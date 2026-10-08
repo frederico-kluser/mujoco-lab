@@ -30,6 +30,20 @@ Modelos de IA (e muita gente) aprenderam MuJoCo na versão 3.3 ou antes — e el
 - **Pesquisa profunda auditada** — [dossiê](pesquisas/2026-10-07-qual-e-a-forma-correta-e-atual-mujoco-3-15-x-out-2026-de-ins.md) com 16 perguntas, 362 fontes citadas e [verificação independente](pesquisas/verificacao/independente.md) por reexecução.
 - **Benchmarks de GPU reais** — MJX e MuJoCo Warp medidos numa RTX 4070 Laptop de 8 GB ([resultados](.agents/mujoco-agent-skill/references/gpu-benchmarks.md)).
 
+## Regra de ouro: sempre simulador físico
+
+Tudo o que corre aqui é **simulação física de verdade**, do primeiro ao último passo (`mj_step` com
+gravidade, arrasto, contactos, atuadores e sensores). Não há cinemática, teleporte (só `reset` explícito
+do simulador), corpos congelados nem "apoios mágicos": os robôs só se mexem por **comandos de atuador**
+— os algoritmos são do utilizador — e a física decide o resto. Na prática:
+
+- os programas **arrancam** nesse estado: o drone (`08_crazyflie_motores`) começa com **motores
+  desligados** e assenta no chão pela física (`T` descolar · `H` pairar · `D` desligar); o Spot
+  (`07_spot_motores`) começa de pé na postura `home`, sustentado pelos próprios servos;
+- o que a simulação faz de facto (inclusive quando diverge da teoria de corpo rígido, como o acoplamento
+  aerodinâmico do drone acima de ~1 m/s ou o acoplamento pelos pés no Spot) é **medido, registado nos
+  READMEs e guardado na memória CoALA** — nada fica "na cabeça".
+
 ## Começar
 
 Requisitos: Linux (testado em CachyOS/Arch, KDE Wayland), [`uv`](https://docs.astral.sh/uv/) e Python 3.13. GPU NVIDIA só é necessária para MJX/Warp.

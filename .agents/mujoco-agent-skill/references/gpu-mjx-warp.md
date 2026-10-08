@@ -3,6 +3,7 @@
 Simulação em lote na GPU: mapa dos backends, limites frente ao motor C, instalação e uso (RTX 4070 Laptop 8 GB, driver 610.57, Python 3.13), desempenho publicado, domain randomization e memória.
 
 > Verificado em MuJoCo 3.15.0 (2026-10-07). Fontes: ficha Q11; `docs/upstream/mujoco/doc/{mjx.rst,mjwarp/index.rst,skills/accelerated/SKILL.md,changelog.rst}`; `docs/upstream/mujoco/mjx/`; `docs/upstream/mujoco_warp/`; `docs/upstream/mujoco_playground/{CHANGELOG.md,pyproject.toml}`; testes em CPU num venv descartável (jax 0.11.2, warp-lang 1.17.0 e 1.18.0, mujoco-mjx e mujoco-warp 3.15.0).
+> **Re-verificado em 2026-10-08** (§2.1, atuadores × backends): `.venv-gpu` (mujoco-mjx, mujoco-warp e warp-lang instalados), `JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES=""`; enums por introspeção e `put_model` de cada atuador.
 
 ## Quando ler este arquivo
 - Escolher entre MuJoCo C, MJX-JAX, MJX-Warp e MJWarp antes de escalar RL/otimização em GPU.
@@ -37,9 +38,9 @@ Legenda: **✔** = verificado por mim (execução em CPU com `JAX_PLATFORMS=cpu`
 | Determinismo | repetível bit a bit ✔ | CPU repetível ✔; GPU n/d | GPU **não** determinística (doc: atomics); CPU determinística ✔ (`wp.set_device("cpu")`) |
 | Solver | PGS, CG, Newton, noslip | CG, Newton. PGS → `NotImplementedError` ✔. **`noslip_iterations>0`: aceito e IGNORADO** ✔ | CG, Newton. PGS e noslip → `NotImplementedError` ✔ |
 | Integrador | Euler, RK4, implicit, implicitfast, discrete | Euler, RK4, implicitfast; implicitfast + fluido → erro ✔; `implicit` → erro ✔; **`discrete`: `put_model` aceita, `mjx.step` falha** ✔ | MJWarp aceita todos ✔, sem o "midpoint" do implicitfast; **MJX-Warp rejeita `implicit` e `discrete`** ✔ |
-| Plugins | todos | **plugin de atuador aceito e IGNORADO** ✔ (`mujoco.pid`, ctrl 0,1: qpos 2,54 vs 0,003 no C) | corpo/atuador/sensor → `NotImplementedError` ✔; SDF só por hooks Python (`mjw._src.collision_sdf.user_sdf`) |
+| Plugins | todos | **plugin de atuador aceito e IGNORADO** ✔ (`mujoco.pid`: números errados sem erro nenhum; §2.1) | corpo/atuador/sensor → `NotImplementedError` ✔ (`Actuator plugins not supported.`, `io.py:357`); SDF só por hooks Python (`mjw._src.collision_sdf.user_sdf`) |
 | Flex | completo | `NotImplementedError` ✔ | experimental (`put_model` aceita ✔) |
-| Atuadores novos do 3.15 | `pid`, `dcmotor`, `orientation` | os três → `NotImplementedError` ✔ (`mjDYN_PID`, `mjBIAS_DCMOTOR`, `mjBIAS_SO3`) | `dcmotor` ✔ aceito e igual ao C (qvel 75,965); `pid`, `orientation` → `NotImplementedError` ✔ (Δ doc: a tabela diz "All") |
+| Atuadores novos do 3.15 | `pid`, `dcmotor`, `orientation` | os três → `NotImplementedError` ✔ (campo que falha primeiro: `mjGAIN_PID`, `mjBIAS_DCMOTOR`, `mjBIAS_SO3`; §2.1) | `dcmotor` ✔ aceito e igual ao C (qvel 75,965); `pid` → `mjGAIN_PID`, `orientation` → `mjTRN_SO3` ✔ (Δ doc: a tabela diz "All") |
 | Sensores | todos | subconjunto (lista na nota [2] de `mjx.rst`) | todos, exceto `PLUGIN` |
 | Fluido | `flInertia` e `fluidshape="ellipsoid"` | só `flInertia`; **elipsoide IGNORADO** ✔ (caso de teste: `qfrc_passive` −0,013 vs −0,0695 no C) | ambos ✔ (−0,0695, igual ao C) |
 | Geoms | todas | ELLIPSOID/CYLINDER só colidem com primitivos (nem todos os pares, nota [3]); BOX é malha; sem SDF; margem/gap em malha/hfield → erro | todas; SDF por hooks; `margin≠0` em alguns pares CCD → erro |
@@ -51,6 +52,24 @@ Legenda: **✔** = verificado por mim (execução em CPU com `JAX_PLATFORMS=cpu`
 - **Autodiff (MJX-JAX):** ✔ com `opt.iterations` padrão (100), `jax.grad` falha ("Reverse-mode … lax.while_loop"); `jax.jacfwd` funciona; com `opt.iterations = 1` ambos funcionam (issue #2259).
 - Δ doc: `mjx.rst` afirma que o `put_model` levanta exceção para recurso não suportado — falso para noslip, plugin de atuador e fluido elipsoidal (MJX-JAX). Antes de confiar numa cena na GPU, rode `parity()` (§4).
 - ⚠ O template `quadrotor` com ar ligado (`implicitfast` + `density>0`) não roda no MJX-JAX (`NotImplementedError` ✔): use o MJWarp ou desligue o fluido.
+
+### 2.1 Matriz de atuadores × backend (✔ medido 2026-10-08, `.venv-gpu`, CPU)
+Cada cena isolada: 1 junta, 1 atuador; enums lidos do `MjModel` compilado e o modelo passado a `mjx.put_model` e `mjw.put_model`. **A rejeição é por enum, não por nome do atalho** — o MJX-JAX procura primeiro no `biastype`, o MJWarp no `trntype`.
+
+| Atuador | enums reais no C (3.15.0) | MJX-JAX | MuJoCo Warp |
+|---|---|---|---|
+| `motor` | trn joint · gain fixed · bias **none** | ✔ aceito | ✔ aceito |
+| `position` | trn joint · gain fixed · bias **affine** | ✔ aceito | ✔ aceito |
+| `general` com `gaintype=fixed` e `biastype` none ou affine | idem | ✔ aceito | ✔ aceito |
+| `dcmotor` (com `motorconst`/`resistance`) | trn joint · dyn/gain/bias **dcmotor** | ✘ `NotImplementedError: [<mjtBias.mjBIAS_DCMOTOR: 3>] not supported` | ✔ aceito (paridade numérica com o C medida em 2026-10-07: §2) |
+| `pid` (atalho; `nu=2`, `nactuator=1`) | trn joint · dyn none · gain **pid** · bias affine | ✘ `[<mjtGain.mjGAIN_PID: 5>] not supported` | ✘ `['mjGAIN_PID'] not supported.` |
+| `orientation` (ball joint, ou site+`refsite`; `nu=nout=3`) | trn **so3** · gain so3 · bias so3 | ✘ `[<mjtBias.mjBIAS_SO3: 4>] not supported` | ✘ `['mjTRN_SO3'] not supported.` |
+| `<plugin joint=… plugin="mujoco.pid">` (`pid.xml`, `nu=nactuator=4`) | `actuator_plugin=[0 1 2 3]` | ⚠ **ACEITO EM SILÊNCIO** — treina com números errados | ✘ `NotImplementedError: Actuator plugins not supported.` |
+
+- **PERIGO (treino em GPU):** o plugin `mujoco.pid` é **aceite sem erro** pelo `mjx.put_model`; o MJX lê só os campos `general` do atuador — que no `pid.xml` são `gain fixed` (`gainprm[0]=1`), `bias none`, `dyn none`, `trn joint` — e o controlador PID do plugin não existe: o resultado é lixo silencioso. Medido em `docs/upstream/mujoco/model/plugin/actuator/pid.xml`, `ctrl = 0,1` nos 4 canais, 2000 passos: qpos no C `[0,1275 0,0897 0,1 0,1]` vs MJX-JAX `[112,56 112,56 −0,0904 −0,0904]` (max|Δ| ≈ 1,1e2). **Antes de treinar, verifique `(m.actuator_plugin != -1).any()`** ou rode `parity()` (§4) — a exceção do `put_model` não é garantia de suporte.
+- **Atalhos × `general`:** o que o backend valida são os enums resultantes, não o elemento escrito — `position` é `general gaintype=fixed biastype=affine` e por isso passa; qualquer `general` com `biastype`/`gaintype`/`dyntype` fora dos conjuntos acima falha igual (`mjx/_src/io.py:374-387`; `mujoco_warp/_src/io.py:314-328`).
+- **Modelos do laboratório** (✔ 2026-10-08): `models/boston_dynamics_spot/spot.xml` = 12× `position` (gain fixed/bias affine/trn joint, `nu=nactuator=12`) e `models/bitcraze_crazyflie_2/cf2.xml` = 4× `motor` (gain fixed/bias none/**trn site**, `nu=nactuator=4`); ambos com `nplugin=0` e `put_model` **aceito** nos dois backends (o resto da cena — malhas, sensores — não foi reavaliado aqui).
+- **Flag de energia × MJX** (✔ 2026-10-08): `lab/spot.py` e `lab/crazyflie.py` ligam `mjENBL_ENERGY` (para `data.energy` nos experimentos), mas o **MJX não implementa a flag**: `mjx.put_model` falha com `NotImplementedError: mjtEnableBit.mjENBL_ENERGY` (MJX-JAX **e** `impl='warp'`); o MuJoCo Warp nativo (`mjw.put_model`) aceita-a. Para preparar um modelo do lab para o MJX use `spot.carregar(energia=False)` / `crazyflie.carregar(energia=False)` — a predefinição `energia=True` mantém o comportamento exato dos experimentos `07_spot_motores`/`08_crazyflie_motores` (o parâmetro vale nos dois caminhos de `carregar`, `sensores=True`/`False`).
 
 ## 3. Instalação
 
@@ -222,9 +241,10 @@ for nw in (1024, 4096): print(nw, "worlds:", round(declared(mjw.make_data(mjm, n
 | `RuntimeError: warp-lang is not installed` com `impl='warp'` ✔ (e `import mjx` imprime "Failed to import warp", inofensivo) | falta `warp-lang` | `pip install "mujoco-mjx[warp]"` |
 | `"mujoco-mjx[warp]" "warp-lang>=1.18"` "instala", mas o MJX vira 3.3.4 ✔ | o extra pina 1.17.0; o uv rebaixa o MJX (só avisa) | não force `>=1.18` com o extra; ou instale sem o extra (Warp 1.18.0 roda ✔ CPU) |
 | `AttributeError … 'GraphMode'` (Δ doc) ✔ | `mjx.rst` escreve `mjxw.GraphMode` | `mjxw.types.GraphMode.WARP_STAGED` (membros NONE, JAX, WARP, WARP_STAGED, WARP_STAGED_EX; `JAX` não funciona com Warp na GPU) |
-| Resultado diverge do C **sem erro** (MJX-JAX) ✔ | noslip, plugin de atuador e fluido elipsoidal aceitos e ignorados | `parity()` (§4); use C ou MJWarp |
+| Resultado diverge do C **sem erro** (MJX-JAX) ✔ | noslip, plugin de atuador e fluido elipsoidal aceitos e ignorados | `parity()` (§4); `(m.actuator_plugin != -1).any()` como pré-checagem de treino (§2.1); use C ou MJWarp |
 | `NotImplementedError: integrator 4 …` (MJX-JAX, no `mjx.step`) ou `mjINT_DISCRETE is unsupported` (MJX-Warp, no `put_model`) ✔ | `discrete`: o JAX só falha no passo; a cópia do Warp embutida no MJX não o tem | Euler/implicitfast; `discrete` só no MJWarp nativo |
-| `NotImplementedError` no `mjw.put_model` ✔ | PGS, noslip, plugin de corpo/atuador/sensor, flex quadrático, atuadores `pid`/`orientation` | remover do XML (no C seguem válidos); p/ GPU use `motor`/`position`/`general` (ou `dcmotor` no MJWarp) |
+| `NotImplementedError` no `mjw.put_model` ✔ | PGS, noslip, plugin de corpo/atuador/sensor, flex quadrático, `pid` (`mjGAIN_PID`) e `orientation` (`mjTRN_SO3`); no MJX-JAX também `dcmotor` (`mjBIAS_DCMOTOR`) | remover do XML (no C seguem válidos); p/ GPU use `motor`/`position`/`general` (ou `dcmotor` no MJWarp); §2.1 |
+| `NotImplementedError: mjtEnableBit.mjENBL_ENERGY` no `mjx.put_model` ✔ | os modelos do lab ligam a flag de energia (`lab/spot.py`, `lab/crazyflie.py`) para `data.energy`; o MJX não a implementa (o MJWarp nativo aceita) | `spot.carregar(energia=False)` / `crazyflie.carregar(energia=False)` (§2.1) |
 | Contatos somem / NaN no MJWarp, sem exceção | overflow de `naconmax`/`njmax`/`nccdmax`/`nvmax` | checar `d.overflow` e `nacon > naconmax`; `warn_overflow=True` (padrão) ao desenvolver e `False` em produção (o `wp.printf` serializa a GPU); `--overflow_behavior=error` (padrão do testspeed) |
 | OOM ao usar MJX-Warp em 8 GB | provável (inferência): o JAX pré-aloca 75 % e o Warp aloca por fora | `XLA_PYTHON_CLIENT_PREALLOCATE=false` ou `XLA_CLIENT_MEM_FRACTION` (não verificado em GPU) |
 | `jax.grad` falha "Reverse-mode … while_loop" ✔ | solver iterativo do MJX-JAX | `opt.iterations = 1` ou `jax.jacfwd` |

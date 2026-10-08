@@ -3,6 +3,7 @@
 Imagens e vídeo sem janela, backends OpenGL, viewer interativo, Studio/Filament e `mjpython` — no Linux Wayland + NVIDIA deste laboratório (com nota macOS).
 
 > Verificado em MuJoCo 3.15.0 (2026-10-07). Fontes: ficha `pesquisas/conhecimento/Q2.md`; `docs/upstream/mujoco/doc/{python.rst,programming/{visualization,ui,samples}.rst,skills/{rendering,studio}/SKILL.md}`; `docs/upstream/mujoco/python/mujoco/{viewer.py,rendering/classic/,egl/,glfw/,osmesa/,mjpython/}`; scripts `mjkit`, `render_video`, `view_model`, `env_check`; testes locais offscreen (nenhum viewer aberto).
+> **Re-verificado em 2026-10-08** (§Backends, `MUJOCO_GL` no import): `.venv` (mujoco 3.15.0), um subprocesso por valor — variável ausente, `egl`, `osmesa`, inválida e `disable`.
 
 ## Quando ler este arquivo
 - Gerar vídeo/GIF/tira de quadros ou imagens RGB/profundidade/segmentação **sem janela** (agente, CI, SSH), ou depurar erro de EGL/OSMesa/GLFW.
@@ -32,12 +33,14 @@ macOS: padrão `cgl` (contexto sem janela; offscreen fora da main thread desde a
 
 | Variável | Efeito |
 |---|---|
-| `MUJOCO_GL` | lida no `import mujoco`; valor inválido → `RuntimeError: invalid value for environment variable MUJOCO_GL: x` ✔ |
+| `MUJOCO_GL` | lida **no import do módulo** (`mujoco/rendering/classic/gl_context.py:24`, trazido por `mujoco/__init__.py:76`) — não no uso do `Renderer`; valor inválido → `RuntimeError: invalid value for environment variable MUJOCO_GL: x` ✔; defini-la **depois** do `import mujoco` não muda nada ✔ |
 | `PYOPENGL_PLATFORM` | vazio ou igual ao backend (`egl`); `mujoco.egl` define `egl` se vazio. ⚠ Conflito (ex.: `glx` com `egl`) → `ImportError` **engolido** por `mujoco/__init__.py`: o import passa e **`mujoco.Renderer`/`GLContext` somem** ✔ |
 | `MUJOCO_EGL_DEVICE_ID` | índice base 0 em `eglQueryDevicesEXT()` (≠ índice CUDA); fora de `0..N-1` → `RuntimeError`; texto → `ValueError` ✔. Sem ela: 1º dispositivo que inicializa |
 | `__EGL_VENDOR_LIBRARY_FILENAMES` | filtra o GLVND: `/usr/share/glvnd/egl_vendor.d/10_nvidia.json` → 1 dispositivo (NVIDIA); `50_mesa.json` → 3 (1º = iGPU Intel) ✔. Forma robusta de fixar a GPU |
 | `PYGLFW_LIBRARY_VARIANT`, `PYGLFW_LIBRARY` | `wayland`/`x11` escolhe a libglfw do wheel (padrão `wayland` se `XDG_SESSION_TYPE=wayland`) ✔; `PYGLFW_LIBRARY` = caminho de outra libglfw (ficha F23) |
 | PRIME (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`, `__VK_LAYER_NV_optimus`) | já exportadas nesta sessão; **irrelevantes ao EGL por dispositivo** ✔ (render idêntico sem elas) |
+
+⚠ **`MUJOCO_GL` vale mesmo sem render nenhum** — não é "irrelevante em treino headless": como a leitura é no import, um valor inválido mata o `import mujoco` antes de qualquer física. Medido em 2026-10-08 (`.venv`, mujoco 3.15.0): `MUJOCO_GL=osmesa` → o import falha em `OpenGL/raw/GL/_errors.py:4` (`AttributeError: 'NoneType' object has no attribute 'glGetError'`; falta `libOSMesa`); `MUJOCO_GL=lixo` → `RuntimeError`; **sem a variável** (padrão `glfw`), com `egl` ou com `disable` → import OK (o `glfw` só falha ao **criar** contexto, não ao importar). Regra para treino/CI/agente: `MUJOCO_GL=egl` ou não tocar na variável — nunca `osmesa` nesta máquina.
 
 Dispositivos EGL aqui (✔ `eglQueryDevicesEXT`, 4): **0** NVIDIA GeForce RTX 4070 Laptop GPU · **1** falha (`MESA-EGL: warning: egl: failed to create dri2 screen` → `ImportError: Cannot initialize a EGL device display`) · **2** Mesa Intel (RPL-S, iGPU) · **3** llvmpipe (CPU). A ordem varia entre máquinas: confira `GL_RENDERER`. O código `mujoco/egl` do 3.15 não usa `CUDA_VISIBLE_DEVICES` (✔ valor vazio não muda o dispositivo); ordem diferente da CUDA em multi-GPU: relato na issue #3245 (3.4.0).
 

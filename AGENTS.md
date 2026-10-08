@@ -34,6 +34,45 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
 - Rode scripts com `cwd` fora da raiz se possível: o MuJoCo grava `MUJOCO_LOG.TXT` no diretório de trabalho (está no `.gitignore`).
 - Experimentos ficam em `experiments/NN_nome/` (run.py headless + view.py + README.md + `out/` ignorado pelo git); modelos reutilizáveis em `models/`.
 - Arquivos temporários: `$TMPDIR`, nunca o diretório temporário global.
+- **Simulador SEMPRE físico** (regra do dono, 2026-10-08): tudo passa por `mj_step` — gravidade, arrasto,
+  contactos, atuadores e sensores a cada passo. Nada de cinemática, teleporte (só `reset` explícito do
+  simulador), corpos congelados ou "apoios mágicos": os robôs só se mexem por comandos de atuador e a
+  física decide o resto. Os programas ARRANCAM nesse estado (drone: motores desligados, assenta no chão
+  pela física; Spot: servos na postura home, de pé pelos próprios motores). Achados físicos (o que a
+  simulação faz de facto) vão para os READMEs e para a memória CoALA.
+
+## Adaptar projetos do GitHub (robôs prontos → laboratório)
+
+Preferir SEMPRE modelos prontos e de boa reputação (ex.: `mujoco_menagerie`) a construir do zero. Procedimento:
+
+1. **Escolher e obter**: clone *sparse* do repositório (só a pasta do robô) para `$TMPDIR`; o espelho local
+   `docs/upstream/` serve de referência mas **não traz malhas** (o sync filtra `.obj`).
+2. **Vendorizar em `models/<robo>/` INTACTO**: XMLs + `assets/` + LICENSE/README/CHANGELOG. Nunca editar
+   ficheiros upstream — toda a adaptação (sensores, escala de atuadores) acontece em **runtime** na camada
+   `lab/<robo>.py` (MjSpec), por isso o modelo de origem continua comparável com o upstream.
+3. **Inspecionar**: `inspect_model.py` e cruzar com specs REAIS do fabricante (datasheets/docs oficiais);
+   as fontes citam-se no README do experimento (conteúdo web = `untrusted`, só citado).
+4. **Entregar MODOS e CONTROLES como FUNÇÕES** em `lab/<robo>.py` — **sem código pronto de estabilização,
+   controle, IK, marcha ou voo** e sem código dos projetos originais (firmware/SDK/ROS proibidos). Padrão:
+   `carregar()` → `(model, data)` com sensores · `definir_*()` (controles em unidades físicas, cortados
+   para as faixas do modelo) · `MODOS` (roteiros abertos `f(model, data, tau)`, sem realimentação) ·
+   `ler_*()` (leituras de sensores). Quem escreve algoritmos e experimentos é o dono do projeto.
+5. **Sensores SÃO desejáveis** (para algoritmos e treino) — adicionar via MjSpec, por tipo de máquina:
+   quadrúpede → IMU (gyro/acc/quat/vel) + encoders das juntas + forças dos pés (touch); drone → IMU +
+   posição/velocidade. Semântica verificada: o `touch` só conta contactos cujo ponto cai no **volume do
+   site** (faça o site cobrir o geom de contacto).
+6. **Experimento `experiments/NN_<robo>_motores/`**: `run.py` (demo dos modos + validação por fórmulas
+   fechadas em CONDIÇÕES ISOLADAS — modelo fresco, sem histórico — + exit code) e `view.py` (teclado +
+   REPL), ambos usando só as funções de `lab/`.
+7. **Ao terminar, registar o que foi feito** (nada fica "na cabeça"): README do experimento com as tabelas
+   de valores medidos vs teoria e as fontes; `coala.py add` na memória; atualizar o catálogo abaixo.
+
+### Catálogo de projetos adaptados
+
+| repositório | modelo em `models/` | API em `lab/` | experimento | notas |
+|---|---|---|---|---|
+| mujoco_menagerie/boston_dynamics_spot | `boston_dynamics_spot/` | `spot.py` | `07_spot_motores` | 12 servos PD; sensores IMU/encoders/pés via MjSpec; feito 2026-10-08 |
+| mujoco_menagerie/bitcraze_crazyflie_2 | `bitcraze_crazyflie_2/` | `crazyflie.py` | `08_crazyflie_motores` | 4 canais wrench; gear dos momentos escalado à faixa física (o upstream é "arbitrário"); feito 2026-10-08 |
 
 ## Don't touch / segurança
 - Nunca versionar `memory/coala.sqlite`, `.venv/`, `docs/upstream/` (reproduzível) nem `experiments/*/out/`.
