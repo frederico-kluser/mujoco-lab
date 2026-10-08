@@ -1,0 +1,285 @@
+{
+  "_doc": "Fontes do material do projeto para `coala.py ingest`. mode: markdown|text|whole|pdf · type: episodic|semantic|procedural · origin: owner|agent|untrusted|system · tags aceitam {stem} {name} {dir} {rule}. Primeira regra que apanha um ficheiro ganha. O motor exclui `.agents/**` por omissão: por isso a skill de controle é ingerida pelo symlink `docs/skill` (→ ../.agents/mujoco-agent-skill). Proveniência: relatório = owner; docs oficiais e pesquisa web = untrusted; skill/código/modelos/experimentos nossos = agent.",
+  "version": 1,
+  "key_prefix": "mujoco",
+  "path_prefix": "",
+  "exclude": [
+    "docs/upstream/**/SOURCE.json",
+    "docs/upstream/INDEX.md",
+    "docs/upstream/mujoco/doc/images/**"
+  ],
+  "rules": [
+    {
+      "name": "relatorio-owner",
+      "include": [
+        "docs/relatorio-tecnico-original.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "owner",
+      "tags": "relatorio,owner,fonte-original"
+    },
+    {
+      "name": "projeto",
+      "include": [
+        "AGENTS.md",
+        "README.md",
+        "experiments/*/README.md",
+        "pesquisas/README.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "projeto,{dir},{stem}"
+    },
+    {
+      "name": "skill-core",
+      "include": [
+        "docs/skill/SKILL.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "skill,mujoco-agent-skill"
+    },
+    {
+      "name": "skill-referencias",
+      "include": [
+        "docs/skill/references/*.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "skill,referencia,{stem}"
+    },
+    {
+      "name": "skill-templates-readme",
+      "include": [
+        "docs/skill/assets/templates/*/README.md"
+      ],
+      "mode": "markdown",
+      "type": "procedural",
+      "origin": "agent",
+      "tags": "template,{dir}"
+    },
+    {
+      "name": "skill-codigo",
+      "include": [
+        "docs/skill/scripts/*.py",
+        "docs/skill/assets/templates/*/run.py",
+        "docs/skill/assets/templates/*/model.xml"
+      ],
+      "mode": "whole",
+      "type": "procedural",
+      "origin": "agent",
+      "tags": "codigo,{dir},{stem}"
+    },
+    {
+      "name": "modelos",
+      "include": [
+        "models/*.xml"
+      ],
+      "mode": "whole",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "mjcf,modelo,{stem}"
+    },
+    {
+      "name": "experimentos-codigo",
+      "include": [
+        "experiments/*/run.py",
+        "experiments/*/view.py"
+      ],
+      "mode": "whole",
+      "type": "procedural",
+      "origin": "agent",
+      "tags": "experimento,codigo,{dir}"
+    },
+    {
+      "name": "dossie",
+      "include": [
+        "pesquisas/20*.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "pesquisa,dossie"
+    },
+    {
+      "name": "fichas",
+      "include": [
+        "pesquisas/conhecimento/Q*.md",
+        "pesquisas/conhecimento/_auditoria_bruta.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "pesquisa,ficha,{stem}"
+    },
+    {
+      "name": "verificacao",
+      "include": [
+        "pesquisas/verificacao/*.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "pesquisa,verificacao"
+    },
+    {
+      "name": "doc-oficial-skills",
+      "include": [
+        "docs/upstream/mujoco/doc/skills/*.md",
+        "docs/upstream/mujoco/doc/skills/*/SKILL.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "doc-oficial,skill-oficial,{dir}"
+    },
+    {
+      "name": "doc-oficial-rst",
+      "include": [
+        "docs/upstream/mujoco/doc/**/*.rst"
+      ],
+      "mode": "text",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "doc-oficial,mujoco,{stem}"
+    },
+    {
+      "name": "doc-oficial-api-c",
+      "include": [
+        "docs/upstream/mujoco/include/mujoco/*.h"
+      ],
+      "mode": "text",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "doc-oficial,api-c,{stem}"
+    },
+    {
+      "name": "doc-oficial-tutoriais",
+      "include": [
+        "docs/upstream/mujoco/python/*.ipynb.md",
+        "docs/upstream/mujoco/python/README.md",
+        "docs/upstream/mujoco/mjx/**/*.md",
+        "docs/upstream/mujoco/README.md",
+        "docs/upstream/mujoco/VERSIONING.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "doc-oficial,tutorial,{stem}"
+    },
+    {
+      "name": "doc-oficial-exemplos",
+      "include": [
+        "docs/upstream/mujoco/model/**/*.xml"
+      ],
+      "mode": "whole",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "exemplo-oficial,mjcf,{dir}"
+    },
+    {
+      "name": "doc-oficial-irmaos",
+      "include": [
+        "docs/upstream/mujoco_warp/**/*.md",
+        "docs/upstream/mujoco_playground/**/*.md",
+        "docs/upstream/mujoco_mpc/**/*.md",
+        "docs/upstream/mujoco_menagerie/**/*.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "untrusted",
+      "tags": "doc-oficial,{dir},{stem}"
+    }
+  ],
+  "graph": {
+    "entities": [
+      {
+        "name": "MuJoCo",
+        "kind": "motor-de-fisica"
+      },
+      {
+        "name": "MJX",
+        "kind": "backend-gpu-jax"
+      },
+      {
+        "name": "MuJoCo Warp",
+        "kind": "backend-gpu-cuda"
+      },
+      {
+        "name": "MuJoCo Menagerie",
+        "kind": "modelos-prontos"
+      },
+      {
+        "name": "mujoco-agent-skill",
+        "kind": "skill"
+      },
+      {
+        "name": "mujoco-lab-agent-skill",
+        "kind": "memoria"
+      },
+      {
+        "name": "Rerun",
+        "kind": "telemetria"
+      },
+      {
+        "name": "urdf2mjcf",
+        "kind": "ferramenta"
+      },
+      {
+        "name": "MJCF",
+        "kind": "formato-de-modelo"
+      }
+    ],
+    "edges": [
+      [
+        "MJX",
+        "implementa",
+        "MuJoCo"
+      ],
+      [
+        "MuJoCo Warp",
+        "implementa",
+        "MuJoCo"
+      ],
+      [
+        "MJX",
+        "pode-usar-backend",
+        "MuJoCo Warp"
+      ],
+      [
+        "mujoco-agent-skill",
+        "controla",
+        "MuJoCo"
+      ],
+      [
+        "mujoco-agent-skill",
+        "consulta",
+        "MuJoCo Menagerie"
+      ],
+      [
+        "mujoco-lab-agent-skill",
+        "memoriza",
+        "mujoco-agent-skill"
+      ],
+      [
+        "urdf2mjcf",
+        "converte-para",
+        "MJCF"
+      ],
+      [
+        "Rerun",
+        "visualiza",
+        "MuJoCo"
+      ],
+      [
+        "MuJoCo",
+        "carrega",
+        "MJCF"
+      ]
+    ]
+  }
+}
