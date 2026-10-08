@@ -1,0 +1,29 @@
+# ambiente e caches
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# saídas geradas pelos experimentos (vídeos, gráficos, métricas): reproduzíveis com run.py
+experiments/*/out/
+
+# espelho local da documentação oficial (reproduzível: .agents/mujoco-agent-skill/scripts/sync_docs.py)
+docs/upstream/
+
+# memória CoALA: o banco SQLite tem o próprio .gitignore (.agents/mujoco-lab-agent-skill/memory/).
+# O MOTOR (scripts/coala.py, SKILL.md e references/ da memória) é cópia vendorizada de um repo privado do autor: NÃO é publicado.
+# Para recriar a memória: instale a skill `coala-agent-skill` e rode `coala.py ingest` com a config versionada em .agents/mujoco-lab-agent-skill/ingest.json.
+.agents/mujoco-lab-agent-skill/scripts/
+.agents/mujoco-lab-agent-skill/references/
+.agents/mujoco-lab-agent-skill/SKILL.md
+.agents/skills/mujoco-lab-agent-skill
+.claude/skills/mujoco-lab-agent-skill
+
+# log padrão do MuJoCo (gravado no cwd)
+MUJOCO_LOG.TXT
+
+# backups gerados pelo integrador da pesquisa
+*.md.bak
