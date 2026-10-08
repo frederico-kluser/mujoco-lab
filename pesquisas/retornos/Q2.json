@@ -1,0 +1,906 @@
+{
+  "id": "Q2",
+  "estado": "respondida",
+  "confianca": "moderada",
+  "resposta": "Nesta máquina o caminho headless é `MUJOCO_GL=egl` + `mujoco.Renderer`, verificado offscreen na NVIDIA RTX 4070 Laptop (`GL_RENDERER` NVIDIA, OpenGL 4.6.0 NVIDIA 610.57.04), inclusive sem `DISPLAY`/Wayland e sem as variáveis de PRIME offload [F20][F21]; `MUJOCO_EGL_DEVICE_ID` indexa `eglQueryDevicesEXT()` (aqui 0 = NVIDIA, 1 = falha MESA-EGL, 2 = Intel iGPU, 3 = llvmpipe) e deve ser conferido por `GL_RENDERER` [F4][F21]. `MUJOCO_GL` é lido no `import mujoco` (Linux: `glfw`/vazio, `glx`, `egl`, `osmesa`; outro valor → `RuntimeError`); OSMesa (CPU) não está instalado aqui e derruba o `import mujoco`, e um `PYOPENGL_PLATFORM` conflitante faz `mujoco.Renderer` sumir sem erro de import [F3][F22]. Para janela, `mujoco.viewer` usa a libglfw do wheel `glfw`: com `XDG_SESSION_TYPE=wayland` carrega-se a variante Wayland pura (sem X11/GLX) e só `PYGLFW_LIBRARY_VARIANT=x11` leva ao XWayland [F28][F23][F2] — o que contraria a premissa de que a janela passa pelo XWayland (inferência: os avisos `libdecor` vêm do backend Wayland); o aviso `GLFWError (65548) … window position` é benigno [F29][F32]. `viewer.launch` bloqueia; `launch_passive` devolve um `Handle` (`lock`, `sync`, `is_running`…) e, fora do macOS, roda o render loop numa thread daemon [F1][F2][F24]. No macOS `launch_passive` exige `mjpython` (trampolim que roda o interpretador numa thread secundária e deixa a thread principal real ao Cocoa); sem ele o código levanta `RuntimeError`, não SegFault; o offscreen no macOS usa CGL e não é restrito à main thread desde a 2.3.4; e `pip install mujoco` já traz o GLFW pelo wheel `glfw`, sem Homebrew [F2][F8][F9][F28][F19]. O Studio (`mujoco.experimental.studio`, experimental) é a sucessora do binário C++ `simulate` (ImGui + Filament; launchers web/native/passive), mas o README oficial diz que ainda não funciona em Wayland no Linux (usar X11): aqui o Filament OpenGL exige X (XWayland) e `--gfx=web` evita a janela nativa, porém faz bind em `::` [F36][F14][F25][F18]; o `mujoco.Renderer` do wheel continua sendo o renderer classic OpenGL [F20].",
+  "afirmacoes": [
+    {
+      "texto": "`MUJOCO_GL` é lido em `mujoco/rendering/classic/gl_context.py` no momento do `import mujoco` (defina-o antes do import). No Linux aceita `glfw` (padrão; vazio/`enable`/`on`/`true`/`1` equivalem), `glx`, `egl` e `osmesa`; `disable`/`disabled`/`off`/`false`/`0` desligam a criação de contexto GL; qualquer outro valor levanta `RuntimeError: invalid value for environment variable MUJOCO_GL: <valor>` já no `import mujoco`. Em Python, `glx` cai no mesmo caminho do GLFW (`mujoco.glfw.GLContext`).",
+      "fontes": [
+        "F3",
+        "F22",
+        "F13"
+      ],
+      "citacao_literal": "_VALID_MUJOCO_GL += ('glx', 'egl', 'osmesa')",
+      "central": true
+    },
+    {
+      "texto": "`MUJOCO_GL=egl` usa `mujoco.egl.GLContext`: contexto OpenGL headless por dispositivo (`eglQueryDevicesEXT` + `EGL_PLATFORM_DEVICE_EXT`), sem janela e sem servidor X/Wayland; é o backend para render offscreen acelerado por GPU (vídeo, datasets, CI). Em Linux o MuJoCo suporta GLX (janela X11), OSMesa (software headless) e EGL (headless acelerado).",
+      "fontes": [
+        "F4",
+        "F10",
+        "F13",
+        "F34"
+      ],
+      "citacao_literal": "\"\"\"An EGL context for headless accelerated OpenGL rendering on GPU devices.\"\"\"",
+      "central": true
+    },
+    {
+      "texto": "Armadilha: se `PYOPENGL_PLATFORM` estiver definido com valor diferente do exigido pelo backend (ex.: `MUJOCO_GL=egl` com `PYOPENGL_PLATFORM=glx`, ou `osmesa` com `egl`), o `ImportError` de `mujoco.egl`/`mujoco.osmesa` é engolido pelo `try/except ImportError` de `mujoco/__init__.py`: `import mujoco` funciona, mas `mujoco.Renderer` e `mujoco.GLContext` não existem (`AttributeError`). `mujoco.egl` só define `PYOPENGL_PLATFORM=egl` quando a variável está vazia.",
+      "fontes": [
+        "F22",
+        "F4",
+        "F7"
+      ],
+      "citacao_literal": "Renderer FAILED: AttributeError: module 'mujoco' has no attribute 'Renderer'",
+      "central": false
+    },
+    {
+      "texto": "Nesta máquina `MUJOCO_GL=egl` + `mujoco.Renderer` renderiza offscreen na GPU NVIDIA (`GL_RENDERER` = `NVIDIA GeForce RTX 4070 Laptop GPU/PCIe/SSE2`, `GL_VERSION` = `4.6.0 NVIDIA 610.57.04`, frame (240, 320, 3) uint8). O resultado é idêntico sem `DISPLAY`/`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE` e sem as variáveis de PRIME offload (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`, `__VK_LAYER_NV_optimus`): o EGL por dispositivo escolhe a GPU diretamente e não depende delas (elas selecionam a GPU de aplicações GLX/Vulkan).",
+      "fontes": [
+        "F20",
+        "F21",
+        "F35"
+      ],
+      "citacao_literal": "GL_RENDERER: b'NVIDIA GeForce RTX 4070 Laptop GPU/PCIe/SSE2'",
+      "central": true
+    },
+    {
+      "texto": "`MUJOCO_EGL_DEVICE_ID` é um índice (base 0) na lista devolvida por `eglQueryDevicesEXT()` — não o índice CUDA/NVML; fora de `0..N-1` levanta `RuntimeError: The MUJOCO_EGL_DEVICE_ID environment variable must be an integer between 0 and N-1 (inclusive), got X.`; valor não inteiro → `ValueError`; sem a variável o `mujoco.egl` percorre os dispositivos e usa o primeiro que inicializa. Relato de usuário em multi-GPU (MuJoCo 3.4.0): a ordem do EGL não coincide com a dos GPUs do CUDA (#3245).",
+      "fontes": [
+        "F4",
+        "F21",
+        "F33"
+      ],
+      "citacao_literal": "candidates = all_devices[device_idx:device_idx + 1]",
+      "central": true
+    },
+    {
+      "texto": "Aqui `eglQueryDevicesEXT` lista 4 dispositivos: 0 = NVIDIA GeForce RTX 4070 Laptop GPU; 1 = falha (`MESA-EGL: warning: egl: failed to create dri2 screen` → `ImportError: Cannot initialize a EGL device display…`); 2 = Mesa Intel(R) Graphics (RPL-S, iGPU); 3 = llvmpipe (CPU). Sem a variável cai no 0 (NVIDIA); a ordem varia entre máquinas/drivers, então confirme por `GL_RENDERER`. Com `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json` a lista cai para 1 dispositivo (só NVIDIA); só Mesa (`50_mesa.json`) → 3 dispositivos e o primeiro que inicializa é a iGPU Intel.",
+      "fontes": [
+        "F21"
+      ],
+      "citacao_literal": "n_devices (default) = 4\nn_devices (__EGL_VENDOR_LIBRARY_FILENAMES=10_nvidia.json) = 1\nn_devices (__EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json) = 3",
+      "central": true
+    },
+    {
+      "texto": "`MUJOCO_GL=osmesa` rasteriza por software na CPU (`mujoco.osmesa.GLContext`, via PyOpenGL) e exige a biblioteca `libOSMesa` do sistema; aqui `ctypes.util.find_library('OSMesa')` é `None` e `import mujoco` com `MUJOCO_GL=osmesa` falha por inteiro com `AttributeError: 'NoneType' object has no attribute 'glGetError'`. Para render por CPU nesta máquina, o EGL expõe o dispositivo llvmpipe (índice 3).",
+      "fontes": [
+        "F22",
+        "F5",
+        "F21",
+        "F23",
+        "F34"
+      ],
+      "citacao_literal": "AttributeError: 'NoneType' object has no attribute 'glGetError'",
+      "central": true
+    },
+    {
+      "texto": "Se `MUJOCO_GL` não está definido (ou é `glfw`/`glx`), o Python usa `mujoco.glfw.GLContext`, que cria uma janela GLFW invisível (`glfw.window_hint(glfw.VISIBLE, 0)`); por isso exige servidor gráfico (Wayland/X11) e não funciona em ambiente headless — nesse caso use `MUJOCO_GL=egl`.",
+      "fontes": [
+        "F6",
+        "F3",
+        "F34",
+        "F22"
+      ],
+      "citacao_literal": "glfw.window_hint(glfw.VISIBLE, 0)",
+      "central": true
+    },
+    {
+      "texto": "O pacote `glfw` (pyGLFW 2.10.2; dependência declarada do `mujoco`) empacota a libglfw 3.4 em duas variantes de Linux, `glfw/wayland/libglfw.so` e `glfw/x11/libglfw.so`: `PYGLFW_LIBRARY_VARIANT=wayland|x11` força uma; se ausente usa `wayland` quando `XDG_SESSION_TYPE=wayland` e `x11` caso contrário; `PYGLFW_LIBRARY` aponta uma libglfw específica; erros do GLFW viram avisos `glfw.GLFWError` (warnings) enquanto não houver error callback.",
+      "fontes": [
+        "F23",
+        "F28",
+        "F19"
+      ],
+      "citacao_literal": "glfw/library.py:219: if os.environ.get('PYGLFW_LIBRARY_VARIANT', '').lower() in ['wayland', 'x11']:",
+      "central": true
+    },
+    {
+      "texto": "Nesta sessão (`XDG_SESSION_TYPE=wayland`) o pyGLFW carrega `glfw/wayland/libglfw.so`: `glfw.get_version_string()` = `3.4.0 Wayland Null EGL OSMesa shared` e `platform_supported(X11)` = 0 — a variante carregada só tem backend Wayland (EGL), sem X11/GLX. Com `PYGLFW_LIBRARY_VARIANT=x11` (ou `XDG_SESSION_TYPE=x11`) carrega `3.4.0 X11 GLX Null EGL OSMesa monotonic shared` e a janela passa pelo XWayland (`DISPLAY=:0`). O `mujoco.viewer` entrega ao módulo C++ `_simulate` o handle dessa mesma libglfw (`_simulate.set_glfw_dlhandle(glfw._glfw._handle)`), logo herda a variante.",
+      "fontes": [
+        "F23",
+        "F2"
+      ],
+      "citacao_literal": "glfw.get_version_string() = b'3.4.0 Wayland Null EGL OSMesa shared'\nplatform_supported(WAYLAND) = 1 | platform_supported(X11) = 0",
+      "central": true
+    },
+    {
+      "texto": "Mensagens típicas do GLFW: `GLFWError: (65548) b'Wayland: The platform does not provide the window position'` ao abrir o viewer em Wayland é só um aviso (`GLFW_FEATURE_UNAVAILABLE` = 65548): o protocolo Wayland não expõe posição de janela, e o issue #2393 reporta o aviso a cada abertura do viewer, que abre mesmo assim. A libglfw x11 do wheel contém `The DISPLAY environment variable is missing` e `GLX: No GLXFBConfigs returned` (inferência: `X11: The DISPLAY environment variable is missing` surge ao usar a variante X11 sem `DISPLAY`, p.ex. via SSH — para render sem janela use `MUJOCO_GL=egl`); a wayland contém `Failed to connect to display` e referencia `libdecor` (decorações de janela; `libdecor-0.so.0` existe no sistema).",
+      "fontes": [
+        "F29",
+        "F32",
+        "F23",
+        "F28"
+      ],
+      "citacao_literal": "Wayland: Window positions are not currently part of any common Wayland protocol, so this function cannot be implemented",
+      "central": true
+    },
+    {
+      "texto": "`viewer.launch(model, data)` é bloqueante: abre o viewer 'gerenciado' e bloqueia o código do usuário (o render loop roda na thread chamadora e a física numa thread lateral; indicado para plugins/callbacks de física); `python -m mujoco.viewer [--mjcf=/caminho/modelo.xml]` chama esse modo (sem `--mjcf` abre vazio e aceita arrastar e soltar um modelo); `launch_from_path(path)` também existe.",
+      "fontes": [
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "The ``viewer.launch`` function launches the interactive viewer and *blocks user code* which is useful to support precise",
+      "central": true
+    },
+    {
+      "texto": "`viewer.launch_passive(model, data, *, key_callback=None, show_left_ui=True, show_right_ui=True)` retorna um `Handle` sem bloquear; o `Handle` (3.15.0) expõe `cam`, `opt`, `perturb`, `user_scn`, `m`, `d`, `viewport`, `lock()`, `sync(state_only=False)`, `is_running()`, `close()`, `update_hfield/mesh/texture` e `set/clear_figures|texts|images`; `viewer.launch_repl` não existe mais (removida na 2.3.4).",
+      "fontes": [
+        "F24",
+        "F1",
+        "F9"
+      ],
+      "citacao_literal": "launch_passive (model: mujoco._structs.MjModel, data: mujoco._structs.MjData, *, key_callback: Optional[Callable[[int], NoneType]] = None, show_left_ui: bool = True, show_right_ui: bool = True) -> mujoco.viewer.Handle",
+      "central": true
+    },
+    {
+      "texto": "Regras de thread do passive viewer: o viewer tem thread própria, então segure `with viewer.lock():` ao modificar `mjModel`/`mjData` e `cam`/`opt`/`pert`; só `sync()` lê/escreve esses structs (traz estado e entradas da GUI, incl. perturbações) e deve ser chamado para o viewer refletir a física — `sync(state_only=True)` copia só o estado de integração (mais rápido; não pega mudanças em `mjModel`); `is_running()` e `close()` podem ser chamados sem lock; geoms customizados vão em `viewer.user_scn` e entram no próximo `sync()`.",
+      "fontes": [
+        "F1"
+      ],
+      "citacao_literal": "``lock()``: provides a mutex lock for the viewer as a context manager. Since the viewer operates its own",
+      "central": true
+    },
+    {
+      "texto": "Fora do macOS, `launch_passive` cria uma `threading.Thread` daemon que roda `_launch_internal` (o render loop e o `glfw.init()` ficam numa thread de fundo) e bloqueia o chamador em `handle_return.get()` até o modelo carregar; no macOS (`sys.platform == 'darwin'`) exige `mjpython` e, sem ele, levanta `RuntimeError('`launch_passive` requires that the Python script be run under `mjpython` on macOS')` — erro limpo, não SegFault.",
+      "fontes": [
+        "F2"
+      ],
+      "citacao_literal": "'`launch_passive` requires that the Python script be run under '",
+      "central": true
+    },
+    {
+      "texto": "`mjpython` é um trampolim só para macOS (script `mjpython.py` + binário nativo do wheel macOS; não existe no wheel Linux — `shutil.which('mjpython')` = None aqui): executa o ponto de entrada do CPython numa thread separada, deixando a thread principal real do macOS (`com.apple.main-thread`) livre para chamadas Cocoa/GUI sem bloquear o script. O doc oficial exige `mjpython` (drop-in do `python`: `mjpython script.py`, `mjpython -m IPython`) para `viewer.launch_passive` no macOS, 'a platform limitation which requires the main thread to be one that does the rendering'; o `viewer` delega o render loop à thread de UI via `_MJPYTHON.launch_on_ui_thread`.",
+      "fontes": [
+        "F8",
+        "F1",
+        "F2",
+        "F9",
+        "F24"
+      ],
+      "citacao_literal": "point in a separate thread, thus leaving the macOS main thread free for Cocoa",
+      "central": true
+    },
+    {
+      "texto": "Desde o MuJoCo 2.3.4 o render offscreen no macOS (`mujoco.Renderer`) deixou de ser restrito à main thread: o contexto GL é criado por CGL (Core OpenGL), não por GLFW/NSOpenGL — por padrão `mujoco.cgl` no macOS, com fallback para `mujoco.glfw`. A restrição de main thread permanece para janelas GLFW/Cocoa (doc do GLFW: `glfwCreateWindow` 'must only be called from the main thread'; em resposta no fórum do GLFW, fora do macOS isso 'would likely work well', mas a regra faz parte da especificação do GLFW).",
+      "fontes": [
+        "F9",
+        "F3",
+        "F29",
+        "F30"
+      ],
+      "citacao_literal": "Offscreen rendering on macOS is no longer restricted to the main thread.",
+      "central": true
+    },
+    {
+      "texto": "No Studio (`mujoco.experimental.studio`) o viewer nativo não abre no macOS: `launch_native`/`launch_passive` põem o viewer numa thread daemon (`launch_thread`) e o AppKit só atende UI criada na main thread. Issue #3579 (MuJoCo 3.13.0, também sob `mjpython`): `launch_passive` retorna normalmente, `handle.is_running()` devolve `True`, o código nativo imprime `ERROR: Error creating window: NSWindow should only be instantiated on the main thread!` e o processo termina com status 1 no primeiro `handle.sync()` — sem exceção Python nem SegFault. O código 3.15.0 continua delegando a `launch_thread`.",
+      "fontes": [
+        "F31",
+        "F17"
+      ],
+      "citacao_literal": "ERROR: Error creating window: NSWindow should only be instantiated on the main thread!",
+      "central": false
+    },
+    {
+      "texto": "MuJoCo Studio (Python: `mujoco.experimental.studio`, namespace experimental) é a próxima iteração do `simulate`: UI Dear ImGui, renderer Filament por padrão, plugins C++/Python e web viewer (NetImgui/WASM). No Python há três launchers, cada um com `run(...)` bloqueante e `launch(...)` não bloqueante: `launch_web` (recomendado; sem dependências gráficas nativas), `launch_native` (janela Filament Vulkan/OpenGL) e `launch_passive` (delega por `config.gfx`). O `simulate` é o app C++ interativo dos binários oficiais (`./simulate ../model/humanoid/humanoid.xml` a partir de `bin/`; GLFW + OpenGL clássico + UI nativa `mjui`) em que o `mujoco.viewer` se baseia.",
+      "fontes": [
+        "F36",
+        "F14",
+        "F11",
+        "F12",
+        "F1"
+      ],
+      "citacao_literal": "MuJoCo Studio is the next iteration of the simulate",
+      "central": true
+    },
+    {
+      "texto": "Rodar o Studio em Python (3.15.0): o módulo `mujoco.experimental.studio.viewer` usa absl (`app.run` no import) com `--model=CAMINHO` (ou 1º argumento posicional), `--gfx` ∈ `opengl`, `opengl_headless`, `opengl_software`, `vulkan`, `vulkan_software`, `web`, `webgl`, `--port` (0 = primeira porta livre ≥ 8080), `--width` (1200) e `--height` (800); sem `--gfx` abre janela nativa (Filament OpenGL); `--gfx=web`/`webgl` sobe o web viewer. O comando `python -m mujoco.experimental.studio.viewer --model=modelo.xml` é inferido do código (não executado, para não abrir janela).",
+      "fontes": [
+        "F16",
+        "F24",
+        "F15"
+      ],
+      "citacao_literal": "'gfx', None, vp.GFX_MODES, 'Graphics mode (\"web\" launches Web Viewer).'",
+      "central": false
+    },
+    {
+      "texto": "O Web Viewer do Studio (`--gfx=web`) faz bind em `'::'` (todas as interfaces, dual-stack IPv4/IPv6; host fixo no código) na primeira porta livre ≥ 8080 e serve tudo (página, `/ui`, `/state`) numa única porta; o próprio código avisa que expor ou tunelar essa porta expõe o viewer inteiro — em rede não confiável, restrinja por firewall.",
+      "fontes": [
+        "F18"
+      ],
+      "citacao_literal": "self._host = '::'",
+      "central": false
+    },
+    {
+      "texto": "O README oficial do Studio (branch main; último commit do arquivo em 29/06/2026) lista como bug conhecido: 'MuJoCo Studio does not yet work using Wayland on Linux, use X11 instead'. Coerente com o wheel 3.15.0: o Filament OpenGL no Linux usa a plataforma GLX (`PlatformGLX`; sem `DISPLAY` o processo sai com `Failed to open X display. (exiting).`) e o SDL2 embutido em `window`/`native_viewer_cc` reconhece `SDL_VIDEODRIVER`, que o SDL2 documenta para forçar 'x11' quando se está em Wayland — a aplicação disso ao Studio (`SDL_VIDEODRIVER=x11`) é inferência não testada; alternativa: `--gfx=web`.",
+      "fontes": [
+        "F36",
+        "F37",
+        "F38",
+        "F27",
+        "F25"
+      ],
+      "citacao_literal": "MuJoCo Studio does not yet work using Wayland on Linux, use X11 instead.",
+      "central": true
+    },
+    {
+      "texto": "Filament offscreen em 3.15.0: `mujoco.experimental.studio.renderer.Renderer(gfx)` (`Init(model)`; `Render(model, data, None, None, None, w, h)` → bytes RGB) funcionou aqui com `opengl_headless`/`opengl_software` (OpenGL/GLX: exigem servidor X — via XWayland `DISPLAY=:0` ok; sem `DISPLAY` o processo termina com `Failed to open X display. (exiting).`, código 1) e com `vulkan`/`vulkan_software` (funcionam sem `DISPLAY` e selecionam a NVIDIA RTX 4070 Laptop); `classic`/`classic_headless` (citados no SKILL.md do Studio) → `ERROR: Unsupported graphics mode` (código 1).",
+      "fontes": [
+        "F25",
+        "F15",
+        "F14"
+      ],
+      "citacao_literal": "Failed to open X display. (exiting).",
+      "central": false
+    },
+    {
+      "texto": "Filament é experimental na API Python (`mujoco.rendering.filament.renderer.Renderer` sobre `mujoco._render_filament`/mjrf, e o Studio); o `mujoco.Renderer`/`mjr_*` do wheel 3.15.0 é o renderer *classic* OpenGL (`mjr_getRendererInfo` → `('classic', 'opengl')` com contexto EGL ativo, `('classic', '')` sem contexto); Filament só substitui as funções `mjr_*` em builds com `MUJOCO_USE_FILAMENT=1`.",
+      "fontes": [
+        "F13",
+        "F10",
+        "F20",
+        "F24"
+      ],
+      "citacao_literal": "experimentally for advanced lighting, soft shadows, and materials.",
+      "central": false
+    },
+    {
+      "texto": "A regra de afinidade de thread do contexto GL vale também no EGL headless: um `Renderer` criado na thread principal (contexto *current* nela) e usado noutra thread falha com `EGLError(err = EGL_BAD_ACCESS, baseOperation = eglMakeCurrent…)`; criar e renderizar na mesma thread secundária funciona; doc: 'a context can only be made current on one thread at any given time, and all subsequent rendering calls must be made on the same thread'.",
+      "fontes": [
+        "F26",
+        "F1"
+      ],
+      "citacao_literal": "B) create in main thread, render in another thread: FAILED -> EGLError: EGLError( err = EGL_BAD_ACCESS, baseOperation = eglMakeCurrent,",
+      "central": false
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/python.rst",
+      "doi": "",
+      "titulo": "Python — documentação do MuJoCo 3.15.0 (doc/python.rst: Interactive viewer, Rendering)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/viewer.py",
+      "doi": "",
+      "titulo": "python/mujoco/viewer.py — viewer interativo (código-fonte, 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/rendering/classic/gl_context.py",
+      "doi": "",
+      "titulo": "python/mujoco/rendering/classic/gl_context.py — seleção de GLContext por MUJOCO_GL",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/egl/__init__.py",
+      "doi": "",
+      "titulo": "python/mujoco/egl/__init__.py — contexto EGL headless e MUJOCO_EGL_DEVICE_ID",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/osmesa/__init__.py",
+      "doi": "",
+      "titulo": "python/mujoco/osmesa/__init__.py — contexto OSMesa (software)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/glfw/__init__.py",
+      "doi": "",
+      "titulo": "python/mujoco/glfw/__init__.py — contexto OpenGL via GLFW (janela invisível)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/__init__.py",
+      "doi": "",
+      "titulo": "python/mujoco/__init__.py — importação de Renderer/GLContext (try/except ImportError)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/mjpython/mjpython.py",
+      "doi": "",
+      "titulo": "python/mujoco/mjpython/mjpython.py — trampolim mjpython para macOS",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog do MuJoCo (entradas 2.3.3, 2.3.4 e 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/visualization.rst",
+      "doi": "",
+      "titulo": "Visualization — guia de programação (OpenGL 1.5, GLX/OSMesa/EGL, Filament)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/samples.rst",
+      "doi": "",
+      "titulo": "Code samples — simulate, record (GLFW/OSMesa/EGL) e render (Filament/classic)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/index.rst",
+      "doi": "",
+      "titulo": "Programming — visão geral, bibliotecas de render e como rodar ./simulate",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/rendering/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo Rendering skill (MUJOCO_GL, Renderer, Filament experimental)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/studio/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo Studio skill (arquitetura, launchers, modos gráficos, WebViewer)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/experimental/studio/viewer_protocol.py",
+      "doi": "",
+      "titulo": "experimental/studio/viewer_protocol.py — GFX_MODES e ViewerConfig",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/experimental/studio/viewer.py",
+      "doi": "",
+      "titulo": "experimental/studio/viewer.py — app Studio em Python (flags absl)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/experimental/studio/launch_native.py",
+      "doi": "",
+      "titulo": "experimental/studio/launch_native.py — viewer nativo em thread daemon",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/experimental/studio/web_viewer.py",
+      "doi": "",
+      "titulo": "experimental/studio/web_viewer.py — Web Viewer (bind em ::, porta ≥ 8080)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/pyproject.toml",
+      "doi": "",
+      "titulo": "python/pyproject.toml — dependências declaradas do pacote mujoco 3.15.0",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: Renderer offscreen com MUJOCO_GL=egl (GL_RENDERER, mjr_getRendererInfo)",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: dispositivos EGL, MUJOCO_EGL_DEVICE_ID, filtro de vendors GLVND, sem DISPLAY/PRIME",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: OSMesa ausente, PYOPENGL_PLATFORM conflitante, MUJOCO_GL inválido/disable/glx",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F23",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: variantes libglfw wayland/x11 do pyGLFW 2.10.2, constantes e strings (sem glfw.init)",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F24",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: introspecção de mujoco.viewer e mujoco.experimental.studio (sem abrir janelas)",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F25",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: Renderer Filament offscreen do Studio por modo gfx",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: afinidade de thread do Renderer EGL",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: strings embutidas em libmujoco 3.15.0 e nos módulos nativos do Studio",
+      "autores": "Investigador Q2 (execução local, offscreen)",
+      "ano": "2026",
+      "veiculo": "Teste empírico em .venv (mujoco 3.15.0, glfw 2.10.2, Python 3.13)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/glfw/",
+      "doi": "",
+      "titulo": "glfw — PyPI (pyGLFW: instalação, wheels, variantes wayland/x11, relatório de erros)",
+      "autores": "pyGLFW (mantenedores)",
+      "ano": "s.d.",
+      "veiculo": "PyPI",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F29",
+      "url": "https://www.glfw.org/docs/latest/group__window.html",
+      "doi": "",
+      "titulo": "GLFW: Window reference",
+      "autores": "Desenvolvedores do GLFW",
+      "ano": "s.d.",
+      "veiculo": "Documentação do GLFW",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F30",
+      "url": "https://discourse.glfw.org/t/question-regarding-multithreading/2827",
+      "doi": "",
+      "titulo": "Question regarding multithreading — fórum de suporte do GLFW",
+      "autores": "Usuários do fórum GLFW",
+      "ano": "2025",
+      "veiculo": "discourse.glfw.org",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F31",
+      "url": "https://github.com/google-deepmind/mujoco/issues/3579",
+      "doi": "",
+      "titulo": "Studio native viewer cannot start on macOS: NSWindow created off the main thread · Issue #3579",
+      "autores": "Usuário do GitHub (relato de bug)",
+      "ano": "2026",
+      "veiculo": "GitHub issues google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F32",
+      "url": "https://github.com/google-deepmind/mujoco/issues/2393",
+      "doi": "",
+      "titulo": "GLFW Issue on Ubuntu 24.04 · Issue #2393 (GLFWError 65548 em Wayland)",
+      "autores": "Usuário do GitHub (relato de bug)",
+      "ano": "2025",
+      "veiculo": "GitHub issues google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F33",
+      "url": "https://github.com/google-deepmind/mujoco/issues/3245",
+      "doi": "",
+      "titulo": "EGL backend internally remaps CUDA_VISIBLE_DEVICES, causing use of wrong physical GPU · Issue #3245",
+      "autores": "Usuário do GitHub (relato de bug)",
+      "ano": "2026",
+      "veiculo": "GitHub issues google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F34",
+      "url": "https://github.com/pytorch/rl/blob/main/knowledge_base/MUJOCO_INSTALLATION.md",
+      "doi": "",
+      "titulo": "Working with MuJoCo-based environments (knowledge base do TorchRL)",
+      "autores": "Equipe PyTorch/TorchRL",
+      "ano": "s.d.",
+      "veiculo": "pytorch/rl",
+      "tipo": "documentacao",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F35",
+      "url": "https://wiki.archlinux.org/title/PRIME",
+      "doi": "",
+      "titulo": "PRIME — ArchWiki",
+      "autores": "Comunidade ArchWiki",
+      "ano": "2026",
+      "veiculo": "wiki.archlinux.org",
+      "tipo": "documentacao",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F36",
+      "url": "https://github.com/google-deepmind/mujoco/blob/main/src/experimental/studio",
+      "doi": "",
+      "titulo": "MuJoCo Studio — README (src/experimental/studio, branch main)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (main)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F37",
+      "url": "https://github.com/google-deepmind/mujoco/commits/main/src/experimental/studio/README.md",
+      "doi": "",
+      "titulo": "Histórico de commits de src/experimental/studio/README.md",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco (main)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F38",
+      "url": "https://wiki.libsdl.org/SDL2/SDL_HINT_VIDEODRIVER",
+      "doi": "",
+      "titulo": "SDL_HINT_VIDEODRIVER — SDL2 Wiki",
+      "autores": "Desenvolvedores do SDL",
+      "ano": "s.d.",
+      "veiculo": "wiki.libsdl.org",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O macOS proíbe operações OpenGL/GLFW fora da main thread; chamar viewer.launch_passive() numa thread de background causa um SegFault.",
+      "veredito": "parcial",
+      "correcao": "(1) Correto para janelas: GLFW/Cocoa exigem criar janelas e processar eventos na main thread (doc do GLFW: `glfwCreateWindow` 'must only be called from the main thread'; doc do MuJoCo: 'a platform limitation which requires the main thread to be one that does the rendering'). (2) Impreciso para 'OpenGL' em geral: desde o MuJoCo 2.3.4 o render offscreen (`mujoco.Renderer`) no macOS usa CGL e não é restrito à main thread. (3) 'SegFault' não é o comportamento documentado: sem `mjpython`, `mujoco.viewer.launch_passive` no macOS levanta `RuntimeError('`launch_passive` requires that the Python script be run under `mjpython` on macOS')` (viewer.py 3.15.0); no Studio (`mujoco.experimental.studio.launch_native/launch_passive`, viewer em thread daemon) o relato do issue #3579 (3.13.0) é `ERROR: Error creating window: NSWindow should only be instantiated on the main thread!` impresso pelo código nativo, `is_running()` ainda `True` e saída com status 1 — sem exceção Python nem SegFault. Os segfaults históricos do `launch_passive` (issues #783/#790, 2.3.3) vinham de uma race condition com `mj_forward` (corrigida na 2.3.4) e de um crash do GLFW ao encerrar o Python com o passive viewer ativo (corrigido na 2.3.7) — nenhum relacionado a threads de UI do macOS. (4) Nuance: sob `mjpython` é o script do usuário que roda numa thread Python secundária; quem renderiza na thread principal real é o viewer.",
+      "fontes": [
+        "F2",
+        "F1",
+        "F9",
+        "F29",
+        "F31",
+        "F8"
+      ]
+    },
+    {
+      "afirmacao": "A solução é usar o mjpython em vez de python, que força a representação passiva na thread principal.",
+      "veredito": "parcial",
+      "correcao": "Essência correta: no macOS `viewer.launch_passive` só funciona via `mjpython` (drop-in do `python`: `mjpython script.py`, `mjpython -m IPython`; vem com o pacote `mujoco`; introduzido na 2.3.3 'for viewer.launch_passive to function there'). Mecanismo impreciso: o `mjpython` é um trampolim que executa um binário nativo que roda o ponto de entrada do CPython **numa thread separada**, deixando a thread principal real do macOS (`com.apple.main-thread`) livre para o Cocoa; o `viewer` envia o render loop a essa thread (`_MJPYTHON.launch_on_ui_thread`). O script do usuário não roda na thread principal. Só vale para macOS (não existe no wheel Linux: `shutil.which('mjpython')` = None) e para `launch_passive` — o doc só exige `mjpython` para ele, e `viewer.launch()`/`python -m mujoco.viewer` (bloqueantes) rodam o render loop na thread chamadora; o Studio nativo não tem equivalente (o issue #3579 reproduz a falha também sob `mjpython`).",
+      "fontes": [
+        "F8",
+        "F1",
+        "F2",
+        "F9",
+        "F31",
+        "F24"
+      ]
+    },
+    {
+      "afirmacao": "No macOS instala-se pip install mujoco e o GLFW vem do Homebrew.",
+      "veredito": "parcial",
+      "correcao": "`pip install mujoco` está certo e basta: `glfw` e `pyopengl` são dependências declaradas do pacote (pyproject 3.15.0), os wheels macOS do pyGLFW já trazem a biblioteca ('The GLFW shared library for 64-bit is included in the Python wheels for macOS') e o doc do MuJoCo diz que a lib do MuJoCo também vem no pacote. Homebrew não é necessário: `/opt/homebrew/lib` é apenas um dos caminhos de busca de fallback do pyGLFW (e `PYGLFW_LIBRARY` aponta outra libglfw). Além disso o `mujoco.Renderer` offscreen no macOS nem usa GLFW (usa `mujoco.cgl`, com fallback para `mujoco.glfw`); o GLFW só entra no viewer.",
+      "fontes": [
+        "F28",
+        "F19",
+        "F23",
+        "F3",
+        "F1"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Modos gráficos aceitos pelo Studio (`gfx`)",
+      "posicoes": [
+        {
+          "fonte": "F14",
+          "diz": "O SKILL.md do Studio (3.15.0) lista `classic` (OpenGL legado) e `classic_headless` entre os modos do NativeViewer."
+        },
+        {
+          "fonte": "F15",
+          "diz": "`viewer_protocol.GFX_MODES` (3.15.0) é só ('opengl', 'opengl_headless', 'opengl_software', 'vulkan', 'vulkan_software', 'web', 'webgl')."
+        },
+        {
+          "fonte": "F25",
+          "diz": "No wheel 3.15.0, `Renderer('classic')` e `Renderer('classic_headless')` → `ERROR: Unsupported graphics mode` (código de saída 1)."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Studio utilizável via Python?",
+      "posicoes": [
+        {
+          "fonte": "F36",
+          "diz": "O README (main; último commit em 29/06/2026) ainda lista 'Python integration… we would like to make Studio usable via Python' em Future Work."
+        },
+        {
+          "fonte": "F14",
+          "diz": "O SKILL.md e o wheel 3.15.0 já trazem `mujoco.experimental.studio` com `launch_web`/`launch_native`/`launch_passive` e plugins Python."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Restrição de main thread no macOS: toda a OpenGL ou só a janela?",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "`launch_passive` exige `mjpython` por 'a platform limitation which requires the main thread to be one that does the rendering'."
+        },
+        {
+          "fonte": "F9",
+          "diz": "Desde a 2.3.4 'Offscreen rendering on macOS is no longer restricted to the main thread' (CGL em vez de GLFW/NSOpenGL)."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    }
+  ],
+  "lacunas": [
+    "Nenhuma janela foi aberta (regra do brief): não confirmei empiricamente se `mujoco.viewer` usa Wayland nativo ou XWayland nesta sessão. Evidência indireta forte: o pyGLFW carrega a variante Wayland (sem backend X11) com XDG_SESSION_TYPE=wayland; isso diverge da premissa do contexto do projeto de que a janela passa pelo XWayland (`DISPLAY=:0`) — conferir com `glfw.get_platform()` após `glfw.init()` num teste autorizado a abrir janela.",
+    "Studio nativo em KDE Wayland: o README oficial diz que não funciona em Wayland (usar X11); não testei o Studio nativo, e `SDL_VIDEODRIVER=x11` é inferido (doc do SDL2 + strings embutidas no wheel), não verificado; Vulkan em Wayland não foi testado.",
+    "Origem e benignidade do aviso `OpenGL error 0x502 in or before mjr_makeContext` (a string existe em libmujoco.so.3.15.0) e do aviso `Failed to load plugin 'libdecor-gtk.so'` não foram confirmadas por fonte; nenhuma fonte oficial do MuJoCo descreve o viewer em Wayland/NVIDIA/PRIME.",
+    "Qual GPU renderiza a janela GLFW (iGPU Intel vs NVIDIA) sob KWin Wayland + PRIME offload: não testado (exigiria abrir janela).",
+    "Se um `glfw.init()` que falha dentro de `launch_passive` bloqueia o chamador em `handle_return.get()` (sem timeout) é inferência do código de viewer.py; não testado.",
+    "`mjpython.mm` (`launch_on_ui_thread`) e as fontes C++ de `simulate/`/`src/` não estão no espelho local: o mecanismo do mjpython baseia-se no docstring do trampolim; não verifiquei se os tarballs oficiais Linux 3.15.0 incluem um binário `studio`.",
+    "O comando `python -m mujoco.experimental.studio.viewer` é inferido do código (o módulo executa `app.run` no import); não foi executado porque abriria janela/servidor.",
+    "libOSMesa não está instalada aqui; a instalação (pacote do CachyOS/Arch) e se o Mesa recente ainda a fornece não foram verificadas."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Studio nativo (SDL2 + Filament) em KDE Wayland/XWayland com NVIDIA PRIME: `SDL_VIDEODRIVER=x11` resolve? O backend Vulkan abre janela em Wayland?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "O README oficial diz que o Studio não funciona em Wayland; o Filament OpenGL é GLX-only e a máquina é Wayland-first."
+    },
+    {
+      "pergunta": "Qual GPU o GLFW Wayland nativo usa com PRIME no KWin e como forçar a NVIDIA (`__EGL_VENDOR_LIBRARY_FILENAMES`, `__NV_PRIME_RENDER_OFFLOAD`) para `mujoco.viewer`?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "O viewer carrega a libglfw Wayland pura; a escolha de GPU não foi testada."
+    },
+    {
+      "pergunta": "O aviso `OpenGL error 0x502 in or before mjr_makeContext` no viewer sob Wayland/EGL vem de qual chamada GL e é seguro ignorar?",
+      "origem": "lacuna",
+      "prioridade": "media",
+      "porque": "A string existe em libmujoco 3.15.0 mas não há fonte que a explique."
+    },
+    {
+      "pergunta": "`launch_passive` trava (em vez de lançar exceção) quando `glfw.init()` falha, p.ex. sem `DISPLAY`/`WAYLAND_DISPLAY`?",
+      "origem": "contra-evidencia",
+      "prioridade": "media",
+      "porque": "viewer.py espera `handle_return.get()` sem timeout; o cenário afeta automação/SSH."
+    },
+    {
+      "pergunta": "Os tarballs oficiais de 3.15.0 para Linux trazem o binário `studio`/`simulate` com backend Wayland do GLFW?",
+      "origem": "fonte-nao-usada",
+      "prioridade": "media",
+      "porque": "A discussão #3007 mostra que o build do GLFW 3.4 a partir do código exige dependências Wayland; falta confirmar nos releases."
+    },
+    {
+      "pergunta": "Há alternativa suportada ao OSMesa no Arch/CachyOS (libOSMesa removida?) — EGL + llvmpipe basta para render por CPU?",
+      "origem": "atualidade",
+      "prioridade": "baixa",
+      "porque": "Aqui `libOSMesa` não existe e o EGL expõe llvmpipe (dispositivo 3)."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/3007",
+      "porque_pode_importar": "Build do GLFW 3.4 a partir do código exige wayland-scanner/libwayland-dev: indica backend Wayland no `simulate` compilado localmente."
+    },
+    {
+      "url": "https://github.com/google-deepmind/dm_control/issues/214",
+      "porque_pode_importar": "`libEGL warning: failed to open /dev/dri/renderD128: Permission denied` (permissões do render node; grupo `render`)."
+    },
+    {
+      "url": "https://github.com/google-deepmind/dm_control/issues/415",
+      "porque_pode_importar": "`ImportError: Cannot initialize a headless EGL display` com `MUJOCO_EGL_DEVICE_ID` em Docker multi-GPU."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/1995",
+      "porque_pode_importar": "Receita de render headless em Docker: osmesa (sem GPU) vs egl."
+    },
+    {
+      "url": "https://wiki.archlinux.org/title/External_GPU",
+      "porque_pode_importar": "Menciona `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json` para PRIME offload com EGL."
+    },
+    {
+      "url": "https://sangillee.com/2026-03-04-start-mujoco",
+      "porque_pode_importar": "Guia macOS (blogue): `viewer.launch` vs `launch_passive` e `mjpython`."
+    },
+    {
+      "url": "https://discourse.libsdl.org/t/is-wayland-really-default/61737",
+      "porque_pode_importar": "Como o SDL escolhe entre Wayland e X11 por padrão (relevante ao Studio nativo)."
+    },
+    {
+      "url": "https://github.com/glfw/glfw/issues/2621",
+      "porque_pode_importar": "Discussão dos mantenedores do GLFW sobre a ausência de posição de janela no Wayland."
+    }
+  ],
+  "consultas": [
+    "MuJoCo MUJOCO_GL egl osmesa glfw headless rendering Linux mujoco.Renderer",
+    "mujoco viewer wayland glfw window does not open launch_passive NVIDIA",
+    "GLFWError 65548 \"Wayland: The platform does not provide the window position\" mujoco viewer harmless",
+    "mujoco launch_passive macOS mjpython \"requires that the Python script be run under\" main thread NSWindow crash",
+    "mujoco macOS viewer.launch background thread crash \"NSWindow\" \"main thread\" glfw segmentation fault OR abort",
+    "google-deepmind mujoco issue 3579 Studio native viewer macOS NSWindow should only be instantiated on the main thread fix launch_native",
+    "stackoverflow GLFW window creation failure in MuJoCo \"Failed to create GLFW window\" GlfwError mujoco viewer Linux",
+    "MuJoCo Studio new visualizer Filament Dear ImGui replaces simulate release python experimental studio launch_web",
+    "mujoco viewer.launch_passive SIGSEGV segmentation fault Linux Wayland glfw thread issue",
+    "mujoco MUJOCO_EGL_DEVICE_ID multiple GPUs EGL headless NVIDIA \"libEGL warning\" failed to open /dev/dri",
+    "mujoco \"OpenGL error 0x502 in or before mjr_makeContext\" OR \"Failed to load plugin 'libdecor-gtk.so'\" Wayland glfw viewer",
+    "NVIDIA PRIME render offload __NV_PRIME_RENDER_OFFLOAD __GLX_VENDOR_LIBRARY_NAME __EGL_VENDOR_LIBRARY_FILENAMES __VK_LAYER_NV_optimus Wayland XWayland OpenGL EGL [--include-domains download.nvidia.com,wiki.archlinux.org,us.download.nvidia.com]",
+    "GLFW documentation thread safety most functions must only be called from the main thread; Wayland window position GLFW_FEATURE_UNAVAILABLE [--include-domains glfw.org]",
+    "mujoco python viewer Wayland KDE Plasma NVIDIA window frozen OR black OR crash XWayland workaround glfw x11 PYGLFW_LIBRARY_VARIANT",
+    "MuJoCo Studio does not yet work using Wayland on Linux use X11 instead SDL_VIDEODRIVER=x11 Filament GLX",
+    "SDL_HINT_VIDEODRIVER SDL_VIDEODRIVER environment variable force x11 when on Wayland [--include-domains libsdl.org,wiki.libsdl.org]"
+  ],
+  "alertas_seguranca": []
+}

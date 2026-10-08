@@ -1,0 +1,796 @@
+{
+  "id": "Q5",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "O MJCF 3.15.0 tem raiz `<mujoco>` com até 17 seções opcionais, repetíveis e de ordem livre (`option`, `compiler`, `size`, `statistic`, `asset`, `worldbody`, `deformable`, `contact`, `equality`, `tendon`, `actuator`, `sensor`, `keyframe`, `visual`, `default`, `custom`, `extension`), mais os meta-elementos `include`/`frame`/`replicate` e as macros `composite`/`flexcomp`/`attach` [F2][F7][F8][F16]; a árvore é feita de `<body>` aninhados em `<worldbody>` (sem `<joint>` o corpo é soldado ao pai), com juntas `free|ball|slide|hinge` (padrão hinge) e geoms `plane|hfield|sphere|capsule|ellipsoid|cylinder|box|mesh|sdf` (padrão sphere) [F1][F2][F21]. Defaults funcionam como CSS: vale a `class` explícita, senão o `childclass` do ancestral (body/frame) mais próximo, senão a classe de topo; `<freejoint>` não herda defaults de joint e a classe de topo não pode ser renomeada (erro em 3.15.0, ao contrário do que diz modeling.rst) [F1][F2][F17]. Sem `<inertial>`, massa e inércia vêm dos geoms com `group` em `inertiagrouprange` (padrão 0–5), com `density` padrão 1000 ou o `mass` do geom, de modo que o par visual (grupo 2) + collision (grupo 3) dobra a massa (8,3776 contra 4,1888 kg), o que a Menagerie evita com `<inertial>` explícito [F2][F11][F18]. Em malhas a colisão usa o casco convexo (`maxhullvert`, padrão −1, deve ser > 3) e `<mesh vertex=…>` sem `face` gera o casco; `mesh/inertia` ∈ {convex, exact, legacy (padrão), shell} deu 8617,5/9000/7000/30000 kg num prisma em U de volume 7 m³ (legacy superestima), `exact` exige malha estanque e orientada, `shellinertia` em geom mesh é erro em 3.15.0 e a malha é recentrada no centro de massa [F2][F19][F20]. Armadilhas verificadas: orientações mutuamente exclusivas (`quat` = [w x y z]), `angle` padrão degree (modelo em radianos; `slide` não converte), `autolimits` padrão true desde 3.0.0, `meshdir` relativo ao XML principal, `<visual>` repetível com fusão atributo a atributo (só um `<global>` por bloco) e unidades não impostas (MKS recomendado) [F1][F2][F3][F4][F16][F20][F21]. Composição: `include` cola XML no parser (arquivo só uma vez; a última definição vence; o manual prefere `attach`), `attach` (3.2.0) opera no compilador com `<asset><model>` e `prefix` obrigatório (auto-attach e `frame=` desde 3.11.0), `frame` (3.1.0) é preservado ao salvar desde 3.14.0 e `replicate` (3.1.5) sufixa nomes e proíbe `<joint>` como filho direto [F2][F3][F16]. Em `composite` só resta `cable` e os deformáveis usam `<flexcomp>` (macro que expande para `flex` + bodies), enquanto `<custom>`, `<extension>` e `<keyframe>` têm o formato verificado nos testes [F2][F3][F22]. Removidos ou renomeados e hoje rejeitados: `option/collision` e `actuatorforcerange` (3.0.0), `mpr_*` (3.2.3), `exactmeshinertia`/`convexhull` (3.2.5), `flag passive` (3.3.6), `camera orthographic` (3.5.0) e os composites antigos (3.0.0–3.3.0); `light directional` é legado ainda aceito e a semântica de `margin`/`gap` mudou em 3.9.0 [F3][F22].",
+  "afirmacoes": [
+    {
+      "texto": "Um modelo MJCF 3.15.0 aceita como filhos diretos de `<mujoco>` as 17 seções `option`, `compiler`, `size`, `statistic`, `asset`, `worldbody`, `deformable`, `contact`, `equality`, `tendon`, `actuator`, `sensor`, `keyframe`, `visual`, `default`, `custom` e `extension` (todas opcionais); `include`, `frame` e `replicate` são meta-elementos fora do schema, e `composite`, `flexcomp` e `attach` são macros dentro do schema.",
+      "fontes": [
+        "F16",
+        "F8",
+        "F7",
+        "F2"
+      ],
+      "citacao_literal": "modelo com as 17 seções (option compiler size statistic asset worldbody deformable contact equality tendon actuator sensor keyframe visual default custom extension) compilou: nbody=3 njnt=2 ngeom=4 nflex=1 nexclude=1 neq=1 ntendon=1 nu=1 nsensor=1 nkey=1 nnumeric=1",
+      "central": true
+    },
+    {
+      "texto": "As seções podem repetir-se e aparecer em qualquer ordem; só importam a ordem das `<joint>` dentro de um `<body>`, a ordem dos elementos de um tendão `spatial`, a ordem de seções repetidas que definem o mesmo atributo (a última definição vale para o modelo todo) e a ordem dos atalhos de atuador num mesmo default. Por isso vários blocos `<visual>` são válidos e fundidos atributo a atributo (o último valor de cada atributo vence), mas cada sub-elemento de `<visual>` (`global`, `quality`, `headlight`, `map`, `scale`, `rgba`) ou de `<option>` (`flag`) só pode aparecer uma vez por bloco (senão 'Schema violation: unique element … found 2 times').",
+      "fontes": [
+        "F2",
+        "F16",
+        "F8",
+        "F7"
+      ],
+      "citacao_literal": "-  The order of repeated sections matters when the same attribute is set multiple times to different values. In that",
+      "central": true
+    },
+    {
+      "texto": "A árvore cinemática é formada por `<body>` literalmente aninhados dentro de `<worldbody>` (o corpo raiz, de nome 'world', que não aceita `<inertial>`, `<joint>` nem atributos); uma `<joint>` define graus de liberdade entre o corpo e o pai, um corpo sem juntas fica soldado ao pai e um mesmo corpo pode ter várias juntas (não são necessários corpos fictícios).",
+      "fontes": [
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "welded to its parent. A body in MJCF can contain multiple joints, thus there is no need to introduce dummy bodies for",
+      "central": true
+    },
+    {
+      "texto": "`joint/type` aceita `free`, `ball`, `slide` e `hinge` (padrão `hinge`): `free` ocupa 7 qpos/6 qvel, `ball` 4/3 e `slide`/`hinge` 1/1; `free` só é aceito em corpos filhos do `worldbody` e sem outras juntas no corpo, `ball` não pode ser combinado com `hinge` (mas pode com `slide`), e `range`/`limited` em `free` são aceitos mas silenciosamente ignorados (jnt_limited=0).",
+      "fontes": [
+        "F21",
+        "F2"
+      ],
+      "citacao_literal": "joint free nq=7 nv=6; ball nq=4 nv=3; slide nq=1 nv=1; hinge (type omitido, default) nq=1 nv=1 jnt_type=3; free em corpo filho -> ERRO: Error: free joint can only be used on top level; ball+hinge -> ERRO: Error: ball followed by rotation in body ''; ball+slide -> nq=5 nv=4",
+      "central": true
+    },
+    {
+      "texto": "`geom/type` aceita `plane`, `hfield`, `sphere`, `capsule`, `ellipsoid`, `cylinder`, `box`, `mesh` e `sdf` (padrão `sphere`); nomes como `cone`, `arrow` ou `torus` dão 'invalid keyword'; `hfield`, `mesh` e `sdf` exigem o asset/plugin correspondente; `fromto` só vale para capsule, cylinder, box e ellipsoid.",
+      "fontes": [
+        "F2",
+        "F21"
+      ],
+      "citacao_literal": ":at:`type`: :at-val:`[plane, hfield, sphere, capsule, ellipsoid, cylinder, box, mesh, sdf], \"sphere\"`",
+      "central": true
+    },
+    {
+      "texto": "Defaults funcionam como CSS: classes aninhadas herdam do pai e a classe ativa de um elemento é a `class` explícita; senão o `childclass` do `<body>` ou `<frame>` ancestral mais próximo; senão a classe de topo; valores escritos no elemento vencem os do default. `<freejoint>` não herda defaults de `joint` (equivale a `<joint type=\"free\" stiffness=\"0\" damping=\"0\" frictionloss=\"0\" armature=\"0\"/>`).",
+      "fontes": [
+        "F1",
+        "F17",
+        "F2"
+      ],
+      "citacao_literal": "which overrides the default settings. The cylinder specifies defaults class \"main\", and so it uses \"main\" instead of",
+      "central": true
+    },
+    {
+      "texto": "MuJoCo não especifica unidades físicas: qualquer sistema consistente serve e recomenda-se MKS, porque os únicos valores com unidade embutida são `gravity=0 0 -9.81` e `geom density=1000`; ângulos podem ser escritos em graus no MJCF mas mjModel/mjData guardam radianos.",
+      "fontes": [
+        "F4"
+      ],
+      "citacao_literal": "MuJoCo does not specify basic physical units. The user may interpret the system of units as they choose, as long as it",
+      "central": false
+    },
+    {
+      "texto": "Se o `<body>` não tem `<inertial>`, o compilador infere massa e inércia dos geoms (`compiler/inertiafromgeom=\"auto\"`, padrão); `true` faz os geoms sobrescreverem um `<inertial>` existente e `false` exige `<inertial>` em todo corpo móvel (senão erro 'mass and inertia of moving bodies must be larger than mjMINVAL').",
+      "fontes": [
+        "F2",
+        "F18"
+      ],
+      "citacao_literal": "specified with the :el:`inertial` element. The default setting \"auto\" means that masses and inertias are inferred",
+      "central": true
+    },
+    {
+      "texto": "O `density` padrão dos geoms é 1000 (a da água em unidades SI) e só é usado quando `mass` do geom não é especificado; apenas a massa/inércia do corpo vai para o mjModel (não existem geom_mass, geom_density nem geom_inertia).",
+      "fontes": [
+        "F2",
+        "F4",
+        "F18"
+      ],
+      "citacao_literal": "assumption of uniform density. The internal default of 1000 is the density of water in SI units. This attribute is",
+      "central": true
+    },
+    {
+      "texto": "`compiler/inertiagrouprange` (padrão `0 5`) define os grupos de geom usados na inferência de inércia; como o padrão inclui os grupos 2 (visual) e 3 (collision) das classes usuais, um par visual+collision de mesma forma dobra a massa (8,3776 kg em vez de 4,1888 kg numa esfera r=0,1). Correções verificadas: `inertiagrouprange=\"3 3\"`, `density=\"0\"` ou `mass=\"0\"` na classe visual, ou `<inertial>` explícito (como a Menagerie); `discardvisual=\"true\"` NÃO corrige.",
+      "fontes": [
+        "F18",
+        "F2",
+        "F11"
+      ],
+      "citacao_literal": "esfera visual (group=2, contype=conaffinity=0) + esfera collision (group=3), r=0.1: massa do corpo = 8.3776 (default inertiagrouprange 0 5) | inertiagrouprange='3 3' -> 4.1888 | visual density=0 -> 4.1888 | visual mass=0 -> 4.1888 | discardvisual=true -> ngeom=1 massa=8.3776",
+      "central": true
+    },
+    {
+      "texto": "`asset/mesh/inertia` aceita `convex`, `exact`, `legacy` e `shell` com padrão `legacy`, que superestima o volume de malhas não convexas: num prisma em U (volume exato 7 m³, casco convexo 9 m³, densidade 1000) deu 8617,5 kg (legacy e sem atributo), 9000 (convex), 7000 (exact) e 30000 (shell, densidade como massa/área). A doc 3.4.0 anunciava trocar o padrão para `convex`; em 3.15.0 o padrão continua `legacy`.",
+      "fontes": [
+        "F2",
+        "F19",
+        "F10"
+      ],
+      "citacao_literal": ":at:`inertia`: :at-val:`[convex, exact, legacy, shell], \"legacy\"`",
+      "central": true
+    },
+    {
+      "texto": "`inertia=\"exact\"` exige malha estanque e bem orientada (faces invertidas dão 'mesh volume is negative (misoriented triangles)'); `geom/shellinertia` só vale para primitivas e, em 3.15.0, `shellinertia=\"true\"` num geom do tipo mesh (inclusive herdado de `<default>`) é erro de compilação — a inércia de casca de malhas se pede com `mesh/inertia=\"shell\"`.",
+      "fontes": [
+        "F19",
+        "F2"
+      ],
+      "citacao_literal": "geom type=mesh com shellinertia=true -> ERRO: Error: for mesh geoms, inertia should be specified in the mesh asset; mesmo via <default><geom shellinertia=true> -> ERRO: Error: for mesh geoms, inertia should be specified in the mesh asset",
+      "central": false
+    },
+    {
+      "texto": "A colisão de geoms mesh usa o casco convexo da malha (formas não convexas devem ser decompostas em vários geoms convexos); `mesh/maxhullvert` (padrão -1 = ilimitado; valores positivos devem ser > 3) limita os vértices do casco (icosfera de 162 vértices → casco de 20 ou 8 vértices; `maxhullvert=3` dá erro).",
+      "fontes": [
+        "F2",
+        "F20",
+        "F4"
+      ],
+      "citacao_literal": "collision detection works with the convex hull of the mesh as explained in :ref:`Collision`. The mesh appearance",
+      "central": true
+    },
+    {
+      "texto": "`<mesh vertex=\"…\">` sem `face` é uma nuvem de pontos da qual o compilador constrói o casco convexo (4 vértices = tetraedro; é o que faz o `car.xml` oficial); exige ≥ 4 vértices não coplanares e a malha é recentrada no centro de massa e alinhada aos eixos principais, de modo que `geom_pos`/`geom_quat` compilados diferem do XML.",
+      "fontes": [
+        "F2",
+        "F20",
+        "F13"
+      ],
+      "citacao_literal": "A mesh can also be defined without faces (a point cloud essentially). In that case the convex hull is constructed",
+      "central": true
+    },
+    {
+      "texto": "`compiler/meshdir` (e `texturedir`; `assetdir` define ambos) é resolvido a partir do diretório do arquivo MJCF principal, não do diretório de trabalho; sem `meshdir`, `file=\"tet.obj\"` guardado num subdiretório falha com 'Error opening file'; `strippath=\"true\"` descarta o caminho presente no nome do arquivo.",
+      "fontes": [
+        "F2",
+        "F20"
+      ],
+      "citacao_literal": "This attribute instructs the compiler where to look for mesh and height field files. The full path to a file is",
+      "central": false
+    },
+    {
+      "texto": "A orientação de body/geom/site/camera/light/frame/inertial é dada por no máximo um entre `quat` ([w x y z], padrão 1 0 0 0), `axisangle`, `euler`, `xyaxes` e `zaxis`; combinar dois dá 'multiple orientation specifiers are not allowed'; internamente tudo vira quaternion unitário [w x y z].",
+      "fontes": [
+        "F1",
+        "F21"
+      ],
+      "citacao_literal": "using at most one of these attributes. The :at:`quat` attribute has a default value corresponding to the null",
+      "central": true
+    },
+    {
+      "texto": "`compiler/angle` tem padrão `degree` em MJCF (sempre `radian` em URDF) e converte para radianos `euler`, `axisangle` e o `range` de juntas hinge/ball; o `range` de `slide` não é convertido; `eulerseq` padrão `xyz` (minúsculas = intrínseco, maiúsculas = extrínseco; o 'rpy' do URDF corresponde a `XYZ`).",
+      "fontes": [
+        "F2",
+        "F21"
+      ],
+      "citacao_literal": ":at:`angle`: :at-val:`[radian, degree], \"degree\" for MJCF, always \"radian\" for URDF`",
+      "central": true
+    },
+    {
+      "texto": "`compiler/autolimits` tem padrão `true` (o padrão mudou de false para true em 3.0.0): `range` sem `limited` liga o limite; com `autolimits=\"false\"` é preciso `limited=\"true\"` e `range` juntos e `range` sem `limited` é erro.",
+      "fontes": [
+        "F2",
+        "F3",
+        "F21"
+      ],
+      "citacao_literal": ":at:`autolimits`: :at-val:`[false, true], \"true\"`",
+      "central": true
+    },
+    {
+      "texto": "`<include file=…>` cola no parser (DOM) os filhos do elemento raiz do arquivo incluído, relativo ao diretório do MJCF principal; cada arquivo só pode ser incluído uma vez no modelo todo (senão 'File … already included'); atributos globais repetidos (ex.: `compiler/angle`) valem pela última definição; o manual recomenda `<attach>` quando aplicável.",
+      "fontes": [
+        "F2",
+        "F1",
+        "F16"
+      ],
+      "citacao_literal": "however a given XML file can be included at most once in the entire model. After all the included XML files have been",
+      "central": true
+    },
+    {
+      "texto": "`<attach>` (3.2.0), implementado no compilador, insere um `body` ou `frame` de outro modelo declarado em `<asset><model name= file=>` (ou do próprio modelo, omitindo `model`, desde 3.11.0): `prefix` é obrigatório e é aplicado a todos os nomes copiados (corpos, juntas, atuadores, sensores, materiais); cada filho mantém suas unidades de ângulo; todos os assets do filho são copiados e keyframes têm limitações.",
+      "fontes": [
+        "F2",
+        "F3",
+        "F16",
+        "F12",
+        "F5"
+      ],
+      "citacao_literal": "The :el:`attach` element is used to insert elements from another (child) model, or from the current model itself",
+      "central": true
+    },
+    {
+      "texto": "`<frame>` (3.1.0) é uma transformação de coordenadas pura sobre seus filhos diretos (aceita `name`, `childclass`, `pos` e uma orientação); não gera corpo no mjModel e, desde 3.14.0, é preservado ao salvar o XML (antes era absorvido nos filhos).",
+      "fontes": [
+        "F2",
+        "F3",
+        "F16"
+      ],
+      "citacao_literal": "The frame meta-element is a pure coordinate transformation that can wrap any group of elements in the kinematic tree",
+      "central": false
+    },
+    {
+      "texto": "`<replicate count= sep= offset= euler=>` (3.1.5) duplica os filhos com deslocamento/rotação incrementais, acrescentando sufixos de índice com o mínimo de dígitos (count=12 → `b_00`…`b_11`) e replicando os elementos que os referenciam; `<joint>` não pode ser filho direto (envolva em `<body>`).",
+      "fontes": [
+        "F2",
+        "F3",
+        "F16"
+      ],
+      "citacao_literal": "Direct children of replicate are replicated into its parent body. Joints are therefore not allowed as direct children;",
+      "central": false
+    },
+    {
+      "texto": "Em `<composite>` só resta `type=\"cable\"` (cadeia inextensível de corpos com juntas ball, com o plugin `mujoco.elasticity.cable`); `particle`, `grid`, `rope`, `cloth` e `loop` dão erro 'composite type is deprecated' com a alternativa sugerida e `box`/`cylinder`/`ellipsoid` dão 'invalid keyword'; objetos deformáveis usam `<flexcomp>`, macro que expande para um `flex` + bodies com juntas slide (+ equality opcional) e não aparece no XML salvo.",
+      "fontes": [
+        "F2",
+        "F3",
+        "F22"
+      ],
+      "citacao_literal": ":ref:`flexcomp<body-flexcomp>` (for soft objects). Therefore, the only supported composite type is now",
+      "central": true
+    },
+    {
+      "texto": "Atributos antigos rejeitados em 3.15.0 ('Schema violation: unrecognized attribute'): `option/collision` (removido em 3.0.0), `joint/actuatorforcerange` (→ `actuatorfrcrange`, 3.0.0), `option/mpr_*` (→ `ccd_*`, 3.2.3), `compiler/exactmeshinertia` (existia na doc 3.1.2) e `compiler/convexhull` (removidos em 3.2.5; usar `mesh/inertia`), `flag/passive` (→ `spring`/`damper`, 3.3.6) e `camera/orthographic` (→ `projection`, 3.5.0); `compiler/coordinate=\"global\"` é erro; `light/directional` é legado ainda aceito (usar `type`, 3.3.3); a semântica de `margin`/`gap` mudou em 3.9.0 (margin_novo = margin_antigo − gap_antigo).",
+      "fontes": [
+        "F22",
+        "F3",
+        "F2",
+        "F9"
+      ],
+      "citacao_literal": "em 3.15.0 -> option collision: 'collision' | joint actuatorforcerange: 'actuatorforcerange' | option mpr_iterations: 'mpr_iterations' | compiler exactmeshinertia: 'exactmeshinertia' | compiler convexhull: 'convexhull' | flag passive: 'passive' | camera orthographic: 'orthographic'",
+      "central": true
+    },
+    {
+      "texto": "`<custom>` agrupa `numeric` (`name` obrigatório; `data` ou `size`), `text` (`data` ou bloco CDATA, desde 3.13.0) e `tuple` (`element objtype= objname= prm=`); `<extension><plugin plugin=\"…\"/>` declara plugins de motor (erro 'plugin … not found' se não existir; o wheel traz libactuator, libelasticity, libsdf_plugin e libsensor); `<keyframe><key name time qpos qvel act ctrl mpos mquat>` completa vetores curtos com o valor padrão e dá erro se forem longos demais.",
+      "fontes": [
+        "F22",
+        "F2",
+        "F3"
+      ],
+      "citacao_literal": "<key name=k qpos='0 0 2 1 0 0 0 0.5' time=1.5 ctrl=0.3>: nkey=1 key_qpos=[0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.5] key_time=1.5; qpos='0 0 2' (curto) -> key_qpos=[0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0]; qpos longo -> ERRO: Error: keyframe 'k': invalid qpos size, expected 8, got 10",
+      "central": false
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "Modeling (guia de modelagem MJCF)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "XML Reference (referência MJCF)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog (3.0.0 a 3.15.0 lidos)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/overview.rst",
+      "doi": "",
+      "titulo": "Overview (compilador, unidades, malhas, geoms)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/modeledit.rst",
+      "doi": "",
+      "titulo": "Model Editing (attachment, attribute merging, defaults)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/simulation.rst",
+      "doi": "",
+      "titulo": "Simulation (mjModel/mjData e buffer único)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLschema.rst",
+      "doi": "",
+      "titulo": "XML schema (tabela de elementos gerada, com ícones de cardinalidade)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/xml/generated/mjcf.xsd",
+      "doi": "",
+      "titulo": "mjcf.xsd — schema XSD do MJCF gerado a partir de src/xml/mjcf.schema (tag 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial google-deepmind/mujoco, lido via tavily extract",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://mujoco.readthedocs.io/en/3.1.2/XMLreference.html",
+      "doi": "",
+      "titulo": "XML Reference (versão 3.1.2)",
+      "autores": "Google DeepMind",
+      "ano": "2024",
+      "veiculo": "mujoco.readthedocs.io (3.1.2)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://mujoco.readthedocs.io/en/3.4.0/XMLreference.html",
+      "doi": "",
+      "titulo": "XML Reference (versão 3.4.0)",
+      "autores": "Google DeepMind",
+      "ano": "2025",
+      "veiculo": "mujoco.readthedocs.io (3.4.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/franka_emika_panda/panda.xml",
+      "doi": "",
+      "titulo": "franka_emika_panda/panda.xml (padrão de classes visual/collision e <inertial> explícito)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie (espelho local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/hammock/hammock.xml",
+      "doi": "",
+      "titulo": "model/hammock/hammock.xml (exemplo oficial de <asset><model>, <frame> e <attach>)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/car/car.xml",
+      "doi": "",
+      "titulo": "model/car/car.xml (exemplo oficial de <mesh vertex=…> e autolimits)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation, tag 3.15.0 (espelho local docs/upstream/mujoco/)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/jayLEE0301/vq_bet_official/issues/12",
+      "doi": "",
+      "titulo": "Fix Franka kitchen XML load error · Issue #12",
+      "autores": "utilizadores do repositório vq_bet_official",
+      "ano": "2025",
+      "veiculo": "GitHub Issues",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/MyoHub/myo_sim/issues/94",
+      "doi": "",
+      "titulo": "MuJoCo 3.8 compatibility: duplicate default class names and proposed compose() API · Issue #94",
+      "autores": "colaboradores do repositório myo_sim",
+      "ano": "2026",
+      "veiculo": "GitHub Issues",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: composição do MJCF (17 seções, repetição de seções e <visual>, <include>, <attach>, <frame>, <replicate>)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F17",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: herança de defaults (class/childclass, <freejoint>, nomes de classe, default/mesh)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: inércia por geoms (inertiafromgeom, density/mass, inertiagrouprange, classes visual/collision, discardvisual)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: inércia de malhas (mesh/inertia legacy|convex|exact|shell em prisma em U, exact com faces invertidas, shellinertia)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: malhas (vertex sem face, casco convexo, maxhullvert, recentragem, scale, meshdir/assetdir/strippath, ajuste de primitiva)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: orientação, ângulos, autolimits, tipos de joint e de geom e suas restrições",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: atributos removidos/renomeados, composite, flexcomp, custom, keyframe e extension/plugin",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F23",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: estrutura do mjModel compilado (buffer único, arrays planos, referências por índice)",
+      "autores": "Teste empírico local (investigador Q5)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (wheel PyPI) em Python 3.13 no .venv do projeto",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O MJCF funciona 'quase como um compilador' que converte geometrias e propriedades em ponteiros puros na memória da simulação.",
+      "veredito": "parcial",
+      "correcao": "A analogia é do próprio manual: MJCF é 'um híbrido entre formato de modelagem e linguagem de programação' com um compilador embutido (arquivo MJCF/URDF → parser → mjSpec → compilador → mjModel, 'cross-indexed and optimized for runtime computation'), e o compilador de fato calcula coisas (massa/inércia dos geoms, centragem de malhas e casco convexo, expansão das macros attach/replicate/flexcomp, conversão de graus em radianos). 'Ponteiros puros' porém é impreciso: o mjModel é um conjunto de arrays planos tipados alocados num único buffer (`mjModel.buffer`; 8660 bytes no modelo de teste), as referências entre elementos são índices inteiros (`geom_bodyid`, `body_geomadr`, `jnt_bodyid`), os campos do struct C são ponteiros para partições desse buffer e, em Python, `model.geom_size` etc. são views numpy sem cópia (OWNDATA=False). O mjModel permanece constante na simulação; o estado dinâmico fica em outro buffer, o mjData.",
+      "fontes": [
+        "F1",
+        "F4",
+        "F6",
+        "F23"
+      ]
+    },
+    {
+      "afirmacao": "Os nós principais são <compiler>, <option>, <worldbody>, <body>, <joint> (hinge, ball), <geom>, <tendon> e <actuator>.",
+      "veredito": "parcial",
+      "correcao": "Todos existem e são centrais, mas a lista é incompleta e mistura níveis. As seções de topo de `<mujoco>` (todas opcionais e repetíveis) são 17: option, compiler, size, statistic, asset, worldbody, deformable, contact, equality, tendon, actuator, sensor, keyframe, visual, default, custom, extension — mais os meta-elementos include/frame/replicate e as macros composite/flexcomp/attach. `<body>`, `<joint>`, `<freejoint>`, `<geom>`, `<site>`, `<camera>`, `<light>` e `<inertial>` não são nós de topo: vivem aninhados em `<worldbody>`/`<body>`. `<joint>` tem 4 tipos — free, ball, slide e hinge (padrão hinge); o relatório omite `free` (base flutuante, o mais comum em robôs móveis) e `slide`. Faltam `<asset>` (mesh, material, texture, hfield, model), `<default>`, `<sensor>`, `<contact>`, `<equality>`, `<keyframe>`, `<visual>`, `<size>` e `<statistic>`, presentes na maioria dos modelos reais.",
+      "fontes": [
+        "F2",
+        "F7",
+        "F8",
+        "F16",
+        "F21"
+      ]
+    },
+    {
+      "afirmacao": "<geom> pode separar o visual (class=\"visual\") do de colisão (class=\"collision\") por classes de defaults.",
+      "veredito": "correta",
+      "correcao": "Correto como padrão de modelagem (usado na Menagerie, ex.: panda.xml): `visual` = `contype=\"0\" conaffinity=\"0\" group=\"2\"` (não colide; grupo 2 é visível por padrão) e `collision` = `group=\"3\"`. Ressalvas verificadas em 3.15.0: (1) 'visual' e 'collision' são apenas nomes de classe (convenção, não palavras reservadas) — quem separa é contype/conaffinity/group definidos nos defaults; (2) se o corpo não tem `<inertial>`, o `inertiagrouprange` padrão '0 5' inclui os grupos 2 e 3, então uma esfera visual + uma esfera collision somam 8,3776 kg em vez de 4,1888 kg — corrija com `inertiagrouprange=\"3 3\"`, `density=\"0\"`/`mass=\"0\"` na classe visual ou `<inertial>` explícito (a Menagerie usa `<inertial>` em todos os links); (3) `discardvisual=\"true\"` descarta os geoms visuais mas NÃO desfaz a duplicação (a massa continua 8,3776 kg).",
+      "fontes": [
+        "F11",
+        "F2",
+        "F18"
+      ]
+    },
+    {
+      "afirmacao": "Se a inércia não for dada, é inferida do volume dos geoms usando a densidade padrão da água (1000 kg/m³).",
+      "veredito": "correta",
+      "correcao": "Correto, com precisões: a inferência ocorre quando o `<body>` não tem `<inertial>` (`compiler/inertiafromgeom=\"auto\"`, padrão); usa só geoms com `group` dentro de `inertiagrouprange` (padrão 0–5) e o `density` padrão do geom é 1000, descrito como 'a densidade da água em unidades SI' — mas MuJoCo não impõe unidades (qualquer sistema consistente; MKS recomendado, daí 1000 kg/m³ e gravity −9,81). `mass` explícito no geom tem precedência sobre `density`; `shellinertia=\"true\"` reinterpreta `density` como massa/área (só primitivas); para malhas o volume depende de `mesh/inertia` (padrão `legacy`, que superestima não convexas: 8617,5 kg contra 7000 kg exatos num prisma em U — use `convex` ou `exact`); corpo móvel sem geoms nem `<inertial>` dá erro 'mass and inertia of moving bodies must be larger than mjMINVAL'. Só massa/inércia do corpo vão para o mjModel (não há geom_mass).",
+      "fontes": [
+        "F2",
+        "F4",
+        "F18",
+        "F19"
+      ]
+    },
+    {
+      "afirmacao": "O URDF 'especifica hierarquias topológicas sem otimização direta de dados' ao contrário do MJCF.",
+      "veredito": "parcial",
+      "correcao": "A diferença estrutural é real e documentada: em URDF criam-se links e juntas que referenciam pai e filho; em MJCF o corpo filho é literalmente filho do pai no XML e uma junta apenas cria graus de liberdade (corpo sem junta = soldado ao pai). A parte 'sem otimização direta de dados' não tem respaldo: MuJoCo compila MJCF e URDF pelo mesmo pipeline (arquivo → parser → mjSpec → compilador → mjModel), logo o dado em tempo de execução é o mesmo; o importador URDF até liga por padrão simplificações de compilação (`fusestatic=\"true\"` funde corpos estáticos, `discardvisual=\"true\"`, `angle` sempre radian) que em MJCF são `false`/`degree`. Diferenças reais: URDF só expressa um subconjunto dos elementos do MuJoCo, não é validado por schema (atributos digitados errados são ignorados em silêncio) e usa um `<mujoco><compiler …/>` embutido para ajustes. Detalhes de URDF ficam para a Q12.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F4"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Repetição de blocos <visual>: convenção 'um único bloco <visual> (o último vence)' (brief da Q5 e versão anterior do AGENTS.md) versus a regra real do parser em 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "Seções podem repetir-se; quando o mesmo atributo é definido várias vezes com valores diferentes, a última definição vale para o modelo todo (regra por atributo, não por bloco)."
+        },
+        {
+          "fonte": "F8",
+          "diz": "No XSD 3.15.0 `visual` pode ocorrer qualquer número de vezes em `mujoco`; cada filho (global, quality, headlight, map, scale, rgba) é '(?)', isto é, no máximo um por bloco."
+        },
+        {
+          "fonte": "F16",
+          "diz": "Teste 3.15.0: dois blocos <visual> são fundidos (azimuth=60 do 2º bloco, elevation=-5 do 1º); <global> duplicado no mesmo bloco dá 'Schema violation: unique element 'global' found 2 times'."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    },
+    {
+      "tema": "Nome da classe <default> de topo: modeling.rst diz que pode ter outro nome; o parser 3.15.0 recusa",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "A classe de topo se chama 'main' se o nome for omitido e vale 'regardless of whether it is called \"main\" or something else'."
+        },
+        {
+          "fonte": "F17",
+          "diz": "Teste 3.15.0: <default class='x'> no topo → 'XML Error: top-level default class 'main' cannot be renamed'; duas seções de topo <default class='main'> são fundidas; classes aninhadas repetidas → 'repeated default class name'."
+        },
+        {
+          "fonte": "F14",
+          "diz": "Relato de utilizador (vq_bet_official #12) reproduz exatamente 'top-level default class 'main' cannot be renamed'."
+        },
+        {
+          "fonte": "F15",
+          "diz": "Relato de utilizador (myo_sim #94): 3.7 aceitava nomes de classe duplicados e 3.8 passou a dar erro 'repeated default class name' (não consta no changelog 3.8.0 lido)."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "geom/shellinertia em geom do tipo mesh: 'ignorado' (doc e changelog 3.3.0) versus erro de compilação em 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "'This attribute only applies to primitive geoms and is ignored for meshes'; a narrativa de <mesh> ainda cita shellinertia como se fosse atributo de malha."
+        },
+        {
+          "fonte": "F3",
+          "diz": "3.3.0: 'Now this attribute is ignored if the geom is a mesh; instead, inertia inference for meshes is specified in the asset'."
+        },
+        {
+          "fonte": "F19",
+          "diz": "Teste 3.15.0: shellinertia=\"true\" num geom mesh (também via <default>) → 'Error: for mesh geoms, inertia should be specified in the mesh asset'."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Padrão de asset/mesh/inertia: mudança para 'convex' anunciada na doc 3.4.0 versus padrão 'legacy' ainda vigente em 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "Doc 3.4.0: 'The current default value legacy will be changed to convex in a future release.'"
+        },
+        {
+          "fonte": "F2",
+          "diz": "Doc 3.15.0: padrão `legacy` 'for backward compatibility, but convex is recommended' (a promessa de troca foi retirada)."
+        },
+        {
+          "fonte": "F19",
+          "diz": "Teste 3.15.0: sem atributo = legacy = 8617,5 kg no prisma em U (exato 7000, convex 9000)."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Atributos aceitos em <default><mesh>: a doc lista só scale e maxhullvert, mas inertia também é aceito",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "'The available attributes are: scale and maxhullvert' (embora exista a âncora default-mesh-inertia)."
+        },
+        {
+          "fonte": "F17",
+          "diz": "Teste 3.15.0: <default><mesh inertia=\"exact\" maxhullvert=\"6\" scale=\"2 2 2\"/></default> compila e é aplicado às malhas."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Exemplo literal de <replicate> no manual não compila",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "O exemplo usa <geom name=\"Alice\"> dentro de replicate e <accelerometer name=\"Bob\" site=\"Alice\"/> e mostra o XML resultante (nomes Alice-00, Alice-10, Alice-01, Alice-11)."
+        },
+        {
+          "fonte": "F16",
+          "diz": "Teste 3.15.0: o exemplo literal dá 'unrecognized name 'Alice' of sensorized object' (accelerometer exige site); com <site name=\"Alice\"> compila e produz Alice-00…Alice-11 e Bob-00…Bob-11, como descrito."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    }
+  ],
+  "lacunas": [
+    "O código-fonte do parser/compilador (src/xml, src/user) não está no espelho local: o comportamento de 3.15.0 foi verificado só por testes empíricos e pelo XSD gerado, não por leitura do código.",
+    "Versão exata em que 'top-level default class cannot be renamed' e 'repeated default class name' passaram a ser erro: relatos de utilizadores apontam 3.8 (F15), mas o changelog 3.8.0 lido não menciona.",
+    "Versão exata em que `shellinertia=\"true\"` em geom mesh deixou de ser ignorado (3.3.0) e passou a erro; não consta no changelog 3.x lido.",
+    "O changelog cita a remoção do composite `rope` em 3.0.0 ('rope e cloth') e de novo em 3.2.6 ('rope e loop'); a cronologia exata de cada tipo (particle, grid, rope, cloth, loop, box, cylinder, sphere) não foi reconciliada.",
+    "Não testados nesta pergunta: hfield, skin, texture/material, geom sdf, tendões spatial/wrapping, equality em detalhe, sensores/atuadores (Q7), mjSpec (Q6), URDF (Q12), arquivos .mjz e render.",
+    "Efeito de `alignfree=\"true\"`/`freejoint/align` sobre qpos0, keyframes e sensores não foi medido aqui (só citado da doc).",
+    "Não foi verificado o suporte dessas features de MJCF (flex, inertia exact/shell, attach, replicate) no MJX/MuJoCo Warp."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Em que versão passaram a ser erro 'top-level default class cannot be renamed' e 'repeated default class name', e qual é a regra exata para classes de topo repetidas em arquivos incluídos?",
+      "origem": "contradicao",
+      "prioridade": "media",
+      "porque": "modeling.rst contradiz o parser 3.15.0 e o erro quebra composição de modelos com <include> (ex.: MyoSim)."
+    },
+    {
+      "pergunta": "O XSD oficial (src/xml/generated/mjcf.xsd, tag 3.15.0) pode ser guardado localmente para validar MJCF offline (xmllint --schema) como ferramenta de lint da skill? Que limitações tem (cardinalidades '?' não impostas; aceita o que o compilador rejeita)?",
+      "origem": "aprofundamento",
+      "prioridade": "alta",
+      "porque": "Lint barato antes de compilar; a doc avisa que o XSD nunca rejeita o que o MuJoCo aceita mas aceita o que o compilador rejeita."
+    },
+    {
+      "pergunta": "Qual é o efeito exato de `compiler/alignfree=\"true\"` e `freejoint/align` sobre qpos0, keyframes, sensores e `body_ipos` em corpos com free joint (3.2.3+)?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "Muda a semântica de qpos/qvel salvos e é recomendado para modelos novos."
+    },
+    {
+      "pergunta": "Quais modelos pré-3.9 precisam migrar `margin`/`gap` (margin_novo = margin_antigo − gap_antigo) e como os defaults de nativeccd (3.3.0) e multiccd (3.8.0) alteram resultados antigos?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "Mudanças silenciosas de física em modelos existentes (menagerie, relatório do utilizador)."
+    },
+    {
+      "pergunta": "Como o parser trata <include> de arquivos com <compiler>/<option> divergentes, e a política recomendada versus `compiler/conflict` em <attach> (o padrão 'warning' deve mudar para 'merge')?",
+      "origem": "atualidade",
+      "prioridade": "baixa",
+      "porque": "Evita surpresas de unidades (angle) e de opções ao compor modelos."
+    },
+    {
+      "pergunta": "Q12 (URDF): confirmar que URDF e MJCF compartilham o pipeline mjSpec→mjModel e documentar os defaults específicos do URDF (fusestatic, discardvisual, angle, strippath) e o que se perde na importação.",
+      "origem": "perspetiva",
+      "prioridade": "media",
+      "porque": "Sustenta a auditoria da afirmação do relatório sobre URDF, aqui só tratada de forma parcial."
+    },
+    {
+      "pergunta": "A limitação de `range` em joints `free` (aceito e ignorado) e de `hfield`/`sdf` com sensores de colisão aparecem em avisos do compilador ou passam silenciosas?",
+      "origem": "contra-evidencia",
+      "prioridade": "baixa",
+      "porque": "Armadilhas silenciosas merecem checagem automática na skill."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://pypi.org/project/mujoco/",
+      "porque_pode_importar": "Lida (histórico de versões confirma 3.15.0 em 5 out 2026), mas não citada: a formatação do extrato muda entre execuções; a versão fica sustentada pelo changelog local e pelo teste empírico."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/318",
+      "porque_pode_importar": "Discussão histórica 'Auto Inertia Computation' que reproduz a doc antiga ('exact for convex meshes … no algorithm can be exact when the notion of interior is ill-defined'), antes de existir mesh/inertia=exact."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/759",
+      "porque_pode_importar": "Erro 'eigenvalue of mesh inertia too small' ao decompor objetos com V-HACD em centenas de geoms convexos — armadilha de inércia de malhas pequenas."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/commit/c6c3ec31",
+      "porque_pode_importar": "Commit que adicionou o atributo `frame` ao <attach> (3.11.0); mostra os testes/limitações."
+    },
+    {
+      "url": "https://github.com/Farama-Foundation/Gymnasium-Robotics/pull/255",
+      "porque_pode_importar": "PR citado em F14 como correção do erro 'top-level default class 'main' cannot be renamed'; mostra qual construção XML dispara o erro."
+    },
+    {
+      "url": "https://www.robocloudhub.tech/learn/blog/urdf-vs-mjcf",
+      "porque_pode_importar": "Blog (2026) comparando URDF e MJCF; útil para a Q12, não aberto."
+    },
+    {
+      "url": "https://roboti.us/book/modeling.html",
+      "porque_pode_importar": "Manual antigo (2.x, pré-3.0) do site original do MuJoCo; só serve de referência histórica (ex.: exactmeshinertia, composite antigos)."
+    },
+    {
+      "url": "https://ropiens.tistory.com/170",
+      "porque_pode_importar": "Blog coreano com análise de MJCF 2.1 (nível D, desatualizado)."
+    }
+  ],
+  "consultas": [
+    "MuJoCo MJCF XML reference mesh inertia attribute convex exact legacy shell inertiafromgeom [include-domains mujoco.readthedocs.io,github.com]",
+    "MuJoCo changelog removed composite types rope loop cloth grid particle replaced by flexcomp replicate cable",
+    "MuJoCo non-convex mesh mass inertia wrong exactmeshinertia convex hull legacy overcounting github issue",
+    "MuJoCo MJCF visual and collision geoms default class group 2 group 3 contype 0 conaffinity 0 inertiagrouprange mass counted twice",
+    "MuJoCo MJCF attach element asset model prefix include versus attach name collision limitations known issues",
+    "mujoco 3.15.0 release notes PyPI GitHub google-deepmind [include-domains pypi.org,github.com,mujoco.readthedocs.io; time-range year]",
+    "MuJoCo XML multiple <visual> elements merged repeated sections last value wins include",
+    "MuJoCo URDF versus MJCF difference links joints parent child nested bodies compiler fusestatic discardvisual same mjModel",
+    "MuJoCo \"top-level default class\" \"main\" cannot be renamed XML error default class name",
+    "[extract] https://pypi.org/project/mujoco/ (histórico de versões)",
+    "[extract] https://github.com/google-deepmind/mujoco/blob/3.15.0/src/xml/generated/mjcf.xsd (filhos de visual e de mujoco)",
+    "[extract] https://github.com/MyoHub/myo_sim/issues/94 e https://github.com/jayLEE0301/vq_bet_official/issues/12 (erros de classe default)",
+    "[extract] https://mujoco.readthedocs.io/en/3.1.2/XMLreference.html e .../3.4.0/XMLreference.html (histórico de mesh/inertia e exactmeshinertia)"
+  ],
+  "alertas_seguranca": []
+}

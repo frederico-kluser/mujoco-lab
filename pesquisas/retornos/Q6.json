@@ -1,0 +1,1002 @@
+{
+  "id": "Q6",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "A API Python moderna do MuJoCo 3.15.0 segue MjSpec → spec.compile() → MjModel → MjData(model), com acesso nomeado (data.body('x').xpos, .id/.name) e bind(elemento_do_spec) que devolvem VIEWS sobre a memória C: guardar histórico exige .copy() e atribuir ao campo copia os valores para o mesmo buffer [F1][F27]. mj_step(m, d, nstep) chama mj_forward internamente e integra (em Euler, mj_step ≡ mj_forward + mj_Euler), mj_step1/mj_step2 só valem para integradores de passo único (com RK4 o mj_step2 cai em Euler) e, após mj_step, os campos derivados refletem o estado anterior à integração [F4][F7][F31]; spec.recompile(model, data) devolve um NOVO par (MjModel, MjData) preservando o estado [F1][F30]. mj_contactForce devolve força:torque no frame do contacto (mundo: frame.reshape(3,3).T @ f), mj_ray exige cinemática calculada e mjd_transitionFD tem C=nsensordata×(2nv+na) e D=nsensordata×nu (o comentário do cabeçalho troca C/D) — porém, em 3.15.0, com flg_centered=True o D sai com sinal trocado [F4][F28][F29][F22]. Callbacks set_mjcb_* readquirem o GIL a cada chamada e o mjcb_control roda 4× por passo em RK4, mas o custo medido é ≈0,6 µs/chamada (1,01–1,48× em thread única) e o prejuízo real é no escalonamento multi-thread; ponteiros C via ctypes não adquirem o GIL [F1][F6][F32]; mujoco.rollout é multithread nativo (lista de N MjData = N threads; 1,8–6,8×; resultados idênticos) e mujoco.minimize.least_squares é o otimizador de mínimos quadrados [F11][F12][F33]. Armadilhas verificadas: com atuadores multi-entrada (nu ≠ nactuator) o acessor nomeado, bind e data.ctrl[id] gravam no slot errado — use actuator_ctrladr [F35][F19]; vários trechos das skills oficiais (bind().set, spec.delete_body, attach sem site/frame, add_equality(anchor=), add_mesh(vertex=, face=)) falham em 3.15.0 [F2][F3][F30]. Das 7 afirmações do §4 auditadas, 2 estão corretas (mj_step→mj_forward; rollout multithread) e 5 são parciais ('imutável', slices, mj_name2id/id cru, viewer.sync+sleep, 'paralisando o solver') [F27][F31][F32][F33][F34].",
+  "afirmacoes": [
+    {
+      "texto": "O ciclo de vida é MjSpec (blueprint mutável) → spec.compile() → MjModel → MjData(model). MjModel não tem construtor Python (MjModel() levanta TypeError 'No constructor defined!'): só existem as fábricas MjModel.from_xml_string(xml, assets=None, vfs=None), MjModel.from_xml_path(filename, assets=None, vfs=None) e MjModel.from_binary_path(filename, assets=None, vfs=None); MjSpec.from_string/from_file só valem na construção. `import mujoco` NÃO importa os submódulos mujoco.rollout, mujoco.minimize e mujoco.viewer (importe-os explicitamente).",
+      "fontes": [
+        "F1",
+        "F26"
+      ],
+      "citacao_literal": "The ``mujoco.MjModel`` class does not have a Python constructor.",
+      "central": true
+    },
+    {
+      "texto": "Campos de MjData/MjModel, acessores nomeados (data.body('x').xpos) e fatias (data.qpos[3:8]) são views NumPy sobre a memória C, sem cópia: após mj_step os valores mudam in place e guardar histórico exige .copy() (testado, 100 passos: lista sem .copy() → 'todos iguais = True'; com .copy() → False). Atribuir ao campo (data.qpos = arr; data.qpos[:] = arr; data.joint('j').qpos = x) copia os valores para o MESMO buffer (ponteiro inalterado; ValueError se o tamanho não bate) — é a forma correta de definir o estado; campos derivados (xpos, qacc…) são graváveis mas sobrescritos no próximo forward/step.",
+      "fontes": [
+        "F1",
+        "F27"
+      ],
+      "citacao_literal": "The user is therefore advised to create copies where required.",
+      "central": true
+    },
+    {
+      "texto": "mj_name2id(m, mjtObj, nome) devolve -1 quando o nome não existe e `data.ctrl[-1] = x` é um índice NumPy válido: com nome errado escreve silenciosamente no ÚLTIMO atuador (testado: ctrl=[0. 7.]), enquanto data.actuator('nome') levanta KeyError listando os nomes válidos. Os acessores têm .id e .name que substituem mj_name2id/mj_id2name; a skill oficial python/SKILL.md manda NUNCA usar mj_name2id nem índices crus.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F27"
+      ],
+      "citacao_literal": "which can be used as replacements for ``mj_name2id`` and ``mj_id2name`` respectively.",
+      "central": true
+    },
+    {
+      "texto": "Desde 3.11 cada atuador tem actuator_ctrlnum/actuator_outnum e nu = soma(ctrlnum) (pid com entrada padrão [pos, vel] = 2 controles; orientation expmap = 3; motor/position/dcmotor padrão = 1), logo nu ≠ nactuator com atuadores multi-entrada. Nesses modelos data.actuator('x').ctrl, data.bind(atuador_do_spec).ctrl e data.ctrl[model.actuator('x').id] indexam pelo ID do atuador e gravam no slot ERRADO (testado com orientation + 2 motores: data.actuator('mot').ctrl = 5.0 grava em ctrl[1], mas o slot correto é actuator_ctrladr[1] = 3; data.actuator('ori').ctrl devolve 1 valor em vez de 3; .force usa o id em vez de actuator_outadr). Padrão correto: data.ctrl[model.actuator_ctrladr[i] : model.actuator_ctrladr[i] + model.actuator_ctrlnum[i]] = valor.",
+      "fontes": [
+        "F35",
+        "F19",
+        "F10",
+        "F18"
+      ],
+      "citacao_literal": "nu = 5 | nactuator = 3 | actuator_ctrladr = [0 3 4] | actuator_ctrlnum = [3 1 1] | actuator_outadr = [0 3 4] | actuator_outnum = [3 1 1]",
+      "central": true
+    },
+    {
+      "texto": "model.bind(x)/data.bind(x) aceitam um elemento do MjSpec (devolvem views como _MjDataJointViews, com os atributos do acesso nomeado) ou uma LISTA de elementos (devolvem _MjBindData/_MjBindModel: ler dá uma lista; atribuir itera sobre os valores). A escrita funciona por atribuição de atributo (data.bind(joints).qpos = [..], padrão dos testes oficiais), mas o método .set('qpos', v) recomendado em doc/skills/python/SKILL.md NÃO existe em 3.15.0 (AttributeError: object has no attribute 'set').",
+      "fontes": [
+        "F15",
+        "F2",
+        "F14",
+        "F30"
+      ],
+      "citacao_literal": "mj_data.bind(joints).qpos = np.array([1, 2])",
+      "central": true
+    },
+    {
+      "texto": "MjSpec mínimo funcional em 3.15.0: spec = mujoco.MjSpec(); b = spec.worldbody.add_body(name=, pos=); b.add_joint(name=, type=mjtJoint.mjJNT_HINGE, axis=); b.add_geom(name=, type=mjtGeom.mjGEOM_CAPSULE, fromto= ou size=[r, 0, 0], mass=); a = spec.add_actuator(name=, trntype=mjtTrn.mjTRN_JOINT, target='junta'); a.set_to_motor(); spec.add_sensor(name=, type=mjtSensor.mjSENS_JOINTPOS, objtype=mjtObj.mjOBJ_JOINT, objname=); spec.add_key(name=, qpos=); model = spec.compile(); data = mujoco.MjData(model) (testado: nq=nv=nu=1, nbody=2). Os set_to_* (adhesion, cylinder, damper, dcmotor, intvelocity, motor, muscle, orientation, pid, position, velocity) configuram ganhos mas NÃO a transmissão: sem trntype/target válidos o compile levanta ValueError 'invalid transmission type in actuator'; nomes duplicados levantam ValueError já em add_*; um add_* que falha na validação (ex.: add_equality com data de tamanho errado) pode deixar um elemento residual no spec e quebrar o compile seguinte.",
+      "fontes": [
+        "F3",
+        "F1",
+        "F30"
+      ],
+      "citacao_literal": "but do **not** set the transmission. You must always specify",
+      "central": true
+    },
+    {
+      "texto": "spec.recompile(model, data) devolve uma TUPLA (MjModel, MjData) NOVA — ao contrário de mj_recompile em C, que é in-place —, preservando o estado integrado (testado: qpos da junta preservado ao adicionar um corpo com freejoint, nq 1→8) e deixando o par antigo válido; reatribua sempre: model, data = spec.recompile(model, data). Após qualquer edição estrutural do spec, data.bind(...)/model.bind(...) com os objetos antigos levantam ValueError('The mjSpec does not match mjData. Please recompile the mjSpec.') (3.14: mjsElement.signature passa a 0 após edição).",
+      "fontes": [
+        "F1",
+        "F5",
+        "F19",
+        "F30"
+      ],
+      "citacao_literal": "while in the Python API it returns new :ref:`MjModel` and :ref:`MjData` objects. This is to avoid dangling references.",
+      "central": true
+    },
+    {
+      "texto": "mj_step(m, d, nstep=1) tem o argumento nstep (assinatura real: mj_step(m: MjModel, d: MjData, nstep: int = 1) -> None): roda N passos em C sem readquirir o GIL entre eles; o resultado é idêntico ao laço de N chamadas (testado bit a bit) e o ctrl atual é repetido nos N passos — para controle por realimentação, chame mj_step uma vez por ciclo.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F31",
+        "F26"
+      ],
+      "citacao_literal": "but the first one does so without acquiring the GIL in between subsequent",
+      "central": true
+    },
+    {
+      "texto": "mj_step executa mj_checkPos, mj_checkVel, mj_forward, mj_checkAcc e o integrador; mj_forward cobre só os estágios 2–23 (mj_step: 1–26) e não integra nem avança time. Testado em Euler: mj_step ≡ mj_forward + mj_Euler (qpos, qvel e time idênticos). Após mj_step os campos derivados (xpos, site_xpos, sensordata, energy) ainda refletem o estado ANTERIOR à integração (jointpos=0.400000 enquanto qpos[0]=0.400505): chame mj_forward para lê-los consistentes — também logo após MjData(m), resets, keyframes ou escrita de estado (xpos e sensordata começam em zero).",
+      "fontes": [
+        "F7",
+        "F4",
+        "F20",
+        "F31"
+      ],
+      "citacao_literal": "mj_forward performs the same computations as :ref:`mj_step` but without the integration. It is useful after loading or",
+      "central": true
+    },
+    {
+      "texto": "mj_step1(m, d) + mj_step2(m, d) permitem calcular o controle entre a parte dependente de posição/velocidade e a de forças, mas só funcionam com integradores de passo único (Euler, implicit, implicitfast): com RK4 selecionado o mj_step2 integra com Euler (testado: step1+step2 == Euler puro ≠ mj_step com RK4). Em Euler, step1+step2 é bit a bit igual a mj_step.",
+      "fontes": [
+        "F7",
+        "F4",
+        "F20",
+        "F31"
+      ],
+      "citacao_literal": "though that the RK4 solver does not work with mj_step1/2. See :ref:`Pipeline` for a more detailed description.",
+      "central": true
+    },
+    {
+      "texto": "mj_stateSize(m, sig), mj_getState(m, d, state, sig) e mj_setState(m, d, state, sig) usam sig = bits de mjtState (o enum é aceito direto): mjSTATE_PHYSICS=30 (nq+nv+na), mjSTATE_FULLPHYSICS=8223 (1+nq+nv+na, inclui time), mjSTATE_INTEGRATION=16383 (toda a entrada da dinâmica direta). Restaurar com FULLPHYSICS reproduz a trajetória só até ~2e-15 após 500 passos com contacto (o warmstart não é restaurado); com mjSTATE_INTEGRATION a reprodução é bit a bit.",
+      "fontes": [
+        "F4",
+        "F31",
+        "F26"
+      ],
+      "citacao_literal": "non-initial state (since the initial state is always cold-started).",
+      "central": true
+    },
+    {
+      "texto": "mj_resetDataKeyframe(m, d, key) copia time, qpos, qvel, act e ctrl do keyframe (testado: key 'baixo' → time=1.5, qvel[-1]=0.1) mas NÃO recalcula os campos derivados — chame mj_forward depois (xpos mudou após o forward); o id vem de model.key('nome').id e, no MjSpec, spec.add_key(name=, qpos=, qvel=, ctrl=, time=).",
+      "fontes": [
+        "F2",
+        "F31",
+        "F30"
+      ],
+      "citacao_literal": "mujoco.mj_forward(model, data)  # Recompute kinematics and sensors",
+      "central": false
+    },
+    {
+      "texto": "mj_contactForce(m, d, id, result) escreve em result (float64[6], gravável) força(3) seguida de torque(3) NO FRAME DO CONTACTO. data.contact[i].frame (9 valores) guarda os eixos nas LINHAS (normal em [0:3]); para o mundo use R = c.frame.reshape(3, 3); f_mundo = R.T @ f_local[:3] (idem torque). Verificado: a soma das forças convertidas = (0, 0, 9.81) = m·g com cone pirâmide, elíptico e condim=6. A normal aponta de geom[0] para geom[1] e f_mundo é a força exercida por geom[0] sobre geom[1] (esfera livre sobre bloco estático: normal (0,0,-1), f_mundo (0,0,-9.81)); a ordem geom[0]/geom[1] segue o TIPO do geom (a esfera é geom[0] apesar do id maior). Use contact.geom (data.contact.geom é N×2); geom1/geom2 estão marcados deprecated no cabeçalho.",
+      "fontes": [
+        "F4",
+        "F9",
+        "F28"
+      ],
+      "citacao_literal": "normal axis (which is the X axis of the contact frame by our convention) is in position mjContact.frame[0-2], the Y axis",
+      "central": true
+    },
+    {
+      "texto": "mj_ray(m, d, pnt, vec, geomgroup, flg_static, bodyexclude, geomid, normal=None) -> float devolve x tal que pnt + x·vec toca a superfície mais próxima (distância em unidades de |vec|; -1 sem interseção); geomid é np.int32[1] gravável (ou None), geomgroup é uint8[6] (ou None), bodyexclude=-1 inclui todos os corpos e o normal opcional (desde 3.5) aponta para fora da geometria. Exige cinemática calculada: logo após MjData(m) devolve -1 (geom_xpos zerado) até mj_forward/mj_kinematics.",
+      "fontes": [
+        "F7",
+        "F28",
+        "F19"
+      ],
+      "citacao_literal": "All ray collision functions rely on quantities computed by :ref:`mj_kinematics` (see :ref:`mjData`), so must be called",
+      "central": false
+    },
+    {
+      "texto": "mjd_transitionFD(m, d, eps, flg_centered, A, B, C, D) usa a convenção de controle: A=(2nv+na)², B=(2nv+na)×nu, C=nsensordata×(2nv+na), D=nsensordata×nu, todos opcionais (None). O comentário do cabeçalho mujoco.h (e a docstring do binding) troca C e D (diz D: nsensordata×2nv+na; C: nsensordata×nu), mas o runtime exige C=(nsensordata, 2*nv+na) (TypeError caso contrário) e a doc e o fonte confirmam C=∂s/∂x, D=∂s/∂u. Com integrador RK4 levanta FatalError 'RK4 integrator is not supported' e, desde 3.14, também com sleeping ativado.",
+      "fontes": [
+        "F29",
+        "F22",
+        "F7",
+        "F8",
+        "F19"
+      ],
+      "citacao_literal": "C/D com dims do comentário do cabeçalho -> TypeError C should be of shape (nsensordata, 2*nv+na)",
+      "central": true
+    },
+    {
+      "texto": "Em 3.15.0 (e no ramo main em 2026-10-07), mjd_transitionFD com flg_centered=True devolve D (∂sensordata/∂ctrl) com o SINAL TROCADO: o actuatorfrc de um atuador position kp=5 dá D=−5 centrado contra +5 não centrado (correto); no extremo do ctrlrange (diferença unilateral) dá +5; A, B e C estão corretos. Causa no fonte: no ramo centrado de clampedDiff a chamada diff(dx, x_plus, x_minus, 2*h, nx) usa diff(dx, x1, x2, h, n) = (x2−x1)/h. Mitigação: obter D com flg_centered=False (ou negar D).",
+      "fontes": [
+        "F29",
+        "F22",
+        "F23"
+      ],
+      "citacao_literal": "D sem limite                    : D(centrado)=-5.0000  D(não centrado)=+5.0000  (esperado +kp=+5)",
+      "central": false
+    },
+    {
+      "texto": "mjd_inverseFD(m, d, eps, flg_actuation, DfDq, DfDv, DfDa, DsDq, DsDv, DsDa, DmDq) tem todas as saídas opcionais, transpostas em relação à convenção de controle (DfD*: nv×nv; DsD*: nv×nsensordata) e, desde 3.11, DmDq é nv×nC (antes nv×nM) porque mjData.qM foi removido em favor de mjData.M (CSR); DfDa ≈ M(q) (erro 5e-8 no teste). Na mesma mudança mj_fullM passou a ser mj_fullM(m, d, dst).",
+      "fontes": [
+        "F19",
+        "F29",
+        "F26"
+      ],
+      "citacao_literal": "``(nv x nM)`` to ``(nv x nC)``.",
+      "central": false
+    },
+    {
+      "texto": "Callbacks expostos em 3.15.0: set_mjcb_{passive, control, contactfilter, sensor, time, act_dyn, act_gain, act_bias} e set_mju_user_{warning, malloc, free} (malloc/free só aceitam ponteiros ctypes), cada um com get_*(); set_mjcb_x(callable) instala e set_mjcb_x(None) remove (set_mjcb_time(None) restaura o timer padrão). Os callables Python recebem os MESMOS objetos passados a mj_step (m is model): control/passive (m, d); contactfilter (m, d, geom1, geom2) -> int; sensor (m, d, stage); act_dyn/act_gain/act_bias (m, d, id) -> float. Uma exceção no callback propaga como a exceção Python original (ValueError, testado). Os callbacks são globais do processo.",
+      "fontes": [
+        "F13",
+        "F1",
+        "F32",
+        "F26"
+      ],
+      "citacao_literal": "pymodule.def(\"set_mjcb_control\", [](py::handle h) {",
+      "central": true
+    },
+    {
+      "texto": "As funções do binding liberam o GIL durante a execução da função C (threads Python podem rodar mj_step em paralelo, com o GIL retido só no código Python), mas callbacks Python readquirem o GIL a cada chamada (a doc fala em 'severe performance impact' e 'unlikely to be suitable for production use case'); um ponteiro de função nativo obtido via ctypes (ex.: ctypes.CDLL(lib).funcao) é atribuído direto ao ponteiro C e o GIL NÃO é adquirido. Em 3.15.0 também MjSpec.from_file, MjModel.from_xml_path, spec.compile() e spec.recompile() liberam o GIL (testado: contador concorrente a 86–95 % da taxa em repouso); a issue #3118 reportava o contrário para recompile em 3.5.0.",
+      "fontes": [
+        "F1",
+        "F13",
+        "F32",
+        "F24"
+      ],
+      "citacao_literal": "The bindings automatically acquire the GIL each time the callback is entered, and release it before reentering MuJoCo.",
+      "central": true
+    },
+    {
+      "texto": "mjcb_control é chamado 1× por mj_step/mj_forward/mj_step1 com Euler, implicit e implicitfast e 4× por mj_step com RK4 (testado: 1/1/4); mjcb_sensor (sensor user com needstage=vel) é chamado 1× por passo mesmo em RK4, com stage=2 (mjSTAGE_VEL). Em RK4 a única forma de mudar o controle entre os sub-passos é o mjcb_control.",
+      "fontes": [
+        "F6",
+        "F32"
+      ],
+      "citacao_literal": "When using the RK integrator, it will be called 4 times per step.",
+      "central": true
+    },
+    {
+      "texto": "Custo medido (mujoco 3.15.0, Python 3.13 com GIL, 32 CPUs lógicos, medianas intercaladas): um callback Python no-op custa ≈0.6 µs por chamada — modelo mínimo 1-DoF: Euler 1.38→1.99 µs/passo (1.45×), RK4 5.16→7.65 (1.48×, 4 chamadas); humanoid (27 DoF): 1.02× (Euler) e 1.01× (RK4); ponteiro C via ctypes: ~1.00× em todos. Com threads Python (humanoid, 4000 passos/thread), sem callback 2/4/8 threads levam 1.10×/1.33×/2.03× o tempo de 1 thread; com callback Python no-op, 1.28×/1.73×/4.23× — o GIL degrada o escalonamento multi-thread, mas não 'paralisa' o solver.",
+      "fontes": [
+        "F32"
+      ],
+      "citacao_literal": "modelo mínimo 1 DoF Euler: sem callback: mediana 1.38 µs/passo | callback Python no-op: mediana 1.99 µs/passo | ponteiro C (ctypes): mediana 1.38 µs/passo | razão py-noop/sem = 1.45x | razão ctypes/sem = 1.01x",
+      "central": true
+    },
+    {
+      "texto": "Assinatura real (3.15.0): from mujoco import rollout; rollout.rollout(model, data, initial_state, control=None, *, control_spec=mjSTATE_CTRL (=64), skip_checks=False, nstep=None, initial_warmstart=None, state=None, sensordata=None, chunk_size=None, persistent_pool=False) -> (state, sensordata), com initial_state (nbatch×nstate, nstate = mj_stateSize(m, mjSTATE_FULLPHYSICS)), control (nbatch×nstep×ncontrol) e saídas state (nbatch×nstep×nstate) e sensordata (nbatch×nstep×nsensordata); model pode ser uma sequência de nbatch MjModel homogêneos e control_spec aceita bits de mjSTATE_USER. Num rollout que diverge o estado final é repetido (a coluna time deixa de crescer).",
+      "fontes": [
+        "F11",
+        "F1",
+        "F33"
+      ],
+      "citacao_literal": "control_spec: int = mujoco.mjtState.mjSTATE_CTRL.value,",
+      "central": true
+    },
+    {
+      "texto": "O multithread do rollout é nativo (C++ com pool de threads; GIL liberado durante a execução): passe uma LISTA com N MjData (um por thread) → N threads; com um único MjData roda no thread chamador (nthread=0); uma TUPLA de MjData falha (RuntimeError: Unable to cast ... tuple) porque o wrapper só trata `list`. Resultados idênticos bit a bit entre 1 e N threads. Medido (humanoid, 64 rollouts × 400 passos, 32 CPUs lógicos): 1.8×/3.1×/4.6×/6.8× com 2/4/8/16 MjData contra 1 MjData; o laço Python equivalente é só 1.08× mais lento que rollout em 1 thread. Rollout(nthread=N) exige len(data)==N; persistent_pool=True reutiliza o pool (não é thread-safe entre chamadas concorrentes).",
+      "fontes": [
+        "F12",
+        "F11",
+        "F1",
+        "F21",
+        "F33"
+      ],
+      "citacao_literal": "py::gil_scoped_release no_gil;",
+      "central": true
+    },
+    {
+      "texto": "mujoco.minimize.least_squares(x0, residual, bounds=None, jacobian=None, norm=Quadratic(), eps=1.49e-8, mu_min=1e-6, mu_max=1e8, mu_factor=1.2589, xtol=1e-8, gtol=1e-8, max_iter=100, verbose=Verbosity.ITER, output=None, iter_callback=None, check_derivatives=False, x_scale=None) -> (x, trace); residual(x) recebe x com shape (nx, npontos) e devolve float64 (nres, npontos); bounds=[inferior, superior] finitos (em radianos para juntas; range de juntas no XML é em graus por omissão). Testado: Rosenbrock → [1, 1] em 15 iterações; IK 2-DOF converge (erro ~1e-10) a partir de [-0.3, -0.3] e [0.3, 0.3]. mujoco.minimize não vem com `import mujoco`.",
+      "fontes": [
+        "F16",
+        "F1",
+        "F33"
+      ],
+      "citacao_literal": "residual: Vectorized function returning the residual for 1 or more points.",
+      "central": false
+    },
+    {
+      "texto": "Quatro trechos de doc/skills/spec_editing/SKILL.md falham em 3.15.0: spec.delete_body/delete_geom/delete_joint/delete_actuator('x') não existem (só spec.delete(elemento), desde 3.3.4); parent.attach(child, prefix='left_') sem site/frame levanta ValueError 'One of frame or site must be specified.'; add_equality(..., anchor=[0,0,0]) levanta TypeError (use objtype=mjOBJ_BODY e data com 11 valores); add_mesh(name=, vertex=, face=) levanta TypeError (use uservert=/userface=, testado com um tetraedro).",
+      "fontes": [
+        "F3",
+        "F30",
+        "F1",
+        "F19"
+      ],
+      "citacao_literal": "spec.delete_body('unwanted_body')",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/python.rst",
+      "doi": "",
+      "titulo": "Python (bindings) — doc/python.rst",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/python/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo Python: Simulation, Sensors & Math (skill oficial)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/spec_editing/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo Spec Editing: Building & Modifying Models (skill oficial)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/simulation.rst",
+      "doi": "",
+      "titulo": "Simulation — programming/simulation.rst",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/modeledit.rst",
+      "doi": "",
+      "titulo": "Model Editing — programming/modeledit.rst",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/APIglobals.rst",
+      "doi": "",
+      "titulo": "Globals (callbacks mjcb_*) — APIreference/APIglobals.rst",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/functions.rst",
+      "doi": "",
+      "titulo": "Functions — APIreference/functions.rst",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mujoco.h",
+      "doi": "",
+      "titulo": "include/mujoco/mujoco.h (cabeçalho C da API)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mjdata.h",
+      "doi": "",
+      "titulo": "include/mujoco/mjdata.h (struct mjContact)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mjmodel.h",
+      "doi": "",
+      "titulo": "include/mujoco/mjmodel.h (actuator_ctrladr/ctrlnum, nu, nactuator)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/rollout.py",
+      "doi": "",
+      "titulo": "python/mujoco/rollout.py (módulo mujoco.rollout)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/rollout.cc",
+      "doi": "",
+      "titulo": "python/mujoco/rollout.cc (rollout nativo com thread pool)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/callbacks.cc",
+      "doi": "",
+      "titulo": "python/mujoco/callbacks.cc (callbacks Python, GIL, ctypes)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/__init__.py",
+      "doi": "",
+      "titulo": "python/mujoco/__init__.py (bind, from_zip/to_zip)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/specs_test.py",
+      "doi": "",
+      "titulo": "python/mujoco/specs_test.py (testes oficiais de MjSpec/bind)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/minimize.py",
+      "doi": "",
+      "titulo": "python/mujoco/minimize.py (mujoco.minimize.least_squares)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/viewer.py",
+      "doi": "",
+      "titulo": "python/mujoco/viewer.py (launch_passive, Handle.sync/lock)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/indexer_xmacro.h",
+      "doi": "",
+      "titulo": "python/mujoco/indexer_xmacro.h (acessores nomeados: tamanhos por campo)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog — doc/changelog.rst (3.0 → 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "Computation — pipeline e estágios (computation/index.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F21",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/rollout.ipynb.md",
+      "doi": "",
+      "titulo": "Rollout Tutorial (notebook oficial convertido)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F22",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_derivative_fd.c",
+      "doi": "",
+      "titulo": "engine_derivative_fd.c (tag 3.15.0): mjd_transitionFD, clampedDiff, diff",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, tag 3.15.0 (extração via Tavily)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://github.com/google-deepmind/mujoco/blob/main/src/engine/engine_derivative_fd.c",
+      "doi": "",
+      "titulo": "engine_derivative_fd.c (ramo main em 2026-10-07): clampedDiff",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco, ramo main (extração via Tavily)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F24",
+      "url": "https://github.com/google-deepmind/mujoco/issues/3118",
+      "doi": "",
+      "titulo": "Python API: Recompile doesn't release the GIL (#3118)",
+      "autores": "robin-moss (issue; atribuída ao mantenedor havess; fechada)",
+      "ano": "2026",
+      "veiculo": "GitHub issues, google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F25",
+      "url": "https://github.com/google-deepmind/mujoco/issues/1159",
+      "doi": "",
+      "titulo": "Sync() runs slowly in Mujoco 3.0.0 python bindings (#1159)",
+      "autores": "hxrkpib (issue; atribuída ao mantenedor saran-t)",
+      "ano": "2023",
+      "veiculo": "GitHub issues, google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F26",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-introspeccao",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: introspecção de assinaturas (help/__doc__), fábricas de MjModel/MjSpec, submódulos e categorias de acesso nomeado",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-views-nomes",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: snippet do relatório (mj_name2id + data.ctrl[id]) vs acesso nomeado, e views vs cópias",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-contacto-raio",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mj_contactForce (frame, conversão ao mundo, cones) e mj_ray",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F29",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-fd",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mjd_transitionFD/mjd_inverseFD (dimensões, sinal de D, RK4)",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F30",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-mjspec",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: MjSpec mínimo, bind, recompile e conformidade dos snippets das skills oficiais",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F31",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-passo-estado",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mj_step/mj_forward/mj_step1-2/RK4/nstep, mj_getState/setState e keyframes",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F32",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-callbacks-gil",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: callbacks set_mjcb_* (contagem, exceção, custo) e escalonamento de threads/GIL",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F33",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-rollout-minimize",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mujoco.rollout (multithread) e mujoco.minimize.least_squares",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F34",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-ritmo-corrigido",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: laços de ritmo com stub de launch_passive e código corrigido",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F35",
+      "url": "https://pypi.org/project/mujoco/3.15.0/#teste-mimo",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: atuadores multi-entrada (orientation/pid): acessor nomeado, bind e data.ctrl[id]",
+      "autores": "Investigador Q6 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0, Python 3.13.15, numpy 2.5.3 (venv local do laboratório)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "`MjModel` é o plano estático (imutável após a conversão do MJCF) e `MjData` guarda o estado temporal: qpos, qvel, qacc, sensordata, ctrl.",
+      "veredito": "parcial",
+      "correcao": "MjModel é o modelo compilado cuja ESTRUTURA (nq, nv, nbody, ngeom…, campos inteiros estruturais) é fixa e somente leitura (m.nq = 99 → AttributeError), mas os parâmetros REAIS são graváveis em tempo de execução (m.opt.timestep, m.body_mass, geom_friction…: a doc diz que são 'safe to change', com exceções que exigem mj_setConst) — logo 'imutável' é incorreto; mudar a estrutura exige editar o MjSpec e spec.recompile(model, data). Em MjData o ESTADO físico é time+qpos+qvel+act (mjSTATE_FULLPHYSICS, tamanho 1+nq+nv+na); ctrl, qfrc_applied, xfrc_applied e mocap são ENTRADAS do usuário e qacc, sensordata, xpos e contactos são SAÍDAS derivadas do estado de integração (qacc só é entrada na dinâmica inversa).",
+      "fontes": [
+        "F4",
+        "F1",
+        "F27"
+      ]
+    },
+    {
+      "afirmacao": "Atribuir via slices do NumPy aos campos de `MjData` mapeia memória C diretamente: uma referência sem cópia sobrepõe valores e pode viciar resultados.",
+      "veredito": "parcial",
+      "correcao": "Mecanismo correto, risco mal descrito. Os campos são views NumPy sobre a memória C, sem cópia ('access to the raw memory used by MuJoCo without copying or buffering'). Atribuir por fatia ou campo (d.qpos[:] = x; d.qpos = x; d.joint('j').qpos = x) escreve direto no estado e é a forma correta de definir condições iniciais (depois, mj_forward); testado: d.qpos = arr mantém o ponteiro e levanta ValueError se o tamanho não bate. O que 'vicia' resultados é LER sem cópia: guardar d.qpos ou d.body('b').xpos numa lista faz todos os elementos apontarem para o último valor (testado: 'todos iguais = True'); use .copy(). Campos derivados (xpos, qacc, sensordata) são sobrescritos a cada mj_forward/mj_step — escrever neles não persiste.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F27"
+      ]
+    },
+    {
+      "afirmacao": "O código usa `mujoco.mj_name2id(modelo, mujoco.mjtObj.mjOBJ_ACTUATOR, \"atuador_principal\")` para obter o id do atuador e `data.ctrl[id] = torque`.",
+      "veredito": "parcial",
+      "correcao": "Funciona, mas é o padrão desaconselhado e tem duas armadilhas. Executado sem viewer em 3.15.0: mj_name2id(...) = 0 e data.ctrl[0] = 0.5 dão qpos=[0.10406 0.] após 1 s. Porém (1) nome inexistente → -1 e data.ctrl[-1] = x escreve silenciosamente no ÚLTIMO atuador, enquanto model.actuator('nome') / data.actuator('nome') levanta KeyError listando os nomes válidos (a skill oficial manda NUNCA usar mj_name2id nem índices crus); (2) com atuadores multi-entrada (3.11+: pid padrão = 2 controles, orientation = 3) vale nu ≠ nactuator e o ID do atuador NÃO é o índice em data.ctrl — nem o acessor data.actuator('x').ctrl acerta o slot; use model.actuator_ctrladr[id] (== id só quando todos os atuadores têm ctrlnum==1). Versão corrigida, testada com um stub sem janela nos dois tipos de modelo (torque no slot certo, KeyError com nome errado):\ndef rodar(model, data, viewer, nome, torque, max_catchup=50):\n    i = model.actuator(nome).id               # KeyError se o nome não existir (em vez de -1)\n    slot = model.actuator_ctrladr[i]          # == i só se todos os atuadores têm ctrlnum == 1\n    wall0, sim0 = time.perf_counter(), data.time\n    while viewer.is_running():\n        alvo = sim0 + (time.perf_counter() - wall0)\n        n = 0\n        while data.time < alvo and n < max_catchup:\n            data.ctrl[slot] = torque\n            mujoco.mj_step(model, data); n += 1\n        viewer.sync(); time.sleep(0.001)",
+      "fontes": [
+        "F2",
+        "F1",
+        "F27",
+        "F35",
+        "F34"
+      ]
+    },
+    {
+      "afirmacao": "O relatório usa `viewer.sync()` dentro de `launch_passive` e `time.sleep` para sincronizar com o tempo real.",
+      "veredito": "parcial",
+      "correcao": "É exatamente o padrão do python.rst (while viewer.is_running(): mj_step → viewer.sync() → sleep(timestep − tempo gasto)), mas o próprio doc o chama de 'Rudimentary time keeping, will drift relative to wall clock' e avisa que o exemplo não mantém necessariamente o tempo real. Medido com um stub sem janela (timestep 2 ms, sync simulado 1,5 ms, 3 s): time.sleep(timestep) fixo → 0.517× do tempo real; sleep(timestep − gasto) (padrão oficial) → 0.964×; ancorar ao relógio de parede (avançar mj_step até data.time alcançar perf_counter() − t0, ver snippet acima) → 0.999×. Regras: qualquer alteração de model/data/viewer.opt fora de sync() exige `with viewer.lock():`; viewer.sync(state_only=True) é mais rápido (só o estado de integração + mj_forward); launch_passive no macOS exige mjpython; o custo do sync pode ser de vários ms (issue #1159: 6 ms em 3.0.0). Não testei janela real (política do laboratório).",
+      "fontes": [
+        "F1",
+        "F17",
+        "F34",
+        "F25"
+      ]
+    },
+    {
+      "afirmacao": "`mj_step` invoca internamente `mj_forward`.",
+      "veredito": "correta",
+      "correcao": "Correta. mj_step = mj_checkPos → mj_checkVel → mj_forward → mj_checkAcc → integrador (Euler/RK4/implicit); mj_forward cobre os estágios 2–23 (mj_step: 1–26). Testado em Euler: mj_step ≡ mj_forward + mj_Euler (qpos, qvel e time idênticos) e mj_forward sozinho não avança time nem estado. Nuance importante: após mj_step os campos derivados (xpos, site_xpos, sensordata, energy) refletem o estado ANTERIOR à integração (jointpos=0.400000 com qpos[0]=0.400505) — chame mj_forward para lê-los consistentes. Em RK4 a sequência é repetida 3 vezes pelo integrador (mjcb_control 4×/passo).",
+      "fontes": [
+        "F4",
+        "F7",
+        "F20",
+        "F31"
+      ]
+    },
+    {
+      "afirmacao": "Callbacks `mjcb_control`/`mjcb_sensor` em Python 'induzem chamadas repetitivas ao GIL durante as quatro derivações do RK4 num único mj_step', paralisando o solver; a mitigação é usar extensões C via ctypes.",
+      "veredito": "parcial",
+      "correcao": "Correto: os bindings readquirem o GIL a cada entrada de callback e o mjcb_control roda 4× por mj_step com RK4 (doc + teste: 1/1/4 chamadas em Euler/implicitfast/RK4); a mitigação com ponteiro C via ctypes é a documentada (o GIL não é adquirido; testado: custo 1.00×). Incorreto/exagerado: (a) 'quatro derivações' vale só para mjcb_control — mjcb_sensor (sensor user) roda 1×/passo mesmo em RK4; (b) não 'paralisa' o solver: custo medido ≈0.6 µs por chamada (modelo 1-DoF: 1.45× em Euler e 1.48× em RK4; humanoid 27 DoF: 1.02×/1.01×); o efeito real é perder o escalonamento multi-thread (humanoid, 8 threads: 4.23× o tempo de 1 thread com callback contra 2.03× sem); (c) há mitigações mais simples que extensões C: definir data.ctrl antes de mj_step (laço externo), mj_step1/mj_step2 (só Euler/implicit/implicitfast; RK4 cai em Euler), mj_step(nstep=N) (sem GIL entre passos) e mujoco.rollout para controle em malha aberta. Exceções no callback propagam como exceções Python.",
+      "fontes": [
+        "F1",
+        "F6",
+        "F13",
+        "F32",
+        "F4"
+      ]
+    },
+    {
+      "afirmacao": "`mujoco.rollout` oferece paralelismo multithread em CPU.",
+      "veredito": "correta",
+      "correcao": "Correta, com condições: `from mujoco import rollout` (não vem com `import mujoco`); o pool é nativo C++ com o GIL liberado, mas só paraleliza se `data` for uma LISTA com N MjData (um por thread) — com um MjData roda no thread chamador e uma tupla falha (RuntimeError). Resultados idênticos bit a bit entre 1 e N threads; medido (humanoid, 64×400 passos, 32 CPUs lógicos): 1.8×/3.1×/4.6×/6.8× com 2/4/8/16 MjData. É só CPU; GPU = MJX/MuJoCo Warp (fora do escopo, Q11).",
+      "fontes": [
+        "F1",
+        "F11",
+        "F12",
+        "F33"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Dimensões de C e D em mjd_transitionFD",
+      "posicoes": [
+        {
+          "fonte": "F8",
+          "diz": "O comentário do cabeçalho (e a docstring do binding) lista 'D: (nsensordata x 2*nv+na)' e 'C: (nsensordata x nu)'."
+        },
+        {
+          "fonte": "F7",
+          "diz": "A doc da API (e o comentário no fonte C, F22) dá C=∂s/∂x com nsensordata×2*nv+na e D=∂s/∂u com nsensordata×nu."
+        },
+        {
+          "fonte": "F29",
+          "diz": "O runtime exige C=(nsensordata, 2*nv+na): TypeError caso contrário."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "Sinal de D (∂sensordata/∂ctrl) em mjd_transitionFD com flg_centered=True",
+      "posicoes": [
+        {
+          "fonte": "F7",
+          "diz": "D = ∂s/∂u (derivada do sensor em relação ao controle)."
+        },
+        {
+          "fonte": "F29",
+          "diz": "Com flg_centered=True o D de actuatorfrc (position kp=5) sai −5; com flg_centered=False sai +5; no extremo do ctrlrange sai +5."
+        },
+        {
+          "fonte": "F22",
+          "diz": "O ramo centrado de clampedDiff chama diff(dx, x_plus, x_minus, 2*h, nx) e diff(dx, x1, x2, h, n) calcula (x2−x1)/h; a main tem o mesmo trecho (F23)."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Escrita via bind(): .set() ou atribuição de atributo",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "doc/skills/python/SKILL.md manda escrever com data.bind(joint).set('qpos', 0.5)."
+        },
+        {
+          "fonte": "F15",
+          "diz": "O teste oficial escreve por atribuição: mj_data.bind(joints).qpos = np.array([1, 2])."
+        },
+        {
+          "fonte": "F30",
+          "diz": "Em 3.15.0 data.bind(j).set(...) levanta AttributeError (sem método 'set')."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Snippets de doc/skills/spec_editing/SKILL.md vs API real do MjSpec",
+      "posicoes": [
+        {
+          "fonte": "F3",
+          "diz": "Usa spec.delete_body/geom/joint/actuator, parent.attach(child, prefix=) sem site/frame, add_equality(anchor=) e add_mesh(vertex=, face=)."
+        },
+        {
+          "fonte": "F30",
+          "diz": "Em 3.15.0: não há delete_body etc. (só spec.delete(elemento)); attach exige site ou frame; add_equality não tem anchor (data de 11 valores); add_mesh usa uservert/userface."
+        },
+        {
+          "fonte": "F19",
+          "diz": "Changelog 3.3.4: 'The Python functions element.delete have been replaced by spec.delete(element)'."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Categorias de acesso nomeado listadas no python.rst vs MjModel em 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "Lista 'tendon or ten' e 'text' entre as categorias de acesso nomeado de MjModel e MjData."
+        },
+        {
+          "fonte": "F26",
+          "diz": "Em 3.15.0 MjModel não tem os acessores ten nem text (m.text('x') → AttributeError); MjData só tem body, jnt/joint, geom, site, cam/camera, light, tendon/ten, actuator e sensor."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Acesso nomeado a atuadores com atuadores multi-entrada (MIMO)",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "Os acessores mapeiam os arrays do MjData/MjModel da entidade pelo nome/id, sem ressalva sobre atuadores multi-entrada; a skill oficial recomenda data.actuator('motor').ctrl."
+        },
+        {
+          "fonte": "F19",
+          "diz": "Desde 3.11 cada atuador tem ctrlnum/outnum e nu = sum(ctrlnum) (nactuator == nu só quando todos têm 1)."
+        },
+        {
+          "fonte": "F35",
+          "diz": "Com orientation (3 controles) antes de dois motores, data.actuator('mot').ctrl = 5.0 grava em ctrl[1]; o slot correto é actuator_ctrladr[1] = 3."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Custo dos callbacks Python: 'severe performance impact' vs medição",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "'This is likely to incur a severe performance impact … unlikely to be suitable for production use case'."
+        },
+        {
+          "fonte": "F32",
+          "diz": "Medido: ≈0.6 µs/chamada; 1.45–1.48× em modelo de 1 DoF, 1.01–1.02× no humanoid em thread única; com 8 threads 4.23× o tempo de 1 thread (contra 2.03× sem callback)."
+        }
+      ],
+      "explicacao_provavel": "populacao"
+    },
+    {
+      "tema": "Tipo aceito para `data` em mujoco.rollout",
+      "posicoes": [
+        {
+          "fonte": "F11",
+          "diz": "A anotação/docstring aceita Union[MjData, Sequence[MjData]]."
+        },
+        {
+          "fonte": "F33",
+          "diz": "Uma tupla de MjData falha com RuntimeError (Unable to cast ... tuple); só `list` é tratada como sequência (isinstance(data, list))."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    }
+  ],
+  "lacunas": [
+    "Não consultei docs/relatorio-tecnico-original.md (fora das ferramentas autorizadas no preâmbulo): a auditoria baseia-se nas 7 afirmações listadas no brief e o snippet do relatório foi reconstruído a partir delas (mj_name2id + data.ctrl[id] + launch_passive/sync/sleep); outros trechos do §4 não foram auditados.",
+    "Não testei o viewer com janela real (política: sem mujoco.viewer/GLFW): o ritmo foi medido com um stub com o mesmo contrato de launch_passive (is_running/sync/lock/close); o custo real de viewer.sync() em KDE Wayland/XWayland com a RTX 4070 continua por medir (a issue #1159 reporta 6 ms em 3.0.0).",
+    "Custos e speedups medidos numa única máquina (32 CPUs lógicos, Python 3.13 com GIL, ruído de ±10–20 % em medições de µs); builds free-threaded (3.13t/3.14t, suportados desde 3.11/3.13 segundo o changelog; o fonte tem MutexLockIfGilDisabled) não foram testados.",
+    "O sinal trocado de D em mjd_transitionFD(flg_centered=True) foi reproduzido por teste e por leitura do fonte 3.15.0/main (extração parcial via Tavily), mas não encontrei issue ou correção upstream; não sei se os mantenedores já conhecem o problema.",
+    "O defeito de indexação por ID do acessor nomeado/bind em atuadores multi-entrada foi verificado com orientation (3 controles) e pid padrão (2 controles; só a contagem); dcmotor com entradas pos/vel/ff, pid com 3 entradas e os campos length/moment/velocity não foram testados.",
+    "mj_ray só foi testado com plano e caixa (sem malha, hfield ou flex) e mj_multiRay apenas em exploração; mju_* (quaternions/poses) só tiveram a existência e dois exemplos verificados; USD exporter, sysid e Renderer ficaram fora do escopo.",
+    "A afirmação de que um add_* que falha pode deixar elemento residual no spec foi testada só com add_equality; não sei se vale para os outros add_*."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "O D de mjd_transitionFD com flg_centered=True tem sinal invertido em 3.15.0/main: existe issue ou correção upstream, e outros usos de clampedDiff (mjd_stepFD, DsDu) são afetados?",
+      "origem": "contra-evidencia",
+      "prioridade": "alta",
+      "porque": "Afeta LQR/estimadores que usam D (sensor × controle); reproduzido por teste e leitura do fonte, sem confirmação upstream."
+    },
+    {
+      "pergunta": "Quais trechos das demais skills oficiais (doc/skills/accelerated, gui, rendering, studio) falham em 3.15.0, como os de python/ (bind().set) e spec_editing/?",
+      "origem": "contradicao",
+      "prioridade": "alta",
+      "porque": "Q6 achou 5 trechos que falham em 2 das 6 skills oficiais; a skill do laboratório não deve herdar esses erros."
+    },
+    {
+      "pergunta": "Como o acessor nomeado/bind se comportam com TODOS os atuadores multi-entrada (pid com pos vel ff, dcmotor com entradas) e há plano upstream para usar actuator_ctrladr/outadr no binding?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "Gravar no slot errado é silencioso; só orientation e pid padrão foram verificados."
+    },
+    {
+      "pergunta": "Como set_mjcb_* e mujoco.rollout se comportam em builds free-threaded (Python 3.13t/3.14t) e qual o impacto do mutex de callbacks?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "O changelog declara suporte a free-threading desde 3.11/3.13 e o fonte tem MutexLockIfGilDisabled, mas nada foi medido."
+    },
+    {
+      "pergunta": "Qual é o custo real de viewer.sync() (e de sync(state_only=True)) em KDE Wayland/XWayland com NVIDIA e como ancorar o ritmo de forma robusta?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "O ritmo foi validado só com stub; a fronteira com Q2 (render/viewer) impediu o teste com janela."
+    },
+    {
+      "pergunta": "Como obter força/torque líquidos por corpo a partir de contactos (soma de mj_contactForce convertida ao mundo vs sensor contact reduce=netforce vs mj_rnePostConstraint) e qual a sensibilidade ao tipo de cone?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "O teste cobriu só caixa/plano e esfera/bloco; aplicações com drones/veículos precisam de agregação por corpo."
+    },
+    {
+      "pergunta": "Como capturar ou silenciar os avisos do MuJoCo que o binding converte em UserWarning (observado ao carregar humanoid100.xml: 'Attach conflict')?",
+      "origem": "aprofundamento",
+      "prioridade": "baixa",
+      "porque": "Ruído em logs de experimentos; set_mju_user_warning/warnings.filterwarnings."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/576",
+      "porque_pode_importar": "Discussão sobre o viewer interativo em Python que relata exceção ao recarregar com mjcb_control instalado (MjWrapperLookup): relevante para callbacks + viewer."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/1720",
+      "porque_pode_importar": "Trecho sobre transformar contact_frame → world_frame → geom_frame: pode confirmar a convenção de conversão de forças de contacto."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/707",
+      "porque_pode_importar": "Comparação de mjd_transitionFD num pêndulo invertido simples: validação independente de A/B (e talvez de C/D)."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/713",
+      "porque_pode_importar": "Issue de 2023 sobre documentação desatualizada de mjd_transitionFD (C/D): possivelmente a origem do comentário trocado no cabeçalho."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/404",
+      "porque_pode_importar": "Histórico de mj_copyData ausente nos bindings (2022); hoje mj_copyData e copy.copy/deepcopy(MjData) funcionam (testado)."
+    },
+    {
+      "url": "https://deepwiki.com/google-deepmind/mujoco/5.5-system-identification-toolbox",
+      "porque_pode_importar": "Fonte secundária (D) que descreve o uso de mujoco.rollout para paralelismo no toolbox de sysid."
+    },
+    {
+      "url": "https://www.roboti.us/book/programming.html",
+      "porque_pode_importar": "Documentação antiga (2.x) com a mesma explicação de mj_step1/mj_step2 vs RK4; obsoleta, só histórica."
+    }
+  ],
+  "consultas": [
+    "MuJoCo Python bindings control callback mjcb_control GIL performance ctypes native callback",
+    "mujoco python rollout multithreaded nthread MjData list thread pool GIL released",
+    "mujoco mj_step1 mj_step2 RK4 integrator not supported control callback only way",
+    "mujoco mj_contactForce contact frame world frame rotation mjContact.frame transposed",
+    "mjd_transitionFD sign D matrix centered finite difference sensor derivative bug",
+    "mujoco launch_passive viewer.sync time.sleep real time pacing timestep drift wall clock",
+    "mujoco mjd_transitionFD centered D matrix opposite sign clampedDiff sensor control derivative [--include-domains github.com]",
+    "mujoco python data.qpos numpy view not copy slice named access .copy() history append same value",
+    "mujoco 3.15.0 release notes python bindings breaking changes mjData.qM removed mj_fullM signature [--include-domains github.com,mujoco.readthedocs.io,pypi.org]",
+    "mujoco MjSpec recompile python returns new MjModel MjData preserves state keyframes lost attach pitfalls [--include-domains github.com,mujoco.readthedocs.io]",
+    "mujoco mj_ray python example geomid normal bodyexclude flg_static geomgroup ray cast distance",
+    "mujoco python callbacks set_mjcb_control slow multithreading free-threaded Python mutex callback limitations [--time-range year]",
+    "[extract] https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_derivative_fd.c (mjd_transitionFD, clampedDiff, diff)",
+    "[extract] https://github.com/google-deepmind/mujoco/blob/main/src/engine/engine_derivative_fd.c (clampedDiff)",
+    "[extract] https://github.com/google-deepmind/mujoco/issues/3118 e https://github.com/google-deepmind/mujoco/issues/1159"
+  ],
+  "alertas_seguranca": []
+}

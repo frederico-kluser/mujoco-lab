@@ -1,0 +1,1073 @@
+{
+  "id": "Q12",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "O MuJoCo 3.15 carrega URDF nativamente (`MjModel.from_xml_path`, `MjSpec.from_file`/`from_string`) e aceita um bloco `<mujoco>` em `<robot>` com `compiler`, `option` e `size`; nesse modo os padrões viram `discardvisual=\"true\"`, `fusestatic=\"true\"` e radianos, então os visuais somem, o link raiz fica soldado ao mundo e `package://` só funciona com `strippath=\"true\"` + `meshdir` (`strippath` é `false` por omissão desde a 3.7.0) [F1][F4][F8][F7]. O carregador exige os seis termos de `<inertia>`, só aceita inércia inválida (A+B<C) com `balanceinertia=\"true\"` (média dos três eixos) e massa zero com `boundmass`, aceita as juntas revolute, continuous, prismatic, fixed, floating, planar e spherical (e `<mimic>`), ignora `<gazebo>`/`<transmission>` (contatos ficam em solref=[0.02 1] e solimp=[0.9 0.95 0.001 0.5 2]) e só lê STL binário (1–200000 faces), OBJ e MSH, sem `.dae` [F3][F5][F6][F2][F10]. A colisão usa o casco convexo de cada malha: um toro côncavo único segurou a esfera (z=0,045 m) e 24 peças convexas no mesmo corpo a deixaram passar (z=-0,485 m), logo malhas côncavas devem ser decompostas (a doc oficial cita a CoACD) e o casco limitado com `maxhullvert` (padrão -1, mínimo 4, até 64 no MJX; inexistente no URDF e, via `MjSpec`, 0 ou 3 derrubam o processo) [F11][F12][F3][F14]. O urdf2mjcf da K-Scale (MIT; `pip install urdf2mjcf`; 0.2.39 de 17/08/2025; último commit 26/09/2025) converte com `urdf2mjcf robot.urdf --output robot.xml`, separa geoms em `class=\"visual\"` e `class=\"collision\"`, grava só `diaginertia` (termos fora da diagonal são ignorados, sem balanceamento) e não decompõe malhas, apenas as troca por primitivas [F20][F19][F21][F28]. A decomposição com CoACD vem de `obj2mjcf --decompose` (MIT; último commit 15/10/2024), do conversor do `mujoco_ros2_control` (origem de `class=\"decomposed_collision\"`) ou do pacote `coacd` (MIT; v1.0.14; ativo em 09/2026), enquanto o V-HACD está arquivado [F32][F30][F36][F39]. Auditoria do §6: estão corretas as afirmações sobre `pip install urdf2mjcf ... --output`, sobre `class=\"collision\"`/`class=\"visual\"`, sobre a ausência de solref/solimp no URDF e sobre 'Computation' e 'XML Reference'; estão incorretas (atribuídas ao urdf2mjcf por engano) o 'nivelamento algébrico' da inércia, que é o `balanceinertia` do compilador do MuJoCo, e a decomposição CoACD com `class=\"decomposed_collision\"`, que vem do `mujoco_ros2_control` e do obj2mjcf [F21][F3][F30][F31].",
+  "afirmacoes": [
+    {
+      "texto": "O MuJoCo 3.15 carrega URDF diretamente (`mujoco.MjModel.from_xml_path`, `mujoco.MjSpec.from_file`, e também texto via `MjModel.from_xml_string`/`MjSpec.from_string`). O URDF aceita um elemento customizado `<mujoco>` como filho de `<robot>`, com os sub-elementos `compiler`, `option` e `size` (mesma função do MJCF). Nem o URDF nem esse bloco são validados por schema: atributos digitados errado são ignorados em silêncio.",
+      "fontes": [
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "sub-elements :ref:`compiler <compiler>`, :ref:`option <option>`,",
+      "central": true
+    },
+    {
+      "texto": "Ao carregar URDF os padrões do compilador mudam em relação ao MJCF: `discardvisual=\"true\"`, `fusestatic=\"true\"` e `angle` sempre radiano (em MJCF: false, false, degree). `strippath` hoje tem o mesmo padrão `false` nos dois formatos (desde a 3.7.0; o texto de modeling.rst que ainda o lista entre os que diferem está desatualizado). Numa `MjSpec` criada a partir de URDF, `spec.compiler.discardvisual` e `spec.compiler.fusestatic` valem True e `spec.compiler.degree` vale False.",
+      "fontes": [
+        "F1",
+        "F3",
+        "F4"
+      ],
+      "citacao_literal": ":ref:`discardvisual<compiler-discardvisual>` have different default values for URDF and MJCF.",
+      "central": true
+    },
+    {
+      "texto": "`compiler/balanceinertia` (padrão `false`) faz o compilador definir silenciosamente os três elementos diagonais pela média quando A+B>=C é violada (teste: (0.001, 0.001, 0.01) vira 0.004 0.004 0.004); sem a opção o carregamento falha com `inertia must satisfy A + B >= C; use 'balanceinertia' to fix`. Massa 0 em corpo móvel falha com `mass and inertia of moving bodies must be larger than mjMINVAL` e é contornada com `compiler/boundmass` (e `boundinertia`), ambos com padrão 0.",
+      "fontes": [
+        "F3",
+        "F5"
+      ],
+      "citacao_literal": "compiler will silently set all three diagonal elements to their average value whenever the above",
+      "central": true
+    },
+    {
+      "texto": "Importação da inércia: `<inertia>` do URDF exige os seis atributos ixx, iyy, izz, ixy, ixz, iyz (sem `ixy`/`ixz`/`iyz` dá `required attribute missing: 'ixy'`). O tensor completo é aceito e diagonalizado (ixx=0.004, ixy=0.001, iyy=0.004, izz=0.002 resulta em `body_inertia=[0.005 0.003 0.002]` com `body_iquat` não trivial); inércia toda zero é tratada como indefinida; link sem `<inertial>` infere a massa das geoms de colisão (densidade 1000: esfera r=0.05 dá 0.5236 kg); link só com `<visual>` e sem `<inertial>` falha com erro de massa.",
+      "fontes": [
+        "F6",
+        "F5"
+      ],
+      "citacao_literal": "// If the inertias are all 0 in a URDF then it is still undefined.",
+      "central": false
+    },
+    {
+      "texto": "Malhas no URDF: `filename` relativo é resolvido a partir do diretório do arquivo URDF (mais `compiler/meshdir`); `package://pkg/meshes/x.stl` NÃO é resolvido (`Error opening file 'package:/my_pkg/meshes/x.stl'`) e o contorno é `<mujoco><compiler strippath=\"true\" meshdir=\"...\"/></mujoco>`. Desde a 3.7.0 o parser URDF respeita `strippath` (padrão `false`); em Python o atributo é `spec.strippath`, não `spec.compiler.strippath` como sugere a nota de migração do changelog (que gera `AttributeError` na 3.15.0).",
+      "fontes": [
+        "F7",
+        "F8",
+        "F3"
+      ],
+      "citacao_literal": "filename 'package://my_pkg/meshes/box.stl', strippath por omissão: ERRO Error: Error opening file 'package:/my_pkg/meshes/box.stl'",
+      "central": true
+    },
+    {
+      "texto": "O parser URDF nativo aceita os tipos de junta revolute (hinge), continuous (hinge sem limite), prismatic (slide), fixed (sem junta), floating (free), planar (3 juntas: `<nome>_TX` e `<nome>_TY` slide + `<nome>_RZ` hinge) e spherical (ball); qualquer outro tipo (ex.: `ball`) gera `invalid joint type in URDF joint definition`. `<mimic>` vira `equality/joint` (`polycoef=\"offset multiplier 0 0 0\"`) somente entre juntas revolute/continuous/prismatic; `<limit effort>` vira `actuatorfrcrange=±effort`, `lower`/`upper` viram `range` e `velocity` é ignorado; `<dynamics>` vira `damping` e `frictionloss`.",
+      "fontes": [
+        "F6",
+        "F9",
+        "F4"
+      ],
+      "citacao_literal": "{\"spherical\", 6} // Bullet physics supports ball joints (non-standard URDF)",
+      "central": true
+    },
+    {
+      "texto": "No URDF nativo o link raiz fica soldado ao mundo (sem junta livre) e, com `fusestatic=\"true\"`, é fundido ao `worldbody` (URDF de 2 links: `nbody=2`, `njnt=1`). Para base flutuante use (a) um link `<link name=\"world\"/>` + junta `type=\"floating\"` até a base (`nq=8`) ou (b) `spec = mujoco.MjSpec.from_file('x.urdf'); spec.body('base').add_freejoint(); model = spec.compile()` (a base mantém massa e inércia do URDF).",
+      "fontes": [
+        "F9",
+        "F4"
+      ],
+      "citacao_literal": "MjSpec.from_file(URDF) + spec.body('base').add_freejoint(): nq=8 nv=7 nbody=3 base.mass=[1.] base.inertia=[0.01 0.01 0.01]",
+      "central": true
+    },
+    {
+      "texto": "Mapeamento visual/colisão do importador nativo: `<collision>` vira geom com `contype=1 conaffinity=1` (group 0); `<visual>` vira geom com `contype=0 conaffinity=0 group=1 density=0` (por isso não duplica a massa) e a cor de `<material>` vira `rgba` (inclusive nas geoms de colisão do mesmo link). Com `discardvisual=\"true\"` (padrão URDF) os visuais e as malhas só-visuais são descartados; `<mujoco><compiler discardvisual=\"false\"/></mujoco>` os mantém.",
+      "fontes": [
+        "F5",
+        "F6",
+        "F3"
+      ],
+      "citacao_literal": "geoms (type,contype,conaffinity,group) com discardvisual=false: [(6, 1, 1, 0), (2, 1, 1, 0), (2, 0, 0, 1)]",
+      "central": true
+    },
+    {
+      "texto": "O carregador não lê `<gazebo>`, `<transmission>` nem `<safety_controller>`: os coeficientes de contato ficam nos padrões do MuJoCo (`solref=[0.02 1]`, `solimp=[0.9 0.95 0.001 0.5 2]`, `friction=[1 0.005 0.0001]`, `margin=0`, `condim=3`) e o `mu1` do Gazebo não é aplicado. O URDF não tem solref/solimp e o bloco `<mujoco>` só aceita `compiler`, `option` e `size`; esses ajustes entram no MJCF depois (por default class).",
+      "fontes": [
+        "F2",
+        "F1"
+      ],
+      "citacao_literal": "geom de colisão importada do URDF: solref=[0.02 1.  ] solimp=[9.0e-01 9.5e-01 1.0e-03 5.0e-01 2.0e+00] friction=[1.e+00 5.e-03 1.e-04] margin=0.0 condim=3",
+      "central": true
+    },
+    {
+      "texto": "Formatos de malha na 3.15: STL binário, OBJ e MSH legado. STL em ASCII é rejeitado (o decoder exige entre 1 e 200000 faces e tamanho exato: `perhaps this is an ASCII file?`), `.dae` (Collada) não é suportado (`no decoder found for mesh file`) e precisa ser convertido (ex.: Blender ou MeshLab); o `scale` do `<mesh>` do URDF é aceito e vira `mesh_scale`.",
+      "fontes": [
+        "F10",
+        "F3",
+        "F7"
+      ],
+      "citacao_literal": "if (nfaces < 1 || nfaces > 200000) {",
+      "central": true
+    },
+    {
+      "texto": "A colisão por malha usa o casco convexo de cada malha: um objeto não convexo (exceto height field e SDF) deve ser decomposto numa união de geoms convexos (primitivas ou malhas) no mesmo corpo, e a doc cita a CoACD para automatizar. Teste: um toro côncavo como malha única (casco de 168 vértices) manteve uma esfera de raio 0,015 m em z=0,045 m, enquanto 24 peças convexas no mesmo corpo a deixaram atravessar o furo até z=-0,485 m. Se não der para usar primitivas, decime as malhas.",
+      "fontes": [
+        "F11",
+        "F3",
+        "F12",
+        "F13",
+        "F1"
+      ],
+      "citacao_literal": "In order to model a non-convex object other than a height field, the user must decompose it into a union of convex geoms",
+      "central": true
+    },
+    {
+      "texto": "`maxhullvert` (atributo de `<mesh>`, também em `<default><mesh/>`): padrão -1 (ilimitado); valores positivos devem ser maiores que 3 (o XML rejeita ≤3 com `maxhullvert must be larger than 3`); é implementado pedindo ao qhull que termine após N vértices. O toro de 288 vértices tem casco de 168 vértices por omissão e 64/32/16/8/4 vértices com `maxhullvert`=64/32/16/8/4.",
+      "fontes": [
+        "F3",
+        "F12"
+      ],
+      "citacao_literal": "value of -1 means \"unlimited\". Positive values must be larger than 3.",
+      "central": true
+    },
+    {
+      "texto": "Armadilhas de `maxhullvert` em Python: o URDF não tem como defini-lo; `spec.default.mesh.maxhullvert = N` definido depois de carregar o URDF não tem efeito (o casco continua com 168 vértices), então use `for me in spec.meshes: me.maxhullvert = N`; e a API `MjSpec` não valida: `maxhullvert=0` ou `3` derruba o processo na 3.15.0 (SIGSEGV; stderr `QH7093 qhull option warning: missing count of added points for trace option 'TAn'`).",
+      "fontes": [
+        "F12"
+      ],
+      "citacao_literal": "MjSpec (Python) maxhullvert=0: returncode=-11 stderr=\"QH7093 qhull option warning: missing count of added points for trace option 'TAn'\" stdout=''",
+      "central": true
+    },
+    {
+      "texto": "Orientação oficial de desempenho para malhas no MJX: `maxhullvert` de 64 ou menos; no MJX-JAX a decomposição convexa de uma malha deve ter cerca de 200 vértices ou menos (colisão com primitivas) e menos de ~32 vértices em colisões convexo–convexo. O Menagerie aplica `<mesh maxhullvert=\"64\"/>` (reBot DevArm).",
+      "fontes": [
+        "F14",
+        "F15"
+      ],
+      "citacao_literal": "Set :ref:`maxhullvert<asset-mesh-maxhullvert>` to `64` or less for better convex mesh collision performance.",
+      "central": false
+    },
+    {
+      "texto": "Fluxo recomendado pela doc: URDF com bloco `<mujoco>` (meshdir, balanceinertia, discardvisual, strippath), carregar, salvar como MJCF e editar só o MJCF (include/default classes). Formas de salvar: `mujoco.mj_saveLastXML('out.xml', model)`, `spec.to_xml()` ou `spec.compile(); spec.to_file('out.xml')` (`to_file` sem `compile` falha com `Only compiled model can be written`), além do utilitário `compile`. O Menagerie documenta o mesmo ('Loaded the URDF into MuJoCo and saved a corresponding MJCF.').",
+      "fontes": [
+        "F1",
+        "F2",
+        "F16",
+        "F17",
+        "F18"
+      ],
+      "citacao_literal": "the URDF as needed, load it and save it as MJCF. Then add information to the MJCF using",
+      "central": false
+    },
+    {
+      "texto": "urdf2mjcf (K-Scale Labs; licença MIT, Copyright 2023 Benjamin Bolte): `pip install urdf2mjcf` (PyPI 0.2.39, Python >=3.11); console script `urdf2mjcf=urdf2mjcf.convert:main`; CLI `urdf2mjcf <urdf_path> [--output OUTPUT] [--copy-meshes] [--metadata JSON] [--metadata-file ARQUIVO] [--log-level N]`; sem `--output` grava `<nome>.mjcf` ao lado do URDF. Na 3.15.0 `MjSpec.from_file('robot.mjcf')` falha (`could not decode content`) e `MjModel.from_xml_path` só carrega com aviso, então prefira `--output robot.xml`. Última release 0.2.39 (17/08/2025); último commit em master em 26/09/2025 (`add site to joints (#78)`).",
+      "fontes": [
+        "F19",
+        "F20",
+        "F21",
+        "F22",
+        "F23",
+        "F24",
+        "F2"
+      ],
+      "citacao_literal": "\"urdf2mjcf=urdf2mjcf.convert:main\",",
+      "central": true
+    },
+    {
+      "texto": "O urdf2mjcf escreve a inércia só como `diaginertia=\"ixx iyy izz\"` e ignora, com aviso, os termos fora da diagonal (|ixy|, |ixz| ou |iyz| > 1e-6); nos arquivos lidos (convert.py e postprocess/*) não há checagem da desigualdade triangular nem 'nivelamento' da diagonal (isso é o `balanceinertia` do compilador do MuJoCo). Com `floating_base=True` (padrão) ele ainda adiciona `<freejoint name=\"floating_base\"/>` e remove o `<inertial>` do link raiz.",
+      "fontes": [
+        "F21",
+        "F25",
+        "F26",
+        "F27"
+      ],
+      "citacao_literal": "inertial_elem.attrib[\"diaginertia\"] = f\"{ixx} {iyy} {izz}\"",
+      "central": true
+    },
+    {
+      "texto": "O urdf2mjcf cria `<default class=\"visual\">` (material `visualgeom`, `contype=0`, `conaffinity=0`, `group=2`) e `<default class=\"collision\">` (`group=1` mais condim/contype/conaffinity/priority/solref/solimp/friction de `CollisionParams`) e marca cada geom do URDF com `class=\"visual\"` ou `class=\"collision\"`. Padrões de `CollisionParams`: condim=3, contype=0, conaffinity=1, priority=1, solref=[0.005, 1.0], solimp=[0.99, 0.999, 0.00001], friction=[1.0, 0.01, 0.01] (mais rígidos que os do MuJoCo); a saída fixa `option integrator=\"implicitfast\" cone=\"elliptic\" impratio=\"100\"`.",
+      "fontes": [
+        "F21",
+        "F27"
+      ],
+      "citacao_literal": "collision_geom_attrib[\"class\"] = \"collision\"",
+      "central": true
+    },
+    {
+      "texto": "O urdf2mjcf da K-Scale NÃO faz decomposição convexa: `postprocess/collisions.py` ('Converts some mesh geometries into easier-to-collide shapes') apenas troca a malha de colisão de links nomeados por primitivas (`CollisionType` BOX, PARALLEL_CAPSULES, CORNER_SPHERES, SINGLE_SPHERE) e `maxhullvert` só entra se configurado em `metadata` (padrão None). Não há CoACD, V-HACD nem 'decompos' em convert.py, model.py, utils.py ou postprocess/*.",
+      "fontes": [
+        "F28",
+        "F21",
+        "F27",
+        "F22"
+      ],
+      "citacao_literal": "Converts some mesh geometries into easier-to-collide shapes.",
+      "central": true
+    },
+    {
+      "texto": "Limitações do urdf2mjcf (código lido): `<mesh scale=...>` do URDF é copiado para o `<geom>`, o que o MuJoCo rejeita (`Schema violation: unrecognized attribute: 'scale'`; issue #35); só revolute, continuous e prismatic geram junta (floating/planar/spherical viram corpo rígido sem aviso); o `filename` do URDF vira `file` da malha sem resolver `package://`; e, como a classe `visual` não define `density=\"0\"` e o `<inertial>` do link raiz é removido, a massa da base tende a ser inferida de visual+collision (num MJCF equivalente a massa dobrou: 8,000 kg contra 4,000 kg) — inferência: o conversor não foi executado.",
+      "fontes": [
+        "F21",
+        "F29",
+        "F26",
+        "F5"
+      ],
+      "citacao_literal": "collision_geom_attrib[\"scale\"] = geom.scale",
+      "central": false
+    },
+    {
+      "texto": "`class=\"decomposed_collision\"` e a decomposição CoACD vêm do conversor URDF→MJCF do `mujoco_ros2_control` (ros-controls), não do K-Scale: as peças convexas ganham `class=\"decomposed_collision\"`, ficam em grupo de visualização próprio e mantêm as cores por peça do obj2mjcf; a decomposição é opt-in por link (`decompose_mesh` com `mesh_name` e `threshold`) e feita com obj2mjcf (coacd) em `assets/decomposed/`. A própria doc avisa: 'This tool is hacky and highly experimental!'",
+      "fontes": [
+        "F30",
+        "F31"
+      ],
+      "citacao_literal": "Decomposed collision pieces (class=\"decomposed_collision\") collide like any other collision geom but live in their own viewer group",
+      "central": true
+    },
+    {
+      "texto": "obj2mjcf (Kevin Zakka; MIT; `pip install --upgrade obj2mjcf`) divide OBJ composto por material (MTL), gera MJCF com materiais, malhas e geoms e, opcionalmente (`--decompose`), gera a malha de colisão por decomposição convexa com CoACD (troca de V-HACD por CoACD no commit 'VHACD -> CoACD. (#27)' de 13/02/2024). `CoacdArgs` padrão: threshold=0.05, max_convex_hull=-1, preprocess_resolution=50, mcts_iterations=100; as peças `<stem>_collision_<i>.obj` entram como geoms `class=\"collision\"` com cor RGB aleatória (`np.random.rand(3)`), não uma paleta. Último commit em 15/10/2024.",
+      "fontes": [
+        "F32",
+        "F33",
+        "F31",
+        "F34",
+        "F35"
+      ],
+      "citacao_literal": "Optionally generates a collision mesh by performing a convex decomposition of the OBJ using [CoACD]",
+      "central": true
+    },
+    {
+      "texto": "CoACD (SarahWeiii; SIGGRAPH 2022; MIT): `pip install coacd`; `parts = coacd.run_coacd(coacd.Mesh(mesh.vertices, mesh.faces))` devolve uma lista de cascos convexos (a entrada deve ser malha triangular). Padrões do README (CLI): `-t/--threshold` 0.05 (faixa 0.01~1), `-c/--max-convex-hull` -1 (só vale com merge), `-dt/--max-ch-vertex` 256 (só com `-d/--decimate`), `-pr/--prep-resolution` 50, `-mi/--mcts-iteration` 100; na API Python os nomes equivalentes usados pelo README e pelo obj2mjcf são `threshold`, `max_convex_hull`, `preprocess_resolution`, `mcts_iterations` e `real_metric` (`real_metric=True` interpreta o threshold em metros). Projeto ativo: v1.0.14 (28/08/2026) e último commit em 23/09/2026; o README anuncia a CuACD (GPU, ~100× mais rápida).",
+      "fontes": [
+        "F36",
+        "F37",
+        "F38"
+      ],
+      "citacao_literal": "concavity threshold for terminating the decomposition (0.01~1), default = 0.05.",
+      "central": true
+    },
+    {
+      "texto": "V-HACD está 'DEPRECATED & ARCHIVED' (README: 'This project is no longer maintained'; 'All new development and bug-fixes have moved to CoACD'), com licença BSD-3-Clause (Copyright 2011 Khaled Mamou), último commit em 18/09/2025 e última release v4.1; o Menagerie ainda o cita (Franka Panda, `link5`).",
+      "fontes": [
+        "F39",
+        "F40",
+        "F41",
+        "F42",
+        "F18"
+      ],
+      "citacao_literal": "V-HACD has reached end-of-life. All new development and bug-fixes have moved to CoACD.",
+      "central": false
+    },
+    {
+      "texto": "Alternativa citada pelo Menagerie: `urdf-to-mjcf` (discoverse-dev; construído sobre o urdf2mjcf da K-Scale como núcleo de conversão e inspirado no obj2mjcf; MIT; `pip install urdf-to-mjcf`; comando `urdf-to-mjcf`) tem `--collision-type {mesh,decomposition,convex_hull}`, resolve `package://` via `URDF2MJCF_MODEL_PATH`, lê STL/OBJ/DAE/GLB e declara `coacd` como dependência; último commit em 16/05/2026 (v0.1.1). O reBot DevArm do Menagerie foi convertido com ele.",
+      "fontes": [
+        "F43",
+        "F44",
+        "F45",
+        "F15"
+      ],
+      "citacao_literal": "split collision meshes into convex parts.",
+      "central": false
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Modeling (seção 'URDF extensions' e dicas de desempenho de colisão)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: elementos URDF ignorados, contatos por omissão, mj_saveLastXML/to_file/to_xml, extensão .mjcf, bloco <mujoco>",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — XML Reference (compiler, asset/mesh)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: URDF mínimo de 2 links no carregador nativo (nbody/njnt, junta, defaults do compiler, to_xml)",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F5",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: inércia (balanceinertia, boundmass, tensor completo, atributos obrigatórios), discardvisual, fusestatic e massa inferida de geoms",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/xml/xml_urdf.cc",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — src/xml/xml_urdf.cc (parser URDF nativo)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0 (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F7",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: caminhos de malha, package://, strippath, .dae, STL ASCII, scale, migração de strippath",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Changelog (URDF strippath em 3.7.0; maxhullvert em 3.2.0)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: tipos de junta do URDF, mimic, link 'world', add_freejoint",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/plugin/stl_decoder/stl_decoder.cc",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — plugin/stl_decoder/stl_decoder.cc (STL binário, 1–200000 faces)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Computation (seção 'Convex decomposition')",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: casco convexo, maxhullvert (XML e MjSpec; SIGSEGV), toro côncavo vs 24 peças convexas",
+      "autores": "Execução local (investigador Q12)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 em .venv local (Python 3.13, Linux)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/overview.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Overview (malhas, geoms convexos)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/mjx.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — MuJoCo XLA (MJX): desempenho e colisões entre malhas",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/seeed_rebot_devarm/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — seeed_rebot_devarm/README.md (urdf-to-mjcf, decomposição convexa, maxhullvert)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco_menagerie (main)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/modeledit.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Model Editing (mjSpec, carregar/salvar, URDF sem defaults)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/samples.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Code samples: utilitário 'compile' (URDF→MJCF)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco @3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/franka_emika_panda/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — franka_emika_panda/README.md (passos URDF→MJCF)",
+      "autores": "Google DeepMind (autores do MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub — google-deepmind/mujoco_menagerie (main)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/setup.py",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — setup.py (entry point, Python >=3.11)",
+      "autores": "Benjamin Bolte",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/urdf2mjcf/",
+      "doi": "",
+      "titulo": "urdf2mjcf 0.2.39 — PyPI",
+      "autores": "Benjamin Bolte",
+      "ano": "2025",
+      "veiculo": "PyPI",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F21",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/urdf2mjcf/convert.py",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — urdf2mjcf/convert.py (master)",
+      "autores": "Benjamin Bolte (codekansas) et al., K-Scale Labs",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://docs.kscale.dev/docs/urdf2mjcf",
+      "doi": "",
+      "titulo": "URDF to Mujoco Converter — Introduction (K-Scale Labs docs)",
+      "autores": "K-Scale Labs",
+      "ano": "s.d.",
+      "veiculo": "K-Scale Labs Docs",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/LICENSE",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — LICENSE (MIT)",
+      "autores": "Benjamin Bolte",
+      "ano": "2023",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F24",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/commits/master",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — histórico de commits (master)",
+      "autores": "K-Scale Labs",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F25",
+      "url": "https://techoverflow.net/2025/02/11/how-to-convert-urdf-to-mujoco-using-urdf2mjcf",
+      "doi": "",
+      "titulo": "How to convert URDF to Mujoco using urdf2mjcf",
+      "autores": "Uli Köhler",
+      "ano": "2025",
+      "veiculo": "TechOverflow",
+      "tipo": "blogue",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F26",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/urdf2mjcf/postprocess/base_joint.py",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — postprocess/base_joint.py",
+      "autores": "K-Scale Labs",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/urdf2mjcf/model.py",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — urdf2mjcf/model.py (CollisionParams, ConversionMetadata)",
+      "autores": "K-Scale Labs",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/blob/master/urdf2mjcf/postprocess/collisions.py",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — postprocess/collisions.py",
+      "autores": "K-Scale Labs",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F29",
+      "url": "https://github.com/kscalelabs/urdf2mjcf/issues/35",
+      "doi": "",
+      "titulo": "kscalelabs/urdf2mjcf — issue #35 'attribute \"scale\" bug'",
+      "autores": "Yuansen-Huang (relator)",
+      "ano": "2025",
+      "veiculo": "GitHub — kscalelabs/urdf2mjcf (issues)",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F30",
+      "url": "https://control.ros.org/kilted/doc/mujoco_ros2_control/mujoco_ros2_control/docs/tools.html",
+      "doi": "",
+      "titulo": "mujoco_ros2_control — URDF to MJCF Conversion (ROS 2 Kilted)",
+      "autores": "ros-controls / mujoco_ros2_control",
+      "ano": "2026",
+      "veiculo": "ros2_control documentation",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F31",
+      "url": "https://github.com/kevinzakka/obj2mjcf/blob/main/obj2mjcf/mjcf_builder.py",
+      "doi": "",
+      "titulo": "kevinzakka/obj2mjcf — obj2mjcf/mjcf_builder.py",
+      "autores": "Kevin Zakka",
+      "ano": "2024",
+      "veiculo": "GitHub — kevinzakka/obj2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F32",
+      "url": "https://github.com/kevinzakka/obj2mjcf/blob/main/README.md",
+      "doi": "",
+      "titulo": "kevinzakka/obj2mjcf — README.md",
+      "autores": "Kevin Zakka",
+      "ano": "2024",
+      "veiculo": "GitHub — kevinzakka/obj2mjcf (vista raw)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F33",
+      "url": "https://github.com/kevinzakka/obj2mjcf/blob/main/obj2mjcf/cli.py",
+      "doi": "",
+      "titulo": "kevinzakka/obj2mjcf — obj2mjcf/cli.py (Args, CoacdArgs)",
+      "autores": "Kevin Zakka",
+      "ano": "2024",
+      "veiculo": "GitHub — kevinzakka/obj2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F34",
+      "url": "https://github.com/kevinzakka/obj2mjcf/commits/main",
+      "doi": "",
+      "titulo": "kevinzakka/obj2mjcf — histórico de commits (main)",
+      "autores": "Kevin Zakka",
+      "ano": "2024",
+      "veiculo": "GitHub — kevinzakka/obj2mjcf",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F35",
+      "url": "https://github.com/kevinzakka/obj2mjcf/blob/main/LICENSE",
+      "doi": "",
+      "titulo": "kevinzakka/obj2mjcf — LICENSE (MIT)",
+      "autores": "Kevin Zakka",
+      "ano": "2022",
+      "veiculo": "GitHub — kevinzakka/obj2mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F36",
+      "url": "https://github.com/SarahWeiii/CoACD/blob/main/README.md",
+      "doi": "",
+      "titulo": "CoACD — README.md (Approximate Convex Decomposition, SIGGRAPH 2022)",
+      "autores": "Xinyue Wei, Minghua Liu et al.",
+      "ano": "2026",
+      "veiculo": "GitHub — SarahWeiii/CoACD (vista raw)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F37",
+      "url": "https://github.com/SarahWeiii/CoACD/blob/main/LICENSE",
+      "doi": "",
+      "titulo": "CoACD — LICENSE (MIT)",
+      "autores": "Xinyue Wei, Minghua Liu",
+      "ano": "2022",
+      "veiculo": "GitHub — SarahWeiii/CoACD (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F38",
+      "url": "https://github.com/SarahWeiii/CoACD/commits/main",
+      "doi": "",
+      "titulo": "CoACD — histórico de commits (main)",
+      "autores": "Xinyue Wei, Minghua Liu et al.",
+      "ano": "2026",
+      "veiculo": "GitHub — SarahWeiii/CoACD",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F39",
+      "url": "https://github.com/kmammou/v-hacd/blob/master/README.md",
+      "doi": "",
+      "titulo": "V-HACD — README.md ('DEPRECATED & ARCHIVED')",
+      "autores": "Khaled Mamou",
+      "ano": "2025",
+      "veiculo": "GitHub — kmammou/v-hacd (vista raw)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F40",
+      "url": "https://github.com/kmammou/v-hacd/blob/master/LICENSE",
+      "doi": "",
+      "titulo": "V-HACD — LICENSE (BSD 3-Clause)",
+      "autores": "Khaled Mamou",
+      "ano": "2011",
+      "veiculo": "GitHub — kmammou/v-hacd (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F41",
+      "url": "https://github.com/kmammou/v-hacd/commits/master",
+      "doi": "",
+      "titulo": "V-HACD — histórico de commits (master)",
+      "autores": "Khaled Mamou",
+      "ano": "2025",
+      "veiculo": "GitHub — kmammou/v-hacd",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F42",
+      "url": "https://github.com/kmammou/v-hacd/releases",
+      "doi": "",
+      "titulo": "V-HACD — Releases (v4.1)",
+      "autores": "Khaled Mamou",
+      "ano": "2022",
+      "veiculo": "GitHub — kmammou/v-hacd",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F43",
+      "url": "https://github.com/discoverse-dev/urdf-to-mjcf/blob/main/README.md",
+      "doi": "",
+      "titulo": "discoverse-dev/urdf-to-mjcf — README.md",
+      "autores": "Yufei Jia et al. (DISCOVERSE)",
+      "ano": "2026",
+      "veiculo": "GitHub — discoverse-dev/urdf-to-mjcf (vista raw)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F44",
+      "url": "https://github.com/discoverse-dev/urdf-to-mjcf/blob/main/pyproject.toml",
+      "doi": "",
+      "titulo": "discoverse-dev/urdf-to-mjcf — pyproject.toml (dependências, MIT)",
+      "autores": "Yufei Jia et al. (DISCOVERSE)",
+      "ano": "2026",
+      "veiculo": "GitHub — discoverse-dev/urdf-to-mjcf (vista raw)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F45",
+      "url": "https://github.com/discoverse-dev/urdf-to-mjcf/commits/main",
+      "doi": "",
+      "titulo": "discoverse-dev/urdf-to-mjcf — histórico de commits (main)",
+      "autores": "Yufei Jia et al. (DISCOVERSE)",
+      "ano": "2026",
+      "veiculo": "GitHub — discoverse-dev/urdf-to-mjcf",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "`pip install urdf2mjcf` e `urdf2mjcf robot.urdf --output robot.mjcf` convertem URDF em MJCF (projeto da K-Scale Labs).",
+      "veredito": "correta",
+      "correcao": "Existe: pacote PyPI `urdf2mjcf` 0.2.39 (Python >=3.11, MIT), console script `urdf2mjcf=urdf2mjcf.convert:main` e a opção `--output` (sem ela grava `<nome>.mjcf` ao lado do URDF). Ressalvas: é projeto comunitário da K-Scale (último commit em 26/09/2025; última release 17/08/2025), não oficial do MuJoCo; a extensão `.mjcf` não é decodificada por `MjSpec.from_file` na 3.15.0 (`could not decode content`; `MjModel.from_xml_path` carrega mas avisa `Could not find decoder for resource`), então use `--output robot.xml`; por padrão gera base flutuante (freejoint), não resolve `package://` e copia `scale` de malha para o `<geom>` (inválido).",
+      "fontes": [
+        "F20",
+        "F19",
+        "F21",
+        "F22",
+        "F2"
+      ]
+    },
+    {
+      "afirmacao": "O conversor examina assimetrias indesejáveis na diagonal da inércia e procede ao seu 'nivelamento algébrico'.",
+      "veredito": "incorreta",
+      "correcao": "O urdf2mjcf não tem essa etapa (convert.py e postprocess/*): só escreve `diaginertia=\"ixx iyy izz\"` e ignora, com aviso, termos fora da diagonal (|ixy|, |ixz|, |iyz| > 1e-6). O 'nivelamento' é o `compiler/balanceinertia=\"true\"` do próprio MuJoCo (padrão false): quando A+B>=C é violada, define os três elementos diagonais pela média (teste: (0.001, 0.001, 0.01) vira 0.004 0.004 0.004). Sem a opção o compilador falha com `inertia must satisfy A + B >= C; use 'balanceinertia' to fix`.",
+      "fontes": [
+        "F21",
+        "F25",
+        "F3",
+        "F5"
+      ]
+    },
+    {
+      "afirmacao": "Separa as malhas de colisão (`class=\"collision\"`) das puramente visuais (`class=\"visual\"`).",
+      "veredito": "correta",
+      "correcao": "Sim, no urdf2mjcf: cria `<default class=\"visual\">` (contype=0, conaffinity=0, group=2, material visualgeom) e `<default class=\"collision\">` (group=1, condim=3, contype=0, conaffinity=1, priority=1, solref=[0.005 1], solimp=[0.99 0.999 0.00001], friction=[1 0.01 0.01]) e marca cada geom. No importador nativo do MuJoCo a separação é por atributos, não por classes: `<visual>` vira contype=0 conaffinity=0 group=1 density=0 e `<collision>` vira contype=1 conaffinity=1.",
+      "fontes": [
+        "F21",
+        "F27",
+        "F6",
+        "F5"
+      ]
+    },
+    {
+      "afirmacao": "Implementa decomposição convexa CoACD, gerando geometrias convexas com `class=\"decomposed_collision\"`, coloridas por paleta.",
+      "veredito": "incorreta",
+      "correcao": "Não no urdf2mjcf da K-Scale: não há CoACD/V-HACD/decomposição em convert.py, model.py, utils.py nem postprocess/*; `collisions.py` só troca malhas de links nomeados por primitivas (BOX, PARALLEL_CAPSULES, CORNER_SPHERES, SINGLE_SPHERE). `class=\"decomposed_collision\"` é convenção do conversor URDF→MJCF do `mujoco_ros2_control`, que chama obj2mjcf+CoACD em modo opt-in (`decompose_mesh`, com `threshold`); as cores por peça vêm do obj2mjcf e são aleatórias (`np.random.rand(3)`), não uma paleta. Para decompor use `obj2mjcf --decompose`, o pacote `coacd` direto ou o fork `discoverse-dev/urdf-to-mjcf` (`--collision-type decomposition`, depende de `coacd`).",
+      "fontes": [
+        "F28",
+        "F21",
+        "F30",
+        "F31",
+        "F33",
+        "F43",
+        "F44"
+      ]
+    },
+    {
+      "afirmacao": "O URDF não tem os ajustes de soft contact (solref/solimp) do MuJoCo.",
+      "veredito": "correta",
+      "correcao": "Correto: o URDF não tem esses campos e o bloco `<mujoco>` do URDF só aceita `compiler`, `option` e `size`. O importador nativo deixa as geoms nos padrões `solref=[0.02 1]`, `solimp=[0.9 0.95 0.001 0.5 2]`, `friction=[1 0.005 0.0001]` e ignora `<gazebo>` (mu1, kp, kd). Os ajustes têm de ser adicionados ao MJCF depois (default class); o urdf2mjcf injeta `solref=[0.005 1]` e `solimp=[0.99 0.999 0.00001]` na classe `collision`.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F27"
+      ]
+    },
+    {
+      "afirmacao": "O repositório do MuJoCo traz o guia 'Computation' e a 'XML Reference'.",
+      "veredito": "correta",
+      "correcao": "Sim: no tag 3.15.0 de google-deepmind/mujoco existem `doc/computation/index.rst` (título 'Computation') e `doc/XMLreference.rst` (título 'XML Reference'); as mesmas páginas estão em https://mujoco.readthedocs.io/en/stable/.",
+      "fontes": [
+        "F3",
+        "F11"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "O MuJoCo lê URDF diretamente?",
+      "posicoes": [
+        {
+          "fonte": "F30",
+          "diz": "A doc do mujoco_ros2_control afirma 'As MuJoCo does not ingest URDFs' e justifica uma ferramenta própria de conversão."
+        },
+        {
+          "fonte": "F1",
+          "diz": "A doc oficial do MuJoCo descreve o carregamento de URDF (com extensão `<mujoco>`) e o parser nativo (xml_urdf.cc) aceita revolute, continuous, prismatic, fixed, floating, planar e spherical; o teste local carregou URDF com `MjModel.from_xml_path`."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    },
+    {
+      "tema": "Nota de migração do changelog 3.7.0 sobre strippath",
+      "posicoes": [
+        {
+          "fonte": "F8",
+          "diz": "A nota de migração sugere `spec = mujoco.MjSpec.from_file(...)` seguido de `spec.compiler.strippath = True`."
+        },
+        {
+          "fonte": "F7",
+          "diz": "Na 3.15.0 `spec.compiler.strippath = True` levanta AttributeError (MjsCompiler não tem `strippath`); o atributo existe em `MjSpec` (`spec.strippath = True`), como na struct C `mjSpec`."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "strippath tem padrão diferente para URDF?",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "modeling.rst (3.15.0) ainda lista strippath entre os atributos do compiler com padrões diferentes para URDF e MJCF."
+        },
+        {
+          "fonte": "F8",
+          "diz": "O changelog 3.7.0 diz que o parser URDF deixou de fixar strippath em \"true\" e que o padrão agora é \"false\"; o teste local confirma (package:// falha por omissão), ou seja, o padrão é o mesmo do MJCF."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Ferramenta de decomposição convexa recomendada",
+      "posicoes": [
+        {
+          "fonte": "F18",
+          "diz": "O README do Menagerie (Franka Panda) usa V-HACD para a decomposição do `link5`."
+        },
+        {
+          "fonte": "F39",
+          "diz": "O README do V-HACD o declara 'DEPRECATED & ARCHIVED' e remete ao CoACD, que também é o citado pela doc do MuJoCo (computation/index.rst)."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Decomposição convexa no 'urdf2mjcf'",
+      "posicoes": [
+        {
+          "fonte": "F28",
+          "diz": "No repositório da K-Scale o pós-processamento de colisão apenas converte malhas em primitivas ('easier-to-collide shapes'); não há CoACD."
+        },
+        {
+          "fonte": "F43",
+          "diz": "O fork discoverse-dev/urdf-to-mjcf oferece `--collision-type decomposition` ('split collision meshes into convex parts') e declara `coacd` como dependência."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    }
+  ],
+  "lacunas": [
+    "O conversor urdf2mjcf da K-Scale não foi executado (instalar pacotes é proibido): o comportamento foi inferido da leitura do código em master (1 commit após a tag 0.2.39) e confirmado em parte por um blog independente (v0.2.2); a extração textual do GitHub perdeu alguns operadores (`*`), sem afetar a lógica lida.",
+    "Não foi lido o código do fork discoverse-dev/urdf-to-mjcf (só README, pyproject e commits): não está confirmado que `--collision-type decomposition` usa CoACD, nem como colore/classifica as peças.",
+    "Não foi lido o script make_mjcf_from_robot_description.py do mujoco_ros2_control (só a doc): a origem de `class=\"decomposed_collision\"` foi atribuída pela documentação.",
+    "CoACD e V-HACD não foram executados: faltam números de peças, tempo e threshold adequados para malhas de robôs no MuJoCo 3.15.",
+    "Não foi verificado se o SIGSEGV de `MjSpec` com `maxhullvert` 0 ou 3 já está reportado ou corrigido upstream (observado só na 3.15.0, Linux x86_64).",
+    "Não foram encontrados requisitos/limites de vértices de hull específicos do MuJoCo Warp (MJWarp) na documentação local.",
+    "Conversão de xacro para URDF (muito comum em robôs ROS) não foi coberta; o ano da última release do urdf2mjcf (17 de agosto) foi deduzido como 2025 pelo histórico de commits; o bug de empacotamento `No module named 'urdf2mjcf.postprocess'` (issue #18, fev/2025) não foi reverificado na 0.2.39."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Quais parâmetros de CoACD (threshold, max_convex_hull, decimate/max_ch_vertex, real_metric) dão cascos por link de robô com ≤64 vértices e poucas peças, e como validar a qualidade (razão de volume, interpenetração, estabilidade de contato) no MuJoCo 3.15?",
+      "origem": "aprofundamento",
+      "prioridade": "alta",
+      "porque": "A skill precisa de uma receita testada de decomposição para links côncavos (garras, carcaças); aqui só houve teste com decomposição manual."
+    },
+    {
+      "pergunta": "Como converter xacro para URDF sem ROS (pacote `xacro` do PyPI ou rosrun) e integrar isso ao fluxo de importação do MuJoCo?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "Muitos robôs reais chegam em xacro (o Menagerie cita `rosrun xacro` para o Kinova Gen3), e o carregador nativo só lê URDF."
+    },
+    {
+      "pergunta": "O `discoverse-dev/urdf-to-mjcf` usa CoACD em `--collision-type decomposition` e como trata package://, DAE→OBJ, inércia completa e classes visual/collision?",
+      "origem": "lacuna",
+      "prioridade": "media",
+      "porque": "É a única alternativa de conversor com decomposição citada pelo Menagerie, mas só README e dependências foram lidos."
+    },
+    {
+      "pergunta": "Quais são os limites de vértices/faces de hull e as regras de colisão de malhas no MuJoCo Warp (MJWarp) 3.15?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "O mirror local do MJWarp só mostra `maxhullvert=\"64\"` em benchmarks; a skill precisa de regra explícita para GPU."
+    },
+    {
+      "pergunta": "Como `fusestatic` e `discardvisual` interagem com sensores, sites e pares `<exclude>` em robôs URDF reais (UR5e, Panda) e que colisões pai-filho aparecem após a fusão?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "O parser nativo funde corpos estáticos e gera colisões próprias (`contype=1 conaffinity=1` em todas as geoms de colisão); autocolisão precisa de checagem."
+    },
+    {
+      "pergunta": "O SIGSEGV de `MjSpec` com `maxhullvert` 0 ou 3 (qhull option warning TAn) está reportado ou corrigido upstream?",
+      "origem": "contra-evidencia",
+      "prioridade": "baixa",
+      "porque": "Documentação diz 'maior que 3' e o XML valida, mas a API Python não valida na 3.15.0."
+    },
+    {
+      "pergunta": "CuACD (GPU) e VisACD (usado no reBot DevArm do Menagerie) superam o CoACD em qualidade e tempo para malhas de robôs?",
+      "origem": "fonte-nao-usada",
+      "prioridade": "baixa",
+      "porque": "O README do CoACD anuncia CuACD (~100× mais rápida) e o Menagerie usa VisACD."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/3176",
+      "porque_pode_importar": "Relato de usuário (iCub) de que vários conversores URDF→MJCF falharam e de colisões entre malhas adjacentes na pose inicial; sem resposta de mantenedores (evidência anedótica de risco)."
+    },
+    {
+      "url": "https://github.com/ros-controls/mujoco_ros2_control",
+      "porque_pode_importar": "Código do conversor (make_mjcf_from_robot_description) que implementa class=\"decomposed_collision\" e a opção decompose_mesh."
+    },
+    {
+      "url": "https://www.alphaxiv.org/abs/2609.28731",
+      "porque_pode_importar": "Artigo sobre decomposição convexa aproximada totalmente em GPU (CuACD), alternativa rápida ao CoACD."
+    },
+    {
+      "url": "https://github.com/3dlg-hcvc/visacd",
+      "porque_pode_importar": "VisACD, ferramenta de decomposição usada pelo Menagerie (reBot DevArm, 8–12 peças por link); não aberta."
+    },
+    {
+      "url": "https://simulately.wiki/docs/toolkits/ConvexDecomp",
+      "porque_pode_importar": "Visão geral comparando ferramentas de decomposição convexa; não lida."
+    },
+    {
+      "url": "https://docs.picknik.ai/7/how_to/configuration_tutorials/migrate_to_mujoco_config",
+      "porque_pode_importar": "Tutorial MoveIt Pro de criação de config MuJoCo a partir de URDF; não lido."
+    },
+    {
+      "url": "https://github.com/kscalelabs/urdf2mjcf/issues/18",
+      "porque_pode_importar": "Bug de empacotamento 'No module named urdf2mjcf.postprocess' (fev/2025); confirma risco de versões antigas."
+    },
+    {
+      "url": "https://dev.to/ravindhar/convert-urdf-to-mujoco-mjcf-without-installing-anything-api-python-sdk-43ge",
+      "porque_pode_importar": "Página de marketing de uma API paga de conversão; descartada (nível D, sem autoria verificável)."
+    }
+  ],
+  "consultas": [
+    "kscalelabs urdf2mjcf github README convert URDF to MJCF pip install urdf2mjcf",
+    "extract: https://pypi.org/project/urdf2mjcf/ e https://github.com/kscalelabs/urdf2mjcf",
+    "urdf2mjcf convert.py class decomposed_collision CoACD convex decomposition collision meshes kscalelabs [include-domains github.com,pypi.org]",
+    "kscalelabs urdf2mjcf convert.py convert_urdf_to_mjcf source code argparse --output metadata collision visual class [include-domains github.com]",
+    "urdf2mjcf kscalelabs github blob master urdf2mjcf/convert.py [--exact; rejeitada pela API por não ter frase entre aspas — sem resultados]",
+    "urdf2mjcf postprocess collisions coacd decomposed_collision convex parts MJCF class collision visual",
+    "extract: https://control.ros.org/kilted/doc/mujoco_ros2_control/mujoco_ros2_control/docs/tools.html (2 leituras, uma focada em decomposed_collision)",
+    "kscalelabs/urdf2mjcf urdf2mjcf/convert.py",
+    "kscalelabs urdf2mjcf postprocess collisions.py update_collisions",
+    "kscalelabs urdf2mjcf pyproject.toml dependencies scripts entry point",
+    "extract: https://github.com/kscalelabs/urdf2mjcf/blob/master/README.md e /releases",
+    "docs.kscale.dev urdf2mjcf documentation convert URDF to MJCF command line",
+    "K-Scale docs urdf2mjcf installation usage metadata JSON joint actuator collision meshes [include-domains docs.kscale.dev,kscale.dev,humanoids.wiki]",
+    "extract: https://docs.kscale.dev/docs/urdf2mjcf (falhou; usado o trecho devolvido pela pesquisa)",
+    "\"convert_urdf_to_mjcf\" urdf2mjcf",
+    "urdf2mjcf convert_urdf_to_mjcf def add_default joint class visual collision geom group",
+    "urdf2mjcf inertia diagonal asymmetry fix triangle inequality MJCF conversion",
+    "from urdf2mjcf.postprocess.add_floor import add_floor from urdf2mjcf.model import ConversionMetadata [include-domains github.com,raw.githubusercontent.com,deepwiki.com]",
+    "urdf2mjcf/convert.py kscalelabs master \"def convert_urdf_to_mjcf\" [mesmos domínios]",
+    "kscalelabs urdf2mjcf master urdf2mjcf postprocess folder [mesmos domínios]",
+    "extract (código do repositório K-Scale indicado no brief; vista raw): github.com/kscalelabs/urdf2mjcf/tree/master/urdf2mjcf, /blob/master/urdf2mjcf/convert.py, raw.githubusercontent.com/kscalelabs/urdf2mjcf/master/{urdf2mjcf/convert.py, urdf2mjcf/model.py, urdf2mjcf/utils.py, urdf2mjcf/postprocess/*.py, setup.py, LICENSE}, github.com/kscalelabs/urdf2mjcf/commits/master",
+    "kevinzakka obj2mjcf README decompose CoACD convex decomposition command line usage",
+    "extract (repositório obj2mjcf indicado no brief): github.com/kevinzakka/obj2mjcf/blob/main/README.md, raw.githubusercontent.com/kevinzakka/obj2mjcf/main/{README.md, LICENSE, obj2mjcf/cli.py, obj2mjcf/mjcf_builder.py, obj2mjcf/constants.py, obj2mjcf/material.py}, /commits/main, /releases",
+    "extract (código oficial MuJoCo, tag 3.15.0): raw.githubusercontent.com/google-deepmind/mujoco/3.15.0/src/xml/xml_urdf.cc",
+    "CoACD SarahWeiii approximate convex decomposition python coacd.run_coacd parameters threshold max_convex_hull max_ch_vertex license",
+    "extract (repositório CoACD indicado no brief): raw.githubusercontent.com/SarahWeiii/CoACD/main/{README.md, LICENSE}, github.com/SarahWeiii/CoACD/commits/main",
+    "kmammou v-hacd V-HACD v4 approximate convex decomposition GitHub license BSD-3-Clause release",
+    "extract: raw.githubusercontent.com/kmammou/v-hacd/master/{README.md, LICENSE}, github.com/kmammou/v-hacd/commits/master e /releases",
+    "ros-controls mujoco_ros2_control make_mjcf_from_robot_description.py decomposed_collision obj2mjcf coacd bright_orange",
+    "extract: raw.githubusercontent.com/discoverse-dev/urdf-to-mjcf/main/README.md e github.com/discoverse-dev/urdf2mjcf",
+    "discoverse-dev urdf-to-mjcf collision-type decomposition coacd convex_hull trimesh implementation architecture [include-domains github.com,pypi.org]",
+    "extract: raw.githubusercontent.com/discoverse-dev/urdf-to-mjcf/main/pyproject.toml e github.com/discoverse-dev/urdf-to-mjcf/commits/main",
+    "\"decomposed_collision\" MJCF geom class convex decomposition [--exact]",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/3176",
+    "kscalelabs urdf2mjcf issues limitations off-diagonal inertia ignored package:// mesh path not supported",
+    "urdf2mjcf kscalelabs github issues open bug mesh not found diaginertia fullinertia [include-domains github.com]",
+    "extract: https://techoverflow.net/2025/02/11/how-to-convert-urdf-to-mujoco-using-urdf2mjcf, https://github.com/kscalelabs/urdf2mjcf/issues/35, github.com/kscalelabs/urdf2mjcf/issues"
+  ],
+  "alertas_seguranca": []
+}

@@ -1,0 +1,1026 @@
+{
+  "id": "Q9",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "O exemplo oficial `model/car/car.xml` é um carro diferencial de 0,543 kg — corpo com `freejoint`, chassi em malha, duas rodas cilíndricas (`size=\".03 .01\"`) em hinge com `damping=\".03\"` e `actuatorfrcrange` ±0,5, esfera de apoio `condim=\"1\" priority=\"1\"` e dois `motor` sobre tendões `fixed` (`forward` .5/.5, `turn` −.5/.5) — e medi 0,498 m/s em reta, giro no lugar a 7,05 rad/s e raio 0,21 m com (forward=1, turn=0,5) [F1][F2][F20]. No contato roda-piso `friction` tem 3 valores (`1 0.005 0.0001`, torsional e rolamento em metros), `condim` aceita 1/3/4/6 e vale o máximo dos dois geoms (ou o do de maior `priority`), e a mistura de friction é o máximo elemento a elemento, de modo que um pneu de μ alto não escorrega mais num piso de μ baixo sem `priority` ou `contact/pair` [F4][F21][F26]. O condim 4 amortece (não bloqueia) o giro em torno da normal e o condim 6 com `friction[2]=C_rr·r` reproduz a resistência ao rolamento (0,0908 vs 0,0902 m/s²), ambos com efeito pleno só no cone elíptico; contra o slip lento valem cone elíptico + `impratio` alto (creep em rampa de 10° em 5 s: 2,24 → 0,112 mm) e `noslip_iterations` 1–3 (0 mm), com `solref[0]` ≥ 2·dt e `implicitfast` [F22][F23][F25][F32]. A receita testada (XML completo na última afirmação) usa hinge + `position` com Ackermann (raio 0,798 m vs 0,785 m cinemático a 1 m/s), `velocity` sobre tendão `fixed` coef .5/.5 como diferencial aberto (razão de rodas 1,220 vs 1,225; dois servos 1,128; `equality joint` 1,000) e suspensão `slide` com `stiffness`/`damping`/`springref` (4,85 Hz medido vs 4,75 Hz), com a armadilha de que `range` de hinge vem em graus por padrão e `ctrlrange` não (R=2,30 m em vez de 0,80 m) [F28][F30][F31][F29]. Limites do contato pneu-solo: não há modelo de pneu nem plugin tipo Pacejka na 3.15.0 (busca local nula, Discussion #3569 sem resposta), a força lateral depende da velocidade de deslizamento e não do ângulo de deriva (t(1/e)=16 ms para vx=1–4 m/s; só `solref` a altera), a aderência do carro mínimo satura em 0,58–0,81·μ·g com o cone piramidal dando menos grip, e o atrito anisotrópico só existe em `contact/pair` com frame fixo no mundo para cilindros [F38][F40][F33][F34][F36]. Como alternativa testada, `condim=\"1\"` mais forças tipo Pacejka via `xfrc_applied` fazem o relaxamento lateral crescer com vx (8/14/22 ms), e o Chrono::Vehicle traz pneus Pacejka/TMeasy/Fiala prontos [F37][F42]. Quanto aos 4096 carros em GPU, é plausível (exemplo oficial com `batch_size = 4096`, Playground com `num_envs=8192` em locomoção), mas não há ambiente de veículo de rodas, MJWarp e MJX não suportam `noslip`, o MJX-JAX restringe colisões de cilindro e não consegui testar GPU [F9][F10][F8][F6][F39].",
+  "afirmacoes": [
+    {
+      "texto": "O exemplo oficial `model/car/car.xml` (adicionado na versão 2.3.7) é um carro de tração diferencial: o corpo `car` tem `<freejoint/>`, chassi em malha (`mesh chasis`), duas rodas cilíndricas (`class=\"wheel\"`: `type=\"cylinder\" size=\".03 .01\"`; corpos orientados com `zaxis=\"0 1 0\"`; uma junta hinge `left`/`right` por roda) e uma esfera de apoio frontal `<geom name=\"front wheel\" type=\"sphere\" size=\".015\" condim=\"1\" priority=\"1\"/>`, cujo condim 1 com `priority=\"1\"` torna esse contato sem atrito (impõe-se ao condim 3 do piso). O `<default>` dá a todas as juntas `damping=\".03\"` e `actuatorfrcrange=\"-0.5 0.5\"`; o piso é um plano `size=\"3 3 .01\"` com textura xadrez e `<compiler autolimits=\"true\"/>`.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F5"
+      ],
+      "citacao_literal": "<geom name=\"front wheel\" pos=\".08 0 -.015\" type=\"sphere\" size=\".015\" condim=\"1\" priority=\"1\"/>",
+      "central": true
+    },
+    {
+      "texto": "A atuação do carro oficial é por dois tendões `fixed` — `forward` (`coef=.5` em `left` e `right`) e `turn` (`coef=-.5` em `left`, `.5` em `right`) — cada um acionado por um `<motor>` com `ctrlrange=\"-1 1\"` (ctrl=1 → força de tendão 1 → 0,5 N·m por roda). `forward` aplica torque simétrico (andar) e `turn` antissimétrico (girar); o limite de torque é imposto na junta (`actuatorfrcrange` ±0,5 N·m, que satura quando os dois comandos se somam) e o sensor `jointactuatorfrc` mede o torque total na junta; a doc 3.15 descreve o modelo como 'similar a um Dubin's Car' e o usa como exemplo de por que se limita a força na junta e não no atuador.",
+      "fontes": [
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "<motor name=\"forward\" tendon=\"forward\" ctrlrange=\"-1 1\"/>",
+      "central": true
+    },
+    {
+      "texto": "Medido em 3.15.0 com o `car.xml` sem alterações (sem `<option>`: dt=0,002, integrador Euler, cone piramidal, impratio=1, solver Newton, noslip_iterations=0; nq=9, nv=8, nu=2, ngeom=5, massa total 0,543 kg = chassi 0,42994 + 2×0,05655): `forward=1` leva as rodas a 16,667 rad/s (= 0,5 N·m ÷ amortecimento 0,03 N·m·s/rad) e o carro a 0,4983 m/s (= ω·r com r=0,03 m); `turn=1` gira no lugar a 7,055 rad/s; (forward=1, turn=0,5) dá v=0,3812 m/s, 1,8182 rad/s e raio 0,2096 m; (1; 0,25) dá raio 0,511 m. Em repouso há 5 contatos: a esfera de apoio com dim=1 e 2 contatos dim=3 por roda cilíndrica (nefc=17).",
+      "fontes": [
+        "F20",
+        "F21",
+        "F1",
+        "F4"
+      ],
+      "citacao_literal": "forward=1 turn=0: v=0.4983 m/s, wheels=16.667/16.667 rad/s\nforward=0 turn=1: yaw_rate=7.055 rad/s (spin in place)\nforward=1 turn=0.5: v=0.3812 m/s yaw_rate=1.8182 rad/s R=v/yaw_rate=0.2096 m",
+      "central": true
+    },
+    {
+      "texto": "`geom/friction` tem 3 valores, por padrão `1 0.005 0.0001`: [0] atrito de deslizamento (tangencial, igual nos dois eixos), [1] torsional (em torno da normal) e [2] de rolamento (em torno dos dois eixos tangentes). Os coeficientes torsional e de rolamento têm unidade de COMPRIMENTO (m) — o torsional pode ser lido como o diâmetro do patch de contato e o de rolamento como a profundidade da deformação local —, não são adimensionais. Cada contato guarda 5 coeficientes (2 tangenciais, 1 torsional, 2 de rolamento); os geoms só têm 3 e só `contact/pair` permite valores anisotrópicos.",
+      "fontes": [
+        "F4",
+        "F3",
+        "F2"
+      ],
+      "citacao_literal": ":at:`friction`: :at-val:`real(3), \"1 0.005 0.0001\"`",
+      "central": false
+    },
+    {
+      "texto": "`condim` só aceita 1, 3, 4 ou 6 (2, 5, 7 e 0 dão erro de compilação 'invalid condim in geom'); com cone elíptico o contato tem 1/3/4/6 dimensões e com cone piramidal 1/4/6/10 linhas. O condim do contato é o MÁXIMO dos condim dos dois geoms, a menos que um deles tenha `priority` maior (então vale o dele, mesmo sendo menor): a esfera de apoio do carro oficial (condim=1, priority=1) torna o contato sem atrito mesmo sobre o piso em condim 3, e basta pôr `condim=\"6\"` no geom da roda para o contato roda-piso ter 6 dimensões.",
+      "fontes": [
+        "F21",
+        "F3",
+        "F2"
+      ],
+      "citacao_literal": "plane condim=6 prio=1 | ball condim=1 prio=0 -> contact dim = 6\nplane condim=6 prio=0 | ball condim=4 prio=1 -> contact dim = 4\ncondim 2 -> erro: Error: invalid condim in geom\ncondim 5 -> erro: Error: invalid condim in geom",
+      "central": false
+    },
+    {
+      "texto": "Torsional (condim 4): num teste de giro em torno da normal (esfera de 1 kg e r=0,05 m, `friction[1]`=0,001 m, wz0=10 rad/s) o condim 3 mantém 10,000 rad/s (nenhuma resistência), enquanto o condim 4 com cone elíptico reduz para 5,811 / 3,351 / 1,114 rad/s em 0,5 / 1 / 2 s — o atrito torsional OPÕE-SE ao giro com torque limitado por μ_t·N e regularização macia (decaimento quase exponencial), não 'bloqueia' a rotação; com cone piramidal o efeito é mais fraco (3,831 rad/s em 2 s). A doc diz 'condim 4 enables torsional friction, preventing rotation around the normal', o que é uma descrição qualitativa.",
+      "fontes": [
+        "F22",
+        "F2",
+        "F3"
+      ],
+      "citacao_literal": "cone=elliptic  condim=3 (contact dim=3): wz@0.5s=10.000 wz@1s=10.000 wz@2s=10.000 rad/s\n  cone=elliptic  condim=4 (contact dim=4): wz@0.5s=5.811 wz@1s=3.351 wz@2s=1.114 rad/s",
+      "central": true
+    },
+    {
+      "texto": "Resistência ao rolamento: com `condim=\"6\"` o `friction[2]` age como μ_r em metros, equivalente a C_rr = μ_r/r (r = raio da roda). No carro mínimo (r=0,04 m, 1,82 kg, juntas das rodas sem amortecimento) `friction[2]=0.0004` (C_rr=0,01) deu desaceleração em roda livre de 0,0908 m/s² com cone elíptico, contra 0,0902 previstos por μ_r·g/(r·(1+4·I_w/(m·r²))); `0.002` deu 0,4526 (prev. 0,4509) e `0.005` deu 1,1210 (prev. 1,1272). Com condim 3 o coeficiente é ignorado (0,0016 m/s²) e com cone piramidal o efeito de `friction[2]=0.0004` cai à metade (0,0455 m/s²). A doc cita explicitamente o uso de condim 6 para 'rolling friction between tires and a road'.",
+      "fontes": [
+        "F23",
+        "F3",
+        "F2",
+        "F22"
+      ],
+      "citacao_literal": "condim=3 (roll=0.0004 ignorado): a=0.0016 m/s^2\n  condim=6 friction[2]=0.0004: a_elíptico=0.0908 a_piramidal=0.0455 a_prevista=0.0902 m/s^2 -> C_rr=mu_r/r=0.010",
+      "central": true
+    },
+    {
+      "texto": "Contatos por roda em pé sobre um plano: `cylinder` gera 2 (nas duas extremidades da banda de rodagem, em repouso e rolando), `ellipsoid` e `sphere` 1, `capsule` 2 e `box` 4 (a caixa rolando oscila entre 0 e 4 contatos); a doc 3.15 afirma que os coliders capsule-plane e box-plane retornam até 2 e 4 contatos. No carro mínimo o raio de curva medido a 1 m/s (δ=0,30 rad) foi 0,798 m com cilindros e 0,786 m com elipsoides ou esferas (cinemática no centro: 0,785 m). Um cilindro funciona como roda; elipsoide/esfera dão contato único.",
+      "fontes": [
+        "F24",
+        "F3"
+      ],
+      "citacao_literal": "contactos por roda sobre plano, repouso (rolando min-max): cylinder=2 (rolando 2-2) sphere=1 (rolando 1-1) ellipsoid=1 (rolando 1-1) capsule=2 (rolando 2-2) box=4 (rolando 0-4)",
+      "central": false
+    },
+    {
+      "texto": "Deslizamento lento (creep) do carro estacionado (4 rodas travadas, μ=1, rampa de 10°, deriva em 5 s): cone piramidal (padrão) 2,240 mm; elíptico com impratio=1 1,120 mm; impratio=10 0,112 mm; impratio=100 0,011 mm; `noslip_iterations=3` 0,000 mm. A doc recomenda cone elíptico + `impratio` alto e, se não bastar, `noslip_iterations` 1–3, avisando que o noslip não garante aderência exata, custa processamento e pode causar instabilidade em sistemas multi-contato. O limiar de deslizamento segue o μ de Coulomb: com μ=1 a rampa de 44° fica parada (6,5 mm em 3 s) e a de 45° desliza (1316,4 mm em 3 s). Padrões: `cone=\"pyramidal\"`, `impratio=\"1\"`, `noslip_iterations=\"0\"`.",
+      "fontes": [
+        "F25",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "citacao_literal": "rampa 10 deg, mu=1, deriva em 5 s -> pyramidal imp=1: 2.240 mm | elliptic imp=1: 1.120 mm | elliptic imp=10: 0.112 mm | elliptic imp=100: 0.011 mm | elliptic imp=1 noslip=3: 0.000 mm\nlimiar (elliptic, mu=1), deriva em 3 s -> 44 deg: 6.5 mm | 45 deg: 1316.4 mm",
+      "central": true
+    },
+    {
+      "texto": "Regras de mistura entre os dois geoms do contato (verificadas em 3.15.0): `friction` = máximo elemento a elemento (piso 0,5/0,005/0,0001 × roda 1,0/0,01/0,0002 → 1 1 0,01 0,0002 0,0002), exceto se um geom tem `priority` maior (usa-se o dele: piso com priority=1 → 0,5 0,5 0,005 0,0001 0,0001); `solref`/`solimp` = média ponderada por `solmix` (0,02 e 0,01 → 0,015; com solmix 1:3 → 0,0125) e, se algum `solref` for negativo (formato direto), o mínimo elemento a elemento. Consequência: um pneu com μ alto NÃO fica mais escorregadio sobre um piso de μ baixo — para trechos de gelo use `priority` no piso ou `contact/pair`.",
+      "fontes": [
+        "F26",
+        "F2"
+      ],
+      "citacao_literal": "friction piso(0.5,0.005,0.0001)+roda(1.0,0.01,0.0002): contacto=1 1 0.01 0.0002 0.0002 | com priority=1 no piso: 0.5 0.5 0.005 0.0001 0.0001\nsolref piso(0.02,1)+roda(0.01,1): solmix 1:1 -> 0.015; solmix 1:3 -> 0.0125; piso solref=(-1000,-10) (direto) -> -1000 -10",
+      "central": false
+    },
+    {
+      "texto": "Contato roda-piso: padrões `solref=\"0.02 1\"` e `solimp=\"0.9 0.95 0.001 0.5 2\"`; o flag `refsafe` (ligado) usa max(solref[0], 2·timestep), de modo que a dt=0,002 `solref=0.002` e `0.004` dão a mesma penetração (0,0022 mm). Penetração estática média da roda no carro de 1,82 kg: 0,054 mm (solref 0,02), 0,014 mm (0,01), 0,003 mm (0,005); `solimp=\"0.99 0.99 …\"` reduz para 0,005 mm e `\"0.5 0.5 …\"` aumenta para 0,245 mm. O hello_robot_stretch do Menagerie usa `solref=\"0.005 1\"` no robô inteiro.",
+      "fontes": [
+        "F27",
+        "F4",
+        "F2",
+        "F12"
+      ],
+      "citacao_literal": "penetracao estatica da roda (mm), 1.82 kg: solref 0.02/0.01/0.005 -> 0.054/0.014/0.003; solimp 0.99 0.99 -> 0.005; solimp 0.5 0.5 -> 0.245\nrefsafe (dt=0.002): solref 0.002 -> 0.0022 mm; solref 0.004 -> 0.0022 mm",
+      "central": false
+    },
+    {
+      "texto": "Direção: um hinge de eixo z por roda dianteira — o corpo da roda carrega 3 juntas em série (`slide` z da suspensão, `hinge` z de esterçamento e `hinge` y de giro) — comandado por `<position kp=\"50\" dampratio=\"1\" ctrlrange=\"-0.5 0.5\">` com `armature=\"0.002\"` na junta. Ackermann: R=L/tan(δ), δ_esq=atan(L/(R−t/2)), δ_dir=atan(L/(R+t/2)). No carro mínimo (L=0,24 m, t=0,16 m, μ=1) a δ=0,30 rad o raio medido por ajuste de círculo foi 0,797/0,798/0,786 m a 0,5/1/2 m/s contra 0,785 m cinemático no centro (erro de ≈2% a 1 m/s e com δ=0,15; ≈4% com δ=0,45, a 1 m/s); a 3 m/s já há subesterço (R=0,986 m, a_lat=8,35 m/s²) e a 4 m/s R=1,652 m.",
+      "fontes": [
+        "F28",
+        "F4",
+        "F2"
+      ],
+      "citacao_literal": "B) delta=0.30 rad: R_fit(v=0.5/1/2/3/4 m/s)=0.797/0.798/0.786/0.986/1.652 m (cinematico no centro 0.785 m); a_lat(3 m/s)=8.35 m/s2\nC) v=1 m/s, delta=0.15/0.30/0.45: R_fit=1.622/0.798/0.533 m vs cinematico 1.593/0.785/0.511 m",
+      "central": true
+    },
+    {
+      "texto": "Armadilha de unidades: com `compiler angle=\"degree\"` (padrão do MJCF) o `range` de juntas hinge é convertido para radianos (`range=\"-0.5 0.5\"` → ±0,00872665 rad = ±0,5°), mas o `ctrlrange` do atuador NÃO é convertido (continua ±0,5). Sem erro algum, o limite de ±0,5° na direção foi 'vencido' em parte pelo servo (esterçamento real 6,59° para 19,03° comandados), dando raio 2,300 m em vez de 0,798 m; use `<compiler angle=\"radian\"/>` ou escreva o range em graus (±28,6° ≈ 0,5 rad).",
+      "fontes": [
+        "F29",
+        "F4"
+      ],
+      "citacao_literal": "minicar angle=\"radian\": jnt_range=[-0.5 0.5] actuator_ctrlrange=[-0.5 0.5] R_fit=0.798 m steer_real=18.98 deg (cmd 19.03)\nminicar angle=\"degree\" (padrao): jnt_range=[-0.00872665 0.00872665] actuator_ctrlrange=[-0.5 0.5] R_fit=2.300 m steer_real=6.59 deg (cmd 19.03)",
+      "central": true
+    },
+    {
+      "texto": "Tração e diferencial (carro mínimo, curva δ=0,30 rad a v_cmd=1,5 m/s, eixo traseiro): um `velocity` sobre um tendão `fixed` com coef .5/.5 regula a velocidade MÉDIA das rodas e deixa cada roda com metade do torque (diferencial aberto) — razão de velocidades externa/interna 1,220 contra 1,225 cinemático e v=1,456 m/s; dois `velocity` independentes com o mesmo comando dão razão 1,128 (v=1,410 m/s, as rodas brigam); `equality joint` (`polycoef=\"0 1 0 0 0\"`, eixo travado) dá 1,000 (v=1,340 m/s). Um `motor` no mesmo tendão divide o torque igualmente mas, sem servo e com torque alto (ctrl=0,6), a roda interna patina (230,0 vs 102,6 rad/s). A doc recomenda `implicitfast`/`implicit` com atuadores `velocity` (o Menagerie usa `velocity` kv=100 nas rodas do TIAGo).",
+      "fontes": [
+        "F30",
+        "F4",
+        "F14"
+      ],
+      "citacao_literal": "curva d=0.30 v_cmd=1.5: razao w_ext/w_int (cinematica ~1.22): velocity@tendao fixed=1.220 | 2x velocity=1.128 | equality joint=1.000; v=1.456/1.410/1.340 m/s\nmotor@tendao fixed ctrl=0.6 (torque, sem servo): w_int=230.0 rad/s, w_ext=102.6 rad/s (roda interna patina)",
+      "central": false
+    },
+    {
+      "texto": "Suspensão por canto: `slide` de eixo z no corpo da roda com `stiffness`, `damping`, `range` (±0,02 m) e `springref=-m_suspensa·g/k` (negativo, para o chassi assentar em q=0). Medido no carro mínimo (chassi 1,5 kg, 4 cantos, 1 cm de compressão inicial): k=400 N/m e c=10 N·s/m dão f_amortecida=4,85 Hz (teórica 4,75 Hz) e ζ=0,41 (projetado 0,41); k=100 N/m e c=5 N·s/m dão 2,36 Hz (teórica 2,37 Hz).",
+      "fontes": [
+        "F31",
+        "F4"
+      ],
+      "citacao_literal": "suspensao (chassi 1.5 kg, 4 cantos): k=400 c=10 -> f_amortecida medida 4.85 Hz (teorica 4.75), zeta medido 0.41 (projetado 0.41); k=100 c=5 -> 2.36 Hz (teorica 2.37), zeta 0.41",
+      "central": false
+    },
+    {
+      "texto": "Estabilidade numérica do carro mínimo: com dt=0,002 não houve avisos; na curva a v_cmd=2 m/s o Euler passa de BADQACC=0 (dt 0,002 e 0,005) a BADQACC=1 em dt=0,01 (velocidades absurdas e `autoreset`), enquanto `implicitfast` permanece estável a dt=0,01 (a doc recomenda `implicitfast`). Uma direção com kp=200 e SEM `armature` diverge a dt=0,005 (BADQACC=1) e estabiliza com `armature=\"0.001\"` na junta (BADQACC=0), coerente com a doc: 'positive armature significantly improves simulation stability, even for small values'. O flag `autoreset` (ligado por padrão) reinicia a simulação ao detectar o problema.",
+      "fontes": [
+        "F32",
+        "F4",
+        "F3"
+      ],
+      "citacao_literal": "curva d=0.30 v=2: Euler dt=0.002/0.005/0.01 -> BADQACC=0/0/1 (vmax a 0.01: 33147 m/s); implicitfast dt=0.01 -> BADQACC=0 (vmax=1.94 m/s)\nimplicitfast dt=0.005, direcao kp=200: armature=0 -> BADQACC=1; armature=0.001 -> BADQACC=0",
+      "central": false
+    },
+    {
+      "texto": "O contato nativo regulariza o atrito de Coulomb por velocidade de DESLIZAMENTO, não por ângulo de deriva: com o carro mínimo livre e vy0=0,05 m/s, o tempo para a velocidade lateral cair a 1/e é 16,0 ms para vx=1, 2 e 4 m/s (derivas de 2,86°, 1,43° e 0,72°) — independente da velocidade; diminui com `solref[0]` (22/16/12/10 ms para 0,04/0,02/0,01/0,005) e não muda com `impratio` 1/5/20 nem com `noslip_iterations=3` (16 ms). Com vy0=1 m/s (deriva ~27°) a desaceleração lateral média foi 8,96 m/s² (≈0,91·μ·g). Logo não há rigidez de curva, comprimento de relaxação nem curva F(α) tipo Pacejka embutidos: a escala de tempo do relaxamento lateral é fixada por `solref[0]`, e `impratio`/noslip só mexem no creep em regime permanente.",
+      "fontes": [
+        "F33",
+        "F2",
+        "F47"
+      ],
+      "citacao_literal": "t(1/e) da vel. lateral (vy0=0.05 m/s): vx=1/2/4 m/s -> 16.0/16.0/16.0 ms; solref 0.04/0.02/0.01/0.005 -> 22/16/12/10 ms; impratio 1/5/20 -> 16/16/16 ms; noslip=3 -> 16 ms\nvy0=1 m/s (deriva 27 graus): desaceleracao lateral media 20-80 ms = 8.96 m/s2 (mu*g=9.81)",
+      "central": true
+    },
+    {
+      "texto": "Limites de aderência do carro mínimo (dt=0,002, implicitfast, δ=0,30 rad): a aceleração lateral satura em 0,58·μ·g com μ=0,5 (2,84 m/s²), 0,81·μ·g com μ=1 (7,98 m/s²) e 0,76·μ·g com μ=1,5 (11,15 m/s²), e acima do limite o carro subesterça (R de 0,8 m para 1,652 m a 4 m/s). No mesmo μ=1 a 3,5 m/s o cone piramidal dá menos aderência que o elíptico (a_lat 6,47 vs 8,18 m/s²); `impratio=10` não altera o limite (8,17) e `noslip_iterations=2` com piramidal também não (6,43).",
+      "fontes": [
+        "F34",
+        "F2"
+      ],
+      "citacao_literal": "curva delta=0.30 v_cmd=3.5 mu=1 (a_lat em m/s2) | pyramidal: a_lat=6.47 | elliptic: a_lat=8.18 | elliptic imp=10: a_lat=8.17 | pyramidal noslip=2: a_lat=6.43\nsaturacao delta=0.30 v_cmd=5 | mu=0.5: a_lat=2.84 (0.58 mu.g) | mu=1.0: a_lat=7.98 (0.81 mu.g) | mu=1.5: a_lat=11.15 (0.76 mu.g)",
+      "central": false
+    },
+    {
+      "texto": "Alta velocidade: em reta a v_cmd=15 m/s o carro mínimo (torque 0,4 N·m/roda, μ=1) perdeu o controle (|y|máx=6,507 m, vx final 1,56 m/s, ncon mínimo 0) SEM avisos BADQACC; a causa é física — a patinação das rodas traseiras satura o cone de atrito e tira a aderência lateral — pois com o torque limitado a 0,15 N·m/roda o carro manteve reta perfeita (|y|<1e-3 m) a 5,97 m/s e com μ=1,5 chegou a 14,62 m/s em reta. A 8 m/s o carro seguiu reto (v_final 7,799 m/s). Ou seja, a instabilidade observada é física (círculo de atrito), controlável por limite de torque ou μ, e não numérica.",
+      "fontes": [
+        "F35",
+        "F32",
+        "F28"
+      ],
+      "citacao_literal": "reta v_cmd=15 m/s: mu=1 tau=0.4 -> |y|max=6.507 m, vx=1.56 m/s, ncon_min=0, BADQACC=0 | tau=0.15 -> |y|max=0.000 m, vx=5.97 m/s | mu=1.5 -> |y|max=0.000 m, vx=14.62 m/s",
+      "central": true
+    },
+    {
+      "texto": "Não há modelo de pneu (Pacejka/Magic Formula, TMeasy, Fiala) nem plugin de pneu na 3.15.0: a busca local por 'pacejka', 'magic formula', 'slip angle' e 'cornering stiffness' em todo o espelho oficial (mujoco, mujoco_warp, mujoco_playground, mujoco_mpc, mujoco_menagerie) retorna 0 ocorrências, e os plugins oficiais são só actuator (pid), elasticity (cable), obj/stl/usd decoders, sdf e sensor (touch_grid). A Discussion #3569 do repositório (11/set/2026, 'Implement a tire friction model through plugin?') segue 'Unanswered', sem comentários. Alternativas: forças de pneu próprias (afirmação seguinte) ou motores de veículos com pneus Pacejka 89/02, TMeasy e Fiala, como o Chrono::Vehicle.",
+      "fontes": [
+        "F38",
+        "F40",
+        "F42",
+        "F2"
+      ],
+      "citacao_literal": "rg_exit=1 (1 = nenhuma correspondência)\n$ ls mujoco/plugin\nactuator elasticity obj_decoder sdf sensor stl_decoder usd_decoder ",
+      "central": true
+    },
+    {
+      "texto": "Alternativa testada para ter curva de deslizamento própria: pôr o contato roda-piso em `condim=\"1\"` (só força normal) e aplicar as forças tangenciais por `mjData.xfrc_applied` (torsor no CoM: força F e torque (p−CoM)×F, com p o ponto de contato), com Fz lido dos contatos do passo anterior via `mj_contactForce` e o deslizamento calculado da velocidade do ponto de contato; com uma função tipo Pacejka simples (B=10, C=1,3, D=μ·Fz, limitada pelo círculo de atrito) o tempo de decaimento lateral passa a crescer com vx (8/14/22 ms para 1/2/4 m/s, contra 16 ms constantes no contato nativo) e o raio a δ=0,30 rad ficou 0,793 m (1 m/s) e 1,084 m (3 m/s, subesterço). A doc ressalva que `mjcb_control` não pode depender de forças de contato do passo corrente e que `mjcb_passive` serve a forças que dependem só de posição e velocidade.",
+      "fontes": [
+        "F37",
+        "F18",
+        "F19",
+        "F3"
+      ],
+      "citacao_literal": "pneu custom (condim=1 + xfrc_applied, Pacejka-like B=10 C=1.3): t(1/e) de vy0=0.05 m/s para vx=1/2/4 -> 8/14/22 ms (nativo: 16/16/16 ms)\npneu custom, curva d=0.30: R_fit=0.793 m (1 m/s) e 1.084 m (3 m/s); cinematico 0.785 m",
+      "central": false
+    },
+    {
+      "texto": "Atrito anisotrópico (μ diferente nos dois eixos tangentes) só existe em `contact/pair` (`friction` com 5 valores) e depende da orientação do frame de contato: medido em 3.15.0 com a roda girada em yaw 0/30/60/90/135°, o eixo tangente t1 do contato roda-plano fica FIXO no mundo (90°) para `cylinder`, `ellipsoid`, `sphere` e `box`, e só acompanha o yaw para `capsule` (90/120/150/180/−135°). Com isso o atrito anisotrópico de `contact/pair` não distingue direção longitudinal e lateral em rodas cilíndricas (contato com plano), o que explica a recomendação do blog da Ekumen de modelar rodas omni com cápsulas; a Discussion #2749 pede o alinhamento para cilindros e está sem resposta.",
+      "fontes": [
+        "F36",
+        "F4",
+        "F2",
+        "F41",
+        "F46"
+      ],
+      "citacao_literal": "cylinder  :    90.0    90.0    90.0    90.0    90.0  (ncon=2)\n  capsule   :    90.0   120.0   150.0   180.0  -135.0  (ncon=2)",
+      "central": false
+    },
+    {
+      "texto": "GPU e o cenário de 4096 carros: nem MJWarp nem MJX suportam `noslip` — o MJWarp levanta `NotImplementedError(\"noslip solver not implemented.\")` se `noslip_iterations>0` e o MJX-JAX só tem CG e Newton (sem PGS), aceita condim 1/3/4/6 (1 não com cone elíptico), roda em float32 e só deixa `CYLINDER` colidir com primitivas (a doc lista como não suportados os pares com SPHERE/BOX/MESH/HFIELD; plano-cilindro não está na lista). O exemplo oficial de aceleração usa `batch_size = 4096` (MJWarp) e o Playground treina locomoção com `num_envs=8192`, mas não existe ambiente de veículo de rodas no Playground (DM Control Suite, locomoção de quadrúpedes/bípedes e manipulação; a busca local não achou carro/rover) e um trabalho de RL de drift em GPU usou simulador próprio com cerca de 10^5 ambientes. Não testei GPU aqui (JAX/Warp não instalados).",
+      "fontes": [
+        "F8",
+        "F7",
+        "F6",
+        "F9",
+        "F10",
+        "F39",
+        "F11",
+        "F45",
+        "F44"
+      ],
+      "citacao_literal": "raise NotImplementedError(f\"noslip solver not implemented.\")",
+      "central": true
+    },
+    {
+      "texto": "Receitas oficiais do Menagerie para bases com rodas (e um preprint com a mesma prática de contato): hello_robot_stretch repete o esquema do carro oficial (tendões `forward`/`turn` com coef ±0,5 + `<motor ctrlrange=\"-1 1\" gear=\"3\" forcerange=\"-100 100\"/>`) com `integrator=\"implicitfast\"`, `cone=\"elliptic\"`, `impratio=\"1\"`, `noslip_iterations=\"2\"`, `solref=\"0.005 1\"` e roda de colisão `type=\"cylinder\" size=\".05 .0125\"`; pal_tiago usa `velocity` (kv=100, ctrlrange ±5) nas rodas, `actuatorfrcrange` ±100 e rodízios com `condim=\"6\"`; stanford_tidybot NÃO simula rodas — a base é `slide` x, `slide` y e `hinge` com `position` (x e y: kp=1e6, kv=5e4; th: kp=5e4, kv=1e3); robot_soccer_kit modela os rolos passivos como juntas e usa `noslip_iterations=\"1\"`. O preprint asRoBallet (robô com rodas omni simulado em MuJoCo) também usa `cone=\"elliptic\"` com `impratio=10` para resolver o sistema sobrerrestrito de três pontos de apoio.",
+      "fontes": [
+        "F12",
+        "F13",
+        "F14",
+        "F15",
+        "F16",
+        "F17",
+        "F43"
+      ],
+      "citacao_literal": "<option integrator=\"implicitfast\" impratio=\"1\" cone=\"elliptic\" noslip_iterations=\"2\">",
+      "central": false
+    },
+    {
+      "texto": "RECEITA TESTADA — carro mínimo de 4 rodas (XML completo, 1,82 kg, L=0,24 m, t=0,16 m, rodas r=0,04 m; chassi sem colisão `contype=0 conaffinity=0`; rodas dianteiras esterçam, tração traseira com diferencial aberto por tendão `fixed`; `angle=\"radian\"`):\n<mujoco model=\"minicar\">\n  <compiler angle=\"radian\" autolimits=\"true\"/>\n  <option timestep=\"0.002\" integrator=\"implicitfast\" cone=\"elliptic\" impratio=\"1\"/>\n\n  <default>\n    <geom friction=\"1 0.005 0.0001\"/>\n    <default class=\"wheel\">\n      <geom type=\"cylinder\" size=\"0.04 0.0125\" mass=\"0.08\" rgba=\"0.15 0.15 0.15 1\"/>\n      <joint damping=\"0.0005\"/>\n    </default>\n    <default class=\"susp\">\n      <joint type=\"slide\" axis=\"0 0 1\" range=\"-0.02 0.02\" stiffness=\"400\" damping=\"10\" springref=\"-0.0092\"/>\n    </default>\n    <default class=\"steer\">\n      <joint type=\"hinge\" axis=\"0 0 1\" range=\"-0.5 0.5\" damping=\"0.05\" armature=\"0.002\"/>\n      <position kp=\"50\" dampratio=\"1\" ctrlrange=\"-0.5 0.5\"/>\n    </default>\n  </default>\n\n  <worldbody>\n    <geom name=\"floor\" type=\"plane\" size=\"100 100 0.1\"/>\n    <body name=\"chassis\" pos=\"0 0 0.0401\">\n      <freejoint name=\"root\"/>\n      <geom name=\"body\" type=\"box\" size=\"0.14 0.06 0.02\" pos=\"0 0 0.02\" mass=\"1.5\"\n            contype=\"0\" conaffinity=\"0\" rgba=\"0.8 0.2 0.2 1\"/>\n      <site name=\"imu\" pos=\"0 0 0.02\"/>\n      <body name=\"fl\" pos=\"0.12 0.08 0\" childclass=\"wheel\">\n        <joint name=\"fl_susp\" class=\"susp\"/>\n        <joint name=\"fl_steer\" class=\"steer\"/>\n        <joint name=\"fl_spin\" axis=\"0 1 0\"/>\n        <geom name=\"fl_tire\" zaxis=\"0 1 0\"/>\n      </body>\n      <body name=\"fr\" pos=\"0.12 -0.08 0\" childclass=\"wheel\">\n        <joint name=\"fr_susp\" class=\"susp\"/>\n        <joint name=\"fr_steer\" class=\"steer\"/>\n        <joint name=\"fr_spin\" axis=\"0 1 0\"/>\n        <geom name=\"fr_tire\" zaxis=\"0 1 0\"/>\n      </body>\n      <body name=\"rl\" pos=\"-0.12 0.08 0\" childclass=\"wheel\">\n        <joint name=\"rl_susp\" class=\"susp\"/>\n        <joint name=\"rl_spin\" axis=\"0 1 0\"/>\n        <geom name=\"rl_tire\" zaxis=\"0 1 0\"/>\n      </body>\n      <body name=\"rr\" pos=\"-0.12 -0.08 0\" childclass=\"wheel\">\n        <joint name=\"rr_susp\" class=\"susp\"/>\n        <joint name=\"rr_spin\" axis=\"0 1 0\"/>\n        <geom name=\"rr_tire\" zaxis=\"0 1 0\"/>\n      </body>\n    </body>\n  </worldbody>\n\n  <tendon>\n    <!-- open differential: the servo regulates the MEAN rear wheel speed; each wheel gets half the torque -->\n    <fixed name=\"rear_cage\">\n      <joint joint=\"rl_spin\" coef=\"0.5\"/>\n      <joint joint=\"rr_spin\" coef=\"0.5\"/>\n    </fixed>\n  </tendon>\n\n  <actuator>\n    <velocity name=\"drive\" tendon=\"rear_cage\" kv=\"0.1\" ctrlrange=\"-400 400\" forcerange=\"-0.8 0.8\"/>\n    <position name=\"steer_l\" joint=\"fl_steer\" class=\"steer\"/>\n    <position name=\"steer_r\" joint=\"fr_steer\" class=\"steer\"/>\n  </actuator>\n\n  <sensor>\n    <velocimeter name=\"vel\" site=\"imu\"/>\n    <gyro name=\"gyro\" site=\"imu\"/>\n  </sensor>\n</mujoco>\nControle (Python, acesso por nome — válido aqui porque nenhum atuador é multi-entrada): `data.actuator('drive').ctrl = v/0.04` (rad/s); com δ (ângulo de bicicleta) e R=L/tan(δ): `data.actuator('steer_l').ctrl = atan(L/(R-t/2))` e `data.actuator('steer_r').ctrl = atan(L/(R+t/2))` (para δ=0 ambos valem 0); velocidade local pelo sensor `vel` (velocimeter no site `imu`). Resultados (dt=0,002, implicitfast, cone elíptico): reta v_cmd=1/2/4/8 m/s → 0,975/1,950/3,899/7,799 m/s (97,5%: erro do servo P por amortecimento das juntas), t90=0,17/0,33/0,68/1,64 s, desvio lateral 0; curvas: ver raios na afirmação de direção (0,798 m a δ=0,30 e 1 m/s).",
+      "fontes": [
+        "F28",
+        "F29",
+        "F30",
+        "F31"
+      ],
+      "citacao_literal": "A) reta v_cmd=1/2/4/8 m/s -> v_final=0.975/1.950/3.899/7.799 m/s (97.5%); t90=0.17/0.33/0.68/1.64 s; desvio lateral 0",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/car/car.xml",
+      "doi": "",
+      "titulo": "model/car/car.xml — exemplo oficial de carro (tração diferencial por tendões fixed)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Modeling (doc/modeling.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Computation (doc/computation/index.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — XML Reference (doc/XMLreference.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Changelog (doc/changelog.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/mjx.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — MuJoCo XLA (MJX), Feature Parity (doc/mjx.rst)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Warp v3.15.0 — README (MuJoCo API Compatibility)",
+      "autores": "Google DeepMind / NVIDIA",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_warp @ v3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/mujoco_warp/_src/io.py",
+      "doi": "",
+      "titulo": "MuJoCo Warp v3.15.0 — mujoco_warp/_src/io.py (put_model: noslip não implementado)",
+      "autores": "Google DeepMind / NVIDIA",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_warp @ v3.15.0",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/accelerated/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — skill oficial 'MuJoCo Accelerated: MJX & MJWarp GPU Backends'",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco_playground/blob/main/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Playground — README",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_playground @ main",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco_playground/blob/main/mujoco_playground/config/locomotion_params.py",
+      "doi": "",
+      "titulo": "MuJoCo Playground — config/locomotion_params.py (num_envs)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_playground @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/hello_robot_stretch/stretch.xml",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — hello_robot_stretch/stretch.xml",
+      "autores": "Hello Robot / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/pal_tiago/tiago.xml",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — pal_tiago/tiago.xml",
+      "autores": "PAL Robotics / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/pal_tiago/tiago_velocity.xml",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — pal_tiago/tiago_velocity.xml",
+      "autores": "PAL Robotics / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/stanford_tidybot/base.xml",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — stanford_tidybot/base.xml",
+      "autores": "Stanford IPRL / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/robot_soccer_kit/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — robot_soccer_kit/README.md",
+      "autores": "Robot Soccer Kit / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/robot_soccer_kit/robot_soccer_kit.xml",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — robot_soccer_kit/robot_soccer_kit.xml",
+      "autores": "Robot Soccer Kit / Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco_menagerie @ main",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/APIglobals.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — API Reference: Globals (mjcb_passive, mjcb_control)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/simulation.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Simulation (qfrc_applied, xfrc_applied)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ 3.15.0",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: carro oficial model/car/car.xml compilado e conduzido (reta, giro no lugar, curvas)",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: dim/condim dos contatos (carro oficial em repouso; regra de máximo/priority; condim 2 e 5 inválidos)",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: condim 3/4/6: giro em torno da normal (torsional) e rolamento de esfera, cone piramidal vs elíptico",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F23",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: resistência ao rolamento do carro mínimo em roda livre (condim 3 vs 6, friction[2], cone)",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F24",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: nº de contatos por forma de roda (cilindro, esfera, elipsoide, cápsula, caixa) sobre plano",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F25",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: deslizamento lento (creep) de carro estacionado em rampa: cone, impratio, noslip, limiar de μ",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: regra de mistura de friction e de solref/solmix entre os dois geoms de um contato (priority, máximo, mínimo)",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: penetração estática da roda vs solref/solimp e efeito do flag refsafe (solref[0] < 2·dt)",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: carro mínimo (4 rodas, direção Ackermann, tração por tendão fixed, suspensão): aceleração e raio de curva",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F29",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: unidades de ângulo: range de hinge (graus) vs ctrlrange (não convertido) e efeito no raio de curva",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F30",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: diferencial: servo velocity em tendão fixed vs dois servos vs equality joint vs motor em tendão",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F31",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: suspensão slide (stiffness/damping/springref): frequência e razão de amortecimento medidas",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F32",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: estabilidade numérica vs integrador/timestep e vs kp da direção com/sem armature",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F33",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: decaimento da velocidade lateral (deriva) vs vx, solref, impratio e noslip",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F34",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: limites de aderência em curva: μ, cone piramidal vs elíptico",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F35",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: reta a 15 m/s: perda de controle por patinação das rodas traseiras vs torque limitado vs μ maior",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F36",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: orientação do frame tangente do contato (atrito anisotrópico) vs yaw da roda por tipo de geom",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F37",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: pneu próprio (condim=1 + xfrc_applied com função tipo Pacejka): relaxamento lateral e raio de curva",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F38",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: busca local em docs/upstream por Pacejka/magic formula/slip angle/cornering stiffness e lista de plugins oficiais",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F39",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: busca local no mujoco_playground por veículos/rodas e lista de ambientes de locomoção",
+      "autores": "Investigador Q9 (execução local)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F40",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/3569",
+      "doi": "",
+      "titulo": "Implement a tire friction model through plugin? (Discussion #3569)",
+      "autores": "Sciancisco (autor da pergunta)",
+      "ano": "2026",
+      "veiculo": "GitHub Discussions — google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F41",
+      "url": "https://ekumenlabs.com/blog/posts/modeling-lekiwis-omni-base-in-mujoco",
+      "doi": "",
+      "titulo": "Modeling LeKiwi's omni-base in MuJoCo",
+      "autores": "Ekumen Labs",
+      "ano": "s.d.",
+      "veiculo": "Ekumen Labs — blog de engenharia",
+      "tipo": "blogue",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F42",
+      "url": "https://api.projectchrono.org/wheeled_tire.html",
+      "doi": "",
+      "titulo": "Chrono::Vehicle Reference Manual — Wheeled vehicles: Tire models",
+      "autores": "Project Chrono",
+      "ano": "s.d.",
+      "veiculo": "api.projectchrono.org",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F43",
+      "url": "https://arxiv.org/html/2604.24916v2",
+      "doi": "10.48550/arXiv.2604.24916",
+      "titulo": "asRoBallet: Closing the Sim2Real Gap via Friction-Aware … (omni-wheel, MuJoCo)",
+      "autores": "n/d",
+      "ano": "2026",
+      "veiculo": "arXiv:2604.24916v2",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F44",
+      "url": "https://arxiv.org/html/2507.23339v1",
+      "doi": "10.48550/arXiv.2507.23339",
+      "titulo": "Learning to Drift with Individual Wheel Drive: Maneuvering Autonomous Vehicle at the Handling Limits",
+      "autores": "n/d",
+      "ano": "2025",
+      "veiculo": "arXiv:2507.23339v1",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F45",
+      "url": "https://arxiv.org/html/2502.08844v1",
+      "doi": "10.48550/arXiv.2502.08844",
+      "titulo": "MuJoCo Playground",
+      "autores": "Zakka, Tabanpour, Liao, Haiderbhai, Holt, Luo, Allshire, Frey, Sreenath, Kahrs, Sferrazza, Tassa, Abbeel",
+      "ano": "2025",
+      "veiculo": "arXiv:2502.08844v1",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F46",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/2749",
+      "doi": "",
+      "titulo": "Contact frame alignment for cylinder-sphere collisions (Discussion #2749)",
+      "autores": "david-wb (autor da pergunta)",
+      "ano": "2025",
+      "veiculo": "GitHub Discussions — google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F47",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/3413",
+      "doi": "",
+      "titulo": "impact of impedence on friction (Discussion #3413)",
+      "autores": "n/d",
+      "ano": "s.d.",
+      "veiculo": "GitHub Discussions — google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F48",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/656",
+      "doi": "",
+      "titulo": "Mujoco impratio (Discussion #656)",
+      "autores": "n/d",
+      "ano": "2022",
+      "veiculo": "GitHub Discussions — google-deepmind/mujoco",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "Para materiais que rodam sobre si (pneus), o atributo condim do geom é essencial: condim 4 adiciona atrito torsional (bloqueia rotação em torno da normal) e condim 6 adiciona atrito de rolamento.",
+      "veredito": "parcial",
+      "correcao": "A semântica está certa, mas com quatro ressalvas. (1) Correto: condim 4 acrescenta atrito torsional (`friction[1]`, torque em torno da normal) e condim 6 acrescenta atrito de rolamento (`friction[2]`); a doc 3.15 cita pneu-estrada para condim 6. (2) 'Essencial' é exagero: o `car.xml` oficial usa condim 3 (padrão) nas rodas cilíndricas e condim 1 na esfera de apoio e anda/curva normalmente (0,498 m/s; raio 0,21 m); condim 4/6 são refinamentos opcionais (resistência ao rolamento, amortecimento de yaw). (3) 'Bloqueia' é impreciso: o atrito torsional OPÕE-SE à rotação com limite μ_t·N e regularização macia (giro de 10 rad/s cai a 1,11 rad/s em 2 s com condim 4 e cone elíptico; não trava) e os coeficientes torsional e de rolamento têm unidade de comprimento (m), não são adimensionais — para rolamento, μ_r = C_rr·r (r=0,04 m e C_rr=0,01 → `friction[2]=0.0004`; medido 0,0908 vs 0,0902 m/s²). (4) O condim do contato é o máximo dos dois geoms (ou o do de maior `priority`), então basta defini-lo no geom da roda; condim 2 e 5 são inválidos; com o cone piramidal (padrão) o efeito de condim 4/6 é bem mais fraco (rolamento 0,0455 vs 0,0908 m/s²), então use `cone=\"elliptic\"`.",
+      "fontes": [
+        "F2",
+        "F3",
+        "F22",
+        "F23",
+        "F21",
+        "F20",
+        "F1"
+      ]
+    },
+    {
+      "afirmacao": "O relatório refere a simulação de 4096 'carros robóticos' em paralelo (GPU) como cenário de RL.",
+      "veredito": "parcial",
+      "correcao": "Plausível, mas não é um cenário oficial nem verificado. MJX (JAX) e MJWarp simulam lotes em GPU (a skill oficial de aceleração usa `batch_size = 4096` como exemplo e o Playground treina locomoção com `num_envs=8192`), porém não existe ambiente de veículo de rodas no Playground (só DM Control Suite, locomoção de quadrúpedes/bípedes e manipulação) nem receita oficial de carro em GPU. Na GPU o contato roda-piso perde o `noslip` (MJWarp lança NotImplementedError; MJX só tem CG/Newton), roda em float32 e, no MJX-JAX, `cylinder` só colide com primitivas (a doc lista como não suportados os pares com sphere/box/mesh/hfield). A literatura de RL de drift em GPU relatada usou simulador próprio (~10^5 ambientes), não MuJoCo. Não testei GPU aqui (JAX/Warp não estão instalados no ambiente), então desempenho e memória de 4096 carros numa RTX 4070 de 8 GB (nconmax/njmax por mundo) seguem não verificados.",
+      "fontes": [
+        "F9",
+        "F10",
+        "F11",
+        "F45",
+        "F6",
+        "F7",
+        "F8",
+        "F39",
+        "F44"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Como o atrito de Coulomb é implementado no MuJoCo (cone só escala o atrito estático/cinético?)",
+      "posicoes": [
+        {
+          "fonte": "F40",
+          "diz": "O autor entende que 'the friction cone is only used to scale the static friction coefficient and switch to the kinetic friction coefficient once static friction is saturated'."
+        },
+        {
+          "fonte": "F2",
+          "diz": "O contato é uma restrição convexa regularizada, com um único μ de Coulomb por dimensão, sem coeficientes estático/cinético distintos; mesmo dentro do cone há deslizamento lento ('slow slippage') porque as dimensões de atrito são amortecidas."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    },
+    {
+      "tema": "Efeito de impratio com cone piramidal",
+      "posicoes": [
+        {
+          "fonte": "F48",
+          "diz": "Cita a doc antiga: para cones piramidais 'the overall effect of this attribute is qualitatively similar'."
+        },
+        {
+          "fonte": "F4",
+          "diz": "A doc 3.15 diz que, para cones piramidais, não se recomenda usar valores altos de impratio."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "condim 4 'impede' a rotação em torno da normal?",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "'condim 4 enables torsional friction, preventing rotation around the normal.'"
+        },
+        {
+          "fonte": "F22",
+          "diz": "Medido: com condim 4 (cone elíptico) o giro de 10 rad/s cai a 1,114 rad/s em 2 s — é um amortecimento limitado por μ_t·N, não um bloqueio."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    }
+  ],
+  "lacunas": [
+    "Comportamento do contato roda-piso e custo (passos/s, memória com nworld/nconmax/njmax) de ~4096 carros em MJWarp/MJX numa RTX 4070 Laptop de 8 GB não foram testados: JAX, Warp e PyTorch não estão instalados no ambiente e a regra proíbe instalar pacotes.",
+    "Nenhuma validação contra dados reais de pneus/veículos: o carro mínimo é de escala RC (1,82 kg); velocidades e massas de carro real (≥20 m/s, ~1500 kg) e o efeito de float32 na GPU não foram avaliados.",
+    "Rodas omni/mecanum (cápsulas + `contact/pair` anisotrópico) e terrenos não planos (hfield, degraus, lombadas) não foram testados; o efeito de `solreffriction` (só em `contact/pair`) na rigidez lateral e dos flags `multiccd`/`nativeccd` em rodas cilíndricas também não foi medido.",
+    "O pneu próprio (condim=1 + xfrc_applied) é uma prova de conceito com Fz atrasada em 1 passo e função de deslizamento simplificada; estabilidade a baixa velocidade, passos grandes e comparação com um Pacejka real não foram avaliadas.",
+    "A discussão #3569 está sem resposta dos mantenedores; não há declaração oficial sobre a intenção de oferecer um modelo de pneu nativo."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Qual o throughput (passos/s) e o uso de memória (nworld, nconmax, njmax) de 4096 carros de 4 rodas em MJWarp/MJX numa RTX 4070 Laptop de 8 GB, e como o contato roda-piso se comporta em float32 sem noslip?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "É o cenário de RL do relatório e o único ponto desta pergunta que ficou sem teste empírico."
+    },
+    {
+      "pergunta": "Como implementar com robustez um pneu Pacejka/TMeasy por callback ou plugin (Fz sem atraso via mj_step1/mj_step2, slip no frame da roda, regularização a baixa velocidade) e validá-lo contra o contato nativo?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "Não existe modelo de pneu nativo e a prova de conceito usou Fz atrasada em 1 passo."
+    },
+    {
+      "pergunta": "Rodas omni/mecanum com cápsulas e `contact/pair` anisotrópico: qual a precisão frente ao modelo de rolos individuais e qual o custo?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "O frame de contato só acompanha a roda para cápsulas; o Menagerie (robot_soccer_kit) modela rolos como juntas."
+    },
+    {
+      "pergunta": "Como `solreffriction`/`solimp[0]` em `contact/pair` ajustam a rigidez e o relaxamento lateral dos pneus para casar com dados reais (sistema de identificação)?",
+      "origem": "quantificacao",
+      "prioridade": "media",
+      "porque": "Medi que o relaxamento lateral depende de solref[0] e não de impratio/noslip, mas não testei os parâmetros de atrito do pair."
+    },
+    {
+      "pergunta": "Como rodas cilíndricas versus elipsoides se comportam sobre hfield, degraus e lombadas (multiccd, margin)?",
+      "origem": "lacuna",
+      "prioridade": "baixa",
+      "porque": "Só testei piso plano."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/jrouwe/JoltPhysics/discussions/1628",
+      "porque_pode_importar": "Discussão sobre implementar pneus Pacejka/Magic Formula num outro motor (Jolt): padrões de integração de um modelo de pneu externo."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/2638",
+      "porque_pode_importar": "Issue 'Abnormal slip': casos de deslizamento anômalo reportados por usuários."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/1040",
+      "porque_pode_importar": "Cilindro quicando ao passar entre caixas de piso com condim=6 e atritos diferentes (relevante para remendos de atrito em pistas)."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/1649",
+      "porque_pode_importar": "Forças de atrito transversais grandes em contatos moles (solref/solimp vs friction)."
+    },
+    {
+      "url": "https://sbel.wisc.edu/wp-content/uploads/sites/569/2018/05/TR-2014-14.pdf",
+      "porque_pode_importar": "Relatório técnico comparando Magic Formula em regime estacionário com outro modelo de pneu (validação de modelos de pneu)."
+    },
+    {
+      "url": "https://gist.github.com/Alexanderallenbrown/e315b52a32dbebece7f1",
+      "porque_pode_importar": "Implementação em Python/NumPy do pneu de Dugoff, candidata a prova de conceito de pneu próprio."
+    },
+    {
+      "url": "https://www.alex-hattori.com/blog/stride-mujoco-sim-no-arms",
+      "porque_pode_importar": "Blog de um biped com rodas simulado em MuJoCo (prática de modelagem de rodas)."
+    },
+    {
+      "url": "https://aibreakingwire.com/news/nvidia-scales-mujoco-to-2048-parallel-gpu-environments",
+      "porque_pode_importar": "Notícia sobre MJWarp com 2048 ambientes em GPU (fonte de imprensa; números de escala a confirmar em fonte primária)."
+    }
+  ],
+  "consultas": [
+    "MuJoCo car model wheels tire friction cylinder condim",
+    "MuJoCo tire model Pacejka magic formula friction vehicle simulation issue",
+    "google-deepmind mujoco github issue wheel cylinder rolling slipping car simulation friction",
+    "MuJoCo Ackermann steering car model xml hinge position actuator suspension slide joint",
+    "MuJoCo MJX wheeled robot car reinforcement learning thousands parallel environments GPU",
+    "MuJoCo noslip_iterations impratio elliptic cone wheel slip drift mobile robot simulation",
+    "MuJoCo differential drive robot wheels slip friction condim sim-to-real mobile base",
+    "MuJoCo rolling friction condim 6 wheel tire road rolling resistance coefficient length units",
+    "Project Chrono vehicle tire models Pacejka TMeasy rigid tire comparison physics engine wheeled vehicle",
+    "MuJoCo custom tire force mjcb_passive callback plugin wheel slip ratio slip angle simulation",
+    "autonomous racing car drifting reinforcement learning MuJoCo MJX vehicle dynamics simulator",
+    "MuJoCo cylinder wheel rolling jitter bumpy ellipsoid sphere capsule wheel geometry recommended contact",
+    "mjlab OR MuJoCo Playground wheeled robot rover vehicle environment massively parallel simulation wheels",
+    "MuJoCo issue vehicle tire friction model slip ratio lateral force cornering car dynamics (include-domains github.com)",
+    "mjlab MuJoCo Warp num_envs 4096 GPU memory nconmax njmax parallel environments",
+    "MuJoCo car chassis suspension slide joint stiffness damping wheels steering hinge tutorial XML example RC car",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/3569",
+    "extract: https://ekumenlabs.com/blog/posts/modeling-lekiwis-omni-base-in-mujoco",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/656",
+    "extract: https://api.projectchrono.org/wheeled_tire.html",
+    "extract: https://arxiv.org/html/2604.24916v2",
+    "extract: https://arxiv.org/html/2507.23339v1",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/2749",
+    "extract: https://arxiv.org/html/2502.08844v1",
+    "extract: https://github.com/google-deepmind/mujoco/issues/1649"
+  ],
+  "alertas_seguranca": []
+}

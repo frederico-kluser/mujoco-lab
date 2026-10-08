@@ -1,0 +1,850 @@
+{
+  "id": "Q15",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "Modele o corpo como um único corpo dinâmico com <freejoint/> e <geom type=\"mesh\"> apontando para um <mesh vertex=\"…\"> só com vértices: o MuJoCo constrói o casco convexo, recentra a malha no centro de massa e infere massa e inércia com density=1000 kg/m³ [F1][F4][F22]; a colisão usa sempre o casco convexo [F3][F22]; sem type=\"mesh\" o geom vira uma esfera ajustada [F27]. Os MJCF mínimos testados em 3.15.0 (afirmações finais) dão para o prisma equilátero (a=0.4 m, L=0.3 m) m=20.7846105 kg e I=[0.2771281, 0.2944487, 0.2944487] kg·m² e para o tetraedro regular m=7.5424722 kg e I=0.0603398 kg·m² (=m a²/20), com erro relativo ≤ 9.3e-8 (float32 dos vértices) frente ao analítico [F20][F29][F33]; inertia=\"exact\" é idêntico ao padrão nesses corpos convexos e só muda em malhas não convexas com face= (U: legacy +39.7%, convex +50%, exact exato) [F20][F21]. Na queda de 1 m (dt=0.002, Euler padrão) o ponto mais baixo toca o chão em 0.450524 s contra sqrt(2h/g)=0.451524 s (−1.0 ms = −dt/2), a energia cai de 250.985 J para 23.522 J — não monotonicamente passo a passo, porque a energia elástica do contato mole não é contabilizada — e o corpo repousa com |v|≈1e-12 m/s [F24][F23][F1]. Com 1° de perturbação o prisma tomba ±60° e repousa numa face com o CoM a 0.115362 m (inradius 0.115470 m, 4 contatos) e o tetraedro tomba 70.53° e repousa a 0.081508 m (r=0.081650 m, 3 contatos); sem perturbação o equilíbrio instável na aresta/vértice dura ≈7.4 s por ruído numérico, com taxa de crescimento 5.76 s⁻¹ contra 5.83 s⁻¹ teórico [F24][F23]. Com solref padrão não há ressalto visível (<0.03 mm) e a penetração máxima no impacto é ≈30 mm; o ressalto exige dampratio<1 (0.1 → e≈0.77) ou dt grande (dt=0.01 → 4 mm), e dt/(timeconst·dampratio)≥2 injeta energia [F25][F1]; a penetração em repouso confirma r=a_u(1−d)·timeconst²·dampratio² (razão 1.000 para um contato) e cai para 1/n com n contatos [F26][F2]. Em model/ não há queda livre/pêndulo básicos — os exemplos mecânicos são slider_crank, tendon_arm/arm26, hammock, balloons, car, cube, cards, arch, sleep/dominos, replicate/newton_cradle, surfacevel e adhesion, e car/arch usam malhas convexas só com vertex= [F28][F11][F12]. Auditoria: a afirmação do relatório sobre inferir a inércia dos geoms com a densidade da água está correta, com ressalvas verificadas (só sem <inertial>, depende da forma, geoms visuais contam) [F1][F4][F27][F35].",
+  "afirmacoes": [
+    {
+      "texto": "Valores por omissão confirmados em mujoco 3.15.0: model.opt.timestep=0.002 s, gravity=[0, 0, -9.81], integrator=0 (mjINT_EULER), solver=2 (Newton), cone=0 (pyramidal), impratio=1, iterations=100, tolerance=1e-8; para cada geom, solref=[0.02, 1], solimp=[0.9, 0.95, 0.001, 0.5, 2], friction=[1, 0.005, 0.0001], condim=3, margin=0, gap=0, priority=0.",
+      "fontes": [
+        "F19",
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "solref [0.02 1.  ] solimp [9.0e-01 9.5e-01 1.0e-03 5.0e-01 2.0e+00] friction [1.e+00 5.e-03 1.e-04] condim 3 margin 0.0 gap 0.0 priority 0",
+      "central": false
+    },
+    {
+      "texto": "Uma <mesh> declarada só com vertex= (sem face=) é tratada como nuvem de pontos e o compilador constrói o casco convexo automaticamente: os 6 vértices do prisma triangular dão mesh_facenum=8 (casco nv=6, nf=8) e os 4 do tetraedro regular dão 4 faces; vértices interiores ou duplicados continuam em mesh_vertnum (prisma + 3 pontos interiores: 9) mas não entram no casco (nv=6, nf=8) nem mudam a massa (20.784610 kg). A doc dá o exemplo <mesh name=\"tetrahedron\" vertex=\"0 0 0  1 0 0  0 1 0  0 0 1\"/>. Menos de 4 vértices dá o erro 'at least 4 vertices required' e 4 vértices coplanares dá 'has coplanar vertices, cannot compute convex hull'.",
+      "fontes": [
+        "F1",
+        "F22"
+      ],
+      "citacao_literal": "A mesh can also be defined without faces (a point cloud essentially). In that case the convex hull is constructed",
+      "central": true
+    },
+    {
+      "texto": "Armadilha verificada: <geom mesh=\"m\"/> SEM type=\"mesh\" não instancia a malha — o type padrão do geom é sphere e o compilador apenas ajusta uma esfera à malha (geom_type=2=mjGEOM_SPHERE; massa inferida 12.581 kg em vez de 20.785 kg). Declare type=\"mesh\" no próprio geom ou numa default class (como em model/arch).",
+      "fontes": [
+        "F27",
+        "F1",
+        "F12"
+      ],
+      "citacao_literal": "geom sem type, com mesh= -> geom_type = 2 (mjGEOM_MESH=7, mjGEOM_SPHERE=2)  massa= 12.581",
+      "central": true
+    },
+    {
+      "texto": "O compilador recentra a malha no centro de massa e a alinha aos eixos principais de inércia, guardando a translação/rotação em mesh_pos/mesh_quat (mjtNum) e compondo-as em geom_pos/geom_quat e body_ipos/body_iquat; mesh_vert é float (32 bits). Com vértices cuja origem está na aresta do ápice: mesh_pos=[0, 0, 0.23094], xpos(corpo)=[0, 0, 1], xipos(CoM)=[0, 0, 1.2309401] e qpos[2]=1.0 — a altura do centro de massa é data.xipos[corpo][2], não qpos[2] (só coincidem se os vértices já estiverem centrados no CoM, caso em que body_ipos≈1e-18).",
+      "fontes": [
+        "F1",
+        "F6",
+        "F27"
+      ],
+      "citacao_literal": "so that it is centered around (0,0,0) and its principal axes of inertia are the coordinate axes. We save the translation",
+      "central": false
+    },
+    {
+      "texto": "Prisma triangular equilátero (aresta a=0.4 m, comprimento L=0.3 m, densidade padrão 1000 kg/m³): analítico V=(√3/4)a²L=0.0207846097 m³, m=20.7846097 kg, I_eixo=m a²/12=0.2771281 e I_perp=m(L²/12+a²/24)=0.2944486 kg·m² (momento de área do triângulo equilátero a⁴/(32√3) por qualquer eixo pelo centroide); o MuJoCo 3.15.0 compilou body_mass=20.7846105 (erro relativo 3.7e-8) e body_inertia ordenada [0.2771281, 0.2944487, 0.2944487] (erro relativo máx 9.3e-8, compatível com vértices em float32), body_ipos≈1e-18; inradius r=a/(2√3)=0.1154701 m e circunraio R=a/√3=0.2309401 m.",
+      "fontes": [
+        "F20",
+        "F1",
+        "F34"
+      ],
+      "citacao_literal": "mass=20.7846104534 (ana 20.7846096908, err_rel 3.67e-08)",
+      "central": true
+    },
+    {
+      "texto": "Tetraedro regular de aresta a=0.4 m: analítico V=a³/(6√2)=0.0075424723 m³, m=7.5424723 kg e inércia isotrópica I=m a²/20=0.0603398 kg·m² em qualquer eixo pelo centroide; o MuJoCo compilou body_mass=7.5424722 (erro relativo 1.2e-8) e body_inertia=[0.0603398, 0.0603398, 0.0603398] (erro relativo máx 4.0e-8); inradius r=a√6/12=0.0816497 m, circunraio R=a√6/4=0.2449490 m, altura H=0.3265986 m.",
+      "fontes": [
+        "F20",
+        "F33"
+      ],
+      "citacao_literal": "mass=7.5424722400 (ana 7.5424723327, err_rel 1.23e-08)",
+      "central": true
+    },
+    {
+      "texto": "Para malhas convexas (prisma e tetraedro declarados só com vertex=) os modos inertia omitido (padrão legacy), legacy, convex e exact dão body_mass, body_inertia, body_ipos e body_iquat idênticos bit a bit (diferença máxima 0.0): inertia=\"exact\" não tem efeito nesses corpos. O padrão de asset/mesh/@inertia é \"legacy\" (valores convex, exact, legacy, shell) e a doc recomenda convex.",
+      "fontes": [
+        "F20",
+        "F1"
+      ],
+      "citacao_literal": "prisma exact max|Δmass|=0.000e+00 max|ΔI|=0.000e+00 max|Δiquat|=0.000e+00 max|Δipos|=0.000e+00",
+      "central": true
+    },
+    {
+      "texto": "Em malhas NÃO convexas com face= explícito o modo de inertia importa: prisma em U (volume real 8.0e-3 m³) → legacy (padrão) 1.1177e-2 m³ (+39.7%), convex 1.2e-2 m³ (volume do casco, +50%), exact 8.0e-3 m³ (exato); C fino (7.0e-3 m³) → legacy +230.5%, convex +257.1%, exact exato. exact exige malha fechada e bem orientada: com 1 face invertida ou 1 face duplicada em sentido oposto dá erro 'faces of mesh ... have inconsistent orientation' e com todas invertidas 'mesh volume is negative (misoriented triangles)', enquanto legacy/convex compilam sem erro (a face duplicada inflou a massa legacy para 23.9036 kg).",
+      "fontes": [
+        "F21",
+        "F27",
+        "F1",
+        "F30"
+      ],
+      "citacao_literal": "inertia=legacy  V_eq=1.117734e-02  razão/real=1.3972",
+      "central": false
+    },
+    {
+      "texto": "maxhullvert (asset/mesh; padrão -1 = ilimitado; positivos devem ser > 3 — 3 ou 0 dão 'maxhullvert must be larger than 3') limita os vértices do casco: numa nuvem de 200 pontos de esfera, maxhullvert=100/20/8/5/4 → casco com 100/20/8/5/4 vértices. Em malhas só com vertex= o casco limitado vira a superfície e reduz a massa inferida (4.0649 → 2.9766 kg com 20; prisma de 6 vértices com maxhullvert=5: 13.856 kg, 2/3 do correto); em malhas com face= só o casco de colisão é limitado (mesh_facenum permanece 396; legacy/exact mantêm 4.0649 kg, mas inertia=\"convex\" cai para 2.9766 kg).",
+      "fontes": [
+        "F1",
+        "F22"
+      ],
+      "citacao_literal": "value of -1 means \"unlimited\". Positive values must be larger than 3.",
+      "central": false
+    },
+    {
+      "texto": "Para colisão o MuJoCo substitui toda malha pelo seu casco convexo (qhull), mesmo que a malha seja côncava e renderizada como tal; formas côncavas exigem decomposição em vários geoms convexos no mesmo corpo. Teste em 3.15.0: uma esfera de raio 0.05 m posta no túnel de um arco côncavo ∩ (volume real 8.0e-3 m³; a esfera está fora do sólido real, mas dentro do casco) gera já em t=0 um contato (bola, arco) e é ejetada (x: 0.05 → −2.67 m em 2 s), enquanto uma esfera afastada não gera contato.",
+      "fontes": [
+        "F3",
+        "F4",
+        "F22"
+      ],
+      "citacao_literal": "the user can be non-convex, and are rendered as such. For collision purposes however they are replaced with their convex",
+      "central": true
+    },
+    {
+      "texto": "Contato plano–malha gera no máximo 4 contatos (mj_maxContact(m, g1, g2, has_margin) = 4 com has_margin −1/0/1; malha–malha = 4, e 5 com margem positiva). Nos testes os contatos ficam exatamente nos vértices da malha que tocam o plano: prisma equilibrado na aresta → 2 contatos (x=±0.15, y=0, os 2 extremos da aresta), prisma apoiado numa face → 4 (os 4 cantos), tetraedro equilibrado no vértice → 1, tetraedro numa face → 3, sempre com soma das forças normais = m g (203.897 N e 73.992 N).",
+      "fontes": [
+        "F27",
+        "F23",
+        "F24",
+        "F3"
+      ],
+      "citacao_literal": "has_margin=-1: plano-malha=4  malha-malha=4",
+      "central": false
+    },
+    {
+      "texto": "Queda de 1 m (ponto mais baixo a 1.0 m do chão, dt=0.002 s, integrador Euler padrão): o ponto mais baixo cruza z=0 em 0.450524 s contra sqrt(2h/g)=0.451524 s, erro −1.000 ms (−0.221%) = −dt/2 (Euler semi-implícito: z_n = z0 − ½ g dt² n(n+1)); o erro escala com dt (−0.25, −0.5, −1.0, −2.0, −5.0 ms para dt=0.0005, 0.001, 0.002, 0.004, 0.01). O 1º estado com contato ocorre em t=0.452 s com penetração de 6.55 mm (o contato só nasce com dist<margin=0); a velocidade vertical no estado anterior é −4.4145 m/s (analítico no cruzamento −4.4294 m/s).",
+      "fontes": [
+        "F24",
+        "F23",
+        "F25"
+      ],
+      "citacao_literal": "t_impacto(cruzamento z_vmin=0)=0.450524 s vs analítico sqrt(2h/g)=0.451524 s -> erro -1.000 ms (-0.221%)",
+      "central": true
+    },
+    {
+      "texto": "Estado final em repouso (|v|,|ω|<1e-3): o prisma apoiado numa face (4 contatos) fica com o CoM a z=0.1153623 m contra o inradius a/(2√3)=0.1154701 m (−0.108 mm de penetração em repouso), |v|≈1e-12 m/s, t_repouso≈1.28 s após a queda de 1 m com tilt de 1°; o tetraedro numa face (3 contatos) fica a z=0.0815075 m contra r=a√6/12=0.0816497 m (−0.142 mm); a energia final (23.522 J) fica 0.022 J abaixo de m g r=23.544 J.",
+      "fontes": [
+        "F24",
+        "F23"
+      ],
+      "citacao_literal": "zcm_fim=0.1153623 m vs r_analítico=0.1154701 m -> penetração=0.1078 mm",
+      "central": true
+    },
+    {
+      "texto": "Com tilt de 1° em torno de X o prisma de aresta para baixo tomba e repousa sobre uma face lateral girando 60.000° (sinal do tilt: +1° → +60°, −1° → −60°; 0.1° também → 60°), com |Δroll|>30° em t≈0.936 s (1°) e 1.326 s (0.1°); o tetraedro de vértice para baixo com 1° gira 70.529° (=arccos(1/3)) e repousa numa face.",
+      "fontes": [
+        "F24"
+      ],
+      "citacao_literal": "roll_final=60.000° (faixa 1.0..62.0), t_tombamento(|Δroll|>30°)=0.936 s",
+      "central": true
+    },
+    {
+      "texto": "Sem perturbação (tilt=0) o prisma de aresta para baixo permanece equilibrado na aresta (2 contatos, roll=0) até t≈7.37 s (dt=0.002; 7.40 s com dt=0.001; 7.47 s com dt=0.005; 7.374 s num loop só com mj_step) e o tetraedro sobre o vértice até ≈7.36 s: o tombamento vem do crescimento de assimetrias numéricas, com taxa ajustada de |roll| 5.76 s⁻¹ contra o valor teórico do pêndulo invertido sqrt(m g R/I_aresta)=5.83 s⁻¹ (I_aresta=I_xx+m R²=1.38564 kg·m²). Esses tempos não têm significado físico: use sempre uma perturbação explícita.",
+      "fontes": [
+        "F23"
+      ],
+      "citacao_literal": "taxa de crescimento ajustada de |roll| em 3.5<t<6.5 s: 5.763 1/s ; teórica sqrt(m g R/I_aresta)=5.829 1/s (I_aresta=1.38564)",
+      "central": false
+    },
+    {
+      "texto": "Com <flag energy=\"enable\"/> (mjData.energy[0]=potencial, [1]=cinética) a energia cai de 250.985 J para 23.522 J (90.63% dissipado) e E(t)≤E(0) sempre, mas NÃO é monotonicamente decrescente passo a passo: após o contato há 970 passos com ΔE>1e-9 (máx +0.809 J em t=0.474 s), porque a energia elástica armazenada no contato mole não é contabilizada (a doc: 'potential and kinetic energy in constraints is not accounted for'; o mantenedor chama de energia 'invisível'). Na queda livre cada passo Euler perde exatamente ½ m g² dt² = 0.0040005 J (medido 0.0040005).",
+      "fontes": [
+        "F1",
+        "F23",
+        "F31"
+      ],
+      "citacao_literal": "Note that potential and kinetic energy in constraints is not accounted for.",
+      "central": false
+    },
+    {
+      "texto": "Com solref padrão [0.02, 1] (amortecimento crítico) e prisma apoiado numa face: não há ressalto visível para dt≤0.005 s (o corpo nunca descola: folga máx −0.108 mm; com a aresta para baixo e 1° o descolamento máximo é 0.028 mm em 12 microvoos); a penetração máxima no impacto a ≈4.4 m/s é ≈30 mm (30.8, 31.8, 30.5, 27.6, 19.4, 15.3 mm para dt=0.0005, 0.001, 0.002, 0.004, 0.005, 0.01) e a penetração em repouso não depende de dt (−0.1078 mm de 0.0005 a 0.01); só com dt=0.01 s surge um ressalto (apex 4.09 mm, e≈0.064); o erro do instante de impacto é −dt/2.",
+      "fontes": [
+        "F25",
+        "F24"
+      ],
+      "citacao_literal": "0.0100       0.02 1      15.335     4.0919  0.064     1     0.700    -0.00    4     -0.1078       -4.997",
+      "central": true
+    },
+    {
+      "texto": "Efeito do solref (dt=0.002, prisma numa face, queda de 1 m; e=√(H_ressalto/h)): dampratio≥1 não ressalta (0.02 2: penetração em repouso 0.367 mm; 0.02 1: 0.108 mm); 0.02 0.5 → ressalto de 74.5 mm (e=0.273 contra 0.163 do oscilador linear exp(−ζπ/√(1−ζ²))); 0.02 0.2 → 346 mm (e=0.588 vs 0.527; sem repouso em 4 s); 0.02 0.1 → 596 mm (e=0.772 vs 0.729); timeconst menor endurece (0.005 1: penetração máx 6.96 mm e ressalto residual de 11.8 mm) e maior amolece (0.05 1: 77.9 mm, penetração em repouso 0.491 mm).",
+      "fontes": [
+        "F25",
+        "F2"
+      ],
+      "citacao_literal": "0.02 0.1       6.771   595.5024  0.772    16       nan    -0.01    2     -0.0067       -1.000  0.729",
+      "central": true
+    },
+    {
+      "texto": "Restituição em MuJoCo vem de solref: no formato direto solref=\"-stiffness -damping\", \"-2500 -100\" reproduz exatamente o padrão \"0.02 1\" (penetração máx 30.453 mm e z final idênticos; dampratio=1 ⇔ damping=2√stiffness, como diz a doc) e a seção Restitution da doc ensina que restituição perfeita = stiffness grande e damping 0: no exemplo oficial solref=\"-1000 0\" (esfera r=0.1 m solta de 1 m) o pico do centro permanece em 0.999–1.000 m por 12 quicadas (queda relativa 2e-4 em 12 s); no prisma, \"-2500 -10\" (ζ efetivo 0.1) dá e=0.736 e \"-2500 0\" dá e=1.002. Não existe atributo de coeficiente de restituição (geom restitution=\"0.5\" é rejeitado com 'unrecognized attribute').",
+      "fontes": [
+        "F2",
+        "F25",
+        "F32",
+        "F36"
+      ],
+      "citacao_literal": "To achieve perfect restitution for contacts and other constraints, set stiffness to some reasonably large",
+      "central": false
+    },
+    {
+      "texto": "Estabilidade do contato sob Euler (dt=0.002, prisma numa face, queda de 1 m): (a) timeconst<2·dt — com refsafe ligado (padrão) o solver usa max(solref[0], 2·dt): solref 0.003 1 e 0.001 1 ressaltam 47.8 mm e repousam em z=0.11547 m; com <flag refsafe=\"disable\"/> o ressalto sobe a 524.9 mm (0.003 1) e com 0.001 1 a peça é ejetada (pico 38.5 m, E=7941 J); (b) dampratio baixo também desestabiliza e o refsafe não protege: para dt/(timeconst·dampratio)=2 (solref 0.02 0.05) o corpo sobe a 5.19 m (e=2.28, E=5636.9 J contra E0=227.4 J), com razão 1.0 fica quase elástico (e=0.998) e com 0.5 é estável (e=0.852 contra 0.854 teórico). Euler, implicit e implicitfast dão resultados idênticos; RK4 não explode (E=52.7 J) e integrator=\"discrete\" também não (E=23.541 J; nem com refsafe desligado).",
+      "fontes": [
+        "F1",
+        "F25",
+        "F3"
+      ],
+      "citacao_literal": "stabilization. If this setting is enabled, the solver uses max(solref[0], 2*timestep) in place of solref[0]",
+      "central": false
+    },
+    {
+      "texto": "A fórmula do manual r=a_u·(1−d)·timeconst²·dampratio² (penetração em repouso, impedância constante d0=dw, a_u=9.81 m/s²) é confirmada exatamente (razão medida/prevista=1.000) para UM contato (tetraedro sobre o vértice; 7 combinações de d∈{0.9, 0.95, 0.99}, timeconst∈{0.01…0.04}, dampratio∈{1…2}) e, no formato direto, r=a_u(1−d)/stiffness (5 combinações); com n contatos dividindo o peso no mesmo plano a penetração por contato cai para 1/n (razão 0.333 com 3 contatos, 0.250 com 4), ou seja z_CoM,repouso = r_geom − r_manual/n; com a solimp padrão a penetração por contato em repouso é 0.3672 mm (1 contato: vértice do tetraedro), 0.2072 mm (2: aresta do prisma), 0.1422 mm (3: face do tetraedro) e 0.1078 mm (4: face do prisma).",
+      "fontes": [
+        "F2",
+        "F26",
+        "F23",
+        "F24"
+      ],
+      "citacao_literal": "r = \\au \\cdot (1 - d) \\cdot \\text{timeconst}^2 \\cdot \\text{dampratio}^2",
+      "central": false
+    },
+    {
+      "texto": "Em model/ não há demo dedicada de queda livre, pêndulo simples ou plano inclinado (a busca por 'pendulum|free fall' não acha nada; rampas só aparecem como cenário em balloons, carousel e sand_castle); os exemplos de mecânica são: slider_crank (3 atuadores position com cranksite/slidersite/cranklength: forward, backward e 'broken'), tendon_arm/arm26 (braço de 2 elos com 6 músculos/tendões, dt=0.005), hammock (humanoide numa rede flexcomp 2D pinada, dt=0.001), balloons (empuxo via gravcomp=7.2, ar com density/viscosity, tendões), car (carro tipo Dubins, chassi 'chasis' = malha convexa de 9 vértices sem faces, 2 atuadores via tendões fixos), cube_3x3x3 (cubo 3×3×3 com juntas ball), cards/house_of_cards (empilhamento por atrito), arch/{roman,gothic,hyperbolic} (arcos de pedra seca com voussoirs convexos de 8 vértices, integrator=\"discrete\"), sleep/dominos (cadeia de tombamentos com sleeping), replicate/newton_cradle (dt=1e-4, solref=\"-1e8 -0\"), surfacevel/{treadmill,carousel} (superfície móvel) e adhesion/* (atuador de adesão); o mais próximo de um pêndulo é replicate/newton_cradle. Dos 87 XML de model/, 66 compilam em 3.15.0 e os 21 que falham dão todos 'Error opening file' (assets .obj/.png ausentes no espelho: cards, cube, mug, parte de flex/plugin/replicate).",
+      "fontes": [
+        "F28",
+        "F7",
+        "F8",
+        "F9",
+        "F10",
+        "F11",
+        "F12",
+        "F13",
+        "F14",
+        "F15",
+        "F16",
+        "F17",
+        "F18"
+      ],
+      "citacao_literal": "slider_crank/slider_crank.xml                     4    3     7     0   3    0   0     0    0  0.0020     0    3",
+      "central": true
+    },
+    {
+      "texto": "Inferência de massa/inércia pelos geoms (verificada): sem <inertial> (compiler/inertiafromgeom=\"auto\", padrão) o corpo recebe a soma dos geoms com density=1000 kg/m³ por omissão (prisma: 20.784610 kg = 1000·V; density=2700 → 56.118 kg; geom mass=5 ignora density); um <inertial> explícito prevalece (3 kg, I=[0.1, 0.2, 0.3]) salvo inertiafromgeom=\"true\"; inertiafromgeom=\"false\" sem <inertial> dá erro 'mass and inertia of moving bodies must be larger than mjMINVAL'; geoms apenas visuais (contype=conaffinity=0, grupo 2) também entram (2 geoms → 41.569 kg) a menos que inertiagrouprange os exclua (\"0 0\" → 20.785 kg).",
+      "fontes": [
+        "F1",
+        "F27",
+        "F4",
+        "F35"
+      ],
+      "citacao_literal": "The internal default of 1000 is the density of water in SI units.",
+      "central": true
+    },
+    {
+      "texto": "MJCF mínimo TESTADO em 3.15.0 do prisma triangular equilátero (a=0.4 m, L=0.3 m) com a aresta do ápice para baixo (vértices relativos ao CoM; tilt de 1° em torno de X para provocar o tombamento; ponto mais baixo a ≈1.000035 m do chão):\n<mujoco model=\"prisma_triangular_invertido\">\n  <asset>\n    <mesh name=\"prisma\" inertia=\"convex\"\n          vertex=\"-0.15 0 -0.23094011  -0.15 -0.2 0.11547005  -0.15 0.2 0.11547005\n                   0.15 0 -0.23094011   0.15 -0.2 0.11547005   0.15 0.2 0.11547005\"/>\n  </asset>\n  <worldbody>\n    <geom name=\"chao\" type=\"plane\" size=\"3 3 0.1\"/>\n    <body name=\"prisma\" pos=\"0 0 1.23094011\" euler=\"1 0 0\">\n      <freejoint/>\n      <geom name=\"prisma\" type=\"mesh\" mesh=\"prisma\"/>\n    </body>\n  </worldbody>\n</mujoco>\nResultado da simulação de 6 s com o texto acima: body_mass=20.7846105 kg, body_inertia=[0.2944487, 0.2944487, 0.2771281] kg·m², impacto em t=0.450532 s (analítico 0.451532 s), repouso com z_CoM=0.1153623 m (inradius 0.1154701 m), roll final 60.000°, 4 contatos.",
+      "fontes": [
+        "F29",
+        "F20"
+      ],
+      "citacao_literal": "prisma: altura inicial do ponto mais baixo=1.000035 m; t_impacto=0.450532 s vs sqrt(2h/g)=0.451532 s; z_cm final=0.1153623 m (esperado r=0.1154701); ncon=4",
+      "central": true
+    },
+    {
+      "texto": "MJCF mínimo TESTADO em 3.15.0 do tetraedro regular (a=0.4 m) com um vértice para baixo (vértices relativos ao CoM; tilt de 1° em torno de X):\n<mujoco model=\"tetraedro_regular_invertido\">\n  <asset>\n    <mesh name=\"tetra\" inertia=\"convex\"\n          vertex=\"0 0 -0.24494897  0 0.23094011 0.08164966  -0.2 -0.11547005 0.08164966  0.2 -0.11547005 0.08164966\"/>\n  </asset>\n  <worldbody>\n    <geom name=\"chao\" type=\"plane\" size=\"3 3 0.1\"/>\n    <body name=\"tetra\" pos=\"0 0 1.24494897\" euler=\"1 0 0\">\n      <freejoint/>\n      <geom name=\"tetra\" type=\"mesh\" mesh=\"tetra\"/>\n    </body>\n  </worldbody>\n</mujoco>\nResultado da simulação de 6 s com o texto acima: body_mass=7.5424722 kg, body_inertia=[0.0603398, 0.0603398, 0.0603398] kg·m², impacto em t=0.450532 s (analítico 0.451532 s), repouso com z_CoM=0.0815075 m (r=0.0816497 m), roll final 70.529°, 3 contatos.",
+      "fontes": [
+        "F29",
+        "F20"
+      ],
+      "citacao_literal": "tetra: altura inicial do ponto mais baixo=1.000037 m; t_impacto=0.450532 s vs sqrt(2h/g)=0.451532 s; z_cm final=0.0815075 m (esperado r=0.0816497); ncon=3",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "XML Reference — asset/mesh (vertex, inertia, maxhullvert), geom (type, density, mass), compiler (inertiafromgeom, inertiagrouprange), option/flag (refsafe, energy)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "Modeling — Solver parameters (solimp, solref: formatos (timeconst, dampratio) e direto, penetração em repouso)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "Computation — colisão (malhas → casco convexo/qhull, múltiplos contatos, tabela de colisores) e integradores",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/overview.rst",
+      "doi": "",
+      "titulo": "Overview — valores por omissão (gravity, densidade 1000) e inferência de inércia a partir dos geoms",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog — remoção de exactmeshinertia (3.2.5), maxhullvert (3.2.0, Q9 em 3.10.0), modelos de exemplo",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mjmodel.h",
+      "doi": "",
+      "titulo": "mjmodel.h — mesh_vert (float), mesh_pos, mesh_quat, mesh_graph",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/slider_crank/slider_crank.xml",
+      "doi": "",
+      "titulo": "model/slider_crank/slider_crank.xml — mecanismo biela-manivela",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/tendon_arm/arm26.xml",
+      "doi": "",
+      "titulo": "model/tendon_arm/arm26.xml — braço de 2 elos com 6 músculos",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/hammock/hammock.xml",
+      "doi": "",
+      "titulo": "model/hammock/hammock.xml — humanoide numa rede (flexcomp 2D)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/balloons/balloons.xml",
+      "doi": "",
+      "titulo": "model/balloons/balloons.xml — balões de hélio (gravcomp, fluido, tendões)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/car/car.xml",
+      "doi": "",
+      "titulo": "model/car/car.xml — carro simples com chassi de malha convexa por vertex=",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/arch/README.md",
+      "doi": "",
+      "titulo": "model/arch/README.md (+ roman/gothic/hyperbolic.xml) — arcos de pedra seca com voussoirs convexos",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/cards/README.md",
+      "doi": "",
+      "titulo": "model/cards/README.md — baralho e casa de cartas (empilhamento por atrito)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/sleep/dominos.xml",
+      "doi": "",
+      "titulo": "model/sleep/dominos.xml — dominós com sleeping",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/replicate/newton_cradle.xml",
+      "doi": "",
+      "titulo": "model/replicate/newton_cradle.xml — pêndulo de Newton com replicate",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/surfacevel/treadmill.xml",
+      "doi": "",
+      "titulo": "model/surfacevel/{treadmill,carousel}.xml — superfície em movimento (surfacevel)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/adhesion/README.md",
+      "doi": "",
+      "titulo": "model/adhesion/README.md (+ active_adhesion, fridge_door, sand_castle) — atuador de adesão",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/cube/README.md",
+      "doi": "",
+      "titulo": "model/cube/README.md — cubo 3x3x3 (Kevin Zakka)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "google-deepmind/mujoco @ tag 3.15.0 (espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: valores por omissão de model.opt e do contato dos geoms (t0)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: massa/inércia do prisma triangular e do tetraedro regular vs analítico; modos inertia= convex/exact/legacy/shell (t1, t1d)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: malhas não convexas (L, U, C) com face= e só vertex= sob inertia= legacy/convex/exact (t1b, t1c)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: casco convexo automático, pontos interiores, maxhullvert e erros de validação (t4, t4b)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F23",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: queda de 1 m do prisma simétrico (impacto, energia, repouso, instabilidade do equilíbrio) (t5, t5b, t5c, t5d)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F24",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: quedas de 1 m com tilt/face-down e tetraedro: tombamento, repouso, contatos, ressalto (t6, t8c)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F25",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: varreduras de timestep, solref (positivo e direto), integradores e regra de estabilidade (t8, t8d, t8e)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: penetração em repouso vs fórmula do manual (formatos positivo e direto; 1, 3 e 4 contatos) (t9, t9b)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: geom sem type, mj_maxContact, orientação de faces, semântica da inferência de inércia, recentragem da malha, exactmeshinertia (t10, t10b, t10c, t14, t15)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: compilação de todos os model/**/*.xml do espelho oficial (66 compilam, 21 falham por assets binários ausentes) (t12)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F29",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: teste dos MJCF mínimos finais (prisma e tetraedro) exatamente como publicados (t13)",
+      "autores": "Investigador Q15",
+      "ano": "2026",
+      "veiculo": "Execução local: .venv/bin/python 3.13, mujoco 3.15.0, numpy 2.5.3, scipy 1.18.1",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F30",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/318",
+      "doi": "",
+      "titulo": "Auto Inertia Computation (GitHub Discussion #318)",
+      "autores": "usuários e mantenedores de google-deepmind/mujoco",
+      "ano": "",
+      "veiculo": "GitHub Discussions",
+      "tipo": "forum",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F31",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/2347",
+      "doi": "",
+      "titulo": "Achieving Stable and Elastic Jumps in MuJoCo Simulations (GitHub Discussion #2347; resposta do mantenedor yuvaltassa)",
+      "autores": "usuário caba0404; mantenedor yuvaltassa",
+      "ano": "2025",
+      "veiculo": "GitHub Discussions",
+      "tipo": "forum",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F32",
+      "url": "https://leggedrobotics.github.io/SimBenchmark/bouncing",
+      "doi": "",
+      "titulo": "SimBenchmark — Bouncing test (RaiSim vs Bullet vs ODE vs MuJoCo vs DartSim)",
+      "autores": "leggedrobotics (ETH Zürich RSL)",
+      "ano": "",
+      "veiculo": "GitHub Pages / SimBenchmark",
+      "tipo": "documentacao",
+      "nivel": "C",
+      "lida": "integral"
+    },
+    {
+      "ref": "F33",
+      "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Classical_Mechanics_(Tatum)/02%3A_Moments_of_Inertia/2.21%3A_Tetrahedra",
+      "doi": "",
+      "titulo": "Classical Mechanics (Tatum) — 2.21: Tetrahedra (momento de inércia de um tetraedro regular)",
+      "autores": "Jeremy Tatum",
+      "ano": "",
+      "veiculo": "LibreTexts Physics",
+      "tipo": "documentacao",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F34",
+      "url": "https://en.wikipedia.org/wiki/List_of_second_moments_of_area",
+      "doi": "",
+      "titulo": "List of second moments of area (triângulo equilátero: I = a^4/(32√3))",
+      "autores": "Wikipedia (colaborativo)",
+      "ano": "",
+      "veiculo": "Wikipedia",
+      "tipo": "documentacao",
+      "nivel": "C",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F35",
+      "url": "https://github.com/google-deepmind/mujoco/issues/3399",
+      "doi": "",
+      "titulo": "USD decoder can change inferred mass/inertia for explicit body inertials and visual-only geoms (GitHub Issue #3399)",
+      "autores": "LouRohanNV (usuário); atribuído a havess",
+      "ano": "",
+      "veiculo": "GitHub Issues",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F36",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/2081",
+      "doi": "",
+      "titulo": "Coefficient of restitution (GitHub Discussion #2081)",
+      "autores": "usuário Aryan-Satpathy; mantenedor Kevin Zakka",
+      "ano": "2024",
+      "veiculo": "GitHub Discussions",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F37",
+      "url": "https://mujoco.readthedocs.io/en/3.1.4/XMLreference.html",
+      "doi": "",
+      "titulo": "XML Reference — MuJoCo 3.1.4 (compiler/exactmeshinertia, versão antiga)",
+      "autores": "Google DeepMind",
+      "ano": "2024",
+      "veiculo": "mujoco.readthedocs.io",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "A inércia pode ser inferida do volume (geoms) com a densidade padrão da água.",
+      "veredito": "correta",
+      "correcao": "Correta, com precisões verificadas em 3.15.0: sem <inertial> (compiler/inertiafromgeom=\"auto\", o padrão; \"true\" força a inferência) o compilador soma massa e inércia dos geoms do corpo cujo grupo está em inertiagrouprange (padrão \"0 5\") assumindo densidade uniforme, e geom/density vale 1000 kg/m³ por omissão (\"densidade da água em SI\"): prisma 0.0207846 m³ → 20.784610 kg; tetraedro → 7.5424722 kg. Ressalvas: (1) a inércia sai da FORMA de cada geom (fórmulas fechadas para primitivas; para malhas, soma de pirâmides governada por asset/mesh/@inertia, padrão \"legacy\", recomendado \"convex\", e \"exact\" só para malhas fechadas e bem orientadas), não apenas do volume; em malhas convexas os 3 modos coincidem bit a bit, em côncavas com face= o legacy superestimou o volume em +39.7% (U) e +230.5% (C fino); (2) um <inertial> explícito desliga a inferência (3 kg no teste) e inertiafromgeom=\"false\" sem <inertial> é erro; (3) geom/mass substitui density; (4) geoms apenas visuais (contype=conaffinity=0) também somam massa (2 geoms → 41.569 kg) a menos que inertiagrouprange os exclua; (5) em runtime só valem massa/inércia do corpo (geom mass/inertia não ficam no mjModel); (6) mesh/@inertia=\"shell\" reinterpreta density como kg/m² (prisma: 498.564 kg); (7) a flag antiga compiler/@exactmeshinertia foi removida na 3.2.5 e hoje é rejeitada ('unrecognized attribute'); (8) a precisão é limitada a ~1e-7 pelos vértices em float32.",
+      "fontes": [
+        "F1",
+        "F4",
+        "F27",
+        "F20",
+        "F21",
+        "F35",
+        "F5",
+        "F37"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "O MuJoCo consegue simular colisão elástica / controlar o ressalto?",
+      "posicoes": [
+        {
+          "fonte": "F32",
+          "diz": "SimBenchmark: 'MuJoCo cannot simulate elastic collision' e não há correspondência 1:1 entre solref e coeficiente de restituição."
+        },
+        {
+          "fonte": "F2",
+          "diz": "Doc 3.15 (seção Restitution): com solref (-stiffness, -damping), stiffness grande e damping 0 dão 'perfect restitution'; o exemplo oficial solref=\"-1000 0\" repetido em 3.15.0 manteve o pico em 0.999–1.000 m por 12 quicadas e no prisma solref=\"-2500 0\" deu e=1.002 (F25)."
+        },
+        {
+          "fonte": "F36",
+          "diz": "Discussão #2081: não há como definir o coeficiente de restituição por geom; o autor aproxima com mola-amortecedor manual (a doc só explica como obter colisão elástica)."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "O modo inertia=\"legacy\" superestima o volume de malhas não convexas?",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "legacy 'leads to volume overcounting for non-convex meshes' (não recomendado)."
+        },
+        {
+          "fonte": "F21",
+          "diz": "Teste: num L extrudado legacy deu o volume exato (3.000 kg) mas num U (+39.7%) e num C fino (+230.5%) superestimou; convex sempre dá o volume do casco e exact o exato."
+        }
+      ],
+      "explicacao_provavel": "populacao"
+    },
+    {
+      "tema": "Faces invertidas em malhas XML/OBJ geram erro de compilação?",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "'Flipped faces are checked by MuJoCo for meshes specified as OBJ or XML and an error message is returned.'"
+        },
+        {
+          "fonte": "F27",
+          "diz": "Teste 3.15.0: 1 face invertida (ou face duplicada em sentido oposto) compila sem erro com inertia omitido/legacy e convex; o erro 'inconsistent orientation' só ocorre com inertia=\"exact\"."
+        }
+      ],
+      "explicacao_provavel": "data"
+    }
+  ],
+  "lacunas": [
+    "Não foi possível compilar/testar cards/*, cube_3x3x3, mug e parte de flex/plugin/replicate no espelho local (faltam assets binários .obj/.png); só foram lidos o XML e o README.",
+    "A escolha dos ≤4 contatos plano–malha quando mais de 4 vértices do casco ficam abaixo do plano (mjc_PlaneConvex) e os detalhes do algoritmo legacy de inércia/checagem de orientação não foram confirmados no código-fonte (src/ não está no espelho local).",
+    "A equivalência entre dampratio e coeficiente de restituição foi comparada só com o oscilador linear exp(−ζπ/√(1−ζ²)): o e medido fica acima dele (ζ≥0.2) e não há derivação oficial da relação com impedância variável/contatos múltiplos.",
+    "O tempo de tombamento sob simetria perfeita (≈7.4 s) depende de assimetrias de arredondamento da máquina/BLAS e do float32 dos vértices; não foi testada a reprodutibilidade em outras plataformas.",
+    "Contato malha–malha (empilhar/deslizar prismas, nativeccd/multiccd) e backends MJX/MJWarp estão fora do escopo e não foram testados."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Em mjc_PlaneConvex, quais vértices do casco são escolhidos quando mais de 4 ficam abaixo do plano, e isso causa tremor em malhas com muitos vértices?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "A doc só dá o máximo (4); malhas CAD com hull grande podem gerar contatos instáveis (relevante para Q4)."
+    },
+    {
+      "pergunta": "Qual solref/solimp direto (stiffness, damping) reproduz um coeficiente de restituição alvo e, contatos múltiplos incluídos, como o e efetivo varia com impedância e integrador (Euler, implicitfast, discrete)?",
+      "origem": "quantificacao",
+      "prioridade": "alta",
+      "porque": "O laboratório precisa de ressalto controlável; o e medido difere do oscilador linear e o integrador discrete altera o amortecimento efetivo."
+    },
+    {
+      "pergunta": "A checagem de faces invertidas citada em XMLreference ainda existe fora de inertia=\"exact\" em 3.15.0 (código de user_mesh.cc)?",
+      "origem": "contradicao",
+      "prioridade": "baixa",
+      "porque": "Doc e teste divergem; afeta a validação de malhas importadas."
+    },
+    {
+      "pergunta": "Como fechar o balanço de energia com a energia elástica do contato (soma de efc_KBIP·efc_pos, discussão #2347) para validar a demonstração com E monotônica?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "mjData.energy não inclui constraints; uma métrica correta daria um teste automático de dissipação."
+    },
+    {
+      "pergunta": "Como o prisma/tetraedro se comporta com friction/condim diferentes (deslizamento, rolagem) e sobre planos inclinados nos mesmos testes?",
+      "origem": "perspetiva",
+      "prioridade": "baixa",
+      "porque": "Experimentos básicos de mecânica ausentes em model/ (plano inclinado, atrito) podem ser as próximas demos."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/user/user_mesh.cc",
+      "porque_pode_importar": "Código do compilador de malhas (casco qhull, maxhullvert, inércia legacy/convex/exact, checagem de orientação): permitiria explicar legacy≠exact e a divergência sobre faces invertidas. Não está no espelho local."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_collision_convex.c",
+      "porque_pode_importar": "mjc_PlaneConvex: critério de escolha dos ≤4 contatos plano–malha."
+    },
+    {
+      "url": "https://diego.ucsd.edu/content/convex-and-analytically-invertible-dynamics-contacts-and-constraints-theory-and.html",
+      "porque_pode_importar": "Todorov (ICRA 2014), artigo revisto por pares com a base teórica do contato mole convexo (solref/solimp); só os metadados foram lidos."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/732",
+      "porque_pode_importar": "Questiona a fórmula de penetração em repouso do formato solref direto; a doc 3.15 (r=a_u(1−d)/stiffness) e o teste F26 a confirmam."
+    },
+    {
+      "url": "https://robolaweb.gitbook.io/robolaweb-docs/basic-concept/mujoco-solver-guide-solref-and-solimp",
+      "porque_pode_importar": "Tabela prática de solref por material (nível D, não verificada)."
+    }
+  ],
+  "consultas": [
+    "search \"MuJoCo mesh inertia attribute convex exact legacy shell non-convex volume overcounting\" --include-domains github.com,mujoco.readthedocs.io",
+    "extract https://github.com/google-deepmind/mujoco/discussions/318 --query \"automatic inertia computation mesh exact for convex meshes non-convex\"",
+    "search \"MuJoCo coefficient of restitution bounce solref dampratio negative direct format elastic collision ball drop\"",
+    "extract https://github.com/google-deepmind/mujoco/discussions/2081 https://github.com/google-deepmind/mujoco/issues/732 --query \"coefficient of restitution solref direct format stiffness damping formula penetration depth\"",
+    "search \"moment of inertia regular tetrahedron edge length a mass m I = m a^2 / 20 inertia tensor isotropic about centroid\"",
+    "extract https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Classical_Mechanics_(Tatum)/02%3A_Moments_of_Inertia/2.21%3A_Tetrahedra --query \"regular tetrahedron mass m edge length a moment of inertia 1/20 m a^2\"",
+    "search \"equilateral triangle second moment of area centroid axis a^4 sqrt(3)/96 polar moment a^4 sqrt(3)/48\"",
+    "search \"Todorov Convex and analytically-invertible dynamics with contacts and constraints: Theory and implementation in MuJoCo ICRA 2014\"",
+    "extract https://diego.ucsd.edu/content/convex-and-analytically-invertible-dynamics-contacts-and-constraints-theory-and.html --query \"abstract soft contact convex optimization MuJoCo analytically invertible\"",
+    "search \"MuJoCo mesh collision uses convex hull only non-convex mesh limitation geom_pos changes after compile mesh centered inertial frame\" --include-domains github.com,mujoco.readthedocs.io,stackoverflow.com",
+    "search \"MuJoCo visual geom contype=0 conaffinity=0 still contributes to body mass and inertia inertiagrouprange density 1000 default\"",
+    "extract https://github.com/google-deepmind/mujoco/issues/3399 --query \"visual-only geom inherits default geom density adding mass to body inferred inertia\"",
+    "search \"MuJoCo contact solref dampratio less than 1 bouncy underdamped object keeps bouncing never rests energy gain unstable timeconst timestep\"",
+    "extract https://github.com/google-deepmind/mujoco/discussions/2347 --query \"energy elastic energy in contacts not included mjData.energy invisible kinetic energy after bounce\"",
+    "extract https://leggedrobotics.github.io/SimBenchmark/bouncing --query \"MuJoCo cannot simulate elastic collision restitutional coefficient solref\""
+  ],
+  "alertas_seguranca": []
+}

@@ -1,0 +1,735 @@
+{
+  "id": "Q13",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "O Python SDK atual do Rerun é o rerun-sdk 0.38.1 (Python ≥ 3.10; a 3.10 está deprecada e sai na 0.39) [F19][F26][F18], com rr.init(application_id, *, recording_id, spawn, …), rr.set_time(timeline, *, sequence|duration|timestamp) (exatamente um; para tempo de simulação, duration=data.time) e rr.log(entity_path, entity, *extra, static=False), usando Points3D(positions, *, …), Arrows3D(*, vectors, origins=None, …) (vectors só por palavra-chave), Transform3D(*, translation, quaternion|mat3x3, …) (cada log reinicia o transform), Mesh3D(*, vertex_positions, triangle_indices, …) e Scalars(scalars) (nunca static) [F13][F14]. Foram removidas set_time_sequence/_seconds/_nanos, TimeSequenceColumn/TimeSecondsColumn/TimeNanosColumn, new_recording e serve_web (na 0.28; deprecadas desde a 0.23), rr.Scalar virou Scalars e axis_length saiu de Transform3D para TransformAxes3D [F16][F17]; o quaternion do Rerun é xyzw e o do MuJoCo é [w,x,y,z] [F15][F6]. Padrão mínimo (derivado da documentação; não executado aqui): rr.init; rr.log('world', ViewCoordinates.RIGHT_HAND_Z_UP, static=True); por passo mj_step + mj_forward, rr.set_time('sim_time', duration=d.time), um Transform3D por corpo com xpos/xquat, um Arrows3D com os contatos e rr.Scalars para as séries [F13][F14][F10]. No MuJoCo, mj_contactForce(m, d, i, result[6]) devolve força 3D + torque 3D no FRAME DO CONTATO; data.contact[i].frame guarda os eixos (normal, tangente 1, tangente 2) nas linhas de uma matriz 3×3 transposta, logo f_mundo = frame.reshape(3,3).T @ f[:3], que é a força de geom[0] sobre geom[1] (testado: 4 contatos somam (0, 0, 9.81) N = m·g) [F1][F2][F3][F4][F9]. data.ncon é campo de MjData (len(data.contact) == ncon) e contatos inativos (efc_address = −1, zona gap) têm força zero e devem ser filtrados [F3][F5][F9]; após mj_step as grandezas derivadas (xpos, contatos, forças) ficam um passo atrasadas em relação a data.time [F2][F10]. Não existe exemplo oficial MuJoCo+Rerun: a árvore de exemplos Python do Rerun (92 diretórios) e a galeria não o têm, a documentação do MuJoCo 3.15 não cita o Rerun, a issue rerun#8634 pede um loader MJCF e só há um loader de terceiros [F22][F23][F24][F25]; alternativas leves: flags mjVIS_CONTACTFORCE/POINT/SPLIT (desligadas por padrão), mjv_updateScene sem GL, sensor <contact reduce=\"netforce\"> (frame global) e matplotlib [F5][F7][F8][F11]. Auditoria do §5.2: a descrição do Rerun (armazenamento colunar em chunks Arrow, núcleo em Rust, SDK Python) está correta [F20][F21], mas o uso de rr.log precisa de rr.set_time e de vectors= por palavra-chave [F13][F14]; mj_contactForce não devolve a força no referencial do mundo e ncon pertence a data, não a data.contact [F1][F3][F9]; e a gravidade não está em qfrc_passive/qfrc_applied (está em qfrc_bias), que são, respectivamente, forças passivas recalculadas e entradas do usuário, não acumuladores [F4][F10].",
+  "afirmacoes": [
+    {
+      "texto": "Em Python, mujoco.mj_contactForce(m, d, id, result) escreve em `result` (numpy float64 de 6 elementos, gravável; assinatura 'result: NDArray[float64] [6, 1] writeable') a força 3D seguida do torque 3D do contato `id`, ambos expressos NO FRAME DO CONTATO (não no mundo). Ordem testada com condim=6: [Fn (normal), Ft1, Ft2, torque de torção em torno da normal, torque de rolamento 1, torque de rolamento 2] (mesma ordem de friction: tangent1, 2, spin, roll1, 2); o torque é zero quando condim é 1 ou 3.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F3",
+        "F9"
+      ],
+      "citacao_literal": "Extract 6D force:torque given contact id, in the contact frame.",
+      "central": true
+    },
+    {
+      "texto": "mjContact.frame (data.contact[i].frame; 9 números em coordenadas do mundo) é armazenado TRANSPOSTO em relação às demais matrizes do mjData: os eixos do frame do contato ficam nas LINHAS de frame.reshape(3,3) — normal em [0:3] (1ª linha), tangente 1 em [3:6], tangente 2 em [6:9].",
+      "fontes": [
+        "F2",
+        "F3",
+        "F9"
+      ],
+      "citacao_literal": "columns. Here the axes are along the rows of the matrix.",
+      "central": true
+    },
+    {
+      "texto": "Para desenhar no referencial do mundo: R = data.contact[i].frame.reshape(3,3); f_mundo = R.T @ f6[:3] (torque_mundo = R.T @ f6[3:6]); vetorizado: np.einsum('nji,nj->ni', data.contact.frame.reshape(-1,3,3), f_local[:, :3]). Teste (caixa de 1 kg em repouso, 4 contatos, cone piramidal e elíptico): soma de f_mundo = (0, 0, 9.81) N = m·g. Em cone piramidal não use efc_force cru: suas componentes são forças em arestas redundantes não ortogonais; use sempre mj_contactForce.",
+      "fontes": [
+        "F9",
+        "F2"
+      ],
+      "citacao_literal": "soma forças mundo (força de geom[0] em geom[1]): [ 0.   -0.    9.81]  m*g = 9.81",
+      "central": true
+    },
+    {
+      "texto": "Convenção de sinal: a normal (frame[0:3]) aponta de geom[0] para geom[1] e a força de contato age 'de geom[0] para geom[1]': R.T @ f é a força exercida por geom[0] SOBRE geom[1]; a força sobre geom[0] é −R.T @ f. Verificado com dois corpos dinâmicos (geom[0]=gB, normal (0,0,−1), R.T@f = (0,0,−9.81) em gA, enquanto cfrc_ext, lido após mj_rnePostConstraint, mostra +9.81 em z sobre B). Não assuma a ordem geom[0]/geom[1] (o manual do sensor <contact> diz que os dois geoms são ordenados segundo mjtGeom; no teste o plano veio sempre primeiro e, entre duas caixas, valeu o menor id): leia data.contact[i].geom.",
+      "fontes": [
+        "F4",
+        "F3",
+        "F9",
+        "F5"
+      ],
+      "citacao_literal": "subtracting these two Jacobians to obtain :math:`S`. The convention we use is that the contact force acts from the first",
+      "central": true
+    },
+    {
+      "texto": "data.ncon é o número de contatos detectados (campo de MjData); data.contact é a lista de mjContact com len(data.contact) == data.ncon (teste: 4 == 4), logo ncon NÃO é atributo de data.contact. O tamanho e a ordem da lista mudam a cada passo (o Agent Skill oficial do MuJoCo desaconselha usá-la como observação de tamanho fixo); campos vetorizados têm shape (ncon, 9) para .frame, (ncon, 3) para .pos e (ncon, 2) para .geom.",
+      "fontes": [
+        "F3",
+        "F6",
+        "F9"
+      ],
+      "citacao_literal": "number of detected contacts",
+      "central": true
+    },
+    {
+      "texto": "Contatos presentes em data.contact mas sem força têm efc_address == -1 (exclude != 0); mj_contactForce devolve seis zeros para eles. No 3.15 a zona 'gap' é margin < dist ≤ margin + gap (detectado, inativo): com margin=0.05, gap=0.05 e dist=0.070 o teste deu exclude=1, efc_address=-1 e força [0 0 0 0 0 0]. Filtre com data.contact.efc_address >= 0 antes de desenhar setas.",
+      "fontes": [
+        "F5",
+        "F9"
+      ],
+      "citacao_literal": "``margin`` and ``margin + gap`` are included in ``mjData.contact`` as inactive contacts (with ``efc_address`` = -1).",
+      "central": false
+    },
+    {
+      "texto": "Alternativa declarativa: o sensor <contact ... data=\"found force torque\" reduce=\"netforce\"/> grava em data.sensordata uma força líquida JÁ NO FRAME GLOBAL (as demais reduções dão a força no frame do contato); o sentido depende da ordem body1/body2 (a normal vai do primeiro ao segundo): para uma caixa de 1 kg, body1=caixa dá (0, 0, −9.81) e body1=chão dá (0, 0, +9.81); found=4 conta os contatos casados.",
+      "fontes": [
+        "F5",
+        "F9"
+      ],
+      "citacao_literal": "The frame of the contact is the global frame, so normal and tangent directions lose their",
+      "central": false
+    },
+    {
+      "texto": "data.qfrc_passive = molas/amortecedores de juntas e tendões + compensação de gravidade do corpo (gravcomp) + forças de fluido do próprio MuJoCo (qfrc_fluid, ativas com option density/viscosity > 0; teste: qfrc_fluid = qfrc_passive = −1.44026 N em x a 10 m/s) + o que um callback mjcb_passive somar. É recalculado a cada avaliação (não 'acumula').",
+      "fontes": [
+        "F1",
+        "F4",
+        "F10"
+      ],
+      "citacao_literal": "Compute qfrc_passive from spring-dampers, gravity compensation and fluid forces.",
+      "central": false
+    },
+    {
+      "texto": "A gravidade NÃO entra em qfrc_passive nem em qfrc_applied: está no termo de bias qfrc_bias = c(q,v) (Coriolis, centrífuga e gravitacional). Teste (corpo livre de 1 kg, g padrão): qfrc_bias[2] = +9.81 com qfrc_passive = qfrc_applied = qfrc_actuator = 0.",
+      "fontes": [
+        "F4",
+        "F3",
+        "F10"
+      ],
+      "citacao_literal": "bias force: Coriolis, centrifugal, gravitational",
+      "central": true
+    },
+    {
+      "texto": "qfrc_applied (nv) e xfrc_applied (nbody×6, wrench cartesiano no CoM do corpo) são ENTRADAS do usuário: o simulador não as escreve nem as zera, então persistem entre mj_step até você sobrescrevê-las (teste: após 3 passos qfrc_applied[2]=3.0 e xfrc_applied[1,0]=2.0 continuam). Forças aerodinâmicas calculadas pelo seu código devem ser escritas aí antes de mj_step (ou entre mj_step1 e mj_step2).",
+      "fontes": [
+        "F2",
+        "F10"
+      ],
+      "citacao_literal": "untouched by the simulator. All input fields except for MoCap poses default to 0.",
+      "central": true
+    },
+    {
+      "texto": "Depois de mj_step (Euler/implicit/implicitfast), data.time e qpos já estão em t+dt, mas as grandezas derivadas (xpos/xmat, contatos, forças de contato, qfrc_passive) foram calculadas no início do passo (estado em t): o manual as chama de 'outdated by one time step'. Teste (Euler, dt=0.01): após mj_step qpos_z=4.899019 mas xpos_z=5.000000; após mj_forward xpos_z=4.899019. Para registrar estado coerente chame mj_forward antes de logar, ou carimbe com d.time − m.opt.timestep.",
+      "fontes": [
+        "F2",
+        "F10"
+      ],
+      "citacao_literal": "None of these quantities are available before ``mj_step`` is called (or rather, they are available but *outdated by one",
+      "central": true
+    },
+    {
+      "texto": "A versão estável atual do Python SDK é rerun-sdk 0.38.1 (PyPI; o site de docs marca 'Version 0.38.1 (latest)'), com Requires: Python >=3.10; o Python 3.10 está deprecado (DeprecationWarning ao importar rerun) e o Rerun 0.39 passa o mínimo para 3.11.",
+      "fontes": [
+        "F19",
+        "F26",
+        "F18"
+      ],
+      "citacao_literal": "Release files for rerun-sdk 0.38.1",
+      "central": true
+    },
+    {
+      "texto": "Assinatura atual (0.38): rr.init(application_id: str, *, recording_id: str | UUID | None = None, spawn: bool = False, init_logging: bool = True, default_enabled: bool = True, strict: bool | None = None, default_blueprint: BlueprintLike | None = None, send_properties: bool = True) -> None. Sem rr.init todos os métodos do SDK viram no-ops; sem spawn/connect_grpc/save os eventos ficam em buffer indefinidamente (rr.save(path) deve ser chamado ANTES de logar; rr.spawn(), rr.connect_grpc(url) e rr.serve_grpc() são as alternativas).",
+      "fontes": [
+        "F14"
+      ],
+      "citacao_literal": "def init(application_id: str,*, recording_id: str | UUID | None = None, spawn: bool = False, init_logging: bool = True, default_enabled: bool = True,",
+      "central": true
+    },
+    {
+      "texto": "Tempo atual: rr.set_time(timeline: str, *, sequence: int | None = None, duration: int | float | timedelta | timedelta64 | None = None, timestamp: int | float | datetime | datetime64 | None = None) — exatamente UM entre sequence/duration/timestamp, e o tipo de uma timeline não pode mudar. Para tempo de simulação use duration=data.time (segundos); para contagem de passos, sequence=i. Vale até o próximo set_time, rr.reset_time() ou rr.disable_timeline(nome); não exige monotonicidade; o equivalente colunar é rr.TimeColumn(timeline, sequence=|duration=|timestamp=).",
+      "fontes": [
+        "F14"
+      ],
+      "citacao_literal": "You are expected to set exactly ONE of the arguments `sequence`, `duration`, or `timestamp`.",
+      "central": true
+    },
+    {
+      "texto": "Removidas do Python SDK na 0.28 (deprecadas desde a 0.23): set_time_sequence(), set_time_seconds(), set_time_nanos() (use set_time()), TimeSequenceColumn/TimeSecondsColumn/TimeNanosColumn (use TimeColumn), new_recording() (use RecordingStream()) e serve_web() (use serve_grpc() + serve_web_viewer()); rr.connect()/connect_tcp()/serve()/log_components() já tinham saído na 0.23 (use rr.connect_grpc()). rr.Scalar (singular) foi deprecado na 0.23 em favor de rr.Scalars e não consta da referência 0.38.1.",
+      "fontes": [
+        "F16",
+        "F17",
+        "F14",
+        "F13"
+      ],
+      "citacao_literal": "* `set_time_sequence()`, `set_time_seconds()`, and `set_time_nanos()` functions (use `set_time()` instead)",
+      "central": true
+    },
+    {
+      "texto": "rr.log(entity_path: str | list[object], entity: AsComponents | Iterable[DescribedComponentBatch], *extra, static: bool = False, recording: RecordingStream | None = None, strict: bool | None = None) -> None. Sem static, cada chamada é carimbada com log_time (e log_tick, se habilitado) mais as timelines definidas por rr.set_time; com static=True o dado não tem tempo, existe em todas as timelines e sombreia dado temporal do mesmo tipo (use para geometria, ViewCoordinates e SeriesLines). Entity paths usam '/' como separador (escape partes com rr.escape_entity_path_part). API colunar: rr.send_columns(entity_path, indexes=[rr.TimeColumn(...)], columns=...), que ignora o set_time.",
+      "fontes": [
+        "F14"
+      ],
+      "citacao_literal": "Static data has no time associated with it, exists on all timelines, and unconditionally shadows any temporal data of the same type.",
+      "central": true
+    },
+    {
+      "texto": "rr.Points3D(positions: Vec3DArrayLike, *, radii=None, colors=None, labels=None, show_labels=None, point_shading=None, class_ids=None, keypoint_ids=None): positions é o único argumento posicional; Points3D.from_fields(...) atualiza só alguns campos e Points3D.columns(...) alimenta rr.send_columns.",
+      "fontes": [
+        "F13"
+      ],
+      "citacao_literal": "def __init__(positions: Vec3DArrayLike,*, radii: Float32ArrayLike | None = None, colors: Rgba32ArrayLike | None = None,",
+      "central": true
+    },
+    {
+      "texto": "rr.Arrows3D(*, vectors: Vec3DArrayLike, origins=None, radii=None, colors=None, labels=None, show_labels=None, class_ids=None): TODOS os argumentos são só-por-palavra-chave (vectors= é obrigatório); sem origins cada seta parte de (0, 0, 0); radii: haste = 0.5·radii, ponta com altura 2.0·radii e raio 1.0·radii. Para forças de contato: origins=pos do contato, vectors=escala·f_mundo.",
+      "fontes": [
+        "F13"
+      ],
+      "citacao_literal": "def __init__(*, vectors: Vec3DArrayLike, origins: Vec3DArrayLike | None = None, radii: Float32ArrayLike | None = None,",
+      "central": true
+    },
+    {
+      "texto": "rr.Transform3D(*, translation=None, rotation=None, rotation_axis_angle=None, quaternion=None, scale=None, mat3x3=None, from_parent=None [deprecado: use relation=], relation=None, child_frame=None, parent_frame=None): cada rr.log desse arquétipo REINICIA o estado do transform (logue translation e rotação juntos a cada passo; atualização parcial só com Transform3D.from_fields); por padrão o transform mapeia do espaço da entidade para o pai. axis_length saiu de Transform3D na 0.28 e virou rr.TransformAxes3D(axis_length, *, show_frame=None).",
+      "fontes": [
+        "F13",
+        "F16"
+      ],
+      "citacao_literal": "Whenever you log this archetype, the state of the resulting transform relationship is fully reset to the new archetype.",
+      "central": true
+    },
+    {
+      "texto": "O quaternion do Rerun é x,y,z,w (rr.Quaternion(xyzw=[...]); o tipo aceito em quaternion= é QuaternionLike = Quaternion), enquanto o do MuJoCo é [w, x, y, z] (data.xquat): converta com rr.Quaternion(xyzw=[q[1], q[2], q[3], q[0]]). Pela doc, mat3x3 aceita uma matriz NumPy 3×3 construída por linhas (armazenamento interno column-major), então data.xmat[b].reshape(3,3) deve ser aceito sem transpor (derivado da doc; não executado).",
+      "fontes": [
+        "F15",
+        "F6"
+      ],
+      "citacao_literal": "Note: although the x,y,z,w components of the quaternion will be passed through to the datastore as provided, when used in the Viewer Quaternions will always be normalized.",
+      "central": true
+    },
+    {
+      "texto": "rr.Mesh3D(*, vertex_positions, triangle_indices=None, vertex_normals=None, vertex_colors=None, vertex_texcoords=None, albedo_texture=None, albedo_factor=None, face_rendering=None, class_ids=None); faces frontais = enrolamento anti-horário (como glTF); várias InstancePoses3D na mesma entidade instanciam a malha. No MuJoCo, model.mesh_vert é float32 (nvert,3) e model.mesh_face é int32 (nface,3) com índices LOCAIS a cada malha — fatie com mesh_vertadr/mesh_vertnum e mesh_faceadr/mesh_facenum (teste: 2ª malha com F.max=3 apesar de vertadr=4) e posicione com data.geom_xpos/geom_xmat do geom (geom_dataid = id da malha), pois o compilador recentraliza a malha (mesh_pos/mesh_quat ≠ identidade).",
+      "fontes": [
+        "F13",
+        "F12"
+      ],
+      "citacao_literal": "def __init__(*, vertex_positions: Vec3DArrayLike, triangle_indices: UVec3DArrayLike | None = None, vertex_normals: Vec3DArrayLike | None = None,",
+      "central": true
+    },
+    {
+      "texto": "rr.Scalars(scalars: Float64ArrayLike) (plural; o singular rr.Scalar foi deprecado na 0.23 e não consta da referência 0.38.1) usa o valor atual da timeline como eixo X, logo NÃO deve ser static, e o número de escalares por instante deve ser constante. Estilo/legenda: rr.SeriesLines(*, colors, widths, names, visible_series, aggregation_policy, interpolation_mode), recomendado logar como static=True no mesmo entity path. Ex.: rr.log('plots/fz', rr.Scalars(fz)).",
+      "fontes": [
+        "F13",
+        "F17"
+      ],
+      "citacao_literal": "The current timeline value will be used for the time/X-axis, hence scalars should not be static.",
+      "central": true
+    },
+    {
+      "texto": "Não há exemplo oficial MuJoCo+Rerun: nem a árvore examples/python do repositório rerun-io/rerun (92 diretórios) nem a galeria rerun.io/examples contêm 'mujoco'/'mjcf' (busca textual: 0 ocorrências; o exemplo robótico oficial mais próximo é animated_urdf), a documentação do MuJoCo 3.15.0 não menciona o Rerun, e a issue rerun-io/rerun#8634 'Support for MJCF Files' (aberta em 2025-01-09, ainda Open) pede um loader de referência. Existe só o loader de terceiros Reimagine-Robotics/rerun-loader-mjcf (MJCFLogger/MJCFRecorder; carimba com duration=data.time) — não oficial.",
+      "fontes": [
+        "F24",
+        "F22",
+        "F23",
+        "F25"
+      ],
+      "citacao_literal": "At a minimum we should have a reference dataloader implemented in Python or C++ which loads an MJCF project into Rerun by translating to a set of Transforms and Meshes.",
+      "central": true
+    },
+    {
+      "texto": "Alternativas leves sem Rerun: (a) flags mjVIS_CONTACTPOINT / mjVIS_CONTACTFORCE / mjVIS_CONTACTSPLIT / mjVIS_PERTFORCE, TODAS desligadas por padrão, ligadas com viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = 1 (passive viewer, dentro de viewer.lock()) ou com MjvOption em Renderer.update_scene(..., scene_option=opt); (b) mjv_updateScene sem contexto GL: com 4 contatos, 4 setas (mjGEOM_ARROW) em CONTACTFORCE e 8 em CONTACTFORCE+CONTACTSPLIT; (c) matplotlib com backend Agg para séries temporais (testado: matplotlib 3.11.2, Fz final = 9.8100 N = m·g).",
+      "fontes": [
+        "F8",
+        "F7",
+        "F11"
+      ],
+      "citacao_literal": "opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True",
+      "central": true
+    },
+    {
+      "texto": "Padrão mínimo (derivado das docs; NÃO executado — rerun não está instalado no venv): rr.init('mujoco_lab', spawn=True) [ou rr.save('run.rrd')]; rr.log('world', rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True); geometria uma vez com static=True (Boxes3D/Ellipsoids3D/Capsules3D/Cylinders3D ou Mesh3D sob world/bodies/<nome>); a cada passo: mujoco.mj_step(m, d); mujoco.mj_forward(m, d); rr.set_time('sim_time', duration=d.time); por corpo, com q = d.xquat[b]: rr.log(f'world/bodies/{rr.escape_entity_path_part(nome)}', rr.Transform3D(translation=d.xpos[b], quaternion=rr.Quaternion(xyzw=[q[1], q[2], q[3], q[0]]))); contatos: rr.log('world/contact_forces', rr.Arrows3D(origins=pos, vectors=escala*f_mundo)) (rr.Clear.flat() se ncon == 0); séries: rr.log('plots/fz', rr.Scalars(fz)).",
+      "fontes": [
+        "F14",
+        "F13",
+        "F10"
+      ],
+      "citacao_literal": "Used for all subsequent logging on the same thread, until the next call to",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/functions.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — API Reference: Functions (mj_contactForce, mj_passive)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/simulation.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Programming: Simulation (contatos e mjContact.frame, entradas do usuário, mj_step)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mjdata.h",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — include/mujoco/mjdata.h (struct mjContact, mjData: ncon, contact, qfrc_*)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Computation (contato, convenção de força, forças passivas, bias)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — XML Reference (geom/gap; sensor contact: data, reduce)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/python/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — doc/skills/python/SKILL.md (Agent Skill oficial: bindings Python, data.contact, quaternions)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/python.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Python (viewer.launch_passive, viewer.opt.flags[mjVIS_*])",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/rendering/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — doc/skills/rendering/SKILL.md (MjvOption, flags de visualização, scene_option)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mj_contactForce, mjContact.frame, ncon, rotação para o mundo, sinal geom[0]→geom[1], contato inativo (gap), condim=6, sensor <contact reduce=netforce>",
+      "autores": "Teste empírico local (investigador Q13)",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 no .venv do laboratório",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F10",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: qfrc_bias/qfrc_passive/qfrc_applied/qfrc_fluid, persistência de qfrc_applied e xfrc_applied, atraso de xpos após mj_step",
+      "autores": "Teste empírico local (investigador Q13)",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 no .venv do laboratório",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F11",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: flags mjVIS_CONTACT* (defaults; setas via mjv_updateScene sem GL) e matplotlib (Agg)",
+      "autores": "Teste empírico local (investigador Q13)",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 no .venv do laboratório",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F12",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: arrays mesh_vert/mesh_face/mesh_vertadr e pose do geom de malha (para rr.Mesh3D)",
+      "autores": "Teste empírico local (investigador Q13)",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 no .venv do laboratório",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F13",
+      "url": "https://ref.rerun.io/docs/python/stable/archetypes",
+      "doi": "",
+      "titulo": "Archetypes — Rerun Python APIs (stable = 0.38.x): Points3D, Arrows3D, Transform3D, Mesh3D, Scalars, SeriesLines, TransformAxes3D, ViewCoordinates",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "ref.rerun.io (referência oficial da API Python)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://ref.rerun.io/docs/python/stable/rerun",
+      "doi": "",
+      "titulo": "Core — Rerun Python APIs (stable = 0.38.x): init, log, set_time, send_columns, TimeColumn, save, spawn, connect_grpc, serve_grpc",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "ref.rerun.io (referência oficial da API Python)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://ref.rerun.io/docs/python/stable/encodings",
+      "doi": "",
+      "titulo": "Encodings — Rerun Python APIs (stable = 0.38.x): Mat3x3, Quaternion",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "ref.rerun.io (referência oficial da API Python)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://rerun.io/docs/reference/migration/migration-0-28",
+      "doi": "",
+      "titulo": "Migrating from 0.27 to 0.28",
+      "autores": "Rerun Development Team",
+      "ano": "2025",
+      "veiculo": "rerun.io/docs (guia de migração)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://rerun.io/docs/reference/migration/migration-0-23",
+      "doi": "",
+      "titulo": "Migrating from 0.22 to 0.23",
+      "autores": "Rerun Development Team",
+      "ano": "2025",
+      "veiculo": "rerun.io/docs (guia de migração)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F18",
+      "url": "https://rerun.io/docs/changelog/changeset-0-38",
+      "doi": "",
+      "titulo": "Rerun 0.38 — changelog (destaques e breaking changes)",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "rerun.io/docs (release notes)",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/rerun-sdk/",
+      "doi": "",
+      "titulo": "rerun-sdk — PyPI (última versão 0.38.1; Requires: Python >=3.10)",
+      "autores": "Rerun.io",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://rerun.io/docs/concepts/logging-and-ingestion/chunks",
+      "doi": "",
+      "titulo": "Chunks — Rerun docs (armazenamento colunar; rr.log vs rr.send_columns)",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "rerun.io/docs",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F21",
+      "url": "https://github.com/rerun-io/rerun",
+      "doi": "",
+      "titulo": "rerun-io/rerun — README (The data layer for physical AI)",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "GitHub",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F22",
+      "url": "https://github.com/rerun-io/rerun/tree/main/examples/python",
+      "doi": "",
+      "titulo": "rerun/examples/python (listagem oficial de exemplos Python; 92 diretórios, nenhum de MuJoCo)",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "GitHub",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://rerun.io/examples",
+      "doi": "",
+      "titulo": "Rerun examples (galeria oficial; robótica = URDF, sem MuJoCo/MJCF)",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "rerun.io",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F24",
+      "url": "https://github.com/rerun-io/rerun/issues/8634",
+      "doi": "",
+      "titulo": "Support for MJCF Files · Issue #8634 · rerun-io/rerun",
+      "autores": "jleibs (mantenedor do Rerun)",
+      "ano": "2025",
+      "veiculo": "GitHub Issues (rerun-io/rerun)",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "integral"
+    },
+    {
+      "ref": "F25",
+      "url": "https://github.com/Reimagine-Robotics/rerun-loader-mjcf",
+      "doi": "",
+      "titulo": "rerun-loader-mjcf — A Rerun external data loader for MJCF (MuJoCo XML) files (terceiros, não oficial)",
+      "autores": "Reimagine Robotics (organização no GitHub)",
+      "ano": "s.d.",
+      "veiculo": "GitHub",
+      "tipo": "documentacao",
+      "nivel": "C",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://rerun.io/docs/reference/migration/migration-0-38",
+      "doi": "",
+      "titulo": "Migrating from 0.37 to 0.38 (cabeçalho do site: Version 0.38.1 (latest))",
+      "autores": "Rerun Development Team",
+      "ano": "2026",
+      "veiculo": "rerun.io/docs (guia de migração)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O Rerun é um data logger de arquitetura colunar (column-oriented) escrito em Rust com suporte Python imediato.",
+      "veredito": "correta",
+      "correcao": "Confirmado por fontes oficiais: o armazenamento é em chunks ('column-oriented table of binary data', codificados em Apache Arrow), o README diz 'Built in Rust on column-chunk storage purpose-built for multi-rate physical data. SDKs in Python, Rust, and C++.' e o pacote Python (pip install rerun-sdk, hoje 0.38.1) já traz o Viewer. Ressalvas de precisão: (1) o projeto se descreve hoje como 'The data layer for physical AI' (log, consulta por dataframes/SQL, visualização e streaming para treino), e não apenas como 'data logger'; (2) a API rr.log é orientada a linhas ('by nature, row-oriented'); a API colunar é rr.send_columns — o que é colunar é o armazenamento/ingestão em chunks.",
+      "fontes": [
+        "F20",
+        "F21",
+        "F19",
+        "F14"
+      ]
+    },
+    {
+      "afirmacao": "O script escreve coordenadas com rr.log a cada transição, em entidades como \"drone/aerodinamica\", usando Archetypes como rr.Points3D e rr.Arrows3D.",
+      "veredito": "parcial",
+      "correcao": "Os nomes existem e estão atuais no rerun-sdk 0.38.1: rr.log(entity_path, entity, *extra, static=False, ...), rr.Points3D(positions, *, radii, colors, ...) e rr.Arrows3D(*, vectors, origins=None, ...); 'drone/aerodinamica' é um entity path válido (hierarquia drone → aerodinamica). O que falta ou pode quebrar: (1) sem rr.set_time(...) cada rr.log só recebe log_time/log_tick de relógio de parede — para tempo de simulação use rr.set_time('sim_time', duration=data.time) (ou sequence=passo); set_time_sequence/set_time_seconds/set_time_nanos foram removidos na 0.28; (2) Arrows3D exige vectors= por palavra-chave (origins= é opcional, padrão (0, 0, 0)); (3) após mj_step, xpos, contatos e forças ficam um passo atrasados em relação a data.time: chame mj_forward antes de logar ou carimbe com d.time − dt; (4) para poses de corpos prefira rr.Transform3D (translation + rr.Quaternion(xyzw=[x,y,z,w]); o MuJoCo usa [w,x,y,z]), geometria com static=True e, para históricos longos, rr.send_columns.",
+      "fontes": [
+        "F14",
+        "F13",
+        "F16",
+        "F2",
+        "F10",
+        "F15"
+      ]
+    },
+    {
+      "afirmacao": "Colisões: a matriz data.contact expõe ncon; mujoco.mj_contactForce(model, data, index, force_array) extrai a força de contato que se desenha como vetor no referencial do mundo.",
+      "veredito": "parcial",
+      "correcao": "ncon é um campo de MjData (data.ncon = número de contatos detectados; len(data.contact) == data.ncon), não um atributo da 'matriz' data.contact, que é uma lista de mjContact de tamanho e ordem variáveis. A assinatura Python mujoco.mj_contactForce(m, d, id, result) está certa (result: float64[6] gravável), mas o resultado — força 3D + torque 3D — está NO FRAME DO CONTATO, não no mundo. Para o mundo: R = data.contact[i].frame.reshape(3,3) (eixos nas LINHAS; 1ª linha = normal) e f_mundo = R.T @ f[:3] (torque: R.T @ f[3:6]); esse vetor é a força de geom[0] sobre geom[1] (a normal vai de geom[0] a geom[1]; sobre geom[0] vale −R.T @ f). Contatos inativos (efc_address == -1, p.ex. zona gap) devolvem zeros e devem ser filtrados. Teste: caixa de 1 kg, 4 contatos somam (0, 0, 9.81) N = m·g.",
+      "fontes": [
+        "F3",
+        "F1",
+        "F2",
+        "F4",
+        "F9",
+        "F5"
+      ]
+    },
+    {
+      "afirmacao": "Forças acumuladas aerodinâmicas/gravíticas estão em data.qfrc_passive e data.qfrc_applied antes de mj_step terminar.",
+      "veredito": "parcial",
+      "correcao": "A parte gravítica está errada: a gravidade não está em qfrc_passive nem em qfrc_applied, e sim em qfrc_bias (c(q,v): Coriolis, centrífuga, gravitacional; teste com 1 kg: qfrc_bias[2] = +9.81 com qfrc_passive = qfrc_applied = 0). qfrc_passive = molas/amortecedores + gravcomp + forças de fluido do MuJoCo (qfrc_fluid, com density/viscosity > 0) + callback mjcb_passive; é recalculado a cada avaliação (não 'acumula') e, após mj_step, reflete o INÍCIO do passo (−1.44026 N guardado vs −1.43943 N recomputado no estado novo). qfrc_applied/xfrc_applied são ENTRADAS do usuário que o MuJoCo nunca escreve nem zera (persistem entre passos): uma aerodinâmica calculada pelo seu código só aparece ali se você a escrever antes de mj_step; eles não são acumuladores preenchidos pelo passo.",
+      "fontes": [
+        "F4",
+        "F1",
+        "F2",
+        "F3",
+        "F10"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Ordem de composição de mat3x3 e translation em rr.Transform3D",
+      "posicoes": [
+        {
+          "fonte": "F13",
+          "diz": "Descrição do arquétipo Transform3D: 'if both a translation and a mat3x3 transform are present, the 3x3 matrix is applied first, followed by the translation.'"
+        },
+        {
+          "fonte": "F13",
+          "diz": "Descrição do parâmetro mat3x3 do construtor: '3x3 matrix representing scale and rotation, applied after translation.'"
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    },
+    {
+      "tema": "Nome da função de tempo em segundos deprecada na 0.23 (set_time_secs vs set_time_seconds)",
+      "posicoes": [
+        {
+          "fonte": "F17",
+          "diz": "O guia 0.22→0.23 cita rr.set_time_secs, rr.set_time_nanos e rr.set_time_sequence como deprecadas e substituídas por rr.set_time."
+        },
+        {
+          "fonte": "F16",
+          "diz": "O guia 0.27→0.28 lista set_time_sequence(), set_time_seconds() e set_time_nanos() entre as funções Python removidas."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    }
+  ],
+  "lacunas": [
+    "Nenhum código Rerun foi executado localmente (rerun-sdk não está instalado no .venv e instalar pacotes está fora do âmbito): assinaturas e o padrão mínimo vêm da documentação oficial 0.38.x; comportamentos de runtime (Arrows3D com arrays vazios, aceitação de listas em quaternion=, ordem real de mat3x3 × translation) não foram testados.",
+    "A versão exata em que rr.Scalar (singular) foi removido não foi localizada (deprecado na 0.23; ausente da referência 0.38.1).",
+    "A documentação do Transform3D é ambígua sobre a composição mat3x3 × translation (ver contradicoes); falta um teste com o SDK instalado.",
+    "Restrições de formato do application_id em rr.init na 0.38 (um resumo de busca sugeriu limite de 180 caracteres e conjunto restrito de caracteres) não foram confirmadas em página lida.",
+    "A ausência de exemplo oficial MuJoCo+Rerun é evidência por ausência (listagem de exemplos, galeria, busca textual e issue #8634 aberta); a compatibilidade do loader de terceiros rerun-loader-mjcf com MuJoCo 3.15 e rerun-sdk 0.38.1 não foi testada.",
+    "O §5.2 do relatório não foi lido integralmente: a auditoria cobre as quatro afirmações listadas no brief."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Com rerun-sdk 0.38.1 instalado, qual é a ordem real de composição de rr.Transform3D(mat3x3=..., translation=...) e como logar corretamente data.xpos/xmat/xquat de corpos MuJoCo (comparando com geom_xpos num modelo de 2 corpos)?",
+      "origem": "contradicao",
+      "prioridade": "alta",
+      "porque": "A doc do arquétipo e a do parâmetro divergem; um erro silencioso de pose invalida toda a visualização."
+    },
+    {
+      "pergunta": "Qual o custo de rr.log por passo versus rr.send_columns (TimeColumn + Transform3D.columns/Arrows3D.columns) em simulações a 500 Hz–1 kHz com contatos de quantidade variável?",
+      "origem": "quantificacao",
+      "prioridade": "media",
+      "porque": "Telemetria de drones/veículos gera milhões de linhas; o custo do batcher e o tamanho do .rrd decidem a viabilidade."
+    },
+    {
+      "pergunta": "O loader de terceiros rerun-loader-mjcf (MJCFLogger/MJCFRecorder) funciona com MuJoCo 3.15 e rerun-sdk 0.38.1, e vale adotá-lo em vez de reimplementar o padrão mínimo?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "É a única integração MJCF→Rerun existente; a issue oficial #8634 segue aberta."
+    },
+    {
+      "pergunta": "Os sensores <contact reduce=\"netforce\"> e <touch> bastam para a telemetria de contato de drones/veículos (tamanho fixo em sensordata), e como logá-los com rr.Scalars/SeriesLines?",
+      "origem": "perspetiva",
+      "prioridade": "media",
+      "porque": "Evita iterar data.contact (tamanho e ordem variáveis) e já entrega a força líquida no frame global."
+    },
+    {
+      "pergunta": "Que restrições o rr.init impõe ao application_id na 0.38 (comprimento, caracteres permitidos)?",
+      "origem": "contra-evidencia",
+      "prioridade": "baixa",
+      "porque": "Um resumo de busca citou restrições não confirmadas; nomes com '/' (como 'drone/aerodinamica') podem ser inválidos como application_id, ao contrário de entity paths."
+    },
+    {
+      "pergunta": "É possível reaproveitar os geoms decorativos de mjv_updateScene (setas de contato/perturbação) como Arrows3D/Capsules3D no Rerun, sem recalcular R^T f?",
+      "origem": "aprofundamento",
+      "prioridade": "baixa",
+      "porque": "Reduziria código e garantiria a mesma escala/convenção do viewer nativo."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://rerun.io/blog/column-chunks",
+      "porque_pode_importar": "Blog oficial sobre chunks colunares e rr.send_columns: corrobora a arquitetura colunar e traz o padrão de ingestão em lote (apareceu na busca; não lido)."
+    },
+    {
+      "url": "https://github.com/ami-iit/jaxsim/issues/113",
+      "porque_pode_importar": "Discussão sobre visualizar forças de contato 3D no passive viewer do MuJoCo (alternativa leve de visualização)."
+    },
+    {
+      "url": "https://ref.rerun.io/docs/python/0.26.1/common/initialization_functions",
+      "porque_pode_importar": "Versão antiga (0.26.1) da referência; útil só para comparação histórica de assinaturas."
+    },
+    {
+      "url": "https://github.com/robium-ai/robium/blob/main/skills/rerun/SKILL.md",
+      "porque_pode_importar": "Skill de terceiros para agentes sobre Rerun; pode conter boas práticas de set_time, mas não foi lida nem verificada."
+    },
+    {
+      "url": "https://rerun.io/docs/concepts/logging-and-ingestion/importers/overview",
+      "porque_pode_importar": "Visão geral oficial dos importadores/loaders embutidos; ajudaria a confirmar a ausência de suporte nativo a MJCF (link visto na navegação do site; não aberto)."
+    }
+  ],
+  "consultas": [
+    "rerun-sdk Python rr.set_time sequence duration timestamp rr.log Scalars",
+    "rerun 0.38 Python API Arrows3D Points3D Transform3D Mesh3D archetype reference",
+    "rerun Python API stable initialization functions init set_time reset_time disable_timeline connect_grpc save spawn",
+    "rerun migration guide removed deprecated set_time_sequence set_time_seconds Scalar SeriesLine Python",
+    "Rerun Migrating from 0.37 to 0.38 migration guide",
+    "rerun-sdk 0.38.0 release changelog highlights Python",
+    "rerun MuJoCo example log mujoco simulation to rerun viewer python mj_step Transform3D",
+    "github rerun-io rerun examples python mujoco",
+    "rerun.io examples robotics simulation physics MuJoCo integration blog",
+    "rerun MuJoCo contact forces visualization Arrows3D mj_contactForce",
+    "rerun datatypes Mat3x3 column-major order Python Mat3x3Like numpy 3x3 rotation matrix Transform3D mat3x3",
+    "ref.rerun.io python stable datatypes Mat3x3 flat_columns Matrices in Rerun are stored as flat list of coefficients in column-major order",
+    "rerun CHANGELOG Python remove deprecated set_time_sequence set_time_seconds set_time_nanos TimeSequenceColumn removed",
+    "rerun importers overview built-in supported file formats URDF MCAP external importer MJCF",
+    "[extract] https://pypi.org/project/rerun-sdk/",
+    "[extract] https://ref.rerun.io/docs/python/stable/archetypes",
+    "[extract] https://ref.rerun.io/docs/python/stable/rerun",
+    "[extract] https://rerun.io/docs/reference/migration/migration-0-23",
+    "[extract] https://rerun.io/docs/reference/migration/migration-0-38 + https://rerun.io/docs/changelog/changeset-0-38",
+    "[extract] https://github.com/rerun-io/rerun/issues/8634 + https://github.com/Reimagine-Robotics/rerun-loader-mjcf",
+    "[extract] https://github.com/rerun-io/rerun/tree/main/examples/python + https://rerun.io/examples",
+    "[extract, 404] https://ref.rerun.io/docs/python/stable/datatypes",
+    "[extract] https://ref.rerun.io/docs/python/stable/encodings",
+    "[extract] https://rerun.io/docs/concepts/logging-and-ingestion/chunks + https://github.com/rerun-io/rerun",
+    "[extract, com consulta application id restrictions] https://rerun.io/docs/reference/migration/migration-0-38",
+    "[extract] https://rerun.io/docs/reference/migration/migration-0-28"
+  ],
+  "alertas_seguranca": []
+}

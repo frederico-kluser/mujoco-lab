@@ -1,0 +1,1008 @@
+{
+  "id": "Q1",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "A última versão estável é o MuJoCo 3.15.0, de 5/out/2026 (changelog, release no GitHub e upload no PyPI) [F11][F20][F18]; o pacote PyPI exige Python ≥ 3.10 (classificadores 3.10–3.15) e há wheels `manylinux_2_27`/`manylinux_2_28` para x86_64 e aarch64 em cp313 e cp314 (além de cp310–cp312, cp315 e builds free-threaded cp314t/cp315t) [F3][F18][F19]. O método oficial para Python no Linux é `pip install mujoco`: o wheel traz os bindings pybind11, a `libmujoco.so.3.15.0`, quatro plugins, 72 headers e o `mujoco.viewer`, com RUNPATH `$ORIGIN` — por isso não precisa de `LD_LIBRARY_PATH` (testado com `env -i`) — e não traz `mjpython` (só macOS), `simulate`, `.pc` nem config CMake; as dependências Python são absl-py, etils[epath], glfw, numpy, pyopengl e websockets>=13 [F2][F14][F15][F4][F3]. Para C/C++ há o tarball `mujoco-3.15.0-linux-x86_64.tar.gz` (ou aarch64) do GitHub Releases, sem instalador, ou o build com CMake (CMake + C++17, dependências baixadas por FetchContent, `cmake --install .`; o CI do Ubuntu instala libgl1-mesa-dev, libwayland-dev, libxinerama/xcursor/xkbcommon/xrandr/xi-dev e ninja-build) [F1][F21][F27]. A instalação via CMake exporta `mujocoConfig.cmake`/`mujocoTargets.cmake` em `<prefix>/lib/cmake/mujoco`; o caminho oficial é `find_package(mujoco CONFIG REQUIRED)` + `target_link_libraries(app PRIVATE mujoco::mujoco)` com `#include <mujoco/mujoco.h>`, e o upstream não instala nenhum `mujoco.pc`, logo `pkg_search_module(MUJOCO mujoco)` não encontra o MuJoCo oficial [F6][F23][F24][F25][F7][F8][F9]. No Arch não há `mujoco` nos repositórios oficiais (0 resultados); no AUR (consultado em 2026-10-07) existem `mujoco` 3.15.0-1 (taotieren, compila do fonte, atualizado em 2026-10-05), `mujoco-bin` 3.14.0-1 (elanglois, reempacota o tarball oficial, uma versão atrás), `mujoco-git` (órfão, 2.2.2) e `python-mujoco` 3.3.7-1 (kidofcubes, desatualizado desde 2025-12-18) [F36][F29][F30][F33][F32][F35][F31]. O CachyOS recompila pacotes do Arch para x86-64-v3/v4/Zen4+ [F42], mas isso não se aplica ao wheel nem ao tarball; gcc-libs/ninja/cmake/glfw só importam para builds do código-fonte (para o wheel basta a glibc), e `LD_LIBRARY_PATH` só era exigido pelo antigo mujoco-py/MuJoCo 2.1 (`LD_LIBRARY_PATH=$HOME/.mujoco/mujoco210/bin`), hoje obsoleto [F15][F33][F28]. Observação: em 3.15.0 a seção de instalação não está em overview.rst, e sim em doc/programming/index.rst (Getting started / Building from source) e doc/python.rst (Installation) [F1][F2].",
+  "afirmacoes": [
+    {
+      "texto": "A versão estável atual do MuJoCo é a 3.15.0, lançada em 5 de outubro de 2026 (changelog oficial; release 3.15.0 no GitHub; wheels enviados ao PyPI em 5/out/2026).",
+      "fontes": [
+        "F11",
+        "F20",
+        "F18",
+        "F22"
+      ],
+      "citacao_literal": "Version 3.15.0 (October 5, 2026)",
+      "central": true
+    },
+    {
+      "texto": "O pacote PyPI `mujoco` 3.15.0 declara `requires-python = \">=3.10\"` (classificadores Python 3.10 a 3.15); o PyPI mostra `Requires: Python >=3.10`.",
+      "fontes": [
+        "F3",
+        "F18",
+        "F14"
+      ],
+      "citacao_literal": "requires-python = \">=3.10\"",
+      "central": true
+    },
+    {
+      "texto": "Existe wheel CPython 3.14 para Linux x86_64 em 3.15.0: `mujoco-3.15.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` (30,2 MB); há também cp314 aarch64 e o build free-threaded cp314t (x86_64 e aarch64).",
+      "fontes": [
+        "F18",
+        "F19"
+      ],
+      "citacao_literal": "mujoco-3.15.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "central": true
+    },
+    {
+      "texto": "Existe wheel CPython 3.13 para Linux x86_64 em 3.15.0: `mujoco-3.15.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` (30,2 MB; cp313 aarch64: 28,5 MB); é o wheel instalado no venv do laboratório (tags WHEEL cp313-cp313-manylinux_2_27_x86_64 e manylinux_2_28_x86_64).",
+      "fontes": [
+        "F18",
+        "F14"
+      ],
+      "citacao_literal": "mujoco-3.15.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "central": true
+    },
+    {
+      "texto": "O wheel contém a própria biblioteca compartilhada `mujoco/libmujoco.so.3.15.0` (SONAME `libmujoco.so.3.15.0`); a doc oficial diz que a cópia da biblioteca vem no pacote e não precisa ser baixada ou instalada separadamente.",
+      "fontes": [
+        "F2",
+        "F14",
+        "F15"
+      ],
+      "citacao_literal": "A copy of the MuJoCo library is provided as part of the package and does **not** need to be downloaded or installed",
+      "central": true
+    },
+    {
+      "texto": "As extensões Python do wheel (`_structs`, `_functions`, `_simulate`, …) têm RUNPATH `$ORIGIN` e NEEDED `libmujoco.so.3.15.0` (no mesmo diretório); o CMake dos bindings define `INSTALL_RPATH $ORIGIN`.",
+      "fontes": [
+        "F15",
+        "F5"
+      ],
+      "citacao_literal": "Library runpath: [$ORIGIN]",
+      "central": true
+    },
+    {
+      "texto": "Com ambiente limpo (`env -i`, sem `LD_LIBRARY_PATH`) `import mujoco` funciona e `mj_versionString()` devolve 3.15.0: o wheel dispensa `LD_LIBRARY_PATH`.",
+      "fontes": [
+        "F15"
+      ],
+      "citacao_literal": "import mujoco OK: 3.15.0 | mj_versionString(): 3.15.0",
+      "central": true
+    },
+    {
+      "texto": "O `mujoco-py` (README: 'Status: Deprecated'; só suporta MuJoCo até 2.1.0) exigia `LD_LIBRARY_PATH=$HOME/.mujoco/mujoco210/bin` para instalar/usar; o README manda novos usuários adotarem os bindings oficiais.",
+      "fontes": [
+        "F28"
+      ],
+      "citacao_literal": "LD_LIBRARY_PATH=$HOME/.mujoco/mujoco210/bin pip install mujoco-py",
+      "central": true
+    },
+    {
+      "texto": "`mjpython` é um launcher só de macOS: a doc só o exige para `launch_passive` no macOS e o `setup.py` só inclui o script quando `platform.system() == 'Darwin'`; o wheel Linux instalado não o contém.",
+      "fontes": [
+        "F2",
+        "F4",
+        "F14"
+      ],
+      "citacao_literal": "On MacOS, ``launch_passive`` requires that the user script is executed via a special ``mjpython`` launcher, this is",
+      "central": true
+    },
+    {
+      "texto": "O RECORD do wheel cp313 instalado (300 entradas) não contém nenhum `.pc`, arquivo de configuração CMake, `mjpython` ou script/binário (o `simulate` não vem no wheel); só há `mujoco/libmujoco.so.3.15.0`, 4 plugins em `mujoco/plugin/` e 72 headers `.h` em `mujoco/include/`.",
+      "fontes": [
+        "F14"
+      ],
+      "citacao_literal": "RECORD com .pc/cmake/mjpython/scripts: []",
+      "central": true
+    },
+    {
+      "texto": "`mujoco.viewer` faz parte do wheel (`mujoco/viewer.py` com `launch`, `launch_from_path` e `launch_passive`; `python -m mujoco.viewer` abre o app standalone) e é baseado na mesma base de código do `simulate` dos binários.",
+      "fontes": [
+        "F2",
+        "F14"
+      ],
+      "citacao_literal": "An interactive GUI viewer is provided as part of the Python package in the ``mujoco.viewer`` module. It is based on the",
+      "central": false
+    },
+    {
+      "texto": "O GitHub Releases 3.15.0 publica `mujoco-3.15.0-linux-x86_64.tar.gz` (31,9 MB; sha256 319943b332fd84c968f655f695d8f4b03cc6a68f658bacd0591f0a552744e497) e `mujoco-3.15.0-linux-aarch64.tar.gz` (com arquivo `.sha256`), além de `mujoco-3.15.0-macos-universal2.dmg` e `mujoco-3.15.0-windows-x86_64.zip`.",
+      "fontes": [
+        "F21",
+        "F10"
+      ],
+      "citacao_literal": "mujoco-3.15.0-linux-x86_64.tar.gz",
+      "central": true
+    },
+    {
+      "texto": "No Linux o binário oficial é um `.tar.gz` sem instalador (extrai-se em qualquer diretório; a doc do Unity usa `~/.mujoco`); o conteúdo inclui `bin/` (simulate e samples), `include/mujoco/`, `lib/` (com `libmujoco.so.3.15.0`), `model/`, `sample/` e `simulate/` — layout confirmado pela doc do Unity (3.15.0) e pelo PKGBUILD do mujoco-bin (3.14.0).",
+      "fontes": [
+        "F1",
+        "F13",
+        "F35"
+      ],
+      "citacao_literal": "The pre-built distribution is a single .zip on Windows, .dmg on macOS, and .tar.gz on Linux. There is no installer.",
+      "central": true
+    },
+    {
+      "texto": "Compilar do código-fonte exige CMake e um compilador C++17; o build baixa dependências da Internet via FetchContent; instala-se com `cmake --install .` (prefixo por `-DCMAKE_INSTALL_PREFIX=<dir>`) e recomenda-se `-DCMAKE_BUILD_TYPE=Release`.",
+      "fontes": [
+        "F1"
+      ],
+      "citacao_literal": "To build MuJoCo from source, you will need CMake and a working C++17 compiler installed. The steps are:",
+      "central": true
+    },
+    {
+      "texto": "O CI oficial (`build_steps.sh`, função `prepare_linux`) instala no Ubuntu: libgl1-mesa-dev, libwayland-dev, libxinerama-dev, libxcursor-dev, libxkbcommon-dev, libxrandr-dev, libxi-dev e ninja-build.",
+      "fontes": [
+        "F27"
+      ],
+      "citacao_literal": "sudo apt-get update && sudo apt-get install",
+      "central": false
+    },
+    {
+      "texto": "Compilar os bindings Python do código-fonte só é necessário para modificá-los (ou em Linux excepcionalmente antigo): `bash make_sdist.sh` gera o sdist e `pip install mujoco-x.y.z.tar.gz` exige `MUJOCO_PATH` (lib + headers) e `MUJOCO_PLUGIN_PATH` (plugins).",
+      "fontes": [
+        "F2",
+        "F4"
+      ],
+      "citacao_literal": "Python bindings (or are trying to run on exceptionally old Linux systems).",
+      "central": false
+    },
+    {
+      "texto": "A instalação via CMake exporta o alvo `mujoco` como `mujoco::mujoco` (`NAMESPACE mujoco::`, `mujocoTargets.cmake`) e instala `mujocoConfig.cmake` e `mujocoConfigVersion.cmake` (COMPATIBILITY AnyNewerVersion) em `${CMAKE_INSTALL_LIBDIR}/cmake/mujoco`; o config chama `find_dependency(OpenGL)` antes de importar os alvos.",
+      "fontes": [
+        "F6",
+        "F23"
+      ],
+      "citacao_literal": "set(CONFIG_PACKAGE_LOCATION \"${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}\")",
+      "central": true
+    },
+    {
+      "texto": "O repositório oficial (tag 3.15.0) não fornece arquivo pkg-config: `cmake/` só traz `mujocoConfig.cmake.in` como template de pacote, `dist/` só tem ícones/plist/rc e nem o `CMakeLists.txt` nem a documentação mencionam `.pc`/pkg-config; logo `pkg_search_module(MUJOCO mujoco)` não encontra o MuJoCo oficial (aqui `pkg-config --exists mujoco` retorna 1 porque não há MuJoCo de sistema).",
+      "fontes": [
+        "F24",
+        "F25",
+        "F6",
+        "F16"
+      ],
+      "citacao_literal": "mujocoConfig.cmake.in",
+      "central": true
+    },
+    {
+      "texto": "O build standalone dos samples oficiais usa por padrão o MuJoCo binário via `find_package(mujoco REQUIRED)` (modo config) e liga com `target_link_libraries(... mujoco::mujoco)`; o código usa `#include <mujoco/mujoco.h>`; se o config não é achado, o CMake pede `CMAKE_PREFIX_PATH` ou `mujoco_DIR`.",
+      "fontes": [
+        "F7",
+        "F8",
+        "F9",
+        "F43"
+      ],
+      "citacao_literal": "If standalone, by default look for MuJoCo binary version.",
+      "central": true
+    },
+    {
+      "texto": "AUR `mujoco` 3.15.0-1 (mantenedor taotieren; atualizado em 2026-10-05 16:15 UTC; sem flag de desatualizado) é construído do código-fonte (tag `$pkgver` do GitHub) com CMake+Ninja e `-DCMAKE_INSTALL_PREFIX=/usr`; depende de libgcc_s.so e libstdc++.so e tem makedepends cmake, glfw, git, libxcursor, libxi, libxinerama, libxrandr, ninja e mold.",
+      "fontes": [
+        "F33",
+        "F29",
+        "F30"
+      ],
+      "citacao_literal": "source=(\"${pkgname}::git+https://github.com/deepmind/mujoco.git#tag=$pkgver\")",
+      "central": true
+    },
+    {
+      "texto": "AUR `mujoco-bin` 3.14.0-1 (elanglois; atualizado em 2026-09-26; Provides/Conflicts `mujoco`; depends libgl e glfw) reempacota os tarballs oficiais linux-x86_64/aarch64 (copia `lib/` para /usr/lib e `include/mujoco` para `/usr/mujoco`, não `/usr/include`) e estava uma versão atrás de 3.15.0 em 2026-10-07.",
+      "fontes": [
+        "F35",
+        "F32",
+        "F29"
+      ],
+      "citacao_literal": "_src_url_prefix=\"https://github.com/deepmind/${_pkgname}/releases/download/${pkgver}/${_pkgname}-${pkgver}-linux\"",
+      "central": true
+    },
+    {
+      "texto": "AUR `python-mujoco` 3.3.7-1 (kidofcubes; última atualização 2025-10-22) está marcado como desatualizado desde 2025-12-18, compila os bindings do tarball-fonte 3.3.7 (patch + `python setup.py build`) contra o `mujoco` do sistema e declara licença LGPL3 (o upstream é Apache-2.0).",
+      "fontes": [
+        "F31",
+        "F29",
+        "F34",
+        "F3"
+      ],
+      "citacao_literal": "Flagged out-of-date (2025-12-18)",
+      "central": true
+    },
+    {
+      "texto": "Nos repositórios oficiais do Arch não existe pacote `mujoco`: a busca por 'mujoco' em archlinux.org/packages devolve 0 resultados; os pacotes estão só no AUR (`mujoco`, `mujoco-bin`, `python-mujoco` e o `mujoco-git` órfão, 2.2.2.r81).",
+      "fontes": [
+        "F36",
+        "F29"
+      ],
+      "citacao_literal": "0 matching packages found.",
+      "central": true
+    },
+    {
+      "texto": "O CachyOS recompila pacotes do Arch para as microarquiteturas x86-64-v3, x86-64-v4 e Zen4+ nos seus repositórios (v3: ganho de 5%–20% segundo a wiki); isso vale para pacotes de repositório, não para o wheel do PyPI nem para o tarball upstream, compilados pelo upstream.",
+      "fontes": [
+        "F42"
+      ],
+      "citacao_literal": "To deliver a performance-optimized distribution, CachyOS recompiles Arch Linux packages specifically for the",
+      "central": false
+    },
+    {
+      "texto": "O MuJoCo usa semver modificado desde a 3.5.0 (SUPERMAJOR.MAJOR.MINOR_OR_PATCH) e `mj_version()` devolve um inteiro `mjVERSION = (SUPERMAJOR * 1e6) + (MAJOR * 1e3) + MINOR_OR_PATCH` — 3015000 para a 3.15.0 (confirmado localmente); a doc recomenda comparar `mjVERSION_HEADER != mj_version()` para detectar descasamento entre headers e biblioteca.",
+      "fontes": [
+        "F12",
+        "F14",
+        "F1"
+      ],
+      "citacao_literal": "mjVERSION = (SUPERMAJOR * 1e6) + (MAJOR * 1e3) + MINOR_OR_PATCH",
+      "central": false
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/index.rst",
+      "doi": "",
+      "titulo": "Programming — Getting started, Building from source, Versions and compatibility (doc MuJoCo 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/python.rst",
+      "doi": "",
+      "titulo": "Python — Installation, Interactive viewer, Building from source, mujoco-py migration (doc MuJoCo 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/pyproject.toml",
+      "doi": "",
+      "titulo": "pyproject.toml do pacote Python mujoco 3.15.0 (requires-python, classificadores, dependências)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/setup.py",
+      "doi": "",
+      "titulo": "setup.py do pacote Python mujoco 3.15.0 (cópia de libs/plugins/headers; mjpython só em Darwin; MUJOCO_PATH)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/CMakeLists.txt",
+      "doi": "",
+      "titulo": "CMakeLists.txt dos bindings Python (INSTALL_RPATH $ORIGIN nas extensões)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/CMakeLists.txt",
+      "doi": "",
+      "titulo": "CMakeLists.txt raiz do MuJoCo 3.15.0 (alvo mujoco, mujoco::mujoco, regras de install/export, CONFIG_PACKAGE_LOCATION)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/sample/cmake/SampleDependencies.cmake",
+      "doi": "",
+      "titulo": "SampleDependencies.cmake (build standalone dos samples usa o MuJoCo binário por omissão)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/sample/CMakeLists.txt",
+      "doi": "",
+      "titulo": "sample/CMakeLists.txt (target_link_libraries(... mujoco::mujoco), target_add_rpath)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/sample/basic.cc",
+      "doi": "",
+      "titulo": "sample/basic.cc (forma de #include <mujoco/mujoco.h>)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/README.md",
+      "doi": "",
+      "titulo": "README do repositório google-deepmind/mujoco — seção Installation (binários, Python >= 3.10, manylinux)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog — Version 3.15.0 (October 5, 2026) e 3.13.0 (suporte a Python 3.15)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/VERSIONING.md",
+      "doi": "",
+      "titulo": "MuJoCo Versioning (semver modificado desde 3.5.0; fórmula de mj_version())",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/unity.rst",
+      "doi": "",
+      "titulo": "Unity Plug-in — instalação no Linux (tar.gz em ~/.mujoco; lib/libmujoco.so.3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 — documentação/código (tag 3.15.0, commit 9ea3cdf; espelho local docs/upstream/mujoco)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: conteúdo e metadados do wheel instalado (RECORD, WHEEL, METADATA, viewer.py) no venv Python 3.13.15",
+      "autores": "Teste local (investigador Q1)",
+      "ano": "2026",
+      "veiculo": "Python venv do laboratório (mujoco 3.15.0, cp313, manylinux x86_64)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F15",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: readelf -d (RUNPATH/NEEDED/SONAME) e import com env -i sem LD_LIBRARY_PATH",
+      "autores": "Teste local (investigador Q1)",
+      "ano": "2026",
+      "veiculo": "Python venv do laboratório (mujoco 3.15.0, cp313, manylinux x86_64)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F16",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: sondas do sistema (pkg-config --exists mujoco, /usr/lib/cmake, EXTERNALLY-MANAGED do Python do sistema)",
+      "autores": "Teste local (investigador Q1)",
+      "ano": "2026",
+      "veiculo": "CachyOS (Python do sistema 3.14.7; venv 3.13.15)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F17",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: dependências instaladas e libglfw.so embutida no wheel do pacote PyPI glfw 2.10.2",
+      "autores": "Teste local (investigador Q1)",
+      "ano": "2026",
+      "veiculo": "Python venv do laboratório",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "mujoco 3.15.0 — PyPI (Requires: Python >=3.10; arquivos de release)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/mujoco/",
+      "doi": "",
+      "titulo": "mujoco — PyPI (página do projeto; arquivos da versão mais recente 3.15.0, 5/out/2026)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://github.com/google-deepmind/mujoco/releases/tag/3.15.0",
+      "doi": "",
+      "titulo": "Release Version 3.15.0 (October 5, 2026) — google-deepmind/mujoco",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub Releases",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F21",
+      "url": "https://github.com/google-deepmind/mujoco/releases/expanded_assets/3.15.0",
+      "doi": "",
+      "titulo": "Assets da release 3.15.0 (linux-x86_64.tar.gz, linux-aarch64.tar.gz, macos-universal2.dmg, windows-x86_64.zip)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub Releases",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F22",
+      "url": "https://mujoco.readthedocs.io/en/stable/changelog.html",
+      "doi": "",
+      "titulo": "Changelog — MuJoCo Documentation (stable): Version 3.15.0 (October 5, 2026)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Read the Docs (mujoco.readthedocs.io, stable)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/cmake/mujocoConfig.cmake.in",
+      "doi": "",
+      "titulo": "cmake/mujocoConfig.cmake.in (template do pacote de configuração CMake instalado)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F24",
+      "url": "https://github.com/google-deepmind/mujoco/tree/3.15.0/cmake",
+      "doi": "",
+      "titulo": "Diretório cmake/ da tag 3.15.0 (listagem de arquivos: mujocoConfig.cmake.in, TargetAddRpath.cmake…; sem .pc.in)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F25",
+      "url": "https://github.com/google-deepmind/mujoco/tree/3.15.0/dist",
+      "doi": "",
+      "titulo": "Diretório dist/ da tag 3.15.0 (listagem: Info.plist.*.in, module.modulemap, ícones, .rc; sem .pc)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/cmake/TargetAddRpath.cmake",
+      "doi": "",
+      "titulo": "cmake/TargetAddRpath.cmake (RPATH em vez de LD_LIBRARY_PATH)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F27",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/.github/workflows/build_steps.sh",
+      "doi": "",
+      "titulo": ".github/workflows/build_steps.sh — prepare_linux (dependências de sistema do CI oficial)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F28",
+      "url": "https://github.com/openai/mujoco-py",
+      "doi": "",
+      "titulo": "mujoco-py — README (Status: Deprecated; LD_LIBRARY_PATH=$HOME/.mujoco/mujoco210/bin)",
+      "autores": "OpenAI",
+      "ano": "2021",
+      "veiculo": "GitHub (openai/mujoco-py)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F29",
+      "url": "https://aur.archlinux.org/rpc/v5/search/mujoco?by=name",
+      "doi": "",
+      "titulo": "AUR RPC v5 — pacotes com 'mujoco' no nome (mujoco, mujoco-bin, mujoco-git, python-mujoco)",
+      "autores": "Arch Linux (aurweb)",
+      "ano": "2026",
+      "veiculo": "AUR (aurweb RPC), consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F30",
+      "url": "https://aur.archlinux.org/packages/mujoco",
+      "doi": "",
+      "titulo": "AUR — mujoco 3.15.0-1 (taotieren)",
+      "autores": "Arch Linux (aurweb)",
+      "ano": "2026",
+      "veiculo": "AUR, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F31",
+      "url": "https://aur.archlinux.org/packages/python-mujoco",
+      "doi": "",
+      "titulo": "AUR — python-mujoco 3.3.7-1 (kidofcubes; flagged out-of-date 2025-12-18)",
+      "autores": "Arch Linux (aurweb)",
+      "ano": "2026",
+      "veiculo": "AUR, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F32",
+      "url": "https://aur.archlinux.org/packages/mujoco-bin",
+      "doi": "",
+      "titulo": "AUR — mujoco-bin 3.14.0-1 (elanglois)",
+      "autores": "Arch Linux (aurweb)",
+      "ano": "2026",
+      "veiculo": "AUR, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F33",
+      "url": "https://github.com/archlinux/aur/blob/mujoco/PKGBUILD",
+      "doi": "",
+      "titulo": "PKGBUILD do AUR mujoco 3.15.0 (espelho archlinux/aur, ramo mujoco)",
+      "autores": "taotieren (mantenedor AUR)",
+      "ano": "2026",
+      "veiculo": "GitHub archlinux/aur (espelho do AUR)",
+      "tipo": "documentacao",
+      "nivel": "B",
+      "lida": "integral"
+    },
+    {
+      "ref": "F34",
+      "url": "https://github.com/archlinux/aur/blob/python-mujoco/PKGBUILD",
+      "doi": "",
+      "titulo": "PKGBUILD do AUR python-mujoco 3.3.7 (espelho archlinux/aur, ramo python-mujoco)",
+      "autores": "kidofcubes (mantenedor AUR)",
+      "ano": "2025",
+      "veiculo": "GitHub archlinux/aur (espelho do AUR)",
+      "tipo": "documentacao",
+      "nivel": "B",
+      "lida": "integral"
+    },
+    {
+      "ref": "F35",
+      "url": "https://github.com/archlinux/aur/blob/mujoco-bin/PKGBUILD",
+      "doi": "",
+      "titulo": "PKGBUILD do AUR mujoco-bin 3.14.0 (espelho archlinux/aur, ramo mujoco-bin)",
+      "autores": "Eric Langlois / elanglois (mantenedor AUR)",
+      "ano": "2026",
+      "veiculo": "GitHub archlinux/aur (espelho do AUR)",
+      "tipo": "documentacao",
+      "nivel": "B",
+      "lida": "integral"
+    },
+    {
+      "ref": "F36",
+      "url": "https://archlinux.org/packages/?q=mujoco",
+      "doi": "",
+      "titulo": "Arch Linux — Package Search 'mujoco' (repositórios oficiais): 0 resultados",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F37",
+      "url": "https://archlinux.org/packages/extra/x86_64/glfw/",
+      "doi": "",
+      "titulo": "Arch Linux — pacote glfw (repositório extra; provê glfw-wayland e glfw-x11)",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F38",
+      "url": "https://archlinux.org/packages/core/x86_64/gcc-libs/",
+      "doi": "",
+      "titulo": "Arch Linux — pacote gcc-libs (repositório core)",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F39",
+      "url": "https://archlinux.org/packages/core/x86_64/glibc/",
+      "doi": "",
+      "titulo": "Arch Linux — pacote glibc (repositório core)",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F40",
+      "url": "https://archlinux.org/packages/extra/x86_64/cmake/",
+      "doi": "",
+      "titulo": "Arch Linux — pacote cmake (repositório extra)",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F41",
+      "url": "https://archlinux.org/packages/extra/x86_64/ninja/",
+      "doi": "",
+      "titulo": "Arch Linux — pacote ninja (repositório extra)",
+      "autores": "Arch Linux",
+      "ano": "2026",
+      "veiculo": "archlinux.org/packages, consultado em 2026-10-07",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F42",
+      "url": "https://wiki.cachyos.org/features/optimized_repos",
+      "doi": "",
+      "titulo": "Optimized Repositories — CachyOS Wiki (x86-64-v3, x86-64-v4, Zen4+)",
+      "autores": "CachyOS",
+      "ano": "2026",
+      "veiculo": "CachyOS Wiki",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F43",
+      "url": "https://github.com/google-deepmind/mujoco/discussions/2157",
+      "doi": "",
+      "titulo": "How to use the cmake folder in sample? — Discussion #2157 (erro do CMake: mujocoConfig.cmake / CMAKE_PREFIX_PATH / mujoco_DIR)",
+      "autores": "usuários do GitHub (discussão)",
+      "ano": "s.d.",
+      "veiculo": "GitHub Discussions (google-deepmind/mujoco)",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O wheel oficial da DeepMind instalado por pip traz os bindings E as bibliotecas C compiladas dinâmicas associadas.",
+      "veredito": "correta",
+      "correcao": "Correto para o 3.15.0. O wheel cp313 `manylinux_2_27/2_28 x86_64` contém as 11 extensões pybind11 (`_structs`, `_functions`, `_specs`, `_render`, `_render_filament`, `_rollout`, `_simulate`, `_callbacks`, `_constants`, `_enums`, `_errors`), a `mujoco/libmujoco.so.3.15.0` (SONAME idêntico), os plugins `mujoco/plugin/libactuator.so`, `libelasticity.so`, `libsdf_plugin.so`, `libsensor.so` e 72 headers em `mujoco/include/`; a doc oficial diz que a cópia da biblioteca vem no pacote e não se baixa nem instala à parte. Ressalvas: não há `libmujoco.so` sem versão, `.pc`, config CMake, `simulate` nem `mjpython` (este só existe no macOS) — o wheel serve ao Python, não como pacote de desenvolvimento C/C++ pronto.",
+      "fontes": [
+        "F2",
+        "F14",
+        "F15",
+        "F4"
+      ]
+    },
+    {
+      "afirmacao": "O AUR oferece `python-mujoco`, empacotando os binários do sistema (a prática moderna recomenda, ainda assim, um virtualenv + wheel).",
+      "veredito": "parcial",
+      "correcao": "O pacote existe, mas a descrição está imprecisa e desatualizada: `python-mujoco` (AUR, mantenedor kidofcubes) está em 3.3.7-1, sem atualização desde 2025-10-22 e marcado como desatualizado desde 2025-12-18. Ele não empacota binários: compila os bindings do tarball-fonte 3.3.7 (patch + `python setup.py build`) contra um `mujoco` de sistema (`mujoco`, `mujoco-bin` ou `mujoco-git`) e declara licença LGPL3 (o upstream é Apache-2.0). Como o AUR `mujoco` já está em 3.15.0-1 (taotieren, 2026-10-05) e os bindings devem casar com a versão da biblioteca, essa combinação é incoerente hoje. Não existe `mujoco` nos repositórios oficiais do Arch (0 resultados). A segunda metade está correta: a doc oficial recomenda `pip install mujoco` (a biblioteca vem no wheel) e o Python do sistema no CachyOS/Arch é 'externally managed' (PEP 668), então use venv/uv.",
+      "fontes": [
+        "F31",
+        "F29",
+        "F34",
+        "F30",
+        "F36",
+        "F2",
+        "F16",
+        "F3"
+      ]
+    },
+    {
+      "afirmacao": "Em CMake liga-se com `pkg_search_module(MUJOCO mujoco)` e `target_link_libraries(my_app PUBLIC mujoco::mujoco)`.",
+      "veredito": "parcial",
+      "correcao": "Mistura dois mecanismos incompatíveis. O MuJoCo oficial não instala `mujoco.pc` (a tag 3.15.0 não tem nenhum arquivo pkg-config; aqui `pkg-config --exists mujoco` falha), então `pkg_search_module(MUJOCO mujoco)` não o encontra e, de qualquer modo, não define o alvo `mujoco::mujoco`. O caminho oficial é o pacote de configuração CMake: `find_package(mujoco CONFIG REQUIRED)` (lê `<prefix>/lib/cmake/mujoco/mujocoConfig.cmake`; fora de /usr passe `-DCMAKE_PREFIX_PATH=<prefix>` ou `-Dmujoco_DIR=<prefix>/lib/cmake/mujoco`) seguido de `target_link_libraries(app PRIVATE mujoco::mujoco)` (os samples oficiais usam a forma sem palavra-chave) e `#include <mujoco/mujoco.h>`. A segunda metade do enunciado (`mujoco::mujoco`) está certa; `PUBLIC` é desnecessário em executável (use PRIVATE). O config importa `find_dependency(OpenGL)` antes de carregar `mujocoTargets.cmake`.",
+      "fontes": [
+        "F6",
+        "F23",
+        "F24",
+        "F25",
+        "F7",
+        "F8",
+        "F43",
+        "F16"
+      ]
+    },
+    {
+      "afirmacao": "Um virtualenv evita as antigas manipulações de `LD_LIBRARY_PATH` das versões antigas do MuJoCo.",
+      "veredito": "parcial",
+      "correcao": "Conclusão certa, causa errada. Quem dispensa `LD_LIBRARY_PATH` é o desenho do wheel oficial (a `libmujoco.so.3.15.0` fica ao lado das extensões e estas têm RUNPATH `$ORIGIN`) e o abandono do mujoco-py, que compilava contra `~/.mujoco/mujoco210` e exigia `LD_LIBRARY_PATH=$HOME/.mujoco/mujoco210/bin` (README: 'Deprecated', só MuJoCo ≤ 2.1.0). Testado: com `env -i` (sem `LD_LIBRARY_PATH`) `import mujoco` funciona. O venv é apenas isolamento (e exigência do PEP 668 no Python do Arch), não o mecanismo que localiza a biblioteca. Para programas C/C++ com a libmujoco fora dos diretórios padrão, o próprio MuJoCo documenta RPATH/`$ORIGIN` como alternativa a `LD_LIBRARY_PATH`.",
+      "fontes": [
+        "F15",
+        "F5",
+        "F28",
+        "F26",
+        "F16"
+      ]
+    },
+    {
+      "afirmacao": "No Arch/CachyOS convém garantir gcc-libs, glibc, ninja, cmake e glfw; o CachyOS recompila pacotes para x86-64-v3.",
+      "veredito": "parcial",
+      "correcao": "Depende da rota. (a) Wheel do PyPI (rota recomendada): nada disso é pré-requisito além da glibc — a `libmujoco.so.3.15.0` só tem NEEDED libdl, libm, libpthread, libc, ld-linux e librt (sem libstdc++/libgcc_s) e o pacote PyPI `glfw` embute `libglfw.so` (x11 e wayland), então o pacote `glfw` do Arch também não é necessário. (b) Build do código-fonte: exige CMake + compilador C++17 (+ git, pois o FetchContent baixa dependências); o Ninja é opcional (usado no CI e no PKGBUILD); glfw e as libs X11/Wayland só entram para samples/simulate (o AUR `mujoco` declara makedepends cmake, glfw, git, libxcursor, libxi, libxinerama, libxrandr, ninja e mold, e depends libgcc_s.so/libstdc++.so, ou seja, gcc-libs). Todos esses pacotes existem nos repositórios oficiais do Arch: `glibc` e `gcc-libs` (core); `glfw`, `cmake` e `ninja` (extra) — o `glfw` do Arch já provê `glfw-wayland` e `glfw-x11`. (c) O CachyOS de fato recompila pacotes do Arch para x86-64-v3 — e também para x86-64-v4 e Zen4+ —, mas isso vale para pacotes de repositório (e `mujoco` nem está nos repositórios oficiais do Arch); o wheel e o tarball upstream não são recompilados pelo CachyOS. O MuJoCo exige processador com AVX.",
+      "fontes": [
+        "F15",
+        "F17",
+        "F33",
+        "F30",
+        "F27",
+        "F37",
+        "F38",
+        "F39",
+        "F40",
+        "F41",
+        "F42",
+        "F1"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Alvo de compatibilidade manylinux dos wheels Linux",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "O README do repositório afirma que os wheels Linux pré-compilados 'target `manylinux2014`'."
+        },
+        {
+          "fonte": "F18",
+          "diz": "Os arquivos no PyPI (e a tag WHEEL local) são `manylinux_2_27` + `manylinux_2_28` (glibc ≥ 2.27/2.28), não manylinux2014."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Layout do tarball Linux oficial",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "A doc lista `bin` (bibliotecas dinâmicas, executáveis), `doc`, `include`, `model`, `sample` — sem `lib/`."
+        },
+        {
+          "fonte": "F13",
+          "diz": "A doc do Unity manda copiar `~/.mujoco/mujoco-3.15.0/lib/libmujoco.so.3.15.0`, ou seja, a biblioteca está em `lib/`."
+        },
+        {
+          "fonte": "F35",
+          "diz": "O PKGBUILD do mujoco-bin (3.14.0) copia `include/mujoco`, `lib`, `bin`, `model`, `sample` e `simulate` do tarball."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Licença do pacote python-mujoco no AUR",
+      "posicoes": [
+        {
+          "fonte": "F34",
+          "diz": "O PKGBUILD declara `license=('LGPL3')`."
+        },
+        {
+          "fonte": "F3",
+          "diz": "O pyproject.toml upstream declara `license = \"Apache-2.0\"`."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "Método de instalação 'recomendado'",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "Os binários pré-compilados do GitHub Releases são 'the recommended way to use the software' (contexto C/C++)."
+        },
+        {
+          "fonte": "F2",
+          "diz": "Para o pacote Python, o recomendado é `pip install mujoco` (PyPI), com a biblioteca embutida no wheel."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    }
+  ],
+  "lacunas": [
+    "Conteúdo exato do tarball oficial mujoco-3.15.0-linux-x86_64.tar.gz não foi verificado (download fora das ferramentas permitidas): não está provado que traga lib/cmake/mujoco/*.cmake nem um libmujoco.so sem versão, nem o RUNPATH dos executáveis; há apenas indícios (SampleDependencies.cmake manda procurar o MuJoCo binário via find_package; PKGBUILD do mujoco-bin copia include/lib/bin/model/sample/simulate).",
+    "Os arquivos instalados pelo pacote AUR `mujoco` (e se `/usr/lib/cmake/mujoco/mujocoConfig.cmake` aparece) são inferidos das regras de install do CMake upstream; não houve build/instalação real. O build também depende de rede (FetchContent).",
+    "Repositórios do CachyOS (cachyos, cachyos-extra-v3/v4) não foram consultados: a página de busca de pacotes é dinâmica e não foi lida; só o Arch oficial (0 resultados) e o AUR foram verificados.",
+    "Só o CPython 3.13.15 foi testado localmente (wheel cp313); cp314/cp314t/cp315 foram confirmados apenas pela listagem do PyPI (o Python do sistema é 3.14.7).",
+    "A doc oficial 3.15.0 não traz uma linha de compilação direta (gcc ... -lmujoco, -Wl,-rpath) para Linux; só o caminho CMake (find_package + mujoco::mujoco). A seção 'Installation' não está em overview.rst (está em programming/index.rst e python.rst).",
+    "As páginas de listagem e de detalhe de archlinux.org/packages devolveram, via extrator, versões divergentes para o mesmo pacote (cmake 4.4.4-1 vs 4.4.3-2; cache do extrator) — por isso nenhuma versão de glfw/cmake/gcc-libs/ninja foi citada, só a pertença ao repositório (core/extra).",
+    "Resumos sintetizados pelo Tavily (campo `answer`) foram descartados por contradizerem a leitura direta (afirmaram 'PyPI latest 3.8.1' e que 'mujoco.pc faz parte do repositório'); um snippet de índice do cgit do AUR mostrava pkgver=3.6.0 enquanto a página/PKGBUILD atuais mostram 3.15.0 (índice de busca defasado). Estados do AUR refletem a consulta de 2026-10-07 e mudam rápido (mujoco-bin pode ser atualizado para 3.15.0)."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "O tarball oficial mujoco-3.15.0-linux-x86_64.tar.gz inclui lib/cmake/mujoco/{mujocoConfig,mujocoTargets,mujocoConfigVersion}.cmake e um libmujoco.so sem versão? Os executáveis (bin/simulate e samples) usam RUNPATH relativo ($ORIGIN/../lib)?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "Fecha os critérios (4) e (5) para a rota 'binários .tar.gz'; a doc local descreve um layout antigo e só o PKGBUILD do mujoco-bin prova include/lib/bin/model/sample/simulate; exige listar o tarball (fora das ferramentas desta ronda)."
+    },
+    {
+      "pergunta": "O PKGBUILD do AUR `mujoco` 3.15.0-1 compila em chroot limpo (o FetchContent exige rede) e instala /usr/lib/libmujoco.so.3.15.0, /usr/include/mujoco/*.h e /usr/lib/cmake/mujoco/*.cmake (e nenhum .pc)?",
+      "origem": "fonte-unica",
+      "prioridade": "media",
+      "porque": "A conclusão sobre find_package/pkg-config no AUR é inferida das regras de install do upstream, não de uma instalação real."
+    },
+    {
+      "pergunta": "É suportado compilar um programa C/C++ contra os headers e a libmujoco.so.3.15.0 que vêm dentro do wheel (sem symlink libmujoco.so e sem config CMake)? Qual a linha de link correta (p.ex. -l:libmujoco.so.3.15.0 + RPATH)?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "É o atalho natural no Arch/CachyOS (evita o AUR), mas nenhuma fonte oficial o descreve."
+    },
+    {
+      "pergunta": "O MuJoCo 3.15.0 importa e roda sob CPython 3.14 (inclusive free-threaded cp314t) neste CachyOS? Testar em venv uv dedicado.",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "Os wheels cp314/cp314t existem no PyPI, mas só o CPython 3.13.15 foi testado; o Python do sistema é 3.14.7."
+    },
+    {
+      "pergunta": "Há pacotes mujoco/python-mujoco nos repositórios do CachyOS (cachyos, cachyos-extra-v3/v4)?",
+      "origem": "lacuna",
+      "prioridade": "baixa",
+      "porque": "A busca de pacotes do CachyOS é dinâmica e não foi lida."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/401",
+      "porque_pode_importar": "Issue 'How do I include mujocoTargets.cmake when including MuJoCo in my own CMakeLists.txt?' — uso de mujocoTargets.cmake a partir da árvore de build (find_package + mujoco_DIR)."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/issues/402",
+      "porque_pode_importar": "Issue relacionada com find_package(mujoco REQUIRED) + link_libraries(mujoco::mujoco) em projeto próprio."
+    },
+    {
+      "url": "https://github.com/pal-robotics/mujoco_vendor",
+      "porque_pode_importar": "Pacote vendor ROS 2 que baixa o binário pré-compilado oficial e o expõe como alvo CMake mujoco::mujoco — pode confirmar o conteúdo lib/cmake/mujoco do tarball."
+    },
+    {
+      "url": "https://index.ros.org/p/mujoco_vendor",
+      "porque_pode_importar": "Visão geral do mujoco_vendor (mesmo assunto)."
+    },
+    {
+      "url": "https://packages.debian.org/experimental/x32/libmujoco-dev/filelist",
+      "porque_pode_importar": "Lista de arquivos do libmujoco-dev do Debian (snippet mostra cmake/mujoco/mujocoConfig.cmake); a extração falhou."
+    },
+    {
+      "url": "https://stackoverflow.com/questions/77374919/how-to-use-mujoco-in-cmake-project",
+      "porque_pode_importar": "Resposta (snippet) afirma que o MuJoCo gera pacote de configuração, não módulo Find; extração falhou; nível D."
+    },
+    {
+      "url": "https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=mujoco",
+      "porque_pode_importar": "Página cgit do PKGBUILD do AUR mujoco: o snippet do índice mostrava pkgver=3.6.0 (defasado); a extração direta falhou — usado o espelho GitHub archlinux/aur."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/tree/3.15.0/.github/workflows",
+      "porque_pode_importar": "README dos passos de build do CI (build_engine instala em ${TMPDIR:-build}/mujoco_install/; build_simulate_app; mujoco_studio)."
+    },
+    {
+      "url": "https://orcd-docs.mit.edu/recipes/mujoco",
+      "porque_pode_importar": "Receita antiga (mujoco-py/MuJoCo 2.3.0) com LD_LIBRARY_PATH — corrobora o contraste histórico; nível C/D."
+    }
+  ],
+  "consultas": [
+    "extract https://pypi.org/project/mujoco/3.15.0/ — query: mujoco 3.15.0 release date requires python download files wheels manylinux cp313 cp314 (+ 10 variações de --query: Requires-Python, aarch64, cp315, free-threading, sdist, macosx, win_amd64)",
+    "extract https://pypi.org/project/mujoco/ — query: mujoco latest version pip install mujoco Released Oct 2026 release history",
+    "search: MuJoCo 3.15.0 release GitHub google-deepmind mujoco-3.15.0-linux-x86_64.tar.gz (--include-domains github.com,pypi.org,mujoco.readthedocs.io)",
+    "extract https://github.com/google-deepmind/mujoco/releases/tag/3.15.0",
+    "extract https://github.com/google-deepmind/mujoco/releases/expanded_assets/3.15.0",
+    "search: AUR mujoco package Arch Linux aur.archlinux.org mujoco physics engine PKGBUILD",
+    "extract https://aur.archlinux.org/packages/mujoco , /python-mujoco , /mujoco-bin",
+    "extract https://aur.archlinux.org/rpc/v5/search/mujoco?by=name",
+    "extract (falhou) https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=mujoco e ?h=python-mujoco; extract (falhou) https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=mujoco",
+    "search: mujoco PKGBUILD taotieren pkgver cmake -DMUJOCO_BUILD depends makedepends package() (--include-domains aur.archlinux.org)",
+    "search: archlinux aur mujoco PKGBUILD taotieren github.com/archlinux/aur mujoco branch (--include-domains github.com,gitlab.archlinux.org)",
+    "extract https://github.com/taotieren/aur-repo (sem mujoco)",
+    "extract https://github.com/archlinux/aur/blob/mujoco/PKGBUILD , .../python-mujoco/PKGBUILD , .../mujoco-bin/PKGBUILD",
+    "extract https://archlinux.org/packages/?q=mujoco ; ?name=glfw ; ?name=gcc-libs ; ?name=ninja ; ?name=cmake ; /packages/core/any/base/ (a variante /packages/search/json falhou); depois, páginas de detalhe /packages/extra/x86_64/{glfw,cmake,ninja}/ e /packages/core/x86_64/{gcc-libs,glibc}/",
+    "extract https://mujoco.readthedocs.io/en/stable/changelog.html — query: Version 3.15.0 (October 5, 2026)",
+    "search: CachyOS repositories x86-64-v3 x86-64-v4 znver4 packages recompiled optimized wiki",
+    "extract https://wiki.cachyos.org/features/optimized_repos",
+    "extract https://github.com/google-deepmind/mujoco/blob/3.15.0/cmake/mujocoConfig.cmake.in",
+    "search: MuJoCo pkg-config mujoco.pc file feature request google-deepmind/mujoco issue pkgconfig",
+    "extract https://github.com/google-deepmind/mujoco/tree/3.15.0/cmake ; .../tree/3.15.0/dist",
+    "search: mujoco-py README install LD_LIBRARY_PATH ~/.mujoco/mujoco210/bin export",
+    "extract https://github.com/openai/mujoco-py",
+    "extract https://github.com/google-deepmind/mujoco/blob/3.15.0/.github/workflows/build.yml ; .../build_steps.sh ; .../tree/3.15.0/.github/workflows",
+    "search: CachyOS package search mujoco python-mujoco repository cachyos-extra-v3 (--include-domains packages.cachyos.org,wiki.cachyos.org,github.com,discuss.cachyos.org) — sem resultado útil",
+    "search: find_package(mujoco REQUIRED) mujoco::mujoco CMake mujoco_DIR lib/cmake/mujoco binary release tar.gz link C++ program",
+    "extract https://github.com/google-deepmind/mujoco/discussions/2157 (2x); extract (falhou) https://stackoverflow.com/questions/77374919/how-to-use-mujoco-in-cmake-project",
+    "search: mujoco-3 linux-x86_64.tar.gz contents lib/cmake/mujoco mujocoConfig.cmake CMAKE_PREFIX_PATH ~/.mujoco extracted libmujoco.so",
+    "search: debian libmujoco-dev file list /usr/lib/x86_64-linux-gnu/cmake/mujoco/mujocoConfig.cmake pkgconfig (--include-domains packages.debian.org,...) — sem resultado útil; extract (falhou) https://packages.debian.org/experimental/x32/libmujoco-dev/filelist",
+    "search: mujoco prebuilt release \"-Dmujoco_DIR\" lib/cmake/mujoco find_package(mujoco CONFIG REQUIRED) target_link_libraries mujoco::mujoco github issue (--include-domains github.com,mujoco.readthedocs.io,stackoverflow.com,robotics.stackexchange.com)",
+    "extract https://github.com/google-deepmind/mujoco/blob/3.15.0/cmake/TargetAddRpath.cmake"
+  ],
+  "alertas_seguranca": []
+}

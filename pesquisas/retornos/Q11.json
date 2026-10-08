@@ -1,0 +1,1004 @@
+{
+  "id": "Q11",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "Em 3.15.0 o MJX é a API JAX do MuJoCo com duas implementações — MJX-JAX (reimplementação em JAX/XLA para GPU/TPU/CPU, com autodiff) e MJX-Warp (`impl='warp'`: o MJX como frontend JAX do MuJoCo Warp; GPU NVIDIA/CUDA, CPU só para desenvolvimento; sem autodiff) — e o MuJoCo Warp (`mujoco-warp`, API nativa `mjw.*`, mantido por Google DeepMind e NVIDIA) é o motor Warp por baixo; a doc oficial chama o MJX-Warp de 'most fully-featured' e só reserva o MJX-JAX a cenas pequenas/gradientes, sem declará-lo descontinuado ou 'em manutenção' (o changelog 3.15.0 ainda altera o MJX: `mjx.render` passou a devolver `d`), e o Playground usa Warp por padrão desde a 0.2.0 [F1][F33][F4][F12][F11][F14]. Instalação: `pip install mujoco-mjx` (JAX) e/ou `pip install mujoco-mjx[warp]` (extra = só `warp-lang==1.17.0`; o mujoco_warp vai vendorizado) e/ou `pip install mujoco-warp` (3.15.0, Alpha; extras `cpu`/`cuda`=`jax[cuda12]`), mais JAX com GPU à parte — `jax[cuda13]` (recomendado pela doc do JAX; driver ≥ 580, GPU SM ≥ 7.5) ou `jax[cuda12]` (driver ≥ 525), que é o que o CI/extras do MuJoCo ainda fixam; os wheels `warp-lang` do PyPI usam CUDA 12.9 (driver ≥ 525) e o `jax` atual exige Python ≥ 3.12, requisitos que driver 610.57 + Python 3.13 satisfazem (a mistura `jax[cuda13]` + Warp CUDA 12.9 no MJX-Warp não está documentada e deve ser testada) [F1][F5][F6][F17][F24][F25][F29][F30][F28]. API: MJX `mjx.put_model`/`mjx.make_data`/`mjx.step` sob `jax.vmap`/`jax.jit`; MJWarp `mjw.put_model`/`mjw.make_data(nworld=N)`/`mjw.step(m, d)`; no Warp os buffers são fixos — `naconmax` (todos os worlds; sobrepõe `nconmax`) e `njmax` (por world, estrito) — e o estouro é comportamento indefinido sinalizado em `Data.overflow`, ao passo que o ramo JAX do MJX ignora `njmax`/`naconmax` (a 'armadilha do njmax' da SKILL.md oficial só vale para Warp); domain randomization faz-se batcheando campos do modelo (`tree_replace` + `in_axes` no MJX; `batch_sizes` no MJWarp), não reenviando modelos [F1][F3][F8][F7][F10][F15][F37][F41]. Limites frente ao motor C: float32 (C: double; `tolerance` ≥ 1e-6 no MJWarp), sem PGS/noslip, sem plugins (MJWarp: NotImplementedError; SDF só via hooks Python), sem o 'midpoint' do IMPLICITFAST, flex experimental (MJWarp) ou ausente (MJX-JAX), geoms/integradores restritos no MJX-JAX, GPU não determinística no MJWarp, e escala pior que o C em árvores únicas acima de ~60 DoF, o que dois preprints também notam [F3][F4][F8][F7][F1][F19][F35][F36]. Os números do relatório estão mal atribuídos: na tabela oficial 'SPS for MJX-Warp Graph Modes' 2,96 M é o Humanoid e 2,33 M é a cena Aloha Pot, ambos MJX-Warp via JAX FFI (modo `WARP`); o Warp puro dá 3,35 M/2,45 M, `WARP_STAGED` 2,67 M/1,96 M e recaptura forçada 0,80 M/0,65 M, sem hardware declarado; outros dados publicados: 1 humanoide a 650K (CPU M3 Max), 1,8 M (CPU 3995WX 64c), 950K (MJX-JAX em A100, batch 8192) e 2,7 M (MJX-JAX em TPU v5×8, batch 16384), saída de exemplo de 2,73 M SPS (8192 worlds) no README de benchmarks, políticas do Playground treinadas em ~10 min numa RTX 4090 com MJX-JAX e razões de aceleração sobre o MJX divulgadas pela NVIDIA (152×/313× em RTX 4090; 252×/475× em RTX PRO 6000 Blackwell) [F2][F1][F13][F34][F23][F22]. Diferenciabilidade: MJX-JAX sim ('mostly supported', mas o solver só é diferenciável em modo reverso com `opt.iterations == 1`), MJX-Warp não ('no immediate plans') e MJWarp não (issue #500; PR #1535 aberta, fora do 3.15.0) [F1][F9][F40][F3][F38][F39]. Quanto à CPU, `mujoco.rollout` é multithread e não colapsa em 4096 instâncias: medido aqui (i9-14900HX, 32 threads, máquina carregada) o humanoide rende ~34–40 K SPS com 1 thread e ~0,26–0,29 M SPS com 32, cerca de 10x abaixo dos 2,7–3,35 M SPS publicados para Warp [F20][F3][F1]. Uma RTX 4070 Laptop de 8 GB serve para aprender, desenvolver e treinar cenas tipo humanoide com milhares de worlds (estimativa própria, não medida: ~0,24–0,48 GiB de arrays declarados para 4096–8192 worlds), mas o JAX pré-aloca 75 % da VRAM (~6 GB), modos staged e cenas com malhas/CCD/muitos DoF consomem bem mais, OOMs do Warp já foram reportados e o consumo real deve ser medido com `mjwarp-testspeed --memory` [F21][F31][F32][F3][F42].",
+  "afirmacoes": [
+    {
+      "texto": "O MJX é a API JAX do MuJoCo para 'várias implementações': MJX-JAX (reimplementação em JAX/XLA) e MJX-Warp (o MJX como frontend JAX do MuJoCo Warp, escolhido com `impl='warp'`); `mujoco-mjx` é um pacote PyPI separado do `mujoco` (em 3.15.0 `from mujoco import mjx` falha no wheel `mujoco` sozinho).",
+      "fontes": [
+        "F1",
+        "F33",
+        "F19"
+      ],
+      "citacao_literal": "MuJoCo XLA (MJX) provides a `JAX <https://github.com/jax-ml/jax#readme>`__ API for various implementations of MuJoCo. MJX can be found",
+      "central": true
+    },
+    {
+      "texto": "O MuJoCo Warp (MJWarp) é mantido por Google DeepMind e NVIDIA como parte do projeto Newton; é a versão do MuJoCo para GPU NVIDIA escrita em Warp (`import mujoco_warp as mjw`); exige GPU NVIDIA para simulação rápida e aceita CPU só para desenvolvimento/depuração.",
+      "fontes": [
+        "F4",
+        "F3"
+      ],
+      "citacao_literal": "MJWarp is maintained by [Google DeepMind](https://deepmind.google/) and [NVIDIA](https://www.nvidia.com/) as part of the [Newton](https://github.com/newton-physics/newton) project.",
+      "central": true
+    },
+    {
+      "texto": "Na doc 3.15.0 o MJX-Warp usa o MuJoCo Warp, 'the most fully-featured implementation of MuJoCo for hardware accelerated devices'; o MJX-JAX é indicado para cenas pequenas e gradientes aproximados ('We point users to MJX-Warp otherwise'); a doc não marca o MJX-JAX como descontinuado nem 'em manutenção'.",
+      "fontes": [
+        "F1",
+        "F2"
+      ],
+      "citacao_literal": "for a simulator that is performant for small scenes and that roughly supports gradients, MJX-JAX is a good option. We",
+      "central": true
+    },
+    {
+      "texto": "Em 3.15.0 `mjx.put_model` sem `impl` escolhe a implementação JAX, e só escolhe Warp numa GPU CUDA se a variável de ambiente `MJX_GPU_DEFAULT_WARP` for 'true' e o `warp-lang` estiver instalado; `impl='warp'` exige `warp-lang` e GPU CUDA (ou CPU) e levanta RuntimeError sem ele.",
+      "fontes": [
+        "F7"
+      ],
+      "citacao_literal": "os.environ.get('MJX_GPU_DEFAULT_WARP', 'f').lower() == 'true'",
+      "central": true
+    },
+    {
+      "texto": "Instalação do MJX: `pip install mujoco-mjx`; com o backend Warp: `pip install mujoco-mjx[warp]`. O extra `warp` de mujoco-mjx 3.15.0 contém apenas `warp-lang==1.17.0` (não instala `mujoco-warp`: o código do MJWarp vem vendorizado em `mujoco.mjx.third_party.mujoco_warp`); as dependências base são absl-py, etils[epath], jax, jaxlib, mujoco>=3.15.0.dev0, scipy e trimesh, com requires-python >=3.10.",
+      "fontes": [
+        "F1",
+        "F5",
+        "F12",
+        "F27"
+      ],
+      "citacao_literal": "pip install mujoco-mjx[warp]",
+      "central": true
+    },
+    {
+      "texto": "JAX com GPU NVIDIA via pip: `pip install -U \"jax[cuda13]\"` (a doc do JAX recomenda migrar para os wheels CUDA 13) ou `\"jax[cuda12]\"`; o driver NVIDIA deve ser >= 580 (CUDA 13) ou >= 525 (CUDA 12) no Linux, e o wheel CUDA 13 exige GPU com SM >= 7.5; o `jax` 0.11.2 do PyPI requer Python >=3.12 e tem os extras cuda12 e cuda13.",
+      "fontes": [
+        "F24",
+        "F29"
+      ],
+      "citacao_literal": "the driver version must be >= 525 for CUDA 12 on Linux, and >= 580 for CUDA 13 on Linux.",
+      "central": true
+    },
+    {
+      "texto": "Os wheels `warp-lang` do PyPI são construídos com o runtime CUDA 12.9 (wheels CUDA 13.0 só no GitHub Releases); Warp com CUDA 12.x exige driver >= 525 e com CUDA 13.x >= 580; Warp suporta Python 3.10+; `warp-lang==1.17.0` publica `py3-none-manylinux_2_28_x86_64` (164,3 MB).",
+      "fontes": [
+        "F25",
+        "F26",
+        "F30"
+      ],
+      "citacao_literal": "The binaries hosted on PyPI are currently built with the CUDA 12.9 runtime.",
+      "central": true
+    },
+    {
+      "texto": "`pip install mujoco-warp` (3.15.0, wheel `py3-none-any`, Python >=3.10, classificador 'Development Status :: 3 - Alpha') depende de absl-py, etils[epath], mujoco>=3.12.0, numpy e warp-lang>=1.15; os extras são `dev`, `cpu` (jax) e `cuda` (`jax[cuda12]`, marcados no pyproject como temporários até o MJX:Warp).",
+      "fontes": [
+        "F6",
+        "F28",
+        "F3"
+      ],
+      "citacao_literal": "\"jax[cuda12]\"",
+      "central": true
+    },
+    {
+      "texto": "API mínima do MJX-JAX: `mjx.put_model(model)`, `mjx.make_data(mjx_model)` (ou `mjx.put_data(model, data)`) e `mjx.step(mjx_model, mjx_data)`, com o batch vindo de `jax.vmap` e `jax.jit` (as funções MJX não são JIT por omissão); `mjx.Data` é um pytree JAX atualizado com `.replace(...)`.",
+      "fontes": [
+        "F1"
+      ],
+      "citacao_literal": "Once installed, you can use MJX by importing the ``mujoco.mjx`` package. A MuJoCo model is placed on device by calling ``mjx.put_model``,",
+      "central": true
+    },
+    {
+      "texto": "API mínima do MJWarp: `m = mjw.put_model(mjm)`, `d = mjw.make_data(mjm, nworld=N)` (ou `mjw.put_data(mjm, mjd, nworld=N)`) e `mjw.step(m, d)` (in-place); para velocidade captura-se o passo em CUDA graph com `wp.ScopedCapture()` e `wp.capture_launch(graph)`.",
+      "fontes": [
+        "F3",
+        "F18"
+      ],
+      "citacao_literal": "d = mjw.make_data(mjm, nworld=100)",
+      "central": true
+    },
+    {
+      "texto": "Capacidades no MJWarp 3.15.0: `nconmax` = contatos por world (um world pode exceder se o total ≤ nworld×nconmax), `naconmax` = contatos para todos os worlds (sobrepõe `nconmax`), `njmax` = restrições por world (limite estrito); com `None`, `make_data`/`put_data` usam heurísticas por modelo. No MJX-Warp: `mjx.make_data(m, impl='warp', naconmax=..., njmax=...)`, com `naconmax` escalado pelo nº de envs do `jax.vmap`.",
+      "fontes": [
+        "F8",
+        "F3",
+        "F1"
+      ],
+      "citacao_literal": "naconmax: Number of contacts to allocate for all worlds. Overrides nconmax.",
+      "central": true
+    },
+    {
+      "texto": "O MJWarp usa buffers de tamanho fixo (nconmax/naconmax, njmax, nccdmax/naccdmax, nvmax, contact_sensor_maxmatch): o estouro NÃO levanta exceção, causa comportamento indefinido, é registrado por world em `Data.overflow` (bitmask `mjw.OverflowType`) e, com `Option.warn_overflow=True` (padrão), imprime avisos via `wp.printf`; `mjwarp-testspeed --overflow_behavior=error` (padrão) aborta.",
+      "fontes": [
+        "F3",
+        "F41"
+      ],
+      "citacao_literal": "execution. When simulation demands exceed these pre-allocated limits, an overflow occurs, leading to undefined behavior.",
+      "central": true
+    },
+    {
+      "texto": "No MJX 3.15.0 o ramo JAX de `put_data`/`make_data` ignora `njmax`/`naconmax`/`naccdmax`/`nvmax` (só `impl='warp'` os repassa) e dimensiona contatos/restrições a partir do modelo; logo a 'armadilha do njmax' da SKILL.md oficial (contatos ignorados se `njmax` for omitido em `mjx.put_data`) não se aplica a `impl='jax'`.",
+      "fontes": [
+        "F7",
+        "F10"
+      ],
+      "citacao_literal": "return _put_data_jax(m, d, device)",
+      "central": true
+    },
+    {
+      "texto": "O MJWarp 3.15.0 não suporta os solvers PGS e `noslip` (só CG e Newton; `put_model` levanta NotImplementedError para `noslip_iterations > 0`), nem o recurso 'midpoint' do integrador IMPLICITFAST, nem plugins de corpo/atuador/sensor (NotImplementedError); flex é experimental. Plugins SDF só existem como funções Warp injetadas em `mjw._src.collision_sdf.user_sdf`/`user_sdf_grad`.",
+      "fontes": [
+        "F4",
+        "F8",
+        "F3"
+      ],
+      "citacao_literal": "- **Solver**: `PGS` and `noslip` not yet supported",
+      "central": true
+    },
+    {
+      "texto": "O MJX-JAX não suporta flex (`put_model` levanta NotImplementedError), PGS/noslip (só solvers CG e NEWTON), geom SDF nem sensores PLUGIN (plugins não constam da tabela de recursos); integradores só EULER, RK4 e IMPLICITFAST; ELLIPSOID e CYLINDER só colidem com primitivos; Jacobiano só DENSE; fluido só `flInertia`; recursos não suportados fazem `put_model` levantar exceção.",
+      "fontes": [
+        "F7",
+        "F1"
+      ],
+      "citacao_literal": "raise NotImplementedError('Flex not implemented for JAX backend.')",
+      "central": true
+    },
+    {
+      "texto": "O MJWarp usa float32, ao contrário do `mjtNum` double do motor C (motor C verificado em 3.15.0: `qpos.dtype` float64, `tolerance` 1e-8 por omissão), e limita `tolerance` a >= 1e-6; resultados podem divergir do C (iterações, colisão, atritos pequenos) e a GPU é não determinística. O MJX-JAX deriva o dtype de `jp.zeros(1, float).dtype` (segue a configuração x64 do JAX).",
+      "fontes": [
+        "F3",
+        "F19",
+        "F7"
+      ],
+      "citacao_literal": "MJWarp utilizes `float <https://nvidia.github.io/warp/stable/api_reference/_generated/warp.float32.html>`__s in contrast to MuJoCo's",
+      "central": true
+    },
+    {
+      "texto": "Escala: o MJWarp escala melhor que o MJX em cenas com muitas geoms/DoFs, mas pior que o MuJoCo (C) numa única árvore cinemática grande; chega a centenas de DoFs só com `sleeping` ligado e cena particionável em islands; melhorar mecanismos únicos acima de ~60 DoFs 'remains an active priority'. Dois preprints apontam o mesmo (Isaac Lab, da NVIDIA, e SmallSatSim, de terceiros): ganhos sobre o MJX em cenas com muitos contatos e limites de escala em cenas com muitos DoF.",
+      "fontes": [
+        "F3",
+        "F35",
+        "F36"
+      ],
+      "citacao_literal": "Improving performance for single connected mechanisms beyond ~60 DoFs remains an active priority.",
+      "central": true
+    },
+    {
+      "texto": "Diferenciabilidade: MJX-JAX = sim ('mostly supported'); MJX-Warp = não ('does not support automatic differentiation and has no immediate plans'); MJWarp = não via autodiff do Warp (issue #500; a PR #1535 de diferenciabilidade seguia aberta quando consultada e não faz parte de 3.15.0).",
+      "fontes": [
+        "F1",
+        "F3",
+        "F38",
+        "F39"
+      ],
+      "citacao_literal": "Note that unlike MJX-JAX, MJX-Warp does not support automatic differentiation and has no immediate plans to",
+      "central": true
+    },
+    {
+      "texto": "No MJX-JAX 3.15.0 o solver de restrições só evita `jax.lax.while_loop` quando `opt.iterations == 1`; com mais iterações o laço impede derivadas em modo reverso através de `mjx.step` (issue #2259: 'Reverse-mode differentiation does not work for lax.while_loop'), embora a busca linear use `_while_loop_scan`, compatível com reverse-mode.",
+      "fontes": [
+        "F9",
+        "F40"
+      ],
+      "citacao_literal": "ctx = jax.lax.while_loop(cond, body, ctx)",
+      "central": false
+    },
+    {
+      "texto": "Tabela oficial 'Steps per Second (SPS) for MJX-Warp Graph Modes': 2,96 M SPS é o Humanoid e 2,33 M SPS é a cena Aloha Pot, ambos na linha MJX-Warp via JAX FFI com graph mode `WARP`; nenhum é 'MJX (JAX)' nem 'MJWarp nativo'.",
+      "fontes": [
+        "F2",
+        "F1"
+      ],
+      "citacao_literal": "| JAX FFI (`WARP`) | 2.96M | 2.33M |",
+      "central": true
+    },
+    {
+      "texto": "Mesma tabela oficial: Warp puro (sem JAX FFI) = 3,35 M SPS no Humanoid e 2,45 M no Aloha Pot; `WARP_STAGED` = 2,67 M / 1,96 M; `WARP` com recaptura forçada a cada passo = 0,80 M / 0,65 M; a doc não informa o hardware.",
+      "fontes": [
+        "F2",
+        "F1"
+      ],
+      "citacao_literal": "| Pure Warp (No JAX FFI) | 3.35M | 2.45M |",
+      "central": true
+    },
+    {
+      "texto": "A NVIDIA reporta (blog de 16/03/2026) que o MuJoCo Warp (MJWarp, MuJoCo 3.5) acelera o MJX em 252x (locomoção) e 475x (manipulação) numa RTX PRO 6000 Blackwell; em set/2025 eram 152x e 313x numa GeForce RTX 4090 — razões de aceleração fornecidas pelo fabricante, não SPS absolutos, e não comparáveis entre GPUs (o blog de 2025 nota que a RTX PRO 6000 acelera o MJWarp em até +44 % e o MJX em até +75 % sobre a RTX 4090).",
+      "fontes": [
+        "F22",
+        "F23"
+      ],
+      "citacao_literal": "252x for locomotion, and 475x for manipulation tasks on the NVIDIA RTX PRO 6000 Blackwell Series.",
+      "central": false
+    },
+    {
+      "texto": "Medido aqui (mujoco 3.15.0, i9-14900HX com 32 threads, máquina com carga ~8–13): o humanoide do benchmark MJWarp (nv=27, dt=0,005, Newton) rende ~34–40 K SPS com 1 thread e ~0,26–0,29 M SPS com `mujoco.rollout` de 32 threads (4096 trajetórias × 100 passos) — sem colapso em 4096 instâncias, mas ~10x abaixo dos 2,7–3,35 M SPS publicados para Warp (hardware não declarado).",
+      "fontes": [
+        "F20"
+      ],
+      "citacao_literal": "rollout nbatch=4096 nstep=100 nthread=32: 259,486, 264,300, 261,720 steps/s (3 reps)",
+      "central": true
+    },
+    {
+      "texto": "O JAX pré-aloca 75 % da memória total da GPU por omissão (`XLA_PYTHON_CLIENT_MEM_FRACTION=.XX` muda a fração; `XLA_PYTHON_CLIENT_PREALLOCATE=false` desliga, com mais risco de fragmentação): numa GPU de 8 GB isso reserva ~6 GB ao XLA, deixando ~2 GB para o resto — inclusive a memória que o Warp aloca por conta própria (workspace inline de solver/CCD, 'Other memory' no `--memory`) e os buffers de staging extras dos modos `WARP_STAGED`/`WARP_STAGED_EX`; a competição entre os dois pools no MJX-Warp é inferência a confirmar por teste.",
+      "fontes": [
+        "F31",
+        "F32",
+        "F1"
+      ],
+      "citacao_literal": "If preallocation is enabled, this makes JAX preallocate XX% of the total GPU memory, instead of the default 75%.",
+      "central": true
+    },
+    {
+      "texto": "Estimativa própria (NÃO é medição): para o humanoide (nv=27) com nconmax=24 e njmax=64 (config do benchmark), os arrays declarados de `Data`/`Contact`/`Constraint` somam ~61 MiB (1024 worlds), ~242 MiB (4096) e ~484 MiB (8192), sem o workspace alocado inline (solver/CCD); cenas com malhas/CCD, muitos DoF ou renderização em lote custam muito mais (ex.: Aloha clutter, nv=136, 2048 worlds, njmax=384: `efc.J` denso ~408 MB). Medir com `mjwarp-testspeed --memory`.",
+      "fontes": [
+        "F21",
+        "F3"
+      ],
+      "citacao_literal": "humanoid nv=27 nworld=4096 nconmax=24 njmax=64 -> ~242 MiB declared arrays (Data+Contact+Constraint; excl. inline workspace); unresolved=['dtype:wp.spatial_vector']",
+      "central": false
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/mjx.rst",
+      "doi": "",
+      "titulo": "MuJoCo XLA (MJX) — doc/mjx.rst (tag 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Documentação do MuJoCo (GitHub, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F2",
+      "url": "https://mujoco.readthedocs.io/en/stable/mjx.html",
+      "doi": "",
+      "titulo": "MuJoCo XLA (MJX) — MuJoCo Documentation (stable)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "mujoco.readthedocs.io (stable)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/mjwarp/index.rst",
+      "doi": "",
+      "titulo": "MuJoCo Warp (MJWarp) — doc/mjwarp/index.rst (tag 3.15.0)",
+      "autores": "Google DeepMind; NVIDIA",
+      "ano": "2026",
+      "veiculo": "Documentação do MuJoCo (GitHub, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Warp (MJWarp) — README (v3.15.0)",
+      "autores": "Google DeepMind; NVIDIA (Newton Developers)",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_warp",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/mjx/pyproject.toml",
+      "doi": "",
+      "titulo": "mujoco-mjx 3.15.0 — pyproject.toml (dependências e extras)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/pyproject.toml",
+      "doi": "",
+      "titulo": "mujoco-warp 3.15.0 — pyproject.toml (dependências e extras)",
+      "autores": "Newton Developers",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_warp (v3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/mjx/mujoco/mjx/_src/io.py",
+      "doi": "",
+      "titulo": "MJX — _src/io.py (put_model, make_data, put_data) em 3.15.0",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/mujoco_warp/_src/io.py",
+      "doi": "",
+      "titulo": "MuJoCo Warp — _src/io.py (put_model, make_data, put_data) em v3.15.0",
+      "autores": "Newton Developers",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial (v3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/mjx/mujoco/mjx/_src/solver.py",
+      "doi": "",
+      "titulo": "MJX — _src/solver.py (solver de restrições) em 3.15.0",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/skills/accelerated/SKILL.md",
+      "doi": "",
+      "titulo": "MuJoCo Accelerated: MJX & MJWarp GPU Backends (skill oficial, tag 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Documentação do MuJoCo (GitHub, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "MuJoCo Changelog (até 3.15.0)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Documentação do MuJoCo (GitHub, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/mjx/mujoco/mjx/warp/__init__.py",
+      "doi": "",
+      "titulo": "MJX-Warp — warp/__init__.py (importa o mujoco_warp vendorizado)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "Código-fonte oficial (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/benchmarks/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Warp Benchmark Suite — README (v3.15.0)",
+      "autores": "Newton Developers",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_warp (v3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco_playground/blob/main/CHANGELOG.md",
+      "doi": "",
+      "titulo": "MuJoCo Playground — CHANGELOG (0.2.0: implementação padrão = MuJoCo Warp)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_playground (main)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco_playground/blob/main/mujoco_playground/_src/locomotion/go1/randomize.py",
+      "doi": "",
+      "titulo": "MuJoCo Playground — go1/randomize.py (domain randomization em MJX)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_playground (main)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco_playground/blob/main/pyproject.toml",
+      "doi": "",
+      "titulo": "MuJoCo Playground — pyproject.toml (mujoco-mjx>=3.6.0, warp-lang>=1.18.0, extra cuda = jax[cuda12])",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_playground (main)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/mjx/cuda_requirements.txt",
+      "doi": "",
+      "titulo": "MJX — cuda_requirements.txt (pins jax-cuda12-plugin / warp-lang)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco (tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco_warp/blob/v3.15.0/notebooks/tutorial.ipynb",
+      "doi": "",
+      "titulo": "MuJoCo Warp — notebook tutorial (put_data nworld=4096, DR por campos batcheados)",
+      "autores": "Google DeepMind; NVIDIA",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_warp (v3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: `from mujoco import mjx` falha; defaults do motor C (float64, Newton, tolerance 1e-8)",
+      "autores": "Investigador Q11",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 (.venv do projeto)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: mj_step e mujoco.rollout no humanoide do benchmark MJWarp (i9-14900HX, 32 threads, máquina com carga ~8–13)",
+      "autores": "Investigador Q11",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 (.venv do projeto)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Estimativa local (NÃO medição em GPU) da memória dos arrays declarados de mjw.Data/Contact/Constraint para o humanoide, a partir de types.py v3.15.0",
+      "autores": "Investigador Q11",
+      "ano": "2026",
+      "veiculo": "Python 3.13 / mujoco 3.15.0 + types.py do mujoco_warp v3.15.0",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "integral"
+    },
+    {
+      "ref": "F22",
+      "url": "https://developer.nvidia.com/blog/newton-adds-contact-rich-manipulation-and-locomotion-capabilities-for-industrial-robotics",
+      "doi": "",
+      "titulo": "Newton Adds Contact-Rich Manipulation and Locomotion Capabilities for Industrial Robotics",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "NVIDIA Technical Blog (16/03/2026)",
+      "tipo": "blogue",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://developer.nvidia.com/blog/train-a-quadruped-locomotion-policy-and-simulate-cloth-manipulation-with-nvidia-isaac-lab-and-newton",
+      "doi": "",
+      "titulo": "Train a Quadruped Locomotion Policy and Simulate Cloth Manipulation with NVIDIA Isaac Lab and Newton",
+      "autores": "NVIDIA",
+      "ano": "2025",
+      "veiculo": "NVIDIA Technical Blog (29/09/2025)",
+      "tipo": "blogue",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F24",
+      "url": "https://docs.jax.dev/en/latest/installation.html",
+      "doi": "",
+      "titulo": "Installation — JAX documentation (NVIDIA GPU)",
+      "autores": "JAX team",
+      "ano": "2026",
+      "veiculo": "docs.jax.dev",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F25",
+      "url": "https://nvidia.github.io/warp/stable/user_guide/installation.html",
+      "doi": "",
+      "titulo": "Installation — Warp 1.17.0 (CUDA Requirements)",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "NVIDIA Warp documentation",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F26",
+      "url": "https://github.com/NVIDIA/warp/discussions/1886",
+      "doi": "",
+      "titulo": "Warp v1.17.0 release notes (GitHub Discussion #1886)",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "GitHub NVIDIA/warp",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco-mjx/",
+      "doi": "",
+      "titulo": "mujoco-mjx 3.15.0 — PyPI (Requires Python >=3.10; extras warp, dev)",
+      "autores": "Google DeepMind",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/mujoco-warp/",
+      "doi": "",
+      "titulo": "mujoco-warp 3.15.0 — PyPI (wheel py3-none-any; extras dev, cpu, cuda)",
+      "autores": "Newton Developers",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F29",
+      "url": "https://pypi.org/project/jax/",
+      "doi": "",
+      "titulo": "jax 0.11.2 — PyPI (Requires Python >=3.12; extras cuda12, cuda13)",
+      "autores": "JAX team",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F30",
+      "url": "https://pypi.org/project/warp-lang/1.17.0/",
+      "doi": "",
+      "titulo": "warp-lang 1.17.0 — PyPI (wheels py3-none; manylinux_2_28_x86_64)",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "PyPI",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F31",
+      "url": "https://docs.jax.dev/en/latest/gpu_memory_allocation.html",
+      "doi": "",
+      "titulo": "GPU memory allocation — JAX documentation",
+      "autores": "JAX team",
+      "ano": "2026",
+      "veiculo": "docs.jax.dev",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F32",
+      "url": "https://nvidia.github.io/warp/stable/user_guide/interoperability/jax.html",
+      "doi": "",
+      "titulo": "JAX Interoperability — Warp 1.17.0 (jax_callable, graph modes)",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "NVIDIA Warp documentation",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F33",
+      "url": "https://github.com/google-deepmind/mujoco_playground/discussions/197",
+      "doi": "",
+      "titulo": "MuJoCo Playground works with MuJoCo Warp! (in Beta) — Discussion #197",
+      "autores": "btaba (mantenedor do mujoco-mjx)",
+      "ano": "2025",
+      "veiculo": "GitHub google-deepmind/mujoco_playground",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F34",
+      "url": "https://arxiv.org/html/2502.08844v1",
+      "doi": "10.48550/arXiv.2502.08844",
+      "titulo": "MuJoCo Playground",
+      "autores": "Zakka, K.; Tabanpour, B.; Liao, Q.; Haiderbhai, M.; Holt, S.; Luo, J. Y.; Allshire, A.; Frey, E.; Sreenath, K.; Kahrs, L. A.; Sferrazza, C.; Tassa, Y.; Abbeel, P.",
+      "ano": "2025",
+      "veiculo": "arXiv:2502.08844",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F35",
+      "url": "https://arxiv.org/html/2603.14598v1",
+      "doi": "10.48550/arXiv.2603.14598",
+      "titulo": "SmallSatSim: A High-Fidelity Simulation and Training Toolkit for Microgravity Robotic Close Proximity Operations",
+      "autores": "Schwartz, D. et al.",
+      "ano": "2026",
+      "veiculo": "arXiv:2603.14598",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F36",
+      "url": "https://arxiv.org/html/2511.04831v1",
+      "doi": "10.48550/arXiv.2511.04831",
+      "titulo": "Isaac Lab: A GPU-Accelerated Simulation Framework for Multi-Modal Robot Learning",
+      "autores": "NVIDIA e colaboradores (equipa Isaac Lab; ver arXiv:2511.04831)",
+      "ano": "2025",
+      "veiculo": "arXiv:2511.04831",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F37",
+      "url": "https://arxiv.org/html/2601.22074v2",
+      "doi": "10.48550/arXiv.2601.22074",
+      "titulo": "mjlab: A Lightweight Framework for GPU-Accelerated Robot Learning",
+      "autores": "autores do mjlab (ver arXiv:2601.22074)",
+      "ano": "2026",
+      "veiculo": "arXiv:2601.22074",
+      "tipo": "preprint",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F38",
+      "url": "https://github.com/google-deepmind/mujoco_warp/issues/500",
+      "doi": "",
+      "titulo": "Differentiability · Issue #500 · google-deepmind/mujoco_warp",
+      "autores": "thowell (Taylor Howell)",
+      "ano": "2025",
+      "veiculo": "GitHub google-deepmind/mujoco_warp",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F39",
+      "url": "https://github.com/google-deepmind/mujoco_warp/pull/1535",
+      "doi": "",
+      "titulo": "Pull request #1535 · google-deepmind/mujoco_warp (diferenciabilidade híbrida; ligado ao issue #500)",
+      "autores": "colaboradores do mujoco_warp",
+      "ano": "2026",
+      "veiculo": "GitHub google-deepmind/mujoco_warp",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F40",
+      "url": "https://github.com/google-deepmind/mujoco/issues/2259",
+      "doi": "",
+      "titulo": "Issue #2259 · google-deepmind/mujoco — gradientes através do solver (lax.while_loop) no MJX",
+      "autores": "EGalahad",
+      "ano": "2024",
+      "veiculo": "GitHub google-deepmind/mujoco",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F41",
+      "url": "https://huggingface.co/blog/nvidia/how-to-use-nvidia-warp-and-mjwarp",
+      "doi": "",
+      "titulo": "How to Use NVIDIA Warp and MjWarp to Accelerate Robotics Simulation and Learning Workflows",
+      "autores": "NVIDIA",
+      "ano": "2026",
+      "veiculo": "Hugging Face Blog (org. NVIDIA, 06/10/2026)",
+      "tipo": "blogue",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F42",
+      "url": "https://github.com/google-deepmind/mujoco_warp/issues/926",
+      "doi": "",
+      "titulo": "OOM in convex_narrowphase and memory pre-allocation in Data · Issue #926 · google-deepmind/mujoco_warp",
+      "autores": "utilizador do mujoco_warp",
+      "ano": "2025",
+      "veiculo": "GitHub google-deepmind/mujoco_warp",
+      "tipo": "forum",
+      "nivel": "C",
+      "lida": "trechos"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O MJX é uma reimplementação do motor em JAX/XLA que roda em GPU/TPU com mjx.Model/mjx.Data em batch; usam-se mjx.put_model e mjx.make_data.",
+      "veredito": "correta",
+      "correcao": "Correto para o MJX-JAX: reimplementação em JAX/XLA que roda em GPUs NVIDIA/AMD, Apple Silicon e TPUs, com `mjx.put_model(m)` + `mjx.make_data(m)` (ou `mjx.put_data(m, d)`) e `mjx.step`; o batch vem de `jax.vmap`/`jax.jit` (não é automático). Ressalvas de 3.15.0: 'MJX' passou a ser a API JAX com duas implementações (`impl='jax'`, padrão, e `impl='warp'`, GPU NVIDIA/CUDA, CPU só para desenvolvimento); TPU só vale para MJX-JAX; `mujoco-mjx` é pacote separado (F1, F7).",
+      "fontes": [
+        "F1",
+        "F7"
+      ]
+    },
+    {
+      "afirmacao": "O MJX-Warp/MJWarp 'otimiza operações tensoriais em chips CUDA da NVIDIA, sacrificando diferenciações analíticas'.",
+      "veredito": "parcial",
+      "correcao": "Certo que é só NVIDIA/CUDA e que não é diferenciável, mas a descrição é imprecisa: MJX-Warp (`mjx.put_model(m, impl='warp')`) e MJWarp (`import mujoco_warp as mjw`) são APIs distintas sobre o mesmo motor Warp (o MJX embute uma cópia vendorizada em `mujoco.mjx.third_party.mujoco_warp`); o motor não é um compilador de operações tensoriais como o XLA/MJX-JAX: executa kernels CUDA SIMT escritos em Warp (com tiles só para álgebra linear densa, p.ex. Cholesky), com número dinâmico de contatos/restrições. Não há 'diferenciação analítica sacrificada': o MJX-JAX tem autodiff do JAX ('mostly supported'), o MJX-Warp 'does not support automatic differentiation and has no immediate plans' e o MJWarp 'não é diferenciável via Warp' (issue #500; PR #1535 aberta) (F1, F3, F12, F33, F38).",
+      "fontes": [
+        "F1",
+        "F3",
+        "F12",
+        "F33",
+        "F38"
+      ]
+    },
+    {
+      "afirmacao": "MuJoCo CPU 'otimizado para latência' (teleoperação/MPC em tempo real).",
+      "veredito": "correta",
+      "correcao": "A doc do MJWarp diz que o MJWarp é otimizado para throughput e o MuJoCo (C) para latência (tempo de um passo); um passo do MJWarp tende a ser mais lento que um passo do MuJoCo, e o C é preferível para controle online (MPC) e interfaces interativas (F3).",
+      "fontes": [
+        "F3"
+      ]
+    },
+    {
+      "afirmacao": "Tabela do relatório (Humanoid): MJX (JAX) 2,33 milhões de SPS; MJWarp (CUDA/NVIDIA) 2,96 milhões de SPS.",
+      "veredito": "incorreta",
+      "correcao": "Os dois números existem, mas vêm da tabela 'Steps per Second (SPS) for MJX-Warp Graph Modes' da doc do MJX e ambos são MJX-Warp via JAX FFI (graph mode `WARP`): 2,96 M SPS = Humanoid; 2,33 M SPS = cena Aloha Pot (não Humanoid). O MJWarp puro (sem JAX FFI) é 3,35 M (Humanoid) e 2,45 M (Aloha Pot); `WARP_STAGED` 2,67 M/1,96 M; recaptura forçada 0,80 M/0,65 M; hardware não declarado. Não há 2,33 M para MJX-JAX no Humanoid: os valores da doc para 1 humanoide são 650K (CPU M3 Max), 1,8M (CPU AMD 3995WX 64 núcleos), 950K (MJX-JAX, A100, batch 8192) e 2,7M (MJX-JAX, TPU v5 de 8 chips, batch 16384). A frase 'sem recaptura gráfica forçada' vem da linha `WARP` vs 'forced recaptures' do próprio MJX-Warp (F2, F1).",
+      "fontes": [
+        "F2",
+        "F1"
+      ]
+    },
+    {
+      "afirmacao": "A versão sequencial em CPU (inclui mujoco.rollout multithread) 'estrangula' com 4096 instâncias em paralelo.",
+      "veredito": "parcial",
+      "correcao": "`mujoco.rollout` não é sequencial: usa pool de threads e escala com os núcleos (a doc diz que alto throughput exige núcleos rápidos e muitas threads, e que o gargalo típico em RL é a transferência host↔device). Não há colapso em 4096: medido aqui (i9-14900HX, 32 threads, máquina carregada) o humanoide do benchmark rende ~34–40 K SPS com 1 thread e ~0,26–0,29 M SPS com 32 threads (4096×100 passos), ~10x abaixo dos 2,7–3,35 M SPS publicados para Warp; na doc, a CPU AMD 3995WX de 64 núcleos chega a 1,8 M SPS (1 humanoide) (F20, F3, F1).",
+      "fontes": [
+        "F20",
+        "F3",
+        "F1"
+      ]
+    },
+    {
+      "afirmacao": "Domain randomization faz-se enviando modelos com inércia/geometria diferentes via mjx.put_model.",
+      "veredito": "parcial",
+      "correcao": "No MJX-JAX cria-se UM `mjx.Model` com `mjx.put_model` e randomiza-se trocando campos por arrays com dimensão de batch (`model.tree_replace({...})`, p.ex. `geom_friction`, `body_mass`, `body_ipos`, `dof_armature`) e passando `in_axes` ao `jax.vmap` (padrão do Playground: `domain_randomize(model, rng) -> (model, in_axes)`); campos numpy 'estruturais' (p.ex. `jnt_limited`) forçam recompilação se alterados. No MJWarp usa-se `mjw.put_model(mjm, batch_sizes={'dof_damping': 2})` e atribuição de arrays batcheados (índice `worldid % shape[0]`); variar malhas/geometria por mundo exige compilar cada variante no host (`spec.compile()`) e sobrescrever os campos por mundo; mudar um campo pode exigir recapturar o CUDA graph (F1, F15, F3, F18, F37).",
+      "fontes": [
+        "F1",
+        "F15",
+        "F3",
+        "F18",
+        "F37"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Constraint islands no MJWarp: SKILL.md oficial vs docs/código 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "Tabela de backends: 'Constraint Islands' = ❌ No para o MJWarp (e 'Handled monolithically on GPU')."
+        },
+        {
+          "fonte": "F3",
+          "diz": "O MJWarp agrupa corpos em islands independentes (usadas por sleeping e pelo compact solver); existem `mjw.island` e `DisableBit.ISLAND` no código v3.15.0."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "`njmax` em `mjx.put_data` (SKILL.md oficial) vs código MJX 3.15.0",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "`mjx.put_data()` pré-aloca contatos a partir de `data.ncon`; sem `njmax` os contatos 'will be silently ignored'; usar `njmax=500`."
+        },
+        {
+          "fonte": "F7",
+          "diz": "O ramo JAX de `put_data`/`make_data` não usa `njmax`/`naconmax`; só `impl='warp'` os repassa (njmax = restrições por world; naconmax = contatos de todos os worlds)."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "Assinatura de `mjw.put_data` (SKILL.md oficial vs código/docs)",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "Exemplo: `mjw_data = mjw.put_data(model, batch_size)`."
+        },
+        {
+          "fonte": "F8",
+          "diz": "Assinatura real: `put_data(mjm, mjd, nworld=1, nconmax=None, nccdmax=None, njmax=None, njmax_nnz=None, naconmax=None, naccdmax=None, nvmax=None)`; o tutorial usa `mjw.put_data(mj_model, mj_data, nworld=4096)`."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "pmap com MJX-Warp: discussão do Playground (2025) vs changelog 3.4.0",
+      "posicoes": [
+        {
+          "fonte": "F33",
+          "diz": "Caveat (ago/set 2025): 'pmap support is not yet available with MJX-Warp'."
+        },
+        {
+          "fonte": "F11",
+          "diz": "Changelog 3.4.0 (05/12/2025): '``pmap`` now works with MuJoCo Warp from MJX'; a doc 3.15.0 mostra `jax.pmap` com `create_render_context(devices=...)`."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Caminho do benchmark no CLI `mjwarp-testspeed`",
+      "posicoes": [
+        {
+          "fonte": "F3",
+          "diz": "Índice RST: `mjwarp-testspeed benchmark/humanoid/humanoid.xml` (sem 's')."
+        },
+        {
+          "fonte": "F4",
+          "diz": "README: `mjwarp-testspeed benchmarks/humanoid/humanoid.xml` (o diretório do repositório é `benchmarks/`)."
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "CUDA 12 vs CUDA 13 para o JAX no ecossistema MuJoCo",
+      "posicoes": [
+        {
+          "fonte": "F24",
+          "diz": "'We recommend migrating to the CUDA 13 wheels; at some point in the future we will drop CUDA 12 support.'"
+        },
+        {
+          "fonte": "F6",
+          "diz": "Extra `cuda` do mujoco-warp = `jax[cuda12]`; `mjx/cuda_requirements.txt` fixa jax-cuda12-plugin 0.11.1 (Python>=3.13) e warp-lang 1.17.0; wheels Warp do PyPI usam CUDA 12.9."
+        }
+      ],
+      "explicacao_provavel": "data"
+    }
+  ],
+  "lacunas": [
+    "O hardware (GPU/CPU), nworld e versões usados na tabela 'SPS for MJX-Warp Graph Modes' (3.35M/2.96M/2.45M/2.33M) não estão na doc; a página de nightly benchmarks do MJWarp afirma listar a 'workstation', mas o texto da especificação não pôde ser recuperado.",
+    "Não há benchmark independente (fora de NVIDIA/DeepMind) de MJX-JAX vs MJWarp em GPU de consumo/laptop (RTX 4070 Laptop 8 GB); 152x/313x/252x/475x são razões do fabricante (RTX 4090 / RTX PRO 6000), não SPS absolutos.",
+    "O consumo real de VRAM de MJWarp/MJX-Warp (com JAX) na 4070 Laptop não foi medido (nada instalado, por regra do brief); a estimativa de ~0,24–0,48 GiB para humanoide com 4096–8192 worlds vem só dos tipos declarados em types.py e exclui o workspace alocado inline (solver/CCD).",
+    "A coexistência de `jax[cuda13]` com o wheel `warp-lang` 1.17.0 (CUDA 12.9) no mesmo processo (MJX-Warp) não está documentada; o CI/extras do MuJoCo (F17, extra `cuda` do mujoco-warp em F6, extra `cuda` do Playground em F16) fixam `jax[cuda12]`.",
+    "Deriva de versões do Warp: `mujoco-mjx[warp]` 3.15.0 fixa `warp-lang==1.17.0` (F5), enquanto o `pyproject.toml` do Playground (main) exige `warp-lang>=1.18.0` (F16) — possível conflito de resolução ao combinar os dois no mesmo ambiente.",
+    "A qualidade dos gradientes do MJX-JAX ('mostly supported'; issue #2259 aberta desde 2024) não foi testada; o estado da PR #1535 (diferenciabilidade do MJWarp) pode ter mudado depois da consulta.",
+    "Não há artigo revisto por pares para MJX nem para o MuJoCo Warp; a referência acadêmica mais próxima é o preprint do MuJoCo Playground (MJX-JAX, 2025); não foi encontrado paper próprio do MuJoCo Warp."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Qual é o consumo real de VRAM (`mjwarp-testspeed --memory`) e o SPS do humanoide, do Go1 e de uma cena com malhas na RTX 4070 Laptop 8 GB para nworld 1024/4096/8192, em MJWarp nativo e em MJX-Warp (JAX FFI)?",
+      "origem": "quantificacao",
+      "prioridade": "alta",
+      "porque": "É o único modo de responder 'serve?' com dados; nada foi instalado nesta rodada."
+    },
+    {
+      "pergunta": "`jax[cuda13]` + `warp-lang` 1.17.0 (CUDA 12.9) coexistem no mesmo processo para MJX-Warp em Python 3.13 com o driver 610.57, ou é preciso `jax[cuda12]` como no CI do MuJoCo?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "A doc do JAX recomenda CUDA 13, mas o ecossistema MuJoCo ainda fixa CUDA 12; a escolha define o comando de instalação da skill."
+    },
+    {
+      "pergunta": "Que hardware, nworld e versão geraram a tabela de SPS da doc do MJX (3.35M/2.96M/2.45M/2.33M)? Está no commit que introduziu `graph_mode` (d07f39b4) ou nos nightly benchmarks?",
+      "origem": "fonte-nao-usada",
+      "prioridade": "media",
+      "porque": "Sem o hardware, os números não são comparáveis com a 4070 Laptop."
+    },
+    {
+      "pergunta": "Qual é o estado atual da diferenciabilidade do MJWarp (PR #1535) e a qualidade prática dos gradientes do MJX-JAX com `opt.iterations > 1`?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "Decide se otimização baseada em gradiente na GPU é viável com MJWarp."
+    },
+    {
+      "pergunta": "Existe benchmark independente comparando MJX-JAX e MJWarp em GPUs de consumo (RTX 40xx) com SPS absolutos?",
+      "origem": "contra-evidencia",
+      "prioridade": "media",
+      "porque": "Os ganhos (152x–475x) são do fabricante e em GPUs de outra classe."
+    },
+    {
+      "pergunta": "Quais campos de `mjw.Model` aceitam `batch_sizes` para domain randomization e como combinar isso com `mjx.Model.tree_replace`/`in_axes` no MJX-Warp?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "A afirmação do relatório sobre DR estava só parcialmente correta; a skill precisa do procedimento exato."
+    },
+    {
+      "pergunta": "A partir de quantos núcleos de CPU (`mujoco.rollout`) a CPU alcança a GPU num humanoide, e como isso muda com `nworld`?",
+      "origem": "perspetiva",
+      "prioridade": "baixa",
+      "porque": "Quantifica o 'estrangula' do relatório além da máquina medida."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://google-deepmind.github.io/mujoco_warp/nightly/",
+      "porque_pode_importar": "Benchmarks noturnos do MJWarp; a página diz listar a 'workstation' usada (texto não recuperável) e pode dar SPS por cena e hardware."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco_warp/pull/1113",
+      "porque_pode_importar": "PR dos benchmarks do renderizador em lote; pode listar hardware e números por cena."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/commit/d07f39b4",
+      "porque_pode_importar": "Commit que introduziu `graph_mode` no MJX; origem provável da tabela de SPS (pode citar o hardware)."
+    },
+    {
+      "url": "https://arxiv.org/html/2603.25544v1",
+      "porque_pode_importar": "MuscleMimic: throughput vs número de ambientes com MuJoCo Warp numa H100 80GB — curva de escalonamento de nworld."
+    },
+    {
+      "url": "https://arxiv.org/html/2603.12185v1",
+      "porque_pode_importar": "ComFree-Sim usa o MJWarp como baseline em benchmarks; pode trazer SPS independentes."
+    },
+    {
+      "url": "https://zvxbase.com/blog/mjx-jax-to-warp-gpu-sim",
+      "porque_pode_importar": "Blog secundário que reproduz a tabela da doc oficial (3.35M vs 2.96M); não é independente, só confirma a leitura."
+    },
+    {
+      "url": "https://github.com/robomotic/sim-benchmarks/blob/main/MACMJX.md",
+      "porque_pode_importar": "Repositório de benchmarks de terceiros sobre MJX/Warp (não avaliado)."
+    }
+  ],
+  "consultas": [
+    "MuJoCo Warp GPU-accelerated physics engine arXiv paper NVIDIA Google DeepMind MJWarp",
+    "MJX-Warp MuJoCo Playground discussion announcement MuJoCo Warp implementation benchmark",
+    "MuJoCo Playground arXiv open-source framework GPU-accelerated robot learning sim-to-real MJX",
+    "mujoco-mjx 3.15.0 PyPI MuJoCo XLA",
+    "mujoco-warp PyPI MuJoCo Warp release",
+    "MuJoCo Warp MJWarp paper arXiv GPU simulation steps per second humanoid benchmark MJX comparison",
+    "NVIDIA developer blog MuJoCo Warp Newton physics engine Google DeepMind GPU-accelerated simulation speedup over MJX",
+    "NVIDIA Warp installation requirements CUDA driver version minimum pip install warp-lang CUDA 13",
+    "JAX installation NVIDIA GPU pip install jax[cuda13] jax[cuda12] driver version requirement compute capability",
+    "MuJoCo Warp 152x faster than MJX locomotion 313x manipulation RTX 4090 Newton beta NVIDIA blog",
+    "Newton 1.0 general availability MuJoCo Warp 252x 475x MJX RTX PRO 6000 Blackwell",
+    "MuJoCo Warp MJX steps per second humanoid 2.96M 2.33M Aloha pot JAX FFI graph mode",
+    "MJX warp graph_mode WARP_STAGED pull request CUDA graph recapture JAX FFI benchmark humanoid aloha pot GPU",
+    "mujoco_warp issue 500 differentiability Warp automatic differentiation MuJoCo Warp roadmap",
+    "mujoco_warp GPU memory per world out of memory nworld njmax nconmax VRAM RTX 4070 8GB",
+    "MuJoCo Warp Nightly Benchmarks recorded on a workstation with the following specifications GPU CPU",
+    "MuJoCo Warp: GPU-accelerated MuJoCo physics engine paper Warp kernels throughput scaling contacts MJX comparison arXiv 2026",
+    "MJX-JAX maintenance mode deprecated MuJoCo Warp recommended successor MJX JAX implementation future",
+    "mjlab MuJoCo Warp GPU memory requirements num_envs 4096 consumer GPU RTX VRAM",
+    "mujoco mjx warp jax cuda13 warp-lang CUDA 12 runtime conflict same process FFI error install",
+    "mjwarp-testspeed --memory humanoid total memory MiB nworld 8192 device memory MuJoCo Warp memory report",
+    "Warp JAX interoperability jax_callable FFI GraphMode requirements jax version CUDA graph"
+  ],
+  "alertas_seguranca": []
+}

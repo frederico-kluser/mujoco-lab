@@ -1,0 +1,72 @@
+{
+  "Q1": {
+    "notas": [
+      "Correção do crítico: o padrão C++ mínimo para compilar o MuJoCo é C++20 desde a 3.3.7 (changelog); doc/programming/index.rst ainda diz C++17 (documentação desatualizada) — a referência install-linux.md usa C++20.",
+      "Reexecução independente: wheel sem mjpython/.pc/CMake config (E16), tag 3.15.0 sem .pc e com mujocoConfig.cmake.in (W08), estado do AUR (W01) e do PyPI (W02) conferidos nas fontes primárias."
+    ]
+  },
+  "Q2": {
+    "notas": [
+      "Verificado pelo orquestrador: sob XDG_SESSION_TYPE=wayland o pyGLFW carrega glfw/wayland/libglfw.so (só Wayland) e PYGLFW_LIBRARY_VARIANT=x11 carrega a variante X11 (E22); o viewer passivo abriu e rodou 3 s sem erro nesta máquina (avisos benignos libdecor-gtk e OpenGL 0x502). Que o viewer abre janela Wayland nativa é inferência da escolha da biblioteca; FPS, GPU da janela e o Studio não foram medidos."
+    ]
+  },
+  "Q4": {
+    "notas": [
+      "Caso do orquestrador: num prisma triangular com 4 contatos (Euler, dt 2 ms, timeconst 0,01) dampratio ≤ 0,45 não repousa em 8 s e ≥ 0,5 repousa — consistente com a esfera de Q4 (0,2 repousa; 0,1 vibra): o limiar depende da geometria e do número de contatos.",
+      "O «dampratio» do contato (solref) não é o «dampratio» do ATUADOR position/intvelocity/orientation, que a 3.15.0 redefiniu por inércia refletida (E23); NoSlip só mostrou efeito com cone elíptico ou contato único nos testes (sem causa conhecida): não generalize «NoSlip resolve o deslize lento» para o cone piramidal; a regra timeconst ≥ 2·dt (refsafe) foi medida só com Euler, e dt/(timeconst·dampratio) ≥ 2 também injeta energia (Q15)."
+    ]
+  },
+  "Q6": {
+    "notas": [
+      "Reproduzidos pelo orquestrador com outros modelos: D com sinal trocado em mjd_transitionFD com flg_centered=True (E11), pid com ki e slewmax juntos não compila (E21), maxhullvert=3 via MjSpec derruba o processo (E24)."
+    ]
+  },
+  "Q7": {
+    "notas": [
+      "Correção do crítico: são multi-entrada pid, dcmotor e orientation (changelog 3.11.0/3.14.0), e os campos de saída actuator_force/length/velocity/moment têm dimensão nout (outadr/outnum): o acessor por nome erra não só em ctrl. A armadilha em ctrl foi reproduzida (E01)."
+    ]
+  },
+  "Q10": {
+    "confianca": "moderada",
+    "notas": [
+      "Confiança rebaixada pelo crítico: nada foi instalado pelo investigador; versões/dependências foram conferidas depois nas APIs do PyPI (dm_control exige mujoco>=3.15.0 e labmaze sem wheel cp313: W03; mjlab fixa mujoco~=3.11: W04; playground exige Python>=3.11: W05).",
+      "A mudança «dampratio» da 3.15.0 refere-se ao dampratio do ATUADOR position/intvelocity/orientation (inércia refletida; E23), homônimo mas distinto do dampratio de solref do contato (Q4)."
+    ]
+  },
+  "Q11": {
+    "confianca": "alta",
+    "notas": [
+      "O laboratório de GPU mediu nesta RTX 4070 Laptop (8 GB; protocolo e versões em references/gpu-benchmarks.md): no humanoide a 4096 mundos o MuJoCo Warp nativo faz ≈ 1,9 M SPS (370 MiB de VRAM) e o MJX-Warp ≈ 1,8 M; o MJX-JAX 27–87 K (conforme `iterations`); a CPU de 32 threads ≈ 0,20–0,25 M; no pêndulo sem contato até 29,2 M SPS (MJX-Warp, 16384 mundos). Os 2,96 M/3,35 M oficiais não foram reproduzidos (hardware não declarado na doc; aqui 53–60%). A origem de 2,96 M/2,33 M foi confirmada na tabela oficial (D01); jax[cuda12] e jax[cuda13] com warp-lang 1.17/1.18 coexistem no mesmo processo.",
+      "Correção da errata (executada em .venv-gpu): o MJX-JAX aceita `noslip_iterations > 0` SEM erro e o ignora em silêncio (o MuJoCo Warp é que levanta NotImplementedError); `njmax` é ignorado no MJX-JAX; `mjw.put_data(model, batch_size)` não existe; o MuJoCo Warp TEM ilhas (`mjw.island`, `DisableBit.ISLAND`)."
+    ]
+  },
+  "Q12": {
+    "confianca": "moderada",
+    "notas": [
+      "Confiança rebaixada pelo crítico: os dois vereditos «incorreta» vêm de leitura de código (urdf2mjcf não foi executado pelo investigador). Reexecução independente: o PyPI e nenhum dos 14 arquivos .py do repositório mencionam CoACD/V-HACD (W06, W07).",
+      "Reconciliação: o relatório pode referir-se ao fork discoverse-dev/urdf-to-mjcf, que tem --collision-type decomposition com CoACD; para o urdf2mjcf da K-Scale (PyPI 0.2.39, master) as afirmações A12.2 e A12.4 são incorretas (W06, W07)."
+    ]
+  },
+  "Q13": {
+    "confianca": "moderada",
+    "notas": [
+      "Confiança rebaixada pelo crítico: o investigador não executou código Rerun; o redator da referência testou a API num venv descartável (ver references/telemetry-rerun.md). A gravidade em qfrc_bias foi reproduzida (E13); gravcomp e fluido ficam em qfrc_passive."
+    ]
+  },
+  "Q16": {
+    "notas": [
+      "Correção do crítico: a doc de programação diz C++17 mas o changelog 3.3.7 exige C++20; a 3.15.0 muda o dampratio do ATUADOR (inércia refletida), não o do contato.",
+      "O «dampratio» que a 3.15.0 mudou é o do ATUADOR (inércia refletida), não o do solref de contato (E23)."
+    ]
+  },
+  "Q3": {
+    "notas": [
+      "Custos relativos por integrador (1,06×/1,09×/1,93×/3,42×) vêm de uma máquina e de um modelo (humanoide): registre faixa, não valor único; as fontes primárias (Todorov 2012; 2014) não foram lidas."
+    ]
+  },
+  "Q9": {
+    "notas": [
+      "Correção da errata: no MJX-JAX `noslip_iterations > 0` é ignorado em silêncio e no MuJoCo Warp levanta NotImplementedError («não suportam noslip» vale com essas duas semânticas)."
+    ]
+  }
+}

@@ -1,0 +1,959 @@
+{
+  "id": "Q7",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "O MuJoCo 3.15.0 tem um único tipo interno de atuador (`general` = transmissão + dyntype + gaintype + biastype) e 11 atalhos MJCF — motor, position, velocity, intvelocity, damper, cylinder, muscle, adhesion, dcmotor (3.7.0), orientation (3.11.0) e pid (3.12.0) — cujos equivalentes em general foram lidos na doc e confirmados compilando cada um: position e intvelocity usam gainprm=[kp] e biasprm=[0,−kp,−kv], velocity usa biasprm=[0,0,−kv], motor é o próprio padrão (ganho fixo 1, sem bias) e o biasprm só vale com biastype=\"affine\" [F1][F26][F5]. O `dcmotor` é o modelo de motor DC de nível datasheet (R, K=√(Kt·Ke) ou nominal=\"V τ_stall ω0\"; opcionais indutância, térmica, saturação, cogging, atrito LuGre e controlador PID interno), verificado contra τ = K/R·(V−K·ω) (0.5 N·m em stall e 0 a 100 rad/s para nominal=\"12 0.5 100\"), enquanto `pid` e `orientation` são multi-entrada, o que faz nu ≠ nactuator e torna errado o acessor por nome `data.actuator(nome).ctrl` [F4][F35][F36][F9]. Sensores: mjtSensor tem 49 tipos e não existe `imu` (IMU = accelerometer + gyro, mais framequat, no mesmo site); as dimensões foram verificadas por compilação (touch 1; accelerometer, gyro, force e torque 3; framequat e ballquat 4; fromto 6; rangefinder 1 por site ou largura×altura por camera; contact = num × campos; tactile = 3 × vértices) e `noise` não injeta ruído desde 3.1.4 [F28][F1][F5]. Tendões fixed (comprimento = Σ coef·q de juntas escalares; o car.xml usa coef ±0.5 para tração diferencial) e spatial (sites + wrapping só em esfera/cilindro) transmitem a força do atuador, e `gear` escala comprimento, braços de momento, velocidade e força [F1][F11][F29]. Equality válidos: connect (3), weld (6), joint (1), tendon (1), flex, flexvert e flexstrain (distance foi removido em 2.2.2); servem para engrenagens (polycoef), laços fechados macios (ajuste solref/solimp) e mocap+weld, e keyframes guardam time/qpos/qvel(nv)/act/ctrl/mpos/mquat [F2][F1][F31][F32][F33]. Armadilhas verificadas: pid com ki e slewmax juntos não compila em 3.15.0 (contradiz a doc), general com biasprm exige biastype=\"affine\", o ctrlrange de servos está em unidades nativas (rad) e kv pede o integrador implicitfast ou implicit [F27][F34][F37]. Auditoria do relatório: a afirmação sobre músculos/FLV é só parcialmente correta (apenas o atuador `muscle` implementa FLV, `tendon` é geometria) e o exemplo mínimo do `motor` está correto [F3][F30][F34].",
+  "afirmacoes": [
+    {
+      "texto": "O MuJoCo tem um único tipo interno de atuador, `general` (transmissão + dyntype + gaintype + biastype); os atalhos MJCF só preenchem esses campos e o MJCF salvo grava tudo como `general`. Padrões de `general`: dyntype=none, gaintype=fixed, biastype=none, dynprm=[1,0,…], gainprm=[1,0,…], biasprm=[0,…] (10 elementos cada) e gear=\"1 0 0 0 0 0\". Palavras-chave: dyntype ∈ {none, integrator, filter, filterexact, pid, dcmotor, muscle, user}; gaintype ∈ {fixed, affine, muscle, dcmotor, pid, so3, user}; biastype ∈ {none, affine, muscle, dcmotor, so3, user} (enums mjtDyn/mjtGain/mjtBias, com 8/7/6 valores). Força escalar = gain·(act, se há estado, senão ctrl) + bias; no tipo affine, gain = gainprm[0]+gainprm[1]·comprimento+gainprm[2]·velocidade e bias = biasprm[0]+biasprm[1]·comprimento+biasprm[2]·velocidade. O atalho `motor` é `general` com esses padrões (ganho fixo 1, sem bias): força = ctrl.",
+      "fontes": [
+        "F1",
+        "F25",
+        "F26",
+        "F3",
+        "F2",
+        "F6"
+      ],
+      "citacao_literal": "The formula uses the activation state when present, and the control otherwise.",
+      "central": true
+    },
+    {
+      "texto": "`position` ≡ general(gaintype=fixed, gainprm=[kp,0,0]; biastype=affine, biasprm=[0,−kp,−kv]; dyntype=none, ou filterexact com dynprm[0]=timeconst e 1 ativação se timeconst>0); padrões kp=1 e kv=0; `dampratio` (exclusivo com kv; unidades 2·√(kp·m), m = massa refletida em qpos0; 1 = criticamente amortecido) e `inheritrange` (exclusivo com ctrlrange; copia o range da junta/tendão) existem. `velocity` ≡ gainprm=[kv,0,0] e biasprm=[0,0,−kv] (kv padrão 1). `intvelocity` ≡ dyntype=integrator (a ativação é o setpoint de posição; o ctrl é a velocidade do setpoint), gainprm=[kp,0,0], biasprm=[0,−kp,−kv]; desde 3.11.0 actlimited='auto' só liga o clamp quando actrange é dado (verificado: sem actrange, actlimited=False). Em transmissões puramente rotacionais (ball joint; site com refsite) o setpoint é interpretado no círculo.",
+      "fontes": [
+        "F1",
+        "F26",
+        "F10",
+        "F2",
+        "F5"
+      ],
+      "citacao_literal": "This element creates a position servo with an optional first-order filter. The underlying :el:`general` attributes are",
+      "central": true
+    },
+    {
+      "texto": "`damper` (força = −kv·velocidade·ctrl, kv ≥ 0) ≡ general(gaintype=affine, gainprm=[0,0,−kv]; biastype=none; dyntype=none) com ctrllimited=true: ctrlrange é obrigatório e não negativo (sem ele o compilador dá 'invalid control range for actuator'). `cylinder` (pneumático/hidráulico) ≡ dyntype=filter (dynprm[0]=timeconst, padrão 1), gaintype=fixed (gainprm[0]=area, padrão 1; se diameter for dado ele tem precedência: area=π·(d/2)²), biastype=affine (biasprm=bias(3), padrão 0 0 0). Para damper (e qualquer kv) a doc recomenda o integrador implicitfast ou implicit.",
+      "fontes": [
+        "F1",
+        "F26",
+        "F37",
+        "F10"
+      ],
+      "citacao_literal": "This element is an active damper which produces a force proportional to both velocity and control:",
+      "central": true
+    },
+    {
+      "texto": "`muscle` ≡ general(dyntype=muscle, gaintype=muscle, biastype=muscle) com gainprm=biasprm=[range0=0.75, range1=1.05, force=−1, scale=200, lmin=0.5, lmax=1.6, vmax=1.5, fpmax=1.3, fvmax=1.2] e dynprm=[timeconst_ativação=0.01 s, timeconst_desativação=0.04 s, tausmooth=0]. A força é actuator_force = −F0·[FL(L)·FV(V)·act + FP(L)] (gain = FL·FV, bias = FP; L e V normalizados por L0), com F0 = scale/actuator_acc0 quando force<0; verificado em arm26.xml que actuator_force == mju_muscleGain·act + mju_muscleBias (−142.32234) e que mju_muscleDynamics(ctrl=1, act=0.5) = 40.0 (dinâmica de Millard et al. 2013). O ctrl é limitado internamente a [0,1] mesmo sem ctrlrange. O modelo assume tendão inelástico e ângulo de penação 0 e só faz sentido físico em transmissões de tendão ou junta; actuator_lengthrange é calculado pelo compilador a partir de limites de junta/tendão (ou dado em lengthrange).",
+      "fontes": [
+        "F3",
+        "F1",
+        "F26",
+        "F30",
+        "F23",
+        "F24",
+        "F12"
+      ],
+      "citacao_literal": "Comparing to the general form of a MuJoCo actuator, we see that :math:`F_L\\cdot F_V` is the actuator gain and",
+      "central": true
+    },
+    {
+      "texto": "`adhesion` ≡ general(trntype=body, dyntype=none, gaintype=fixed com gainprm=[gain,0,0] (gain padrão 1, em unidades de força), biastype=none) com ctrllimited=true: injeta força normal nos contatos das geoms do body-alvo (dividida igualmente entre os contatos); ctrlrange é obrigatório e não negativo (sem forças repulsivas; sem ele o compilador dá 'invalid control range for actuator'); o comprimento do atuador é sempre 0; para sucção à distância defina gap>0 nas geoms do body (contatos inativos dentro do gap); a adesão passiva por superfície é o atributo geom/adhesion.",
+      "fontes": [
+        "F1",
+        "F26",
+        "F37",
+        "F13"
+      ],
+      "citacao_literal": "This element defines an active adhesion actuator which injects forces at contacts in the normal direction, see",
+      "central": true
+    },
+    {
+      "texto": "`dcmotor` (adicionado em 3.7.0; redesenhado em 3.12.0 com input/controller em espaço de torque) modela um motor DC no nível de datasheet: v = i·R + K·ω e τ = K·i (τ = K/R·(v − K·ω) sem indutância), com dyntype=gaintype=biastype=dcmotor (não segue a estrutura afim gain/bias, exceto no caso sem estado). Layout: gainprm=[R, K, α, T0, kp, ki, kd, Vmax], dynprm=[te, (di/dt)max, R_T, C, T_a, σ0, σ1, slew, Imax], biasprm=[A, Np, φ, τc, τs, ωs]. Parâmetros: resistance (Ω); motorconst=\"Kt Ke\" (K=√(Kt·Ke); Kv→Ke=1/Kv) ou nominal=\"tensão torque_stall vel_vazio\" (K=V/ω0; R=K·V/τ_stall); opcionais inductance=\"L timeconst\" (+1 ativação: corrente), thermal (+1: temperatura), saturation=\"torque corrente taxa_corrente\" (forcerange=±τmax), cogging=\"amplitude polos fase\", lugre=\"rigidez amortecimento coulomb estático stribeck\" (+1: deformação), gear, damping e armature do atuador (damping e armature refletidos ×gear²), input ⊂ {pos vel ff voltage} (padrão 'voltage' = 1 controle; 'none' = passivo, 0 controles) e controller=\"kp ki kd slewmax Imax Vmax\" (ganhos em espaço de torque; Vmax limita a tensão do controlador, não o input voltage).",
+      "fontes": [
+        "F1",
+        "F4",
+        "F26",
+        "F5",
+        "F19",
+        "F10"
+      ],
+      "citacao_literal": "This element creates a DC motor actuator. See the `DC motor technical note <_static/dcmotor.pdf>`__ for complete",
+      "central": true
+    },
+    {
+      "texto": "Comportamento verificado do `dcmotor` em 3.15.0 com nominal=\"12 0.5 100\" (V, N·m de stall, rad/s a vazio): R=2.88 Ω e K=0.12 N·m/A; com V=12 o torque é 0.5 N·m parado, 0.25 N·m a 50 rad/s e 0 a 100 rad/s; com J=0.01 kg·m² a velocidade chega a 99.325 rad/s em 10 s (analítico 99.326, constante mecânica t_m=R·J/K²=2 s); saturation=\"0.3 0 0\" vira forcerange=[−0.3,0.3] e inductance adiciona 1 ativação; input=\"pos vel\" dá 2 controles e acompanha o setpoint de posição (0.5003 rad para 0.5) e input=\"none\" dá nu=0. Quando usar (inferência a partir da nota técnica, que traz mapeamento de datasheet e de Isaac Lab): quando importa a curva torque–velocidade e os limites de tensão/corrente de motor+redutor (sim-to-real); para torque ideal use `motor`, para servo ideal `position`/`pid`. Os parâmetros que criam estados (te, ki, slew, R_T·C, σ0) não podem alternar entre zero e positivo depois de compilar.",
+      "fontes": [
+        "F35",
+        "F4",
+        "F1"
+      ],
+      "citacao_literal": "V=12: force at qvel=0 -> 0.5000, at 50 rad/s -> 0.2500, at 100 rad/s -> 0.00000; nu=1 ctrlspec=8",
+      "central": true
+    },
+    {
+      "texto": "`pid` (novo em 3.12.0; subsume o plugin mujoco.pid) é um controlador PID de um único atuador com setpoints reais: input é um subconjunto de [pos, vel, ff] (padrão \"pos vel\" = 2 controles; entradas ausentes valem 0); força = kp·(u_pos − l) + kv·(u_vel − v) [+ ki·act + ff]. ≡ general(dyntype=none ou pid, gaintype=pid com gainprm=[ki,0,0], biastype=affine com biasprm=[0,−kp,−kv]); com setpoint de velocidade zero é idêntico a `position`. ki>0 liga a integral (+1 ativação, dyntype=pid, exige a entrada pos) com anti-windup imax (dynprm[0]); slewmax>0 limita a taxa do setpoint (+1 ativação, dynprm[1]); há também posrange/velrange/ffrange, dampratio e inheritrange. Verificado: kp=30 ki=4 kv=3 imax=2 → dyn=PID gain=PID bias=AFFINE gainprm[0]=4, biasprm=[0,−30,−3], dynprm[0]=2, ctrlnum=2, ctrlspec=3.",
+      "fontes": [
+        "F1",
+        "F26",
+        "F10",
+        "F21",
+        "F20",
+        "F5"
+      ],
+      "citacao_literal": "This element creates a PID controller with position and velocity setpoint inputs on a single force output, with optional",
+      "central": true
+    },
+    {
+      "texto": "Limitação em 3.15.0 (contradiz a doc de pid): `pid` com ki>0 e slewmax>0 ao mesmo tempo não compila — 'actdim > 1 is only allowed for dyntype user and dcmotor' — tanto em XML quanto via MjSpec.set_to_pid(kp, kv, ki, imax, slewmax); cada recurso isolado compila (ki → na=1; slewmax → na=1). Contorno: usar só um dos dois recursos (o plugin mujoco.pid, que aceita ambos, não foi testado aqui).",
+      "fontes": [
+        "F27",
+        "F1",
+        "F21",
+        "F10"
+      ],
+      "citacao_literal": "XML pid ki+slewmax: ERROR: Error: actdim > 1 is only allowed for dyntype 'user' and 'dcmotor'",
+      "central": true
+    },
+    {
+      "texto": "`orientation` (novo em 3.11.0) é um servo geodésico em SO(3) sobre um ball joint (ou site com refsite): torque = kp·log(q⁻¹·q_alvo) − kv·ω, exato para qualquer combinação de eixos, com 3 saídas de força (no frame filho). ≡ general(trntype=so3, dyntype=none, gaintype=so3 com gainprm=[kp,0,0], biastype=so3 com biasprm=[0,−kp,−kv]); gaintype e biastype têm de ser ambos 'so3' ou nenhum. input=\"expmap\" (padrão; 3 controles, vetor exponencial em rad) ou \"quat\" (4 controles, w-first, normalizado); forcerange limita a NORMA do torque (o limite inferior deve ser 0). Verificado: ctrlnum=3/outnum=3/ctrlspec=1 (expmap) e ctrlnum=4/outnum=3/ctrlspec=2 (quat); nomes das entradas: rx ry rz ou qw qx qy qz.",
+      "fontes": [
+        "F1",
+        "F26",
+        "F5",
+        "F6"
+      ],
+      "citacao_literal": "This element creates an orientation servo: a geodesic PD controller on a relative orientation, targeting a ball",
+      "central": false
+    },
+    {
+      "texto": "Sensores presos a site (dim = nº de valores em sensordata): touch 1 (soma escalar ≥0 das forças normais dos contatos na zona do site, só geoms do mesmo body); accelerometer 3 (aceleração linear do site INCLUINDO gravidade, frame local: em repouso lê +g no z local e em queda livre ≈ 0); velocimeter 3 e gyro 3 (frame local); force 3 e torque 3 (interação entre o body do site e o pai, no frame do site, apontando do filho para o pai; costuma exigir um body 'dummy' soldado); magnetometer 3; rangefinder 1 por site (raio no +Z do site, −1 se não acerta) ou largura×altura por camera (verificado: 4×3 → 12; a câmera olha −Z), com data = dist(1) dir(3) origin(3) point(3) normal(3) depth(1) em ordem fixa (todos = 14); camprojection 2 (pixels, origem no canto superior esquerdo, sem recorte). Estágios verificados: touch/accelerometer/force/torque = ACC, velocimeter/gyro = VEL, magnetometer/rangefinder/camprojection = POS.",
+      "fontes": [
+        "F28",
+        "F1",
+        "F6"
+      ],
+      "citacao_literal": "dims (site-based): touch=1 accelerometer=3 velocimeter=3 gyro=3 force=3 torque=3 magnetometer=3 rangefinder=1 rangefinder_cam=12 rangefinder_all=14 camprojection=2",
+      "central": true
+    },
+    {
+      "texto": "Sensores de junta/tendão/atuador (todos dim 1, exceto ball): jointpos e jointvel (só juntas escalares hinge/slide; copiam qpos/qvel); tendonpos e tendonvel (ten_length/ten_velocity); actuatorpos, actuatorvel e actuatorfrc (actuator_length/velocity/force; a força escalar do atuador, antes do clamp de actuatorfrcrange); jointactuatorfrc (qfrc_actuator da junta: soma de todos os atuadores, e gravcomp se joint/actuatorgravcomp) e tendonactuatorfrc; ballquat 4 (quaternion unitário) e ballangvel 3 (ball joint); sensores de limite: jointlimitpos (= efc_pos − efc_margin; negativo se violado, 0 se não), jointlimitvel, jointlimitfrc e tendonlimitpos/vel/frc (0 se o limite não está violado).",
+      "fontes": [
+        "F28",
+        "F1"
+      ],
+      "citacao_literal": "dims (joint/tendon/actuator): jointpos=1 jointvel=1 tendonpos=1 tendonvel=1 actuatorpos=1 actuatorvel=1 actuatorfrc=1 jointactuatorfrc=1 tendonactuatorfrc=1 ballquat=4 ballangvel=3 jointlimitpos=1 jointlimitvel=1 jointlimitfrc=1 tendonlimitpos=1 tendonlimitvel=1 tendonlimitfrc=1",
+      "central": true
+    },
+    {
+      "texto": "Sensores de frame, subárvore, geometria, contato e globais: framepos 3, framequat 4, framexaxis/frameyaxis/framezaxis 3, framelinvel 3, frameangvel 3, framelinacc 3, frameangacc 3 (objtype ∈ body|xbody|geom|site|camera; reftype/refname opcionais dão o referencial, exceto em framelinacc e frameangacc; body = frame inercial, xbody = frame regular); subtreecom 3, subtreelinvel 3, subtreeangmom 3; insidesite 1 (enclosed=true mede o quanto o objeto sai do site); distance 1, normal 3 e fromto 6 (sensores de colisão independentes do pipeline; cutoff = distância máxima, padrão 0 = só penetração); contact = num × campos (found 1, force 3, torque 3, dist 1, pos 3, normal 3, tangent 3, nessa ordem; reduce ∈ none|mindist|maxforce|netforce; verificado num=3 com 'found force dist normal' → 24); tactile = 3 × nº de vértices da malha (verificado 81 → 243; só contatos com geoms SDF contribuem); e_potential 1, e_kinetic 1, clock 1; user = dim obrigatório (callback mjcb_sensor; needstage pos|vel|acc, padrão acc; datatype real|positive|axis|quaternion); plugin (dim definida pelo plugin, por exemplo touch_grid).",
+      "fontes": [
+        "F28",
+        "F1",
+        "F6"
+      ],
+      "citacao_literal": "dims (geometric/contact/global/user): insidesite=1 distance=1 normal=3 fromto=6 contact_default=1 contact_3x8=24 e_potential=1 e_kinetic=1 clock=1 user=5 (contact_3x8: num=3 x data 'found force dist normal' = 3 x 8)",
+      "central": true
+    },
+    {
+      "texto": "Não existe sensor `imu` (mjtSensor tem 49 tipos, de mjSENS_TOUCH a mjSENS_USER, nenhum IMU): um IMU é gyro + accelerometer (+ framequat com objtype=site e, se quiser, magnetometer) no mesmo site, como nos modelos Skydio X2 e Crazyflie 2 do Menagerie. O atributo `noise` NÃO injeta ruído: desde 3.1.4 o engine removeu o ruído nativo (a flag sensornoise não existe mais; mjtEnableBit = OVERRIDE, ENERGY, FWDINV, INVDISCRETE, SLEEP, DIAGEXACT, IPC) e sensor_noise é só um lugar para guardar o desvio-padrão (verificado: noise=0.5 em repouso lê exatamente 0), então adicione o ruído você mesmo; `cutoff` positivo limita |valor| (gyro de 5 rad/s com cutoff=2 lê 2). Sensores também aceitam nsample/delay/interp/interval (atraso e período de amostragem; verificado: delay=0.004 com dt=0.002 lê 2 passos antes), e accelerometer, force, torque, framelinacc e frameangacc disparam mj_rnePostConstraint.",
+      "fontes": [
+        "F1",
+        "F28",
+        "F17",
+        "F18",
+        "F5",
+        "F3",
+        "F22",
+        "F25",
+        "F38"
+      ],
+      "citacao_literal": "simulate an inertial measurement unit (IMU).",
+      "central": true
+    },
+    {
+      "texto": "Cada atuador tem exatamente uma transmissão (mjtTrn: JOINT, JOINTINPARENT, SLIDERCRANK, TENDON, SITE, BODY, SO3): joint (hinge/slide: comprimento = posição·gear[0]; ball: gear[0:3] = eixo de rotação no frame filho; free: gear[0:3] translação no mundo + gear[3:6] rotação no filho, comprimento 0); jointinparent (idem, eixo no frame do pai); tendon (comprimento = comprimento do tendão × gear); site (gear 6D no frame do site: jatos/hélices; comprimento 0, a menos de refsite, que permite position em espaço cartesiano); body (adhesion); cranksite+slidersite+cranklength (biela-manivela); so3 (orientation). `gear` escala comprimento, braços de momento, velocidade e força (diferente do ganho, que só escala a força); em transmissões escalares só gear[0] é usado; damping e armature do atuador são refletidos por gear². Verificado: motor gear=2 → torque = 2·ctrl (qfrc 1.000 para ctrl 0.5); em tendão fixed com gear=2 e coef (0.5,0.5), ctrl=1 → qfrc_actuator=[1,1] e actuator_length = gear·ten_length.",
+      "fontes": [
+        "F1",
+        "F2",
+        "F6",
+        "F34",
+        "F29"
+      ],
+      "citacao_literal": "This attribute scales the length (and consequently moment arms, velocity and force) of the actuator, for all",
+      "central": true
+    },
+    {
+      "texto": "Limites (a doc diz 'three ways' mas lista quatro): (1) ctrlrange clampa o ctrl (ctrllimited='auto' liga o clamp quando ctrlrange é dado e compiler autolimits=true, o padrão; com autolimits=false, ctrlrange sem ctrllimited é erro — verificado); (2) forcerange clampa a força de saída do atuador (útil em servos de posição; em `orientation` clampa a norma do torque); (3) joint/actuatorfrcrange clampa a SOMA das forças de todos os atuadores na junta escalar (use o sensor jointactuatorfrc; actuatorfrc reporta a força antes do clamp); (4) tendon/actuatorfrcrange idem para tendões (actuatorfrclimited='auto' é o padrão só desde 3.14.0). A flag option/flag/clampctrl=disable desliga o clamp de ctrl globalmente e option/actuatorgroupdisable (bitfield, grupos 0..30) desativa grupos de atuadores (sem força; ativações não integradas). Unidades: ctrlrange e actrange são em unidades nativas (rad), NÃO convertidas de graus mesmo com compiler angle=degree (verificado: position ctrlrange=\"-90 90\" → [−90, 90]).",
+      "fontes": [
+        "F3",
+        "F1",
+        "F37",
+        "F5"
+      ],
+      "citacao_literal": "Actuator forces are usually limited between lower and upper bounds. These limits can be enforced in three ways:",
+      "central": true
+    },
+    {
+      "texto": "Tendão fixed: comprimento = Σ coef_i·q_i sobre juntas ESCALARES (hinge/slide) via <joint joint= coef=/>; o Jacobiano é constante (= coeficientes), então acopla juntas sem geometria: no car.xml os tendões forward (coef 0.5/0.5) e turn (−0.5/0.5), acionados por dois `motor`, dão tração diferencial; no humanoid.xml o tendão hamstring (hip_y 0.5, knee −0.5) é só limitado. Verificado: motor gear=2 em forward → qfrc_actuator=[1,1]; turn → [−0.5,0.5]; ctrlrange=-1 1 clampa ctrl=3 para 1; ten_length = coef·qpos e ten_J = coeficientes. Atributos comuns a fixed e spatial: limited/range (limite por restrição), margin, stiffness (a,b,c polinomial), damping, springlength (1 valor, ou 2 = banda morta; −1 = a partir de qpos0), frictionloss, armature, actuatorfrcrange, solreflimit/solimplimit e solreffriction/solimpfriction.",
+      "fontes": [
+        "F1",
+        "F11",
+        "F14",
+        "F29",
+        "F2"
+      ],
+      "citacao_literal": "This element creates an abstract tendon whose length is defined as a linear combination of joint positions. Recall that",
+      "central": true
+    },
+    {
+      "texto": "Tendão spatial: caminho de comprimento mínimo por <site> (pontos de passagem) e <geom> de wrapping — SOMENTE esfera e cilindro (cilindro tratado como infinito) —, com sidesite (escolhe o lado do wrap; se estiver dentro da geom, o tendão passa por dentro) e <pulley divisor=> (cada ramo é dividido pelo divisor e somado); cada ramo começa e termina em site e duas geoms consecutivas precisam de um site entre elas. Verificado: dois sites a 2 m → ten_length=2.0; com esfera r=0.5 no caminho → 2.25565 (= analítico 2.25564958); geom box como obstáculo dá erro 'is not sphere or cylinder'. arm26.xml usa 6 tendões spatial com `muscle`; um tendão sem atuador com range/springlength [0 X] se comporta como cabo (só puxa quando esticado).",
+      "fontes": [
+        "F1",
+        "F12",
+        "F29",
+        "F3"
+      ],
+      "citacao_literal": "The name of a geom that acts as an obstacle for the tendon path. Only sphere and cylinder geoms can be referenced",
+      "central": true
+    },
+    {
+      "texto": "Equality em 3.15.0 (mjtEq): connect (3 restrições: ponto fixo entre dois bodies; body1+anchor ou site1+site2; body2 omitido = mundo), weld (6: pose relativa; relpose, torquescale — 0 vira connect; ou site1+site2), joint (1: y−y0 = a0+a1(x−x0)+…+a4(x−x0)⁴, polycoef padrão \"0 1 0 0 0\", só hinge/slide; joint2 omitido fixa joint1), tendon (1: idem para comprimentos), flex (1 por aresta), flexvert (2 por vértice; só flex de dimensão 2) e flexstrain (26 por elemento trilinear, 162 por quadrático; só dimensão 3). mjEQ_DISTANCE existe no enum mas é 'unsupported' (removido em 2.2.2). Todos têm active, solref e solimp; mjData.eq_active liga/desliga em runtime (inicial = mjModel.eq_active0). Verificado: os modelos oficiais plate.xml, poncho.xml e strain.xml compilam com mjEQ_FLEX, mjEQ_FLEXVERT e mjEQ_FLEXSTRAIN.",
+      "fontes": [
+        "F2",
+        "F1",
+        "F6",
+        "F25",
+        "F31"
+      ],
+      "citacao_literal": "Distance equality constraints were removed in MuJoCo version 2.2.2. If you are using an earlier version, please",
+      "central": true
+    },
+    {
+      "texto": "Uso de equality: (a) engrenagens/acoplamento — equality joint com polycoef (a1 = razão): verificado j2 = −2·j1 (j2/j1 = −1.9994 com polycoef=\"0 -2 0 0 0\"; com data.eq_active[0]=0 o acoplamento some); active_adhesion.xml acopla juntas com polycoef=\"0 -.5 0 0 0\"; (b) mecanismos fechados — connect fecha laços fora da árvore (2 connects no mesmo par = hinge; ≥3 não colineares ≈ weld, menos eficiente): um quadrilátero articulado de 4 barras fechado por connect dá ângulos (0.5, −0.5, 0.5) e gap 3e-12 m sem gravidade; com gravidade e solref padrão o gap é 2.4e-4 m e com solref=\"0.005 1\" solimp=\"0.95 0.99 0.001\" cai para 8e-6 m (restrições macias); a Robotiq 2F85 do Menagerie usa 2 connect + 1 equality joint com esses solref/solimp. A doc desaconselha representar juntas comuns por equality (mais lento e menos preciso que a árvore cinemática): use para laços e juntas macias. Pegadinha verificada: geoms colidíveis nas pontas do laço geram contato espúrio (gap 1.0e-2 m); desative a colisão entre elos não adjacentes.",
+      "fontes": [
+        "F2",
+        "F31",
+        "F13",
+        "F16",
+        "F1"
+      ],
+      "citacao_literal": "Among other applications, equality constraints can be used to create \"loop joints\", i.e., joints that cannot be modeled",
+      "central": true
+    },
+    {
+      "texto": "Corpo mocap: <body mocap=\"true\"> só vale para filhos diretos do world SEM juntas; a cinemática define a pose a partir de mjData.mocap_pos (nmocap×3) e mjData.mocap_quat (nmocap×4, w-first), cujos padrões são a pose do body no XML (mj_resetData); mjModel.body_mocapid mapeia body→índice (−1 para os demais; verificado [−1,0,−1]). Para a dinâmica o mocap é fixo (o contato com ele não vê velocidade relativa e pode instabilizar); a receita estável é um body dinâmico ligado ao mocap por <weld>, com o compromisso weld×contato ajustado por solref/solimp. Mocap bodies não geram contato com geometria estática nem entre si, e seus filhos têm a filtragem pai-filho padrão. Verificado: weld(target, hand) com mocap_pos=[0.5,−0.2,1.3] e rotação de 0.4 rad em z → o corpo livre chega a erro de 3.7e-4 m em 3 s sob gravidade.",
+      "fontes": [
+        "F3",
+        "F1",
+        "F7",
+        "F32"
+      ],
+      "citacao_literal": "The key thing to understand about mocap bodies is that the simulator treats them as being fixed. We are causing them to",
+      "central": true
+    },
+    {
+      "texto": "<keyframe><key name time qpos qvel act ctrl mpos mquat/>: time (padrão 0), qpos (nq; padrão qpos0), qvel (nv — a doc XMLreference escreve nq por engano; padrão 0), act (na), ctrl (nu), mpos (3·nmocap; padrão body_pos) e mquat (4·nmocap; padrão body_quat). Vetores mais curtos são aceitos e completados com os padrões; mais longos dão erro ('invalid qvel size, expected 7, got 8'). nkey = max(size/nkey, nº de <key>); chaves não definidas têm dados 0, exceto qpos=qpos0. mj_resetDataKeyframe(m, d, key) copia time/qpos/qvel/act/ctrl/mocap_pos/mocap_quat para o mjData (verificado) e os dados ficam em mjModel.key_* (key_qpos (nkey,nq), key_qvel (nkey,nv), key_act, key_ctrl, key_mpos, key_mquat); keyframes não participam da física. Elementos <custom> guardam dados do usuário no mjModel: <numeric name data|size> (m.numeric('nome').data), <text name data> (sem acessor nomeado em Python 3.15.0: use text_data/text_adr/text_size) e <tuple name> com <element objtype objname prm> (m.tuple('nome').objtype/objid/objprm).",
+      "fontes": [
+        "F1",
+        "F8",
+        "F33"
+      ],
+      "citacao_literal": "This is a grouping element for keyframe definitions. It does not have attributes. Keyframes can be used to create a",
+      "central": true
+    },
+    {
+      "texto": "Receitas verificadas em 3.15.0 (hinge, J=0.1 kg·m²): TORQUE — <motor joint= gear= ctrlrange= forcerange=/>: o ctrl é torque (N·m)×gear (o exemplo do relatório, gear=1.0, dá qfrc_actuator=0.5 e qacc=5 para ctrl=0.5). PD — <position kp= kv=/> (ou dampratio) ou, genérico, <general gainprm=\"kp\" biasprm=\"0 -kp -kv\" biastype=\"affine\"/>: o Panda do Menagerie usa gainprm=\"4500\" biasprm=\"0 -4500 -450\" com default dyntype=none, biastype=affine, ctrlrange=±2.8973 (rad) e forcerange=±87; kv=0 oscila (pico 1.60 para alvo 0.8) e dampratio=1 dá kv=2·√(kp·J)=6.3246 sem overshoot. kv pede o integrador implicitfast/implicit (recomendado pela doc): com Euler, kp=100, kv=100, J=0.01 e dt=0.002 diverge (|qpos| máx 2.37e3), enquanto o atributo damping do atuador (implícito até no Euler) é estável. VELOCIDADE — <velocity kv=/> leva qvel até ctrl (kv=5, ctrl=2 → 2.0000 rad/s); <intvelocity> integra o ctrl num setpoint de posição (ctrl=0.5 rad/s → act=0.500 em 1 s; clampado em actrange=±1). O ctrl de servos de posição/velocidade está em unidades nativas (rad, rad/s).",
+      "fontes": [
+        "F15",
+        "F14",
+        "F1",
+        "F34",
+        "F26",
+        "F37"
+      ],
+      "citacao_literal": "<general class=\"panda\" name=\"actuator1\" joint=\"joint1\" gainprm=\"4500\" biasprm=\"0 -4500 -450\"/>",
+      "central": true
+    },
+    {
+      "texto": "Gripper (receita oficial do Menagerie, Franka Panda): <tendon><fixed name=\"split\"> com as duas juntas slide dos dedos (coef 0.5/0.5) + <equality><joint joint1=\"finger_joint1\" joint2=\"finger_joint2\" solimp=\"0.95 0.99 0.001\" solref=\"0.005 1\"/> (espelha os dedos: polycoef padrão \"0 1 0 0 0\") + <general tendon=\"split\" ctrlrange=\"0 255\" forcerange=\"-100 100\" gainprm=\"0.01568627451 0 0\" biasprm=\"0 -100 -10\"/> com biastype=affine herdado do default (kp=100; ctrl 0–255 remapeado para 0–0.04 m: gainprm[0]=0.04·100/255). A Robotiq 2F85 usa a mesma ideia + 2 <connect> (follower/coupler) para o laço fechado. Verificado: com biastype=\"affine\", ctrl=255/128/0 → dedos em 0.0400/0.0201/0.0000 m; SEM biastype (padrão none) o biasprm é ignorado em silêncio e os dedos não servoam (0.0408/0.0406/0.0399). Alternativa por contato: `adhesion` (ctrlrange 0 1) com gap>0.",
+      "fontes": [
+        "F15",
+        "F16",
+        "F34",
+        "F1"
+      ],
+      "citacao_literal": "gainprm=\"0.01568627451 0 0\" biasprm=\"0 -100 -10\"/>",
+      "central": true
+    },
+    {
+      "texto": "Com atuadores multi-entrada (pid: padrão \"pos vel\" = 2 controles; dcmotor: subconjunto de pos/vel/ff/voltage; orientation: 3 ou 4), nu = Σ actuator_ctrlnum ≥ nactuator (nu=13 com 12 atuadores num teste com 1 pid), nout = Σ outnum, e o slot de ctrl do atuador i começa em model.actuator_ctrladr[i]. O acessor por nome `data.actuator('x').ctrl` devolve shape (1,) indexado pelo ID do atuador (o teste upstream afirma `data.ctrl[actuator_id]`), por isso grava no slot ERRADO para atuadores depois de um multi-entrada — verificado: [motor, pid, position] → nu=4, actuator_ctrladr=[0,1,3] e d.actuator('pos').ctrl[:]=99 gravou data.ctrl=[0,0,99,0] (o certo é o índice 3). Use data.ctrl[model.actuator_ctrladr[i] : model.actuator_ctrladr[i]+model.actuator_ctrlnum[i]]; mj_actuatorInputName(m, i, k) dá o nome de cada entrada (pid: pos vel ff; orientation: rx ry rz ou qw qx qy qz; dcmotor: pos vel ff voltage); mj_readCtrl e o histórico de controle (nsample) passaram a usar actuator_ctrlnum[id] valores por amostra em 3.14.0. Para modelos só com atuadores de 1 controle o acessor por nome continua correto.",
+      "fontes": [
+        "F36",
+        "F9",
+        "F5",
+        "F26"
+      ],
+      "citacao_literal": "d.actuator('pos').ctrl[:] = 99 -> data.ctrl=[ 0.  0. 99.  0.] (actuator id=2) ; d.ctrl[actuator_ctrladr[id]=3] = 99 -> data.ctrl=[ 0.  0.  0. 99.]",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "XML Reference (MJCF) - seções actuator, sensor, tendon, equality, keyframe, custom, option e body/mocap (lidas integralmente)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "Computation - Actuation model (transmission, stateful actuators, force generation), Polynomial forces e Constraint model/Equality",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "Modeling - Actuators (shortcuts, force limits, length range, muscles), Sensors, Delays e MoCap bodies",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/dcmotor/dcmotor.tex",
+      "doi": "",
+      "titulo": "MuJoCo DC Motor Model (nota técnica do atuador dcmotor)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "Changelog do MuJoCo (3.15.0 ... 3.1.4)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/include/mujoco/mjtype.h",
+      "doi": "",
+      "titulo": "mjtype.h - enums mjtTrn, mjtDyn, mjtGain, mjtBias, mjtEq, mjtSensor, mjtCtrlInput",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/programming/simulation.rst",
+      "doi": "",
+      "titulo": "Simulation - State and control (mocap_pos/mocap_quat, eq_active, ctrl)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/functions.rst",
+      "doi": "",
+      "titulo": "API Reference - Functions (mj_resetDataKeyframe)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/bindings_test.py",
+      "doi": "",
+      "titulo": "python/mujoco/bindings_test.py - test_named_indexing_actuator_ctrl e testes de atuador multi-entrada (pid)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/python/mujoco/specs_test.py",
+      "doi": "",
+      "titulo": "python/mujoco/specs_test.py - test_actuator_shortname (set_to_motor/position/intvelocity/orientation/pid/velocity/damper/adhesion/dcmotor/muscle)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/car/car.xml",
+      "doi": "",
+      "titulo": "model/car/car.xml - tendões fixed forward/turn acionados por motores (tração diferencial)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/tendon_arm/arm26.xml",
+      "doi": "",
+      "titulo": "model/tendon_arm/arm26.xml - braço de 2 juntas com 6 músculos em tendões spatial",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/adhesion/active_adhesion.xml",
+      "doi": "",
+      "titulo": "model/adhesion/active_adhesion.xml - atuadores adhesion, position, equality joint com polycoef e tendão com polias",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F14",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/model/humanoid/humanoid.xml",
+      "doi": "",
+      "titulo": "model/humanoid/humanoid.xml - motores com gear, tendões fixed hamstring e keyframe",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo 3.15.0 (tag 3.15.0 de github.com/google-deepmind/mujoco; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F15",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/franka_emika_panda/panda.xml",
+      "doi": "",
+      "titulo": "franka_emika_panda/panda.xml - PD via general (gainprm/biasprm), tendão split + equality joint + atuador do gripper",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo Menagerie (github.com/google-deepmind/mujoco_menagerie, ref main; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F16",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/robotiq_2f85/2f85.xml",
+      "doi": "",
+      "titulo": "robotiq_2f85/2f85.xml - tendão split, equality connect (laços fechados) e atuador general do gripper",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo Menagerie (github.com/google-deepmind/mujoco_menagerie, ref main; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F17",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/skydio_x2/x2.xml",
+      "doi": "",
+      "titulo": "skydio_x2/x2.xml - IMU como gyro + accelerometer + framequat no site 'imu'",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo Menagerie (github.com/google-deepmind/mujoco_menagerie, ref main; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F18",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/bitcraze_crazyflie_2/cf2.xml",
+      "doi": "",
+      "titulo": "bitcraze_crazyflie_2/cf2.xml - IMU como gyro + accelerometer + framequat no site 'imu'",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo Menagerie (github.com/google-deepmind/mujoco_menagerie, ref main; espelho local docs/upstream)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F19",
+      "url": "https://mujoco.readthedocs.io/en/stable/XMLreference.html",
+      "doi": "",
+      "titulo": "XML Reference - MuJoCo Documentation (stable): actuator/motor, actuator/adhesion e actuator/dcmotor",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "mujoco.readthedocs.io (versão stable)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F20",
+      "url": "https://github.com/google-deepmind/mujoco/releases/tag/3.12.0",
+      "doi": "",
+      "titulo": "Release 3.12.0 - google-deepmind/mujoco (novo atuador pid)",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub Releases",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F21",
+      "url": "https://github.com/google-deepmind/mujoco/commit/279df98c",
+      "doi": "",
+      "titulo": "Commit 279df98c - Add the pid actuator: setpoint inputs, integral action, slew rate limiting",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "GitHub (google-deepmind/mujoco)",
+      "tipo": "oficial",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F22",
+      "url": "https://mujoco.readthedocs.io/en/3.1.1/XMLreference.html",
+      "doi": "",
+      "titulo": "XML Reference - MuJoCo Documentation (versão 3.1.1, ANTIGA): flag sensornoise",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2024",
+      "veiculo": "mujoco.readthedocs.io (versão 3.1.1)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F23",
+      "url": "https://mujoco.readthedocs.io/en/stable/modeling.html",
+      "doi": "",
+      "titulo": "Modeling - MuJoCo Documentation (stable): Muscles - Relation to OpenSim",
+      "autores": "Google DeepMind (equipe MuJoCo)",
+      "ano": "2026",
+      "veiculo": "mujoco.readthedocs.io (versão stable)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F24",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/23445050",
+      "doi": "10.1115/1.4023390",
+      "titulo": "Flexing computational muscle: modeling and simulation of musculotendon dynamics",
+      "autores": "Millard M, Uchida T, Seth A, Delp SL",
+      "ano": "2013",
+      "veiculo": "Journal of Biomechanical Engineering 135(2):021005",
+      "tipo": "artigo-revisto",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F25",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: enums mjtSensor, mjtGain, mjtBias, mjtDyn, mjtTrn e mjtEq",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F26",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: compilação de cada atalho de atuador (motor, position, velocity, intvelocity, damper, cylinder, muscle, adhesion, dcmotor, pid, orientation, general) e leitura de actuator_gaintype/biastype/dyntype/gainprm/biasprm/dynprm",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F27",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: atuador pid com ki, slewmax e ambos (XML e MjSpec.set_to_pid)",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F28",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: dimensão, estágio e tipo de dado de todos os sensores; noise, cutoff, IMU e acelerômetro",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F29",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: tendões fixed (acoplamento diferencial, gear) e spatial (wrapping)",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F30",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: atuador muscle em arm26.xml vs mju_muscleGain, mju_muscleBias e mju_muscleDynamics",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F31",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: equality joint (engrenagem), connect (4 barras), eq_active e flex*",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F32",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: corpo mocap + weld seguindo mocap_pos/mocap_quat",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F33",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: keyframes, mj_resetDataKeyframe, tamanhos de vetores e elementos custom",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F34",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: receitas motor/position/velocity/intvelocity/gripper e estabilidade de kv",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F35",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: dcmotor (nominal, stall, velocidade a vazio, saturation, inductance, input)",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F36",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: layout de data.ctrl com atuadores multi-entrada e acessor por nome",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F37",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: ctrlrange/ctrllimited/autolimits, unidades e erros de compilação de atuadores",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F38",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: nsample/delay/interval em sensores e atuadores",
+      "autores": "Investigador Q7 (teste local reprodutível)",
+      "ano": "2026",
+      "veiculo": "mujoco 3.15.0 (Python 3.13, .venv local), MUJOCO_GL=egl",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "`<tendon>` e `<actuator>` modelam a anatomia biomecânica de músculos com leis FLV (Force-Length-Velocity) e atuadores elétricos mapeados a transmissões mecânicas das juntas.",
+      "veredito": "parcial",
+      "correcao": "Só o atuador `<muscle>` (dyntype=gaintype=biastype=muscle) implementa FLV: força = −F0·[FL(L)·FV(V)·act + FP(L)], com F0 = scale/actuator_acc0 (scale padrão 200) e ativação com constantes 0.01 s/0.04 s (Millard 2013); verificado que actuator_force == mju_muscleGain·act + mju_muscleBias. `<actuator>` é só o contêiner (11 atalhos + `general`; nenhum além de `muscle` tem FLV) e `<tendon>` NÃO tem lei muscular: fixed = combinação linear de coordenadas de juntas escalares; spatial = caminho de comprimento mínimo por sites, com wrapping apenas em esferas/cilindros e polias, e mola/amortecedor/limites/atrito seco passivos opcionais. O modelo muscular é simplificado (tendão inelástico, sem ângulo de penação), longe de uma anatomia completa. Sobre 'atuadores elétricos': `motor` é fonte ideal de força/torque (sem dinâmica elétrica); a física elétrica (R, K, indutância, back-EMF, saturação, térmica, atrito LuGre) está no `dcmotor` (3.7.0+). Todo atuador é mapeado a uma transmissão, mas 'das juntas' é só um dos 7 tipos (joint, jointinparent, slidercrank, tendon, site, body, so3).",
+      "fontes": [
+        "F3",
+        "F1",
+        "F30",
+        "F26",
+        "F24",
+        "F23",
+        "F25"
+      ]
+    },
+    {
+      "afirmacao": "Exemplo mínimo: `<motor name=\"atuador_principal\" joint=\"junta_motor\" gear=\"1.0\"/>` num hinge, controlado por `data.ctrl`.",
+      "veredito": "correta",
+      "correcao": "Válido em 3.15.0 (o `<motor>` deve estar dentro de `<actuator>` e `joint` deve nomear uma junta existente — em hinge/slide o ctrl é 1 torque/força escalar, enquanto ball/free usam gear 3D/6D; gear=\"1.0\" é redundante porque o padrão é \"1 0 0 0 0 0\"). Verificado: com J=0.1 kg·m², ctrl=0.5 → qfrc_actuator=0.500 N·m e qacc=5.000 rad/s²; gear=2 dobra o torque. Ressalvas: sem ctrlrange o ctrl é ilimitado (com ctrlrange e autolimits=true, o padrão, o clamp é automático; forcerange limita a saída); o motor é torque ideal (sem back-EMF nem limite de velocidade); `data.ctrl[i]` e `data.actuator('atuador_principal').ctrl` são equivalentes enquanto TODOS os atuadores têm 1 controle — com atuadores multi-entrada (pid, dcmotor, orientation) use model.actuator_ctrladr.",
+      "fontes": [
+        "F34",
+        "F1",
+        "F36",
+        "F37"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "pid com ki e slewmax simultâneos: estados de ativação",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "actuator/pid: cada recurso habilitado (slew, integral) adiciona um estado de ativação, na ordem [slew, integral]; mas actuator/general/actdim diz que valores >1 só valem para dyntype user (tipos nativos exigem 0 ou 1)"
+        },
+        {
+          "fonte": "F27",
+          "diz": "No 3.15.0 pid com ki>0 e slewmax>0 não compila ('actdim > 1 is only allowed for dyntype user and dcmotor'), em XML e em MjSpec; cada recurso sozinho compila"
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "tamanho do vetor qvel em <keyframe>/<key>",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "qvel: real(mjModel.nq)"
+        },
+        {
+          "fonte": "F33",
+          "diz": "O compilador exige nv: 'invalid qvel size, expected 7, got 8' (nq=8, nv=7)"
+        }
+      ],
+      "explicacao_provavel": "erro-de-citacao"
+    },
+    {
+      "tema": "quantos tipos de equality existem",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "'There are five types of equality constraints' — lista connect, weld, joint, tendon e distance (removido)"
+        },
+        {
+          "fonte": "F1",
+          "diz": "Lista connect, weld, joint, tendon, flex, flexvert e flexstrain (7); mjtEq tem 8 membros, incluindo mjEQ_DISTANCE 'unsupported'"
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "ruído nativo de sensores (flag sensornoise)",
+      "posicoes": [
+        {
+          "fonte": "F22",
+          "diz": "Doc 3.1.1: a flag sensornoise (padrão disable) habilita ruído gaussiano de média zero somado ao sensordata"
+        },
+        {
+          "fonte": "F5",
+          "diz": "3.1.4 removeu o ruído nativo; noise/sensor_noise é só um lugar para guardar o desvio-padrão (e mjtEnableBit não tem SENSORNOISE em 3.15.0)"
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "lista de atalhos de atuador",
+      "posicoes": [
+        {
+          "fonte": "F3",
+          "diz": "Seção Shortcuts lista 9 atalhos (motor, position, velocity, intvelocity, damper, cylinder, muscle, adhesion, dcmotor)"
+        },
+        {
+          "fonte": "F1",
+          "diz": "Lista 11 atalhos: inclui também pid (3.12.0) e orientation (3.11.0)"
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "formas de limitar a força do atuador",
+      "posicoes": [
+        {
+          "fonte": "F3",
+          "diz": "'These limits can be enforced in three ways', mas a seção descreve quatro mecanismos (ctrlrange, forcerange, joint/actuatorfrcrange e tendon/actuatorfrcrange)"
+        },
+        {
+          "fonte": "F1",
+          "diz": "tendon/actuatorfrcrange e joint/actuatorfrcrange documentados separadamente"
+        }
+      ],
+      "explicacao_provavel": "data"
+    }
+  ],
+  "lacunas": [
+    "Não foi encontrada discussão pública/issue sobre o acessor por nome data.actuator(nome).ctrl com atuadores multi-entrada; o teste upstream (bindings_test.py) codifica shape (1,) indexado pelo ID, então não dá para afirmar se é limitação intencional ou bug a corrigir.",
+    "Não se sabe se a restrição de pid com ki+slewmax simultâneos é intencional, bug ou já corrigida em main (pós-3.15.0); o plugin mujoco.pid, que aceita ambos, não foi testado.",
+    "dcmotor: validado só contra as equações estáticas/mecânicas da nota técnica; térmica, LuGre, cogging, indutância dinâmica e o controlador com slewmax/Imax/Vmax não foram testados, e não há validação externa independente com motores reais.",
+    "Não testados: transmissões slidercrank, site/refsite e ball/free joint com gear (drones: Q8), dinâmica do orientation, adhesion com contato real, sensores contact/tactile em simulação, plugin touch_grid e user com callback, e flexvert/flexstrain além da compilação.",
+    "O suporte de MJX/MJWarp (GPU) a cada atuador (dcmotor, pid, orientation, muscle, adhesion), sensor e equality não foi verificado nesta questão."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Quais atuadores, sensores e tipos de equality são suportados pelo MJX e pelo MuJoCo Warp na 3.15.0 (dcmotor, pid, orientation, muscle, adhesion, tendões spatial, flex*)?",
+      "origem": "aprofundamento",
+      "prioridade": "alta",
+      "porque": "A skill precisa saber quando a receita de CPU não vale na GPU."
+    },
+    {
+      "pergunta": "O acessor por nome data.actuator(nome).ctrl com atuadores multi-entrada é limitação intencional ou bug, e há API recomendada (por exemplo ctrladr/ctrlnum) em 3.15.x ou em main?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "porque": "Muda a convenção 'acesso por nome' do laboratório para pid/dcmotor/orientation."
+    },
+    {
+      "pergunta": "A restrição pid com ki e slewmax juntos (actdim > 1) foi corrigida em main/3.15.x ou é intencional?",
+      "origem": "contradicao",
+      "prioridade": "media",
+      "porque": "A doc do pid promete os dois estados [slew, integral]."
+    },
+    {
+      "pergunta": "Como parametrizar o dcmotor a partir de datasheets reais (nominal vs motorconst/resistance, saturation contínuo vs pico) e quanto ele difere de position/pid em sim-to-real?",
+      "origem": "quantificacao",
+      "prioridade": "media",
+      "porque": "Quantifica quando vale usar o modelo elétrico."
+    },
+    {
+      "pergunta": "Quais valores de solref/solimp e passo de tempo mantêm laços fechados por connect/weld abaixo de 1e-4 m sob carga, e quando preferir a árvore cinemática?",
+      "origem": "quantificacao",
+      "prioridade": "media",
+      "porque": "Os gaps medidos variam de 3e-12 a 2.4e-4 m conforme gravidade e solref."
+    },
+    {
+      "pergunta": "Como reproduzir ruído e latência de sensores de forma reprodutível (semente, filtros) já que o engine removeu o ruído nativo, usando nsample/delay/interval?",
+      "origem": "aprofundamento",
+      "prioridade": "media",
+      "porque": "IMUs e encoders reais precisam de ruído/atraso na simulação de robôs e drones."
+    },
+    {
+      "pergunta": "Como funciona o sensor plugin touch_grid e o tactile (SDF) em termos de dimensão, custo e uso com dedos de gripper?",
+      "origem": "fonte-nao-usada",
+      "prioridade": "baixa",
+      "porque": "Documentados mas só a dimensão do tactile foi verificada."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/2635",
+      "porque_pode_importar": "Uso comunitário de mocap + weld para controlar efetuadores (padrão do FetchEnv do Gymnasium-Robotics); nível D, só ilustra a receita."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/237",
+      "porque_pode_importar": "Discussão histórica (2.1.4) sobre controlar atuadores por Python e o acessor ctrl; pode ajudar a explicar o histórico do indexador por nome."
+    },
+    {
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3705831",
+      "porque_pode_importar": "Texto completo de Millard et al. 2013 com as curvas FL/FV/PE e a dinâmica de ativação em que o muscle do MuJoCo se baseia."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/plugin/actuator/README.md",
+      "porque_pode_importar": "Plugin mujoco.pid (aceita kp, ki, kd, slewmax e imax juntos); contorno possível para a limitação do pid nativo."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/plugin/sensor/README.md",
+      "porque_pode_importar": "Sensor plugin touch_grid (taxels em coordenadas esféricas) para sensoriamento tátil."
+    }
+  ],
+  "consultas": [
+    "MuJoCo actuator dcmotor XML reference general gaintype biastype dyntype  [include-domains mujoco.readthedocs.io,github.com]",
+    "extract https://mujoco.readthedocs.io/en/stable/XMLreference.html --query \"actuator dcmotor pid orientation general dyntype gaintype biastype shortcuts\"",
+    "MuJoCo 3.12 new pid actuator ki slewmax imax activation; orientation actuator geodesic servo ball joint; dcmotor release notes  [include-domains mujoco.readthedocs.io,github.com,pypi.org]",
+    "extract https://github.com/google-deepmind/mujoco/commit/279df98c --query \"pid actuator slewmax ki activation state actdim order slew integral\"",
+    "mujoco pid actuator ki and slewmax together error actdim > 1 is only allowed for dyntype  [include-domains github.com,mujoco.readthedocs.io]",
+    "mujoco python bindings data.actuator(name).ctrl wrong index multi-input actuator actuator_ctrladr nu nactuator  [include-domains github.com,mujoco.readthedocs.io]",
+    "MuJoCo muscle actuator force-length-velocity FLV curve gain bias activation dynamics Millard OpenSim differences tendon elasticity pennation not modeled  [include-domains mujoco.readthedocs.io,github.com,doi.org,asmedigitalcollection.asme.org,pubmed.ncbi.nlm.nih.gov]",
+    "Millard McPhee Kearney 2013 Flexing computational muscle: modeling and simulation of musculotendon dynamics force-length-velocity activation  [include-domains doi.org,asmedigitalcollection.asme.org,pubmed.ncbi.nlm.nih.gov,pmc.ncbi.nlm.nih.gov]",
+    "extract https://pubmed.ncbi.nlm.nih.gov/23445050 --query \"abstract musculotendon models force-length-velocity activation dynamics rigid tendon elastic tendon\"",
+    "extract https://pmc.ncbi.nlm.nih.gov/articles/PMC3705831 --query \"authors Millard Uchida Seth Delp Journal of Biomechanical Engineering 2013 135 021005 rigid-tendon\"",
+    "MuJoCo sensor noise attribute does not add noise to sensordata, noise only stores standard deviation; add Gaussian noise manually IMU gyro accelerometer  [include-domains mujoco.readthedocs.io,github.com,docs.google.com]",
+    "MuJoCo mocap body weld equality constraint end-effector control mocap_pos mocap_quat solref contact limitations  [include-domains mujoco.readthedocs.io,github.com,robotics.farama.org]",
+    "MuJoCo closed kinematic chain four-bar linkage connect equality constraint soft solref solimp drift gear ratio joint equality polycoef  [include-domains mujoco.readthedocs.io,github.com,pypi.org]",
+    "MuJoCo position actuator kp kv unstable high gain Euler integrator implicitfast recommended joint damping vs actuator kv forcerange ctrlrange pitfalls  [include-domains mujoco.readthedocs.io,github.com]"
+  ],
+  "alertas_seguranca": []
+}

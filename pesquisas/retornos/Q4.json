@@ -1,0 +1,767 @@
+{
+  "id": "Q4",
+  "estado": "respondida",
+  "confianca": "alta",
+  "resposta": "No MuJoCo 3.15 o contacto é um constraint «soft» resolvido por otimização convexa (QP com cones piramidais, programa cônico com elípticos), sem a complementaridade estrita do LCP — a doc oficial e um artigo revisto por pares concordam [F1][F9]. Cada linha escalar obedece, aproximadamente, a a_c + d·(b·v + k·r) = (1−d)·a_u com a_ref = −b·v − k·r; para solref positivo (default 0.02 1 = timeconst, dampratio) b = 2/(d_w·timeconst) e k = d(r)/(d_w²·timeconst²·dampratio²), para solref negativo (direto) b = damping/d_w e k = stiffness·d(r)/d_w², e solimp = (d_0, d_w, width, midpoint, power) (default 0.9 0.95 0.001 0.5 2) dá d(r) de d_0 (r=0) a d_w (|r| ≥ width), clampado a [0.0001, 0.9999]; confirmei K, B, I e a_ref em mjData.efc_KBIP, a penetração em repouso a_u(1−d)·timeconst²·dampratio² a 4 dígitos e que refsafe impõe timeconst ≥ 2·timestep [F2][F3][F15][F16]. Entre dois geoms, condim e friction vêm do geom de maior priority ou, em empate, do máximo (elemento a elemento no friction), solref/solimp são média ponderada por solmix (mínimo elemento a elemento se algum solref for direto) e margin/gap somam-se — com a semântica da 3.9.0: força se dist ≤ margin e contacto inativo se margin < dist ≤ margin+gap [F2][F4][F17]. condim só aceita 1/3/4/6 (1/4/6/10 linhas de constraint no cone piramidal, 1/3/4/6 no elíptico) e friction tem 3 números [deslizamento, torsional, rolamento] com os dois últimos em unidades de comprimento; atrito anisotrópico só via <pair> [F1][F3][F18]. O cone é uma opção global (option/cone, default pyramidal) independente do solver; o piramidal é anisotrópico (limite μ/√2 na diagonal), impratio divide o R das linhas de atrito e, nos testes locais, o NoSlip só zerou o deslize com cone elíptico (ou com um único contacto) [F3][F19]. A filtragem usa contype/conaffinity ((c1&a2)||(c2&a1)), exclusão pai-filho (filterparent), <exclude> e <pair> (que contorna esses filtros); não há colisor plane-plane/plane-hfield/hfield-hfield e as malhas colidem como casco convexo [F1][F20][F21].",
+  "afirmacoes": [
+    {
+      "texto": "O contacto do MuJoCo é um constraint «soft» resolvido como otimização convexa, não como LCP: a doc oficial diz que se abandona a restrição estrita de complementaridade do LCP (família de modelos «convex»), que por isso pode ser violada (força e velocidade normais ambas positivas), e que as forças de contacto são a solução global única de um problema convexo (QP com cones piramidais, programa cônico com elípticos); um artigo revisto por pares independente descreve a abordagem de Todorov como formulação dos impulsos por otimização convexa, em contraste com LCP/NCP. Sem atrito o QP é equivalente a um LCP; as diferenças surgem com atrito.",
+      "fontes": [
+        "F1",
+        "F9"
+      ],
+      "citacao_literal": "Many of the advantages of our contact model can be traced to the fact that we drop the strict complementarity constraint",
+      "central": true
+    },
+    {
+      "texto": "Para um constraint escalar a doc (Modeling → Solver parameters) dá a_c + d·(b·v + k·r) = (1 − d)·a_u, com a_c a aceleração restrita, a_u a aceleração sem força de constraint, d∈(0,1) a impedância, v a velocidade e r o desvio de posição (0 nas dimensões de atrito); a_ref = −b·v − k·r. A doc apresenta-a como a dinâmica «aproximada» no espaço do constraint (diagonal aproximada de A calculada em qpos0; caso em que o minimizador sem restrições é admissível), não como identidade exata; b e k não são atributos do XML — derivam de solref e solimp.",
+      "fontes": [
+        "F2",
+        "F1"
+      ],
+      "citacao_literal": "\\ac + d \\cdot (b v + k r) = (1 - d)\\cdot \\au",
+      "central": true
+    },
+    {
+      "texto": "Com solref positivo (formato padrão (timeconst, dampratio), default 0.02 1) a doc define b = 2/(d_w·timeconst) e k = d(r)/(d_w²·timeconst²·dampratio²); no engine, mjData.efc_KBIP guarda o K SEM o fator d(r) (K = 1/(d_w²·timeconst²·dampratio²)), o B e a impedância I, e a_ref = −B·v − K·I·r. Medido com solimp (0.9,0.95,0.001,0.5,2) e penetração 0.0005: K=2770.0831, B=105.2632, I=0.925, K·I=2562.3269 (= k da doc), a_ref=1.28116.",
+      "fontes": [
+        "F15",
+        "F2"
+      ],
+      "citacao_literal": "solref=(0.02,1) solimp=(0.9,0.95,0.001,0.5,2) penetracao=0.0005: efc_KBIP[0]=[K=2770.0831, B=105.2632, I=0.9250] aref=1.28116 | doc: b=2/(dw*tc)=105.2632 ; k=d(r)/(dw^2*tc^2*dr^2)=2562.3269 ; K*I=2562.3269",
+      "central": true
+    },
+    {
+      "texto": "Com solref negativo (formato direto (−stiffness, −damping)) b = damping/d_w e k = stiffness·d(r)/d_w², sem interação entre os dois números; permite restituição perfeita com damping=0 (doc: solref=\"-1000 0\"; medido e≈1.00 numa queda de 0.4 m). Medido em efc_KBIP com solref=(−1000,−10): K=1108.0332 (=stiffness/d_w²), B=10.5263 (=damping/d_w).",
+      "fontes": [
+        "F2",
+        "F15",
+        "F16"
+      ],
+      "citacao_literal": "k &= \\text{stiffness} \\cdot d(r) / d_\\mathrm{w}^2 \\\\",
+      "central": true
+    },
+    {
+      "texto": "solimp tem 5 valores (d_0, d_w, width, midpoint, power), default 0.9 0.95 0.001 0.5 2: a impedância d(r)∈(0,1) vale d_0 em r=0 e d_w para |r| ≥ width (a notação dmin/dmax da pergunta = d_0/d_w; a doc 3.1.6 chama d_w de d_width; a 3.15 usa d_w), com transição sigmoide (power ≥ 1 é o grau do polinómio; midpoint∈(0,1), em unidades de width, é o ponto de inflexão; power=1 dá reta); r é o desvio do constraint — nos contactos r = dist − margin, negativo quando ativo; d é clampado a [mjMINIMP, mjMAXIMP] = [0.0001, 0.9999]. Forma fechada confirmada empiricamente em efc_KBIP[:,2] (18 casos, erro < 1e-14): d = d_0 + y·(d_w − d_0), x = min(|r|/width, 1), y = x^p/midpoint^(p−1) se x ≤ midpoint, y = 1 − (1−x)^p/(1−midpoint)^(p−1) se x > midpoint (y = x se p = 1).",
+      "fontes": [
+        "F2",
+        "F11",
+        "F6",
+        "F15",
+        "F14"
+      ],
+      "citacao_literal": "d(0) = d_0, \\quad d(\\text{width}) = d_\\mathrm{w}",
+      "central": true
+    },
+    {
+      "texto": "Valores por omissão medidos em 3.15.0: geom solref=[0.02, 1.0], solimp=[0.9, 0.95, 0.001, 0.5, 2.0], friction=[1.0, 0.005, 0.0001], condim=3, margin=0, gap=0, priority=0, solmix=1, contype=conaffinity=1; <pair>: friction=[1, 1, 0.005, 0.0001, 0.0001], solreffriction=[0, 0] (= usar solref), condim 3; option: cone=pyramidal (mjCONE_PYRAMIDAL=0), impratio=1, noslip_iterations=0, noslip_tolerance=1e-6, solver Newton; flags nativeccd, multiccd, filterparent e refsafe ligadas (bits de disable a False).",
+      "fontes": [
+        "F14",
+        "F3"
+      ],
+      "citacao_literal": "geom_solref=[0.02, 1.0] geom_solimp=[0.9, 0.95, 0.001, 0.5, 2.0] geom_friction=[1.0, 0.005, 0.0001] geom_condim=3 geom_margin=0.0 geom_gap=0.0 geom_priority=0 geom_solmix=1.0 contype=1 conaffinity=1",
+      "central": true
+    },
+    {
+      "texto": "A regra timeconst ≥ 2·timestep é imposta: a flag refsafe (default enable) faz o solver usar max(solref[0], 2·timestep) em cada constraint ativo. Medido com timestep 0.002 e solref[0]=0.001: refsafe ligado → B=526.3158 (timeconst efetivo 0.004) e a esfera repousa (z=0.09998 m); desligado → B=2105.2632 e a esfera é ejetada (z_final=9.02 m em 2 s). Com o integrador discrete (3.13+) a flag atua de outra forma: substitui linhas mais rígidas do que o timestep resolve pela linha de zero-restituição mais rígida.",
+      "fontes": [
+        "F3",
+        "F2",
+        "F15"
+      ],
+      "citacao_literal": "stabilization. If this setting is enabled, the solver uses max(solref[0], 2*timestep) in place of solref[0]",
+      "central": true
+    },
+    {
+      "texto": "Penetração em repouso com impedância constante (d_0 = d_w = d): formato padrão r = a_u·(1−d)·timeconst²·dampratio²; formato direto r = a_u·(1−d)/stiffness (a_u = aceleração sem constraint, g = 9.81 num apoio). Medido numa esfera de 4.19 kg com d = 0.9: 3.924e-4 m para solref=(0.02,1), 1.5696e-3 m para (0.04,1) e 9.81e-4 m para (−1000,−20), iguais à fórmula a 4 dígitos; dobrar o timeconst quadruplica a penetração.",
+      "fontes": [
+        "F16",
+        "F2"
+      ],
+      "citacao_literal": "repouso, d=0.9 constante, a_u=9.81: solref=(0.02,1) r=3.924000e-04 m (formula a_u(1-d)tc^2 dr^2=3.924000e-04) ; (0.04,1) r=1.569600e-03 (1.569600e-03) ; direto (-1000,-20) r=9.810000e-04 (a_u(1-d)/k=9.810000e-04)",
+      "central": true
+    },
+    {
+      "texto": "Queda de 0.4 m de uma esfera de 4.19 kg (v ≈ 2.8 m/s, dt=0.002, solimp default): com solref=(0.02,1) (amortecimento crítico) não há ressalto e a penetração máxima é 19.86 mm (≫ ≈0.4 mm em repouso); dampratio < 1 quica (e ≈ 0.263 com 0.5; 0.589 com 0.2; 0.729 com 0.1, timeconst 0.02); o formato direto com damping=0 devolve e ≈ 1.004 (energia aproximadamente preservada), com penetração máxima 89.25 mm para stiffness 1000.",
+      "fontes": [
+        "F16",
+        "F2"
+      ],
+      "citacao_literal": "queda 0.4 m (esfera 4.19 kg, v=2.8 m/s), solimp default: solref=(0.02,1) pen_max=19.86 mm sem ressalto | (0.02,0.5) e=0.263 | (0.02,0.2) e=0.589 | (0.02,0.1) e=0.729 | direto (-1000,0) e=1.004 pen_max=89.25 mm",
+      "central": false
+    },
+    {
+      "texto": "Contacto subamortecido (solref=(0.02, dampratio), queda de 0.4 m, T=30 s, solimp default): dampratio=0.5 repousa após 2 saltos (0.524 s), 0.2 após 9 saltos (1.182 s), 0.1 continua a perder contacto (3135 saltos aos 30 s) e 0.05 diverge (|vz|=63.8 m/s) — logo a regra prática «dampratio < ~0,5 nunca repousa» (nota de AGENTS.md do laboratório) não vale para dampratio ≥ 0.2 neste cenário.",
+      "fontes": [
+        "F16"
+      ],
+      "citacao_literal": "solref=(0.02,dr), queda 0.4 m, T=30 s: dr=0.5 2 saltos, repousa aos 0.524 s | dr=0.2 9 saltos, repousa aos 1.182 s | dr=0.1 3135 saltos, ainda quica aos 30 s | dr=0.05 instavel (|vz_final|=63.8 m/s)",
+      "central": false
+    },
+    {
+      "texto": "Mistura de condim e friction entre dois geoms (contacto dinâmico): se um geom tem priority maior usa-se o dele; em empate condim = máximo dos dois (geom sem atrito + geom com atrito dá contacto com atrito, salvo se o sem atrito tiver priority maior) e cada coeficiente de friction = máximo elemento a elemento; cada geom tem 3 coeficientes que o contacto expande para 5 ([μ, μ, torsional, rolamento, rolamento]). Medido: floor (0.3,0.01,0.001) + esfera (0.8,0.002,0.0005) → [0.8, 0.8, 0.01, 0.001, 0.001]; priority=1 no floor → [0.3, 0.3, 0.01, 0.001, 0.001]; condim 1+4 → dim=4; condim 1 com priority=1 → dim=1. (A frase de XMLreference «maximum of the condim values» omite a regra de priority.)",
+      "fontes": [
+        "F2",
+        "F17",
+        "F3"
+      ],
+      "citacao_literal": "higher priority, its friction coefficients are used. Otherwise the **element-wise maximum** of each friction",
+      "central": true
+    },
+    {
+      "texto": "Desde a 3.9.0 (breaking): margin é a inflação geométrica da superfície — força quando dist ≤ margin e d(r) usa r = dist − margin — e gap é um buffer extra de deteção: o contacto é criado se dist < margin + gap e, para margin < dist ≤ margin + gap, fica em mjData.contact como inativo (efc_address = −1, sem força); os margin e os gap dos dois geoms somam-se (soma desde a 3.5.0; priority é ignorada) e margin negativo é permitido com margin + gap ≥ 0. Antes da 3.9.0 o gap era subtraído (força só se dist < margin − gap; migração margin_novo = margin_antigo − gap_antigo); com margin=gap=0 nada muda. Medido: margin=0.01 gap=0 dist=0.005 → ativo (efc_pos=0.005, efc_margin=0.01); margin=0 gap=0.01 dist=0.005 → inativo; margin 0.005+0.005 com dist=0.008 → ativo.",
+      "fontes": [
+        "F4",
+        "F1",
+        "F2",
+        "F10",
+        "F17"
+      ],
+      "citacao_literal": "- **Detection**: contacts are created when ``dist < margin + gap``.",
+      "central": true
+    },
+    {
+      "texto": "Mistura de solref/solimp entre dois geoms: se um geom tem priority maior usa-se o dele; em empate média ponderada por solmix (w1 = solmix1/(solmix1+solmix2)); exceção: se o solref de algum geom for não positivo (formato direto) usa-se o mínimo elemento a elemento, independentemente de solmix. Medido: solmix 3:1 com solref (0.02,1) e (0.04,0.5) → [0.025, 0.875]; solimp (0.9,0.95,0.001,0.5,2) e (0.5,0.6,0.01,0.3,4) com solmix 3:1 → [0.8, 0.8625, 0.00325, 0.45, 2.5]; solref direto (−1000,−10) contra (0.02,1) com solmix 100:1 → [−1000, −10]; solmix=0 num geom anula o seu peso. Armadilha: alterar solref só num geom dá a média com o outro (o piso mantém 0.02 1).",
+      "fontes": [
+        "F2",
+        "F17"
+      ],
+      "citacao_literal": "then the element-wise minimum is used regardless of solmix. This is because averaging solref parameters in different",
+      "central": true
+    },
+    {
+      "texto": "condim aceita apenas 1, 3, 4 ou 6 (0, 2, 5 e 7 dão erro de compilação «invalid condim in geom»; default 3): 1 = só normal (sem atrito), 3 = normal + atrito tangencial (2 eixos), 4 = + torsional (em torno da normal), 6 = + rolamento (2 eixos). Linhas de constraint por contacto: cone elíptico = condim (1/3/4/6); cone piramidal = 1/4/6/10 (2(n−1) arestas), medido em mjData.nefc.",
+      "fontes": [
+        "F1",
+        "F18",
+        "F3"
+      ],
+      "citacao_literal": "``condim = 6`` : 6 for elliptic, 10 for pyramidal",
+      "central": true
+    },
+    {
+      "texto": "O vetor friction de um geom tem 3 números [deslizamento (2 eixos tangentes), torsional (em torno da normal), rolamento (2 eixos)], default [1, 0.005, 0.0001]; torsional e rolamento têm unidades de comprimento (torsional ≈ diâmetro do patch de contacto; rolamento ≈ profundidade da deformação local). Atrito anisotrópico só é possível com <contact><pair> (friction de 5 números, default 1 1 0.005 0.0001 0.0001), que define todas as propriedades do par e ignora as dos geoms (medido: pair condim=6 friction='0.5 0.9 0.02 0.003 0.004' dá dim=6 e friction=[0.5, 0.9, 0.02, 0.003, 0.004] mesmo com priority=5 no floor), com solreffriction próprio.",
+      "fontes": [
+        "F3",
+        "F1",
+        "F2",
+        "F17"
+      ],
+      "citacao_literal": "properties explicitly or through defaults, and the properties of the individual geoms are not used. Anisotropic",
+      "central": true
+    },
+    {
+      "texto": "condim 3 não resiste ao giro em torno da normal nem ao rolamento; condim 4 acrescenta atrito torsional (esfera com ωz0=10 rad/s: 10.0 rad/s após 1 s com condim 3, 0.206 rad/s com condim 4 e torsional 0.005) e condim 6 acrescenta rolamento (vx0=1 m/s: 0.9995 m/s com condim 3; 0.8597 m/s com condim 6 e rolling=0.002). Coeficientes de friction abaixo de mjMINMU=1e-5 são clampados a 1e-5 (friction=0 não zera o atrito; para atrito nulo usa-se condim=1).",
+      "fontes": [
+        "F18",
+        "F6",
+        "F1"
+      ],
+      "citacao_literal": "giro em torno da normal wz0=10 rad/s apos 1 s: condim3=10.0000 condim4=0.2063 rad/s | rolamento vx0=1 m/s apos 1 s: condim3=0.9995 condim6(rolling=0.002)=0.8597 m/s",
+      "central": true
+    },
+    {
+      "texto": "O tipo de cone é global: <option cone=\"pyramidal|elliptic\"/> → mjOption.cone (default pyramidal = mjCONE_PYRAMIDAL 0; mjCONE_ELLIPTIC = 1); não há seleção por geom ou par. É independente do solver (PGS, CG e Newton aceitam ambos; a doc: «a modeling choice rather than an algorithmic choice»); a frase da secção condim («global setting determined by the choice of constraint solver») é texto legado. A doc recomenda experimentar elíptico (mais fiel à física; o piramidal pode ser mais rápido/robusto).",
+      "fontes": [
+        "F3",
+        "F2",
+        "F1",
+        "F10",
+        "F14"
+      ],
+      "citacao_literal": ":at:`cone`: :at-val:`[pyramidal, elliptic], \"pyramidal\"`",
+      "central": true
+    },
+    {
+      "texto": "O cone piramidal tem 2(n−1) arestas (n = condim) e é anisotrópico: com condim 3 e inclinação a 45° dos eixos tangentes do contacto o limite de deslize cai para ≈ μ/√2 (μ=0.5: a caixa começa a deslizar entre 18° e 20°, previsto atan(μ/√2)=19.47°, em vez de 26.57° = atan(μ)); medido v(2 s): piramidal az=45: 18° 0.0010, 20° 0.1990, 22° 0.9314 m/s; piramidal alinhado (az=0): 20° 0.0018, 28° 0.5498; elíptico (az=0/45): 26° 0.0014/0.0014, 28° 0.5540/0.5673 — isotrópico, limiar tan θ = μ.",
+      "fontes": [
+        "F19",
+        "F1"
+      ],
+      "citacao_literal": "mu=0.5, v(2 s) em m/s numa rampa theta (az = direcao da inclinacao vs eixos tangentes do contacto): piramidal az=0: 20deg 0.0018, 28deg 0.5498 | piramidal az=45: 18deg 0.0010, 20deg 0.1990, 22deg 0.9314 | eliptico 26deg az=0/45: 0.0014/0.0014, 28deg: 0.5540/0.5673",
+      "central": true
+    },
+    {
+      "texto": "impratio (default 1) é a razão atrito/normal da impedância para cones elípticos: R_atrito = R_normal/impratio (medido: efc_R=[0.019357, 0.001936, 0.001936] com impratio=10; mu do solver = 0.5/√10) e a doc desaconselha impratio alto com cone piramidal; aumentar impratio reduz o deslize lento sem aumentar μ — numa rampa de 20° (μ=0.5) o creep caiu ∝ 1/impratio (elíptico 8.75e-4 → 8.75e-5 → 8.75e-6 m/s para impratio 1/10/100), embora a doc ressalve que a taxa depende do contacto e não é universal; os modelos oficiais do Menagerie usam cone elíptico com impratio=10 (garras/braços) ou 100 (Unitree Go1/Go2/A1).",
+      "fontes": [
+        "F3",
+        "F19",
+        "F2",
+        "F12",
+        "F13"
+      ],
+      "citacao_literal": "This attribute determines the ratio of frictional-to-normal constraint impedance for elliptic friction cones. The",
+      "central": true
+    },
+    {
+      "texto": "NoSlip é um passo de pós-processamento (noslip_iterations > 0; default 0; noslip_tolerance default 1e-6; a doc sugere 1–3) que re-resolve só as dimensões de atrito com PGS e R = 0, sem resolver um problema único bem definido e podendo instabilizar. Medido numa rampa de 20° (μ=0.5, T=3 s): com cone elíptico reduz |v| de 8.750e-4 para 1.637e-7 m/s (3 iterações); com cone piramidal não alterou |v| de uma caixa (4 contactos) nem de um cilindro (3) (1.800e-3 e 2.399e-3 m/s; igual com CG, PGS e islands desligadas), mas zerou o deslize num contacto único (esfera: max|efc_vel| 6.299e-4 → 3.553e-15). No código 3.15.0 a atualização piramidal mantém fixa a soma de cada par de arestas opostas (f0 = mid+y, f1 = mid−y).",
+      "fontes": [
+        "F19",
+        "F1",
+        "F3",
+        "F2",
+        "F8",
+        "F13"
+      ],
+      "citacao_literal": "rampa 20deg, T=3 s, noslip_iterations 0->3: eliptico caixa |v| 8.750e-04->1.637e-07 m/s ; piramidal caixa (4 contactos) 1.800e-03->1.800e-03 ; piramidal cilindro (3) 2.399e-03->2.399e-03 ; piramidal esfera (1 contacto) max|efc_vel| 6.299e-04->3.553e-15",
+      "central": true
+    },
+    {
+      "texto": "Nas linhas de atrito de um contacto elíptico a posição é r = 0 → K = 0 (sem mola) e a_ref = −B·v com B = 2/(d_w·timeconst_atrito) (solreffriction, default «0 0» = usa solref; só vale para cone elíptico). Medido que a impedância dessas linhas é a MESMA do normal, d(r_normal) (I = 0.745 nas 3 linhas com solimp (0.5,0.99,0.001,0.5,2) e penetração 0.0005, em vez de d_0 = 0.5; efc_R igual nas 3 linhas com impratio=1), enquanto a frase da doc «impedance is always d_0» só se confirmou para frictionloss de junta (I = 0.5).",
+      "fontes": [
+        "F19",
+        "F2",
+        "F3"
+      ],
+      "citacao_literal": "eliptico solimp=(0.5,0.99,0.001,0.5,2) penetracao=0.0005: efc_pos=[-0.0005, 0.0, 0.0] efc_KBIP.I=[0.745, 0.745, 0.745] K=[2550.76, 0.0, 0.0] B=101.0101 efc_R=[0.0817, 0.0817, 0.0817] | frictionloss de junta: I=0.50 (=d_0)",
+      "central": true
+    },
+    {
+      "texto": "Filtro contype/conaffinity (bitmasks inteiros de 32 bits, default 1/1): dois geoms geram contacto dinâmico se (contype1 & conaffinity2) || (contype2 & conaffinity1) for não nulo; testado em 11 combinações (ex.: (1,0)×(1,0) → sem contacto; (1,0)×(0,1) → contacto; (3,0)×(0,2) → contacto; (2,2)×(1,1) → sem contacto).",
+      "fontes": [
+        "F1",
+        "F20",
+        "F3"
+      ],
+      "citacao_literal": "``(contype1 & conaffinity2) || (contype2 & conaffinity1)``",
+      "central": true
+    },
+    {
+      "texto": "Filtros para pares gerados por corpos: geoms do mesmo corpo nunca colidem; pai-filho não colidem por omissão (flag filterparent=enable), exceto se o pai for o world (corpos soldados sem juntas contam como um só); geoms de corpos sem DoF (estáticos/mocap) não geram contacto entre si; <contact><exclude body1 body2/> remove todos os pares entre dois corpos; <pair> contorna contype/conaffinity e o filtro pai-filho (medido: ncon 0→1) e não é anulado por <exclude> do mesmo par (ncon=1); até geoms do mesmo corpo colidem se listados num <pair> (ncon=1).",
+      "fontes": [
+        "F1",
+        "F5",
+        "F3",
+        "F20"
+      ],
+      "citacao_literal": "The two geoms cannot belong to the same body. Furthermore, they cannot belong to a parent and a child body, unless",
+      "central": true
+    },
+    {
+      "texto": "Pares geom×geom: plane-plane não é suportado (doc) e mj_maxContact devolve 0 também para plane-hfield e hfield-hfield; plane e hfield colidem com sphere/capsule/ellipsoid/cylinder/box/mesh (hfield até mjMAXCONPAIR=50 contactos). Máximos medidos por mj_maxContact (engine_collision_driver.c: «maximum number of contacts that can be generated between two geoms»; nativeccd e multiccd ligados por omissão — multiccd desde a 3.8.0, nativeccd desde a 3.3.0): plane-sphere 1, plane-capsule 2, plane-ellipsoid 1, plane-cylinder/box/mesh 4, sphere-qualquer 1, capsule-capsule 2, cylinder-cylinder 4, box-box 8, mesh-mesh 4. Discrepância: a tabela da doc dá capsule-box = 2 mas mj_maxContact devolve 4 (em 20 000 poses aleatórias nunca se observaram mais de 2 contactos).",
+      "fontes": [
+        "F1",
+        "F21",
+        "F7",
+        "F4",
+        "F14"
+      ],
+      "citacao_literal": "check. This is usually the case but there are exceptions (for example plane-plane collisions are not supported),",
+      "central": true
+    },
+    {
+      "texto": "Para colisão as malhas — mesmo não convexas — são substituídas pelo seu casco convexo (qhull); heightfields são tratados como prismas triangulares; objetos côncavos devem ser decompostos em geoms convexos (primitivos ou malhas) no mesmo corpo (ex.: CoACD). Medido: uma esfera largada sobre o entalhe de uma malha em L não convexa (12 vértices, 20 faces) repousa em z=1.0996 m, sobre o casco convexo, em vez de cair ao chão (z=0.1 m).",
+      "fontes": [
+        "F1",
+        "F21"
+      ],
+      "citacao_literal": "the user can be non-convex, and are rendered as such. For collision purposes however they are replaced with their convex",
+      "central": true
+    }
+  ],
+  "fontes": [
+    {
+      "ref": "F1",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/computation/index.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Computation (Constraint model, Contact, Constraint solver, Collision detection) [secções de contacto lidas integralmente]",
+      "autores": "Google DeepMind (equipa MuJoCo; E. Todorov et al.)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F2",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/modeling.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Modeling (Solver parameters, Contact parameters, Contact override, Solver settings, Tips) [secções de contacto lidas integralmente]",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F3",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/XMLreference.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — XML Reference (option, option/flag, body/geom, contact/pair, contact/exclude)",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F4",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/changelog.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Changelog (3.15.0 … 2.1.0; entradas 3.9.0 margin/gap, 3.5.0 soma de margin/gap, 3.8.0 multiccd, 3.3.0 nativeccd)",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F5",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/overview.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — Overview (Surprising Collisions; Softness and slip)",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F6",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/doc/APIreference/APIglobals.rst",
+      "doi": "",
+      "titulo": "MuJoCo 3.15.0 — API Globals (Engine constants: mjMINMU, mjMINIMP, mjMAXIMP, mjMAXCONPAIR)",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "MuJoCo documentation (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F7",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_collision_driver.c",
+      "doi": "",
+      "titulo": "engine_collision_driver.c (3.15.0): tabela mjCOLLISIONFUNC e mj_maxContact",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "Código-fonte MuJoCo (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F8",
+      "url": "https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_solver.c",
+      "doi": "",
+      "titulo": "engine_solver.c (3.15.0): solNoSlip (pares de arestas piramidais, R subtraído, terminação por noslip_tolerance)",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2026",
+      "veiculo": "Código-fonte MuJoCo (google-deepmind/mujoco, tag 3.15.0)",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F9",
+      "url": "https://proceedings.mlr.press/v211/zhong23a/zhong23a.pdf",
+      "doi": "",
+      "titulo": "Improving Gradient Computation for Differentiable Physics Simulation with Contacts",
+      "autores": "Zhong, Y. D. et al.",
+      "ano": "2023",
+      "veiculo": "Proceedings of Machine Learning Research, vol. 211 (L4DC 2023)",
+      "tipo": "artigo-revisto",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F10",
+      "url": "https://www.roboti.us/book/computation.html",
+      "doi": "",
+      "titulo": "MuJoCo Computation (documentação legada, MuJoCo 2.x): margin/gap antigos e frase sobre cone determinado pelo solver",
+      "autores": "Roboti LLC / E. Todorov",
+      "ano": "n.d. (MuJoCo 2.x)",
+      "veiculo": "MuJoCo documentation (versão legada em roboti.us)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F11",
+      "url": "https://mujoco.readthedocs.io/en/3.1.6/modeling.html",
+      "doi": "",
+      "titulo": "MuJoCo 3.1.6 — Modeling (solimp: d_0, d_width, width, midpoint, power; clamp [mjMINIMP, mjMAXIMP])",
+      "autores": "Google DeepMind (equipa MuJoCo)",
+      "ano": "2024",
+      "veiculo": "MuJoCo documentation (versão 3.1.6)",
+      "tipo": "documentacao",
+      "nivel": "A",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F12",
+      "url": "https://github.com/google-deepmind/mujoco_menagerie/blob/main/unitree_go2/README.md",
+      "doi": "",
+      "titulo": "MuJoCo Menagerie — Unitree Go2 (README): contactos amaciados e impratio aumentado para reduzir deslize (go2.xml: cone elliptic, impratio 100)",
+      "autores": "Google DeepMind (MuJoCo Menagerie)",
+      "ano": "2026",
+      "veiculo": "Repositório google-deepmind/mujoco_menagerie (main)",
+      "tipo": "documentacao",
+      "nivel": "B",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F13",
+      "url": "https://github.com/google-deepmind/mujoco/issues/3328",
+      "doi": "",
+      "titulo": "Regularized friction never sticks: a pinched capsule at 20–95× Coulomb static margin creeps through (issue #3328, mujoco 3.8.1)",
+      "autores": "Autor do issue (utilizador); sem identificação verificada",
+      "ano": "2026",
+      "veiculo": "GitHub issue (google-deepmind/mujoco)",
+      "tipo": "forum",
+      "nivel": "D",
+      "lida": "trechos"
+    },
+    {
+      "ref": "F14",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: valores por omissão de geom/pair/option, flags e constantes (m.geom_*, m.pair_*, m.opt.*)",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F15",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: fórmulas do soft constraint em mjData.efc_KBIP/efc_aref (K, B, I), forma de d(r) em 18 casos, clamp [0.0001, 0.9999], refsafe ligado/desligado, formato direto",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F16",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: esfera a cair/repousar/quicar com solref padrão e direto (penetração em repouso vs fórmula; ressalto; dampratio)",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F17",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: margin/gap (regimes ativo/inativo/sem contacto), soma entre geoms, priority, solmix, condim/friction/solref/solimp combinados e <pair>",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F18",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: nº de linhas efc por condim e cone, condim inválidos, atrito torsional/rolamento, clamp mjMINMU",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F19",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: rampa com cone piramidal vs elíptico (anisotropia), impratio (R, mu, creep), noslip_iterations, impedância das linhas de atrito elípticas",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F20",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: filtros de colisão: contype/conaffinity, pai-filho, filterparent, <exclude>, <pair>, corpos estáticos",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    },
+    {
+      "ref": "F21",
+      "url": "https://pypi.org/project/mujoco/3.15.0/",
+      "doi": "",
+      "titulo": "Execução local de mujoco 3.15.0: matriz de colisão por mj_maxContact (8 tipos), capsule×box por amostragem, malha não convexa colidindo como casco convexo",
+      "autores": "Investigador Q4 (execução local, Python 3.13, mujoco 3.15.0)",
+      "ano": "2026",
+      "veiculo": "Teste empírico no mujoco instalado (.venv), sem rede nem janelas",
+      "tipo": "oficial",
+      "nivel": "A",
+      "lida": "integral"
+    }
+  ],
+  "auditoria_relatorio": [
+    {
+      "afirmacao": "O MuJoCo reformula o contacto como otimização convexa com 'soft contacts', ao contrário dos motores LCP de complementaridade estrita; tolera interpenetrações subtis.",
+      "veredito": "correta",
+      "correcao": "Correto. A doc oficial (Computation → Soft contact model) diz que o MuJoCo abandona a restrição estrita de complementaridade do LCP (a complementaridade pode ser violada) e que as forças de contacto são a solução única de um problema convexo (QP para cones piramidais; programa cônico para elípticos); sem atrito o QP é equivalente a um LCP — as diferenças surgem com atrito. A penetração não é «subtil» por construção: é regida por solref/solimp/margin (≈0.4 mm em repouso com os defaults numa esfera de 4.19 kg, mas 19.86 mm no impacto a 2.8 m/s com solref=(0.02,1)).",
+      "fontes": [
+        "F1",
+        "F9",
+        "F16"
+      ]
+    },
+    {
+      "afirmacao": "A dinâmica do constraint obedece a a1 + d·(b·v + k·r) = (1 − d)·a0, com d = impedância, k = rigidez, b = amortecimento.",
+      "veredito": "correta",
+      "correcao": "Correto, com ressalva: é a equação de Modeling → Solver parameters, a_c + d·(b·v + k·r) = (1−d)·a_u (a1 = aceleração restrita; a0 = aceleração sem força de constraint), que a doc dá como dinâmica «aproximada» (diagonal aproximada de A em qpos0; caso em que a força sem restrições é admissível); r = dist − margin nos contactos (0 nas dimensões de atrito). b e k não são atributos: derivam de solref/solimp — padrão: b = 2/(d_w·timeconst), k = d(r)/(d_w²·timeconst²·dampratio²); direto: b = damping/d_w, k = stiffness·d(r)/d_w². O engine guarda K sem o fator d(r) (a_ref = −B·v − K·I·r). Confirmado: penetração em repouso r = a_u(1−d)·timeconst²·dampratio² a 4 dígitos.",
+      "fontes": [
+        "F2",
+        "F15",
+        "F16",
+        "F1"
+      ]
+    },
+    {
+      "afirmacao": "`solimp` 'determina a impedância espacial do material variando entre limites estritos (d0 e d_width)'.",
+      "veredito": "parcial",
+      "correcao": "Parcial. solimp são 5 números (d_0, d_w, width, midpoint, power; default 0.9 0.95 0.001 0.5 2), não só dois: d(r) vai de d_0 (r=0) a d_w (|r| ≥ width) com sigmoide controlada por midpoint e power; r é o desvio do constraint (nos contactos, dist − margin) e d é clampado a [0.0001, 0.9999]. d_0 e d_w são os valores em r=0 e |r| ≥ width, não «limites estritos» (d_0 pode exceder d_w); «d_width» é a notação da doc 3.1.6 (a 3.15 usa d_w). É propriedade do constraint, não do «material», combinada entre dois geoms por priority/solmix, e vale para todas as linhas do contacto (as linhas de atrito de contactos elípticos usam a impedância do normal, medido).",
+      "fontes": [
+        "F2",
+        "F11",
+        "F6",
+        "F15",
+        "F19",
+        "F17"
+      ]
+    },
+    {
+      "afirmacao": "`solref` define 'constante de tempo (timeconst) e rácio de amortecimento (dampratio)'.",
+      "veredito": "parcial",
+      "correcao": "Parcial. Só no formato padrão (ambos positivos; default 0.02 1): (timeconst, dampratio), com timeconst = 1/(ζ·ω_n) e dampratio=1 = amortecimento crítico (<1 quica, >1 sobreamortecido). Com valores negativos é o formato direto (−stiffness, −damping), recomendado para identificação de sistemas e para restituição. timeconst deve ser ≥ 2·timestep (a flag refsafe, ativa por omissão, usa max(solref[0], 2·timestep)); nas linhas de atrito de cones elípticos r ≡ 0, só conta o timeconst (solreffriction, default '0 0' = usa solref); entre dois geoms o solref é média ponderada por solmix (mínimo se algum for direto).",
+      "fontes": [
+        "F2",
+        "F3",
+        "F15",
+        "F17",
+        "F19"
+      ]
+    },
+    {
+      "afirmacao": "Os cones de fricção podem ser elípticos ou piramidais, configuráveis globalmente.",
+      "veredito": "correta",
+      "correcao": "Correto: <option cone=\"pyramidal|elliptic\"/> (mjOption.cone) é global, default pyramidal (mjCONE_PYRAMIDAL=0; mjCONE_ELLIPTIC=1); não há seleção por geom ou par, e é independente do solver (PGS/CG/Newton aceitam ambos — a frase da doc «determined by the choice of constraint solver» é legado). A doc recomenda experimentar elíptico. Medido: linhas de constraint por contacto (condim 3: 4 piramidal vs 3 elíptico); o cone piramidal é anisotrópico (limite μ/√2 na diagonal); impratio/NoSlip/solreffriction fazem mais sentido (ou só funcionam bem) com elíptico.",
+      "fontes": [
+        "F3",
+        "F2",
+        "F1",
+        "F19",
+        "F14"
+      ]
+    },
+    {
+      "afirmacao": "condim: 1 = sem atrito (só normal); 3 = tangencial (2 eixos); 4 = + torsional (pneu parado no asfalto); 6 = + rolamento (2 eixos) para esferas/cilindros.",
+      "veredito": "correta",
+      "correcao": "Correto no essencial: 1 = só normal, 3 = + 2 eixos tangenciais, 4 = + torsional (em torno da normal), 6 = + rolamento (2 eixos). Precisões: só 1/3/4/6 são válidos (2 e 5 dão erro de compilação); default 3; os coeficientes torsional (0.005) e de rolamento (0.0001) têm unidades de comprimento e vêm no vetor friction de 3 números [deslizamento, torsional, rolamento] (5 no <pair>); condim 6 não é exclusivo de esferas/cilindros — serve para qualquer par (ex.: pneu/estrada); entre dois geoms condim e friction vêm do de maior priority ou, em empate, do máximo. Medido: condim 3 não resiste ao giro em torno da normal (10.0 rad/s mantidos), condim 4 sim (→0.206 rad/s em 1 s), rolamento só com condim 6.",
+      "fontes": [
+        "F1",
+        "F3",
+        "F2",
+        "F18"
+      ]
+    }
+  ],
+  "contradicoes": [
+    {
+      "tema": "Semântica de margin/gap",
+      "posicoes": [
+        {
+          "fonte": "F10",
+          "diz": "MuJoCo 2.x: o contacto é registado quando dist < margin e as forças só são geradas quando a distância normal é inferior a margin − gap."
+        },
+        {
+          "fonte": "F4",
+          "diz": "Desde a 3.9.0: o contacto é criado se dist < margin + gap; a força é gerada só se dist ≤ margin; margin < dist ≤ margin + gap fica inativo (efc_address = −1)."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "O que determina o tipo de cone de fricção",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "Secção condim: «a global setting determined by the choice of constraint solver» (elliptic solvers vs pyramidal solvers) — texto que já existia nas docs 2.x (F10)."
+        },
+        {
+          "fonte": "F2",
+          "diz": "«The choice between pyramidal and elliptic friction cones is a modeling choice rather than an algorithmic choice»; F3 e a medição (F14) mostram option/cone independente do solver."
+        }
+      ],
+      "explicacao_provavel": "data"
+    },
+    {
+      "tema": "Impedância das linhas de atrito dos contactos elípticos",
+      "posicoes": [
+        {
+          "fonte": "F2",
+          "diz": "Friction (Modeling): nas linhas de atrito de cones elípticos «the impedance is always d_0 (solimp[0])» porque d(r) é avaliada em r=0."
+        },
+        {
+          "fonte": "F3",
+          "diz": "impratio: «solimp determines a single impedance value for all contact dimensions, which is then modulated by this attribute»."
+        },
+        {
+          "fonte": "F19",
+          "diz": "Medido em efc_KBIP/efc_R: as 3 linhas de um contacto elíptico têm a impedância do normal d(r_normal)=0.745 (não d_0=0.5); só o frictionloss de junta usa d_0."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    },
+    {
+      "tema": "Regra de condim entre dois geoms",
+      "posicoes": [
+        {
+          "fonte": "F3",
+          "diz": "body/geom/condim: a dimensionalidade do contacto dinâmico é «the maximum of the condim values of the two participating geoms» (sem mencionar priority)."
+        },
+        {
+          "fonte": "F2",
+          "diz": "Contact parameters: se um geom tem priority maior usa-se o seu condim; em empate, o máximo."
+        },
+        {
+          "fonte": "F17",
+          "diz": "Medido: floor condim=1 com priority=1 + esfera condim=4 → dim=1; sem priority → dim=4."
+        }
+      ],
+      "explicacao_provavel": "definicao"
+    },
+    {
+      "tema": "Máximo de contactos de um par capsule-box",
+      "posicoes": [
+        {
+          "fonte": "F1",
+          "diz": "Tabela de colisores: capsule × box = primitive, máximo 2 contactos."
+        },
+        {
+          "fonte": "F21",
+          "diz": "mj_maxContact(capsule, box) devolve 4; em 20 000 poses aleatórias nunca se observaram mais de 2 contactos."
+        }
+      ],
+      "explicacao_provavel": "desconhecida"
+    }
+  ],
+  "lacunas": [
+    "Causa de o NoSlip não alterar as forças com cone piramidal em corpos de 2–4 contactos (no despejo de forças uma aresta de cada par já estava em 0 e a atualização mantém a soma do par fixa — pistas, não confirmadas; sem fonte oficial que descreva a limitação).",
+    "Não li o código que calcula a impedância das linhas de atrito (mj_makeImpedance): a divergência entre a doc («impedance is always d_0») e a medição em contactos elípticos (impedância do normal) não foi confirmada no código.",
+    "Só testei o integrador Euler (default); a regra timeconst ≥ 2·timestep e a flag refsafe sob implicit/implicitfast/RK4 e sobretudo sob o novo integrador discrete (3.13+, que trata as linhas de constraint implicitamente) não foram medidas.",
+    "A escala 1/impratio do creep foi medida só numa rampa (μ=0.5, 20°); a doc ressalva que não existe taxa universal. Não medi o efeito de solimp/solref no creep.",
+    "Suporte em MJX e MuJoCo Warp de pares geom×geom e dos parâmetros (solimp/solref, margin/gap da 3.9, condim 4/6, cone elíptico, noslip) não foi verificado.",
+    "Não testei colisões com heightfield/SDF/flex, margens positivas em malhas (multiccd legado com até 5 contactos), adhesion/surfacevel, sleeping nem o comportamento de plane-hfield por simulação (só mj_maxContact).",
+    "Não consultei o texto integral do relatório original (§2.3 e §2.4): a auditoria cobre apenas as seis afirmações listadas no brief."
+  ],
+  "novas_perguntas": [
+    {
+      "pergunta": "Por que noslip_iterations não altera as forças de contacto com cone piramidal em corpos com 2–4 contactos no MuJoCo 3.15 (soma fixa por par de arestas, aresta em 0)? É limitação de design ou bug, e há correção/ressalva oficial?",
+      "origem": "contra-evidencia",
+      "prioridade": "media",
+      "porque": "Afeta a receita anti-deslize (garras, pneus): hoje só o cone elíptico mostrou efeito do NoSlip nos testes."
+    },
+    {
+      "pergunta": "No código (mj_makeImpedance), as linhas de atrito dos contactos elípticos usam mesmo a impedância do normal d(r_normal)? A secção Friction do Modeling está desatualizada?",
+      "origem": "contradicao",
+      "prioridade": "media",
+      "porque": "Define o significado real de solimp[0] e de impratio para o ajuste de contactos de garras e pés."
+    },
+    {
+      "pergunta": "Quais pares de colisão e parâmetros de contacto (solimp/solref, margin/gap 3.9, condim 4/6, cone elíptico, impratio, noslip, priority/solmix) são suportados em MJX e MuJoCo Warp 3.15 e com que diferenças?",
+      "origem": "perspetiva",
+      "prioridade": "alta",
+      "porque": "O laboratório pode escalar em GPU; a receita de contacto do experimento de demonstração tem de valer também aí."
+    },
+    {
+      "pergunta": "Receita de contacto para pneus (Q9): como combinar condim 4/6, friction anisotrópico via <pair>, solref/solimp e impratio num pneu de veículo, e quão bem a penetração/rolamento medidos batem com o esperado?",
+      "origem": "aprofundamento",
+      "prioridade": "alta",
+      "porque": "Pneus são o caso de uso do condim 4/6 citado no relatório e dependem da mistura de parâmetros entre geoms."
+    },
+    {
+      "pergunta": "Quantificar numa garra simulada o efeito de condim 4, cone elíptico, impratio e solimp na estabilidade do grasp (experimento de demonstração).",
+      "origem": "quantificacao",
+      "prioridade": "media",
+      "porque": "A doc recomenda estes ajustes mas não dá números; o Menagerie usa impratio 10–100."
+    },
+    {
+      "pergunta": "Como se comportam a regra timeconst ≥ 2·timestep e a flag refsafe com os integradores implicit, implicitfast, RK4 e discrete (3.13+)?",
+      "origem": "atualidade",
+      "prioridade": "media",
+      "porque": "O discrete muda a semântica de refsafe e pode permitir timeconst < 2·timestep; fronteira com Q3."
+    },
+    {
+      "pergunta": "Qual é o máximo real de contactos do par capsule-box (tabela da doc 2 vs mj_maxContact 4)?",
+      "origem": "contradicao",
+      "prioridade": "baixa",
+      "porque": "Dimensionamento de buffers/nconmax e expectativas de estabilidade em capsule-box."
+    }
+  ],
+  "fontes_nao_usadas": [
+    {
+      "url": "https://github.com/newton-physics/newton/issues/3559",
+      "porque_pode_importar": "Relato independente de que, após alinhar a semântica de margin/gap (Newton #2980, mujoco_warp 3.10), pares mesh-mesh deixaram de gerar resposta de contacto no pipeline MuJoCo do Newton; útil para integrações/MJWarp e migração de modelos com margin/gap."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/656",
+      "porque_pode_importar": "Explicação intuitiva de impratio em cones elípticos («razão entre a capacidade do solver de impedir deslize e de impedir penetração»); fonte de fórum — só serve como corroboração da doc."
+    },
+    {
+      "url": "https://github.com/google-deepmind/mujoco/discussions/63",
+      "porque_pode_importar": "Mantenedor: os defaults de contacto são «bastante moles» (muita penetração, forças grandes, divergência); sugere reduzir solref em todos os geoms e/ou o timestep."
+    },
+    {
+      "url": "https://mujoco.readthedocs.io/en/stable/mjx.html",
+      "porque_pode_importar": "Limitações de colisão no MJX (colisões entre malhas convexas por SAT, limites de vértices) — relevante para escalar em GPU; pertence a outra pergunta."
+    },
+    {
+      "url": "https://cris.technion.ac.il/en/publications/simulation-tools-for-model-based-robotics-comparison-of-bullet-ha",
+      "porque_pode_importar": "Erez, Tassa e Todorov (ICRA 2015): comparação revista por pares entre motores (incl. o modelo de contacto do MuJoCo); só li o registo da publicação."
+    }
+  ],
+  "consultas": [
+    "search: \"MuJoCo soft contact solref solimp impedance timeconst dampratio constraint stiffness damping\" [--include-domains mujoco.readthedocs.io,github.com]",
+    "extract: https://mujoco.readthedocs.io/en/stable/modeling.html --query \"Solver parameters solimp solref timeconst dampratio direct format mixing rules solmix priority friction condim\"",
+    "search: \"Todorov Convex and analytically-invertible dynamics with contacts and constraints: Theory and implementation in MuJoCo\" [--preset academico]",
+    "search: \"Todorov 2014 MuJoCo contact model convex optimization soft constraints instead of linear complementarity problem LCP\"",
+    "search: \"MuJoCo noslip_iterations has no effect pyramidal cone NoSlip elliptic only slip\"",
+    "search: \"MuJoCo margin gap semantics changed contact detection threshold Newton physics margin gap\"",
+    "search: \"MuJoCo contype conaffinity bitmask collision filtering explained parent child exclude pair\"",
+    "search: \"MuJoCo solref timeconst at least two times timestep instability refsafe\"",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/656 --query \"impratio friction slip elliptic cone maintainer answer\"",
+    "extract: https://github.com/newton-physics/newton/issues/3559 --query \"margin gap semantics change mesh-mesh collision MuJoCo\"",
+    "extract: https://github.com/google-deepmind/mujoco/discussions/63 --query \"solref timeconst timestep instability maintainer\"",
+    "extract: https://www.roboti.us/book/computation.html --query \"margin gap contact detection condim friction solref\"",
+    "search: \"Erez Tassa Todorov Simulation tools for model-based robotics: Comparison of Bullet, Havok, MuJoCo, ODE and PhysX\"",
+    "search: \"MJX MuJoCo XLA collision geom pair types supported limitations mesh convex contact\"",
+    "search: \"MuJoCo non-convex mesh collision uses convex hull decomposition CoACD V-HACD multiple geoms same body\"",
+    "search: \"MuJoCo pyramidal friction cone approximation anisotropic versus elliptic cone friction coefficient direction dependence\"",
+    "extract: https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_solver.c --query \"mj_solNoSlip noslip PGS friction rows pyramidal elliptic contact cone\" (3 consultas com queries distintas)",
+    "extract: https://github.com/google-deepmind/mujoco/blob/3.15.0/src/engine/engine_collision_driver.c --query \"mj_maxContact maximum number of contacts geom pair capsule box mjCOLLISIONFUNC table\"",
+    "extract: https://proceedings.mlr.press/v211/zhong23a/zhong23a.pdf --query \"MuJoCo contact model convex optimization relaxation complementarity soft constraint Todorov\"",
+    "extract: https://mujoco.readthedocs.io/en/3.1.6/modeling.html --query \"solimp five numbers dmin dmax width midpoint power impedance function clamps mjMINIMP\"",
+    "search: \"mujoco noslip_iterations pyramidal cone no effect issue slip box multiple contacts elliptic required\" [--include-domains github.com,mujoco.readthedocs.io]",
+    "extract: https://github.com/google-deepmind/mujoco/issues/3328 --query \"noslip_iterations pyramidal cone slip creep elliptic impratio results maintainer response\""
+  ],
+  "alertas_seguranca": []
+}

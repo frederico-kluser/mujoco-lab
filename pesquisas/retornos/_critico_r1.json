@@ -1,0 +1,254 @@
+{
+  "lacunas": [
+    {
+      "pergunta": "Qual receita de instalação da pilha GPU (uv + Python 3.13 + CachyOS + driver NVIDIA 610.57) realmente roda MJX-JAX, MJX-Warp e MuJoCo Warp na RTX 4070 Laptop de 8 GB — versões fixadas de jax (cuda12 × cuda13) e warp-lang (CUDA 12.9) no mesmo processo, pré-alocação de 75 % da VRAM pelo JAX com o compositor já ocupando memória, escolha da dGPU no laptop híbrido — e quanto de VRAM e de passos/s rende num humanoide e num modelo simples (mjwarp-testspeed --memory; nworld 1k–8k; divergência float32 × motor C)?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "pai": "Q11",
+      "porque": "C11 exige a adequação a uma RTX 4070 de 8 GB, mas a resposta é estimativa própria não medida (0,24–0,48 GiB só de arrays declarados, sem o workspace de solver/CCD); nada foi instalado (regra do brief); a mistura jax[cuda13] + Warp CUDA 12.9 'não está documentada e deve ser testada'; os SPS publicados não declaram hardware e as razões 152×/313×/252×/475× são do fabricante (RTX 4090/PRO 6000); 13 fontes de nível B e nenhum benchmark independente em GPU de consumo/laptop (a perspectiva ML/RL só foi ouvida via fabricante). Sem isso a skill escreveria uma receita de GPU não testada. Exige autorização para um venv de teste; senão, gravar como NÃO-VERIFICADO na memória."
+    },
+    {
+      "pergunta": "O viewer interativo (mujoco.viewer launch/launch_passive) funciona em KDE Wayland nativo com NVIDIA híbrida? Medir glfw.get_platform() após glfw.init(), qual GPU renderiza a janela (iGPU Intel × RTX 4070), FPS e custo de viewer.sync(), origem e benignidade dos avisos 'OpenGL error 0x502' e 'libdecor-gtk', coexistência com MUJOCO_GL=egl no mesmo processo e quando recorrer a PYGLFW_LIBRARY_VARIANT=x11; incluir o renderer Filament offscreen em NVIDIA/Linux (o wheel traz mujoco.rendering.filament e o sample render.cc da 3.13 suporta Filament e classic).",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "pai": "Q2",
+      "porque": "C2 pede o caminho recomendado para viewer interativo e para headless: só o headless EGL foi verificado empiricamente (nível A). O viewer repousa em evidência indireta (pyGLFW escolhe a variante Wayland com XDG_SESSION_TYPE=wayland), contradiz a premissa de contexto (XWayland) e já foi gravado no AGENTS.md como fato; nenhuma janela foi aberta (regra do brief), o custo real de viewer.sync() em KDE Wayland + RTX 4070 continua por medir (Q6) e a perspectiva 'praticante Linux/Arch' tem só 6 fontes C/D em Q2 e nenhuma issue/discussão de usuários sobre Wayland+NVIDIA. Filament só aparece via Studio, embora o brief o liste entre os backends. Requer autorização do usuário para abrir janela ou um script de smoke test que ele mesmo rode."
+    },
+    {
+      "pergunta": "Quais pacotes do ecossistema (dm_control 1.0.48, Gymnasium 1.4.0 [mujoco], MuJoCo Playground, Brax, robot_descriptions, mujoco-menagerie) resolvem e passam um smoke test no Python 3.13 do laboratório com mujoco 3.15.0 via uv — e o que precisa de um venv Python 3.12 (labmaze sem wheel cp313?, classifiers do Playground 3.11–3.12, jax/warp-lang)? Quais são as 3 das 99 scenes da Menagerie que não compilam no 3.15.0 e por quê?",
+      "origem": "atualidade",
+      "prioridade": "alta",
+      "pai": "Q10",
+      "porque": "O laboratório usa Python 3.13 com uv. Q10 (confiança alta) admite que nada foi instalado: só há declarações de metadados e um teste de compilação com malhas sintéticas. 'labmaze sem wheels 3.13 → usar 3.12' vem de um guia do TorchRL (nível B) e de uma issue de 03/2025, sem confirmação direta no PyPI — evidência possivelmente obsoleta em out/2026; o suporte de Playground/jax/warp-lang a 3.13 não foi confirmado; as 3 cenas que falham não são identificadas. Dá para checar a resolução sem instalar (uv pip compile / --dry-run) antes de um smoke test. dm_control e Gymnasium foram lançados no mesmo dia da 3.15.0: maturidade mínima."
+    },
+    {
+      "pergunta": "Quais das 62 afirmações da matriz sobrevivem à verificação adversarial e como se resolve cada uma das 74 contradições (decisão, versão testada, teste mínimo reprodutível)? Consolidar uma tabela de errata 'documentação × comportamento do 3.15.0', incluir na matriz as descobertas novas de maior risco do dossiê (MIMO, pid ki+slewmax, FD centered, NoSlip, default class, visual repetido), preencher §8 (limitações) e §9 (metodologia) e triar as ~99 'novas perguntas propostas' (sem id).",
+      "origem": "contra-evidencia",
+      "prioridade": "alta",
+      "pai": "brief",
+      "porque": "Matriz: 62/62 linhas com 'Verificação adversarial' = '—'; 59 'alta' e 3 'moderada' (nenhuma rebaixada); 7 linhas com 1 só fonte independente (A3.1, A5.5, A11.1, A11.2, A11.3, A12.6, A16.1); a matriz cobre só as afirmações do relatório do usuário, não as descobertas novas do dossiê. Contradições: 74/74 'por resolver na ronda 2', inclusive as que o FAQ já resolveu por teste (visual repetido, default class de topo, replicate, condim, mjd_transitionFD) sem registrar a decisão. §8 está vazia, §9 só tem marcadores e há 107 lacunas abertas após uma única ronda. A errata doc≠comportamento é o ativo mais valioso para a skill e hoje existe só espalhada em prosa."
+    },
+    {
+      "pergunta": "Quais afirmações do relatório técnico do usuário (docs/relatorio-tecnico-original.md) ainda não foram auditadas? Produzir um inventário seção → afirmação → veredito → texto corrigido (tabelas §2.2/§2.4/§5.1, fórmula §2.3, código completo do §4, §5.2, §6), lendo o relatório inteiro e não apenas as 62 afirmações extraídas para os sub-briefs.",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "pai": "brief",
+      "porque": "Q6 declara que não consultou o relatório e que reconstruiu o snippet do §4 a partir de 7 afirmações; C3, C4 e C8 pedem a correção da tabela §2.2, a fórmula §2.3, a tabela §2.4 e a tabela §5.1, mas o dossiê entrega vereditos por afirmação, sem tabela corrigida nem mapa de cobertura. O que não foi extraído entrará na memória CoALA como não auditado — e o objetivo (3) do brief é justamente corrigir o relatório antes de virar conhecimento persistente."
+    },
+    {
+      "pergunta": "Quais são exatamente actuator_ctrlnum e actuator_outnum de cada atalho do 3.15 (pid, dcmotor, orientation, muscle, cylinder, adhesion…; dependem da configuração, p.ex. input/ki/slewmax?) e quais acessores nomeados e campos desalinham quando nu ≠ nactuator ≠ nout — ctrl, actuator_force, ctrlrange/ctrllimited, act, length, gainprm — com um teste mínimo por campo e o estado em main?",
+      "origem": "contra-evidencia",
+      "prioridade": "alta",
+      "pai": "Q7",
+      "porque": "Q7 cita só pid e orientation como multi-entrada; o changelog 3.14.0 (mj_readCtrl) e Q16 listam pid, dcmotor e orientation; o changelog 3.11.0 diz que nu = Σctrlnum dimensiona mjData.ctrl e nout = Σoutnum dimensiona mjData.actuator_force, logo o slot errado não se limita a data.actuator().ctrl (a FAQ só trata ctrl). É uma regra crítica e silenciosa (já fixada no AGENTS.md e no lab.mjkit só para ctrl) sem fonte oficial sobre ser intencional ou bug; Q7 admite não ter achado issue."
+    },
+    {
+      "pergunta": "Os comportamentos tipo bug do 3.15.0 achados por um único teste local se reproduzem com um segundo modelo e estão abertos ou corrigidos em main/3.15.x (issues, PRs, 'Upcoming version' do changelog)? (a) mjd_transitionFD com flg_centered=True devolve D com sinal trocado — e A, B, C?; (b) pid com ki e slewmax juntos não compila; (c) maxhullvert 0 ou 3 via MjSpec derruba o processo; (d) NoSlip sem efeito com cone piramidal em 2–4 contatos.",
+      "origem": "fonte-unica",
+      "prioridade": "alta",
+      "pai": "Q6",
+      "porque": "São 'fatos' fortes que a skill copiaria, mas cada um assenta em um teste, sem causa nem fonte oficial (contradições classificadas 'desconhecida'): (a) corrompe silenciosamente LQR/MPC se for real e é um falso bug se for artefato do teste (actuatorfrc, kp=5); (b) e (c) podem ser limitações intencionais ou já corrigidas. A 3.15.0 saiu 2 dias antes do dossiê e o ritmo é de ~3 semanas por versão minor (3.9.0 em 27/05/2026 → 3.15.0 em 05/10/2026), quase todas com 'Breaking API changes': datar cada achado com a versão testada e checar main antes de virar conhecimento."
+    },
+    {
+      "pergunta": "Qual é a lista item a item de quebras 3.0→3.15 que afetam código e modelos antigos — gerada mecanicamente de docs/upstream/mujoco/doc/changelog.rst e testada — começando pelo dampratio redefinido na 3.15.0 (atributo dampratio dos atuadores position/intvelocity/orientation; efeito numérico nas 11 pastas da Menagerie que o usam e em modelos antigos), sem confundi-lo com o dampratio de solref do contato?",
+      "origem": "lacuna",
+      "prioridade": "alta",
+      "pai": "Q16",
+      "porque": "C16 pede a lista de mudanças e quebras 3.0→3.15; Q16 entrega uma condensação por faixa de versão e admite que a tabela item a item deve ser gerada do changelog local. Q10 e Q16 citam 'dampratio redefinido' sem dizer o quê (conferi no changelog 3.15.0, item 3: a inércia refletida passa a ser a inércia de espaço operacional (J M⁻¹ Jᵀ)⁻¹ em qpos0; cadeias multi-elo ficam menos amortecidas) e o termo é homônimo do dampratio de solref (Q4): risco de a skill misturá-los. Os modelos da Menagerie declaram versão mínima ≤3.3.0, logo foram ajustados antes dessa mudança."
+    },
+    {
+      "pergunta": "A qual ferramenta e versão o §6 do relatório se refere (urdf2mjcf da K-Scale 0.2.39, o fork discoverse-dev/urdf-to-mjcf ou outra) e as afirmações de 'nivelamento algébrico' da inércia e de 'CoACD com class=decomposed_collision' são de fato falsas para ela? Executar o conversor (venv de teste) num URDF real e rodar o pipeline CoACD→MJCF (threshold, nº de hulls, tempo, estabilidade do contato, maxhullvert) numa malha côncava.",
+      "origem": "fonte-unica",
+      "prioridade": "alta",
+      "pai": "Q12",
+      "porque": "Dois vereditos 'incorreta' (A12.2, A12.4) assentam na leitura do master da K-Scale (1 commit após a tag) e num blog da v0.2.2; o conversor nunca foi executado; o fork com --collision-type decomposition (coacd como dependência) não foi lido e a linha 'Decomposição convexa no urdf2mjcf' está 'por resolver' — o veredito pode estar errado ou deveria ser 'depende da versão/fork'. A decomposição recomendada (CoACD) nunca foi rodada: só peças convexas montadas à mão. Q12 tem confiança 'alta' sem execução."
+    },
+    {
+      "pergunta": "Qual é o catálogo de falhas de iniciante (sintoma → causa → correção) que a FAQ não cobre: modelos em escala ou unidades extremas (solimp width de 1 mm, timeconst, timestep, float32), tunneling de geoms finos ou rápidos (margin, dt, espessura), erros de compilação MJCF mais frequentes (massa/inércia mínimas, A+B≥C, malha com <4 vértices, graus × radianos), estouro de contatos/arena (mjWARN_CONTACTFULL; nconmax/naconmax no Warp) e ciclo de vida do Renderer (close(), contextos EGL, multiprocess, profundidade/segmentação, offwidth/offheight)?",
+      "origem": "lacuna",
+      "prioridade": "media",
+      "pai": "Q14",
+      "porque": "Q14 cobre divergência numérica e avisos, mas não escala/unidades (Q5 diz só 'unidades não impostas'), tunneling, catálogo de erros de compilação nem armadilhas do Renderer; admite que não há regra para frictionloss/margin/gap e testou razão de massa num único par de caixas. São as falhas que um iniciante mais encontra; o brief também não tem critério C* para render/vídeo — lacuna por construção."
+    },
+    {
+      "pergunta": "O que o código-fonte do tag 3.15.0 e as fontes primárias nomeadas no brief mostram sobre os pontos 'não li o código': impedância das linhas de atrito (mj_makeImpedance), algoritmo e limites do NoSlip, escolha de contatos plano–malha (mjc_PlaneConvex), inércia legacy/exact e checagem de orientação, parser/compilador (defaults, shellinertia, visual, XSD), engine_passive (fluido) — e o que acrescentam Todorov 2012/2014 e os artigos MJX/MuJoCo Warp/Playground?",
+      "origem": "fonte-nao-usada",
+      "prioridade": "media",
+      "pai": "Q4",
+      "porque": "≥6 lacunas em 5 nós (Q4, Q5, Q8, Q15, Q16) dizem que o código não foi lido porque src/ não está no espelho local (só python/, mjx/, plugin/, model/, wasm/, include/), e várias contradições 'desconhecida' dependem dele. O brief exige Todorov 2012/2014 e os artigos MJX/Warp: Q3 admite não ter lido o ICRA 2014 (a busca só devolveu trabalhos que o citam), logo o modelo de contato se apoia na doc oficial e em trabalhos que citam Todorov. Sugestão: estender sync_docs.py para espelhar src/ do tag 3.15.0."
+    },
+    {
+      "pergunta": "O padrão mínimo MuJoCo→Rerun (rr.init, rr.set_time(duration=data.time), Transform3D com quaternion xyzw convertido de [w x y z] ou mat3x3 a partir de xmat, Arrows3D de forças de contato no frame do mundo, rr.Scalars, rr.save headless) executa sem erro no rerun-sdk 0.38.1 e produz a cena esperada? Qual é a ordem real de composição mat3x3 × translation em Transform3D?",
+      "origem": "fonte-unica",
+      "prioridade": "media",
+      "pai": "Q13",
+      "porque": "C13 exige o 'padrão correto de logging', mas nenhum código Rerun foi executado (rerun-sdk não instalado): o padrão é 'derivado da documentação', a doc do Transform3D se contradiz (matriz antes ou depois da translação), Arrows3D vazio e quaternion como lista não foram testados e a API muda a cada release (a 0.39 remove o Python 3.10) — a confiança 'alta' de Q13 não se sustenta. Exige venv de teste."
+    },
+    {
+      "pergunta": "Quais são as receitas verificadas de controle de robôs articulados em 3.15 — compensação de gravidade (gravcomp/qfrc_bias), torque computado (mj_rne, mj_fullM, mj_inverse), cinemática inversa por Jacobiano (mj_jac + mínimos quadrados amortecidos), mocap+weld, linearização/LQR via mjd_transitionFD, ajuste de kp/kv/dampratio e de ctrlrange/forcerange — e as convenções de frame que quebram controladores (qvel de junta livre: v global e ω local; xmat/xquat; gyro e accelerometer no frame do site, accelerometer = força específica)?",
+      "origem": "perspetiva",
+      "prioridade": "media",
+      "pai": "Q7",
+      "porque": "A perspectiva 'engenheiro de robótica e controle' foi coberta só como catálogo de atuadores/sensores e estabilidade (Q7, Q14); não há receitas de controle nem convenções de frame, causa típica de falha de controladores de robô e de drone (Q8 só mede um PD de altitude/atitude no modelo de teste). O brief não tem critério C* para controle — ficou de fora por construção."
+    },
+    {
+      "pergunta": "Quais receitas verificadas (com valor analítico) cobrem os experimentos básicos de mecânica — pêndulo simples e duplo (período × amplitude, energia), plano inclinado (limiar tanθ=μ em cone piramidal × elíptico), rolamento sem deslizar (a = g·senθ/(1+I/mr²)), colisão com restituição (solref negativo), projétil com arrasto (density>0), massa-mola-amortecedor e precessão giroscópica?",
+      "origem": "lacuna",
+      "prioridade": "media",
+      "pai": "Q15",
+      "porque": "C15 inclui 'experimentos básicos de mecânica'; Q15 verifica a fundo apenas o prisma/tetraedro em queda e lista os exemplos de model/ (que não têm queda livre nem pêndulo); pendulum.xml e gyroscopic.xml não foram reproduzidos (Q3) e cards/cube_3x3x3/mug não compilaram no espelho (faltam assets). Para um laboratório de física são os primeiros experimentos que o usuário vai pedir."
+    },
+    {
+      "pergunta": "O que dizem especialistas e dados reais sobre drones e veículos terrestres além dos modelos de fabricante e de escala RC: derivação de kT/kQ e do mixer para um drone próprio, empuxo ∝ ω² com dinâmica de motor/hélice (dcmotor/general), efeito giroscópico, ruído e atraso de IMU injetados à mão (noise não injeta ruído desde a 3.1.4); e, para veículos (≥1000 kg, ≥20 m/s), geometria de roda (cilindro × cápsula/elipsoide, nativeccd/multiccd), terreno hfield, solreffriction/rigidez lateral e Pacejka via xfrc_applied ou mjcb_passive?",
+      "origem": "perspetiva",
+      "prioridade": "media",
+      "pai": "Q8",
+      "porque": "As perspectivas 'especialista em drones' e 'especialista em veículos terrestres' foram ouvidas só via modelos oficiais, literatura B/C e testes em escala pequena (X2/CF2; carro de 0,5–1,8 kg). Q8/Q9 declaram não testados: dinâmica de rotor/ESC e giroscópico, omni/mecanum, terrenos não planos, solreffriction, multiccd/nativeccd, escala real e float32 em GPU; os valores de efeito de solo (+20–37 %) vêm de literatura e nenhuma fonte de especialista de voo ou de dinâmica veicular foi usada (só o Chrono é citado)."
+    }
+  ],
+  "afirmacoes_frageis": [
+    {
+      "no": "Q1",
+      "problema": "'CMake + C++17' repete doc/programming/index.rst; o changelog 3.3.7 (changelog.rst L1183, conferido no espelho local) diz que o mínimo é C++20 ('the CMake update was forgotten'). A contradição consta como 'por resolver', mas a resposta (confiança alta) adotou o lado desatualizado: a skill daria requisito de compilador errado para build do fonte."
+    },
+    {
+      "no": "Q1",
+      "problema": "Layout e conteúdo do tarball oficial (lib/cmake/mujoco/*.cmake, libmujoco.so sem versão, RUNPATH) e arquivos instalados pelo pacote AUR 'mujoco' não foram verificados (inferidos das regras de install e do PKGBUILD; sem extração nem build); a doc lista bin/include/model/sample sem lib/ e a doc do Unity manda copiar de lib/. O caminho C/C++ por find_package com o tarball é indireto; repositórios cachyos/cachyos-extra-v3/v4 não foram consultados."
+    },
+    {
+      "no": "Q1",
+      "problema": "O estado dos pacotes (AUR mujoco 3.15.0-1, mujoco-bin 3.14.0-1, Arch oficial = 0 resultados, Menagerie 2026.10.1 no PyPI) é verdade datada de 2026-10-07, dois dias após a 3.15.0: envelhece em dias; a memória precisa gravar data e validade, senão vira 'fato' permanente."
+    },
+    {
+      "no": "Q2",
+      "problema": "'mujoco.viewer usa Wayland nativo' é inferência (pyGLFW escolhe a variante Wayland com XDG_SESSION_TYPE=wayland); sem janela aberta nem glfw.get_platform(), com origem e benignidade dos avisos 0x502 e libdecor sem fonte e a GPU que renderiza o viewer (Intel × NVIDIA) desconhecida. Já foi gravada no AGENTS.md como fato."
+    },
+    {
+      "no": "Q2",
+      "problema": "O mapa de MUJOCO_EGL_DEVICE_ID (0 = NVIDIA, 1 = falha MESA, 2 = Intel, 3 = llvmpipe) e o GL_RENDERER são específicos desta máquina/driver 610.57: não podem virar regra fixa. O Studio com --gfx=web faz bind em '::' (todas as interfaces, sem autenticação): risco de exposição na LAN ou por túnel, não sinalizado como risco; SDL_VIDEODRIVER=x11 é inferido."
+    },
+    {
+      "no": "Q3",
+      "problema": "Fonte primária exigida pelo brief (Todorov ICRA 2014; Todorov et al. 2012) não lida; exemplos oficiais pendulum.xml/gyroscopic.xml não reproduzidos; custos relativos por integrador (1,06×/1,09×/1,93×/3,42×) vêm de uma máquina e um modelo; um trecho de busca ('Implicit has the longest runtime') os contradiz e está 'por resolver'."
+    },
+    {
+      "no": "Q4",
+      "problema": "'NoSlip só zerou o deslize com cone elíptico (ou contato único)' e o efeito nulo com piramidal em 2–4 contatos são achados empíricos sem causa nem fonte oficial (só 'pistas'); Q3/Q9 recomendam NoSlip 1–3 sem esse qualificador — a skill pode generalizar 'NoSlip só funciona com elíptico' (ou o contrário) a partir de um teste."
+    },
+    {
+      "no": "Q4",
+      "problema": "Regra de condim/friction entre dois geoms: XMLreference (máximo) × Modeling (priority, depois máximo) — a resposta escolhe a segunda sem teste dedicado visível, e a receita de pneu de Q9 (priority/pair) depende disso. Impedância das linhas de atrito em contatos elípticos: doc ('sempre d_0') × medição (impedância do normal), com mj_makeImpedance não lido. refsafe/timeconst ≥ 2·dt só foi medido com Euler, mas Q3/Q9 o apresentam como regra geral."
+    },
+    {
+      "no": "Q5",
+      "problema": "As versões em que 'top-level default class cannot be renamed', 'repeated default class name' e shellinertia em geom mesh passaram a erro são desconhecidas (src/ ausente do espelho; o changelog lido não menciona); o XSD usado em Q5 ([S69]) tem procedência não esclarecida, já que Q16 diz que o XSD não está no espelho e não foi verificado."
+    },
+    {
+      "no": "Q6",
+      "problema": "A auditoria do §4 usa um snippet reconstruído a partir de 7 afirmações; docs/relatorio-tecnico-original.md não foi lido — outros trechos do §4 (e as tabelas §2.2/§2.4/§5.1) podem não ter sido auditados."
+    },
+    {
+      "no": "Q6",
+      "problema": "'mjd_transitionFD com flg_centered=True devolve D com sinal trocado em 3.15.0' vem de um único teste (actuatorfrc, kp=5), sem causa e sem issue/commit upstream; contradição classificada 'desconhecida'. Se real, é armadilha para LQR/MPC; se artefato, a skill propaga um falso bug. Também não se sabe se A, B e C são afetados."
+    },
+    {
+      "no": "Q7",
+      "problema": "'pid com ki e slewmax não compila' (contra a doc) é um teste local; não se sabe se é bug, intencional ou já corrigido em main. A lista de atuadores multi-entrada (pid, orientation) omite dcmotor, que o changelog 3.14.0 e Q16 incluem, e o risco de slot errado alcança actuator_force (dimensão nout, changelog 3.11.0), não só ctrl."
+    },
+    {
+      "no": "Q8",
+      "problema": "Receita do quadricóptero: ganhos, t_s=1,48 s, overshoot 0 % e k=0,0201 vêm de um modelo de teste e do fabricante (X2; CF2 'arbitrário'); sem dinâmica de rotor/ESC (dcmotor) e sem efeito giroscópico; efeito de solo (+20–37 %) e arrasto de rotor vêm da literatura (B/C), não de simulação — não generalizar para outros drones."
+    },
+    {
+      "no": "Q9",
+      "problema": "Receita de veículo validada só no carro de escala RC (0,5–1,8 kg, ≈1 m/s): saturação de aderência 0,58–0,81·μ·g, t(1/e)=16 ms e 4,85 Hz de suspensão pertencem ao modelo testado; 'plausível rodar 4096 carros em GPU' é inferência sem teste (JAX/Warp/PyTorch não instalados); float32 não avaliado."
+    },
+    {
+      "no": "Q10",
+      "problema": "Confiança 'alta' incompatível com as lacunas: compatibilidade de Gymnasium 1.4.0, dm_control 1.0.48, Playground e Brax com mujoco 3.15.0 só por metadados; 'labmaze sem wheel cp313 → Python 3.12' vem de guia do TorchRL (nível B) + issue de 03/2025, sem confirmação no PyPI (possivelmente obsoleta); Playground em 3.13 não confirmado; 3 de 99 scenes da Menagerie não compilam e não são identificadas."
+    },
+    {
+      "no": "Q10",
+      "problema": "'O 3.15.0 mudou o cálculo de dampratio (11 pastas o usam)' aparece sem conteúdo (Q10 e Q16): conferi no changelog 3.15.0 (item 3) que é o dampratio do ATUADOR position/intvelocity/orientation (inércia refletida operacional (J M⁻¹ Jᵀ)⁻¹ em qpos0), homônimo do dampratio de solref do contato (Q4) — risco de confusão e de aplicar a mudança ao contato."
+    },
+    {
+      "no": "Q11",
+      "problema": "'A RTX 4070 de 8 GB serve' é estimativa própria (0,24–0,48 GiB de arrays declarados, sem workspace de solver/CCD), com nada instalado nem medido; SPS publicados (2,33/2,96/3,35 M…) sem hardware declarado e razões 152×/313×/252×/475× do fabricante (RTX 4090/PRO 6000); mistura jax[cuda13] + Warp CUDA 12.9 'não documentada, deve ser testada'; 13 fontes de nível B. Confiança 'alta' injustificada."
+    },
+    {
+      "no": "Q11",
+      "problema": "'O Playground usa Warp por padrão desde a 0.2.0' omite que train-jax-ppo/train-rsl-ppo usam --impl jax por omissão (Q10 diz as duas coisas; contradição 'por resolver'): quem seguir só Q11 treinará em JAX sem saber."
+    },
+    {
+      "no": "Q12",
+      "problema": "Vereditos 'incorreta' (A12.2 nivelamento algébrico; A12.4 CoACD/decomposed_collision) assentam em leitura do master da K-Scale (1 commit após a tag) e blog da v0.2.2; conversor não executado; fork discoverse-dev/urdf-to-mjcf (--collision-type decomposition + coacd) não lido — o relatório pode se referir a outro fork/versão. Pipeline CoACD→MJCF nunca rodado; 'maxhullvert 0 ou 3 via MjSpec derrubam o processo' é teste único. Confiança 'alta' injustificada."
+    },
+    {
+      "no": "Q13",
+      "problema": "Nenhum código Rerun foi executado: o padrão mínimo é 'derivado da documentação', a doc do Transform3D se contradiz sobre mat3x3 × translation, Arrows3D vazio e quaternion como lista não foram testados, a API muda a cada release (0.39 remove o Python 3.10) e a versão em que rr.Scalar saiu não foi localizada. Confiança 'alta' injustificada."
+    },
+    {
+      "no": "Q14",
+      "problema": "Limiares de estabilidade vêm de testes pequenos (razão de massa ≥1e4 atravessa sem aviso — 2 caixas, Newton, implicitfast; mola explícita estável a 1,50 ms e divergente a 1,52 ms) e não generalizam; sem regra oficial para frictionloss/margin/gap; efeito de margin na estabilidade não testado; escala/unidades extremas e tunneling não abordados."
+    },
+    {
+      "no": "Q15",
+      "problema": "'Experimentos básicos de mecânica' reduzidos a listar exemplos de model/ mais um corpo (prisma/tetraedro); cards/*, cube_3x3x3 e mug não testados (faltam assets); a equivalência dampratio × coeficiente de restituição não tem derivação oficial (o medido fica acima do oscilador linear para ζ≥0,2)."
+    },
+    {
+      "no": "brief",
+      "problema": "Matriz §4: coluna 'Verificação adversarial' = '—' nas 62 linhas; 59 'alta' e 3 'moderada'; 7 linhas com 1 só fonte independente (A3.1, A5.5, A11.1, A11.2, A11.3, A12.6, A16.1). A matriz só cobre afirmações do relatório do usuário: as descobertas novas de maior risco do dossiê (MIMO, pid, FD centered, NoSlip, errata doc×3.15.0) não têm linha, logo nenhuma passou por contagem de fontes independentes ou verificação adversarial."
+    },
+    {
+      "no": "brief",
+      "problema": "Contradições §5: 74/74 'por resolver na ronda 2', inclusive as que o FAQ já resolveu por teste (visual repetido, default class de topo, replicate, condim, shellinertia) sem registro de decisão/versão/teste; §8 (limitações) vazia e §9 (metodologia) com marcadores; ~99 'novas perguntas propostas' (soma dos nós) sem id nem triagem."
+    }
+  ],
+  "incoerencias": [
+    {
+      "nos": ["Q1", "Q16"],
+      "descricao": "Q1 manda compilar com 'CMake + C++17' (doc/programming/index.rst), enquanto o changelog 3.3.7 lido por Q16 diz C++20 mínimo e a tabela de contradições lista o par como 'por resolver'. A resposta de maior confiança adotou o lado desatualizado."
+    },
+    {
+      "nos": ["Q7", "Q16"],
+      "descricao": "Q7 aponta só pid e orientation como atuadores multi-entrada (nu ≠ nactuator); Q16, o AGENTS.md e o changelog 3.14.0 incluem dcmotor. O changelog 3.11.0 dimensiona actuator_force por nout (≠ nactuator), mas a FAQ trata o desalinhamento só para ctrl."
+    },
+    {
+      "nos": ["Q10", "Q11"],
+      "descricao": "Q11 diz que o Playground usa Warp por padrão desde a 0.2.0; Q10 e a tabela de contradições mostram que só as configs (default_config) usam Warp e que os scripts train-jax-ppo/train-rsl-ppo usam --impl jax por omissão."
+    },
+    {
+      "nos": ["Q5", "Q16"],
+      "descricao": "Q5 usa o XSD 3.15.0 ([S69]) como evidência (visual repetível; filhos '(?)'), mas Q16 declara que o XSD e src/ não estão no espelho local e que não foi possível verificar o XSD; a procedência do XSD de Q5 não está esclarecida."
+    },
+    {
+      "nos": ["Q3", "Q4", "Q9"],
+      "descricao": "Q3 e Q9 oferecem NoSlip 1–3 como remédio do deslize lento (Q9: 0 mm) sem o qualificador de Q4 — nos testes só funcionou com cone elíptico ou contato único e não alterou forças com piramidal em 2–4 contatos (causa desconhecida) — e o cone padrão do projeto é piramidal."
+    },
+    {
+      "nos": ["Q3", "Q4", "Q9", "Q15"],
+      "descricao": "refsafe/timeconst ≥ 2·dt: Q3 e Q9 tratam como regra geral (Q9 usa implicitfast), mas Q4 declara que só foi medida com Euler (sob implicit, implicitfast, RK4 e discrete 3.13+ não foi medida). Q15 ainda mostra que dt/(timeconst·dampratio) ≥ 2 injeta energia mesmo com timeconst ≥ 2·dt: a regra combinada não é enunciada em nenhum nó."
+    },
+    {
+      "nos": ["Q12"],
+      "descricao": "A12.4 (veredito 'incorreta' para a decomposição CoACD atribuída ao urdf2mjcf) convive com a linha de contradições que mostra o fork discoverse-dev/urdf-to-mjcf com --collision-type decomposition + coacd, 'por resolver': veredito e contradição não foram reconciliados."
+    },
+    {
+      "nos": ["Q4", "Q10", "Q16"],
+      "descricao": "'dampratio' tem dois significados no dossiê: o da solref do contato (Q4) e o atributo do atuador redefinido na 3.15.0 (Q10, Q16); Q10 e Q16 citam a mudança sem qualificar de qual dampratio se trata."
+    },
+    {
+      "nos": ["Q6", "Q11", "Q14"],
+      "descricao": "Ganho do mujoco.rollout com números diferentes para configurações semelhantes: 6,8× com 16 MjData (Q6), 6,0× com 16 threads (Q14) e ~7–8× de 1 a 32 threads (Q11: ~34–40 K → ~0,26–0,29 M SPS, máquina carregada). Cargas distintas, mas a skill deve registrar faixa e variância, não um valor único."
+    },
+    {
+      "nos": ["Q2"],
+      "descricao": "Q2 conclui 'Wayland nativo' (inferência) contra a premissa de contexto do projeto (XWayland); o AGENTS.md já adotou 'nativo' como fato, sem o teste que o próprio Q2 pede (glfw.get_platform())."
+    },
+    {
+      "nos": ["Q4", "Q9"],
+      "descricao": "Ortografia mista pt-PT × pt-BR nos intervalos lidos (contacto 20 × contato 29; fatorização × fatoração; rácio × razão; ficheiro × arquivo) apesar de o brief exigir pt-BR; a busca FTS5 da memória CoALA não casa 'contato' com 'contacto'."
+    }
+  ],
+  "veredito": "continuar"
+}
