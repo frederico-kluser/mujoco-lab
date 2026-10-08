@@ -1,0 +1,95 @@
+<mujoco model="carro">
+  <!--
+    Carro de 4 rodas (≈2.6 kg): tração traseira por 2 motores de torque (um por roda traseira) e direção Ackermann nas rodas dianteiras (servos <position> nas juntas de esterçamento).
+    Sem suspensão: a "mola" é o contato macio (solref) — suficiente para pistas planas; para suspensão, troque a fixação das rodas por uma junta slide com stiffness/damping.
+    Eixos do carro: +X frente, +Y esquerda, +Z cima. Entre-eixos L = 0.30 m, bitola T = 0.22 m, roda r = 0.05 m. Pneu: friction="1.0 0.02 0.005" e condim="4"
+    (condim 4 = atrito de deslizamento + torsional; use 6 para incluir resistência ao rolamento).
+    ctrl: tr_e, tr_d = torque na roda traseira esquerda/direita (N·m); est_e, est_d = ângulo de esterçamento (rad) das rodas dianteiras esquerda/direita.
+  -->
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096"/>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.6 0.6 0.6" specular="0.05 0.05 0.05"/>
+  </visual>
+  <statistic center="0 0 0.2" extent="2.0"/>
+
+  <default>
+    <geom friction="1.0 0.02 0.005" condim="4" solref="0.008 1"/>
+    <joint damping="0.002" armature="0.0005"/>
+    <default class="roda">
+      <geom type="cylinder" size="0.05 0.02" euler="90 0 0" mass="0.15" rgba="0.12 0.12 0.14 1"/>
+    </default>
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.50 0.72 0.95" rgb2="0.03 0.05 0.10" width="512" height="3072"/>
+    <texture name="grade" type="2d" builtin="checker" rgb1="0.19 0.23 0.29" rgb2="0.27 0.32 0.39" width="512" height="512" mark="edge" markrgb="0.55 0.60 0.66"/>
+    <material name="piso" texture="grade" texrepeat="2 2" texuniform="true" reflectance="0.08"/>
+  </asset>
+
+  <worldbody>
+    <light name="sol" pos="2 -3 6" dir="-0.3 0.5 -1" type="directional" diffuse="0.85 0.85 0.85"/>
+    <camera name="fixa" pos="3.4 -6.8 4.4" xyaxes="1 0 0 0 0.5 0.87"/>
+    <geom name="chao" type="plane" size="14 14 0.05" material="piso" friction="1.0 0.02 0.005" condim="4" solref="0.008 1" contype="1" conaffinity="3"/>
+
+    <body name="carro" pos="0 0 0.053">
+      <freejoint name="livre"/>
+      <camera name="seguir" mode="trackcom" pos="-0.9 -1.2 0.75" xyaxes="0.8 -0.6 0 0.25 0.33 0.91"/>
+      <geom name="chassi" type="box" size="0.19 0.085 0.028" pos="0 0 0.028" mass="2.0" rgba="0.15 0.45 0.9 1" contype="2" conaffinity="0"/>
+      <site name="imu" pos="0 0 0.03" size="0.01"/>
+      <geom name="cabine" type="box" size="0.08 0.07 0.022" pos="-0.03 0 0.078" mass="0.1" rgba="0.9 0.92 0.97 1" contype="0" conaffinity="0"/>
+      <geom name="farol" type="box" size="0.006 0.07 0.012" pos="0.19 0 0.03" mass="0" rgba="1 0.9 0.4 1" contype="0" conaffinity="0"/>
+
+      <!-- traseiras: junta hinge no eixo Y (a roda gira em torno do eixo lateral) -->
+      <body name="roda_te" pos="-0.15  0.11 0">
+        <joint name="giro_te" type="hinge" axis="0 1 0"/>
+        <geom class="roda"/>
+        <geom type="box" size="0.035 0.0025 0.007" pos="0.03 0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+        <geom type="box" size="0.035 0.0025 0.007" pos="0.03 -0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+      </body>
+      <body name="roda_td" pos="-0.15 -0.11 0">
+        <joint name="giro_td" type="hinge" axis="0 1 0"/>
+        <geom class="roda"/>
+        <geom type="box" size="0.035 0.0025 0.007" pos="0.03 0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+        <geom type="box" size="0.035 0.0025 0.007" pos="0.03 -0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+      </body>
+
+      <!-- dianteiras: esterçamento (hinge Z) + giro (hinge Y) -->
+      <body name="pivo_fe" pos="0.15  0.11 0">
+        <inertial pos="0 0 0" mass="0.02" diaginertia="2e-5 2e-5 2e-5"/>
+        <joint name="est_fe" type="hinge" axis="0 0 1" range="-40 40" damping="0.05" armature="0.002"/>
+        <body name="roda_fe">
+          <joint name="giro_fe" type="hinge" axis="0 1 0"/>
+          <geom class="roda"/>
+          <geom type="box" size="0.035 0.0025 0.007" pos="0.03 0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+          <geom type="box" size="0.035 0.0025 0.007" pos="0.03 -0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+        </body>
+      </body>
+      <body name="pivo_fd" pos="0.15 -0.11 0">
+        <inertial pos="0 0 0" mass="0.02" diaginertia="2e-5 2e-5 2e-5"/>
+        <joint name="est_fd" type="hinge" axis="0 0 1" range="-40 40" damping="0.05" armature="0.002"/>
+        <body name="roda_fd">
+          <joint name="giro_fd" type="hinge" axis="0 1 0"/>
+          <geom class="roda"/>
+          <geom type="box" size="0.035 0.0025 0.007" pos="0.03 0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+          <geom type="box" size="0.035 0.0025 0.007" pos="0.03 -0.0205 0" mass="0" rgba="1 0.8 0.2 1" contype="0" conaffinity="0"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="tr_e" joint="giro_te" ctrlrange="-1.5 1.5"/>
+    <motor name="tr_d" joint="giro_td" ctrlrange="-1.5 1.5"/>
+    <position name="est_e" joint="est_fe" kp="25" kv="0.8" inheritrange="1"/>
+    <position name="est_d" joint="est_fd" kp="25" kv="0.8" inheritrange="1"/>
+  </actuator>
+
+  <sensor>
+    <framequat name="quat" objtype="body" objname="carro"/>
+    <gyro name="gyro" site="imu"/>
+  </sensor>
+</mujoco>

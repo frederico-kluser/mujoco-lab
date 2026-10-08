@@ -1,0 +1,71 @@
+<mujoco model="triangulo_invertido">
+  <!--
+    Experimento 01 — prisma triangular equilátero "de cabeça para baixo" (aresta para baixo) caindo no chão.
+
+    Convenções MuJoCo: SI (m, kg, s) · +Z é "para cima" · quaternions [w x y z] · ângulos em graus
+    (compiler angle="degree"). A malha é definida só por VÉRTICES; o MuJoCo calcula o casco convexo,
+    a massa (densidade × volume) e a inércia sozinho — e reposiciona a malha no seu centro de massa.
+
+    Geometria: triângulo equilátero de lado a = 0.40 m no plano XZ, vértice (aresta) para baixo,
+    extrudado em Y por L = 0.30 m. Coordenadas relativas ao centroide:
+        topo:   (-a/2, ±L/2, +h/3) e (+a/2, ±L/2, +h/3)      com h = a·√3/2 = 0.34641 → h/3 = 0.11547
+        ponta:  (0,    ±L/2, -2h/3) = (0, ±0.15, -0.23094)
+    Massa esperada = 1000 kg/m³ × (√3/4·a²) × L = 20.785 kg.
+    Altura do centro de massa em repouso sobre uma face retangular = raio inscrito = a/(2√3) = 0.11547 m.
+  -->
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65" specular="0.05 0.05 0.05"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <!-- setas/discos de contato (flags mjVIS_CONTACT*): finos para não cobrir o objeto -->
+    <scale contactwidth="0.08" contactheight="0.02" forcewidth="0.04"/>
+    <map force="0.002"/>
+  </visual>
+  <statistic center="0 0 0.45" extent="1.7"/>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.50 0.72 0.95" rgb2="0.03 0.05 0.10" width="512" height="3072"/>
+    <texture name="grade" type="2d" builtin="checker" rgb1="0.19 0.23 0.29" rgb2="0.27 0.32 0.39"
+             width="512" height="512" mark="edge" markrgb="0.55 0.60 0.66"/>
+    <material name="piso" texture="grade" texrepeat="5 5" texuniform="true" reflectance="0.12"/>
+    <material name="laranja" rgba="0.96 0.47 0.10 1" specular="0.35" shininess="0.5"/>
+    <mesh name="prisma" vertex="
+      -0.20 -0.15  0.11547    0.20 -0.15  0.11547    0.00 -0.15 -0.23094
+      -0.20  0.15  0.11547    0.20  0.15  0.11547    0.00  0.15 -0.23094"/>
+  </asset>
+
+  <!-- valores analíticos de referência, lidos por run.py para validar a simulação (campo <custom> do MJCF) -->
+  <custom>
+    <numeric name="esperado_massa_kg"       data="20.7846"/>   <!-- 1000 · (√3/4·0.4²) · 0.3 -->
+    <numeric name="esperado_altura_repouso" data="0.11547"/>   <!-- raio inscrito = a/(2√3), apoiado numa face retangular -->
+  </custom>
+
+  <worldbody>
+    <light name="sol" pos="1.5 -2.5 4" dir="-0.3 0.6 -1" type="directional" diffuse="0.85 0.85 0.85" specular="0.2 0.2 0.2"/>
+    <camera name="frontal" pos="0 -2.15 0.60" xyaxes="1 0 0 0 0.04 1"/>
+
+    <!-- chão: contato com atrito (deslizamento, torção, rolamento) e "mola" macia (solref = timeconst, dampratio).
+         dampratio < ~0.5 deixa o corpo vibrando para sempre (contato subamortecido); 0.6 dá um ressalto curto e repouso limpo. -->
+    <geom name="chao" type="plane" size="4 4 0.05" material="piso"
+          friction="0.8 0.005 0.0001" solref="0.01 0.6"/>
+
+    <!-- corpo livre (6 GDL): começa a 1.0 m do chão, inclinado 7° (rolagem) e 4° (guinada) para quebrar a
+         simetria e tornar o tombamento determinístico (uma aresta perfeitamente simétrica ficaria em equilíbrio instável) -->
+    <body name="triangulo" pos="0 0 1.0" euler="0 7 4">
+      <freejoint name="livre"/>
+      <geom name="prisma" type="mesh" mesh="prisma" material="laranja"
+            density="1000" friction="0.8 0.005 0.0001" solref="0.01 0.6"/>
+      <!-- marcadores visuais (sites: sem massa e sem colisão): a aresta de baixo em vermelho e os cantos de cima em cores diferentes,
+           para enxergar a rotação -->
+      <site name="aresta"  type="capsule" fromto="0 -0.15 -0.23094  0 0.15 -0.23094" size="0.012" rgba="0.95 0.12 0.12 1"/>
+      <site name="canto_a" type="sphere" pos="-0.20 -0.15 0.11547" size="0.02" rgba="0.15 0.55 0.95 1"/>
+      <site name="canto_b" type="sphere" pos=" 0.20 -0.15 0.11547" size="0.02" rgba="0.25 0.85 0.45 1"/>
+      <site name="canto_c" type="sphere" pos="-0.20  0.15 0.11547" size="0.02" rgba="0.95 0.85 0.20 1"/>
+      <site name="canto_d" type="sphere" pos=" 0.20  0.15 0.11547" size="0.02" rgba="0.85 0.35 0.95 1"/>
+    </body>
+  </worldbody>
+</mujoco>
