@@ -1,5 +1,9 @@
 /**
- * Bloco de controlos (coluna fixa à direita): vento constante, VENTO DINÂMICO, REINICIAR e LOOP.
+ * Controlos de VENTO (`ControlosVento`, secção «Vento») e de EPISÓDIO (`ControlosEpisodio`, barra fixa).
+ *
+ * `ControlosVento` = vento constante (sliders + rosa + APLICAR/PARAR) e VENTO DINÂMICO.
+ * `ControlosEpisodio` = REINICIAR (hold de 1 s) + LOOP — vive na barra fixa do topo para estar acessível
+ * de QUALQUER secção (a monitoria em voo não pode depender de scroll até à coluna lateral).
  *
  * Cascata:
  *  · passo 2 — `hold-to-confirm` (REINICIAR), `multi-state-button` (APLICAR/PARAR VENTO, RAJADA AGORA,
@@ -558,7 +562,7 @@ function Dinamico({
   )
 }
 
-interface ControlosProps {
+interface ControlosVentoProps {
   vento: VentoEstado
   /** Vetor do vento em vigor (telemetria `vento_vec`), ou `null`. */
   vec: [number, number, number] | null
@@ -566,13 +570,12 @@ interface ControlosProps {
   /** Modo reportado pela última linha de telemetria (o que a física está mesmo a fazer). */
   modoTelemetria: ModoVentoDinamico
   estado: EstadoEpisodio
-  ep: number
-  ligado: boolean
+  /** Continuidade do backend: com `loop` ligado NÃO há «terminado» a exigir REINICIAR. */
   loop: boolean
+  ligado: boolean
   faseVento: FaseVento
   faseDinamico: FaseVento
   emCurso: AlvoDinamico | null
-  aReiniciar: boolean
   onAplicarVento: (corpo: CorpoVento) => void
   onPararVento: () => void
   onVentoDinamico: (
@@ -580,35 +583,26 @@ interface ControlosProps {
     alvo: AlvoDinamico,
     descricao: string
   ) => void
-  onReiniciar: () => void
-  onLoop: (ativo: boolean) => void
 }
 
-export function Controlos({
+export function ControlosVento({
   vento,
   vec,
   dinamico,
   modoTelemetria,
   estado,
-  ep,
-  ligado,
   loop,
+  ligado,
   faseVento,
   faseDinamico,
   emCurso,
-  aReiniciar,
   onAplicarVento,
   onPararVento,
   onVentoDinamico,
-  onReiniciar,
-  onLoop,
-}: ControlosProps) {
-  const ui = useMotionUITransition("ui")
+}: ControlosVentoProps) {
   const [forca, setForca] = useState(0)
   const [azimute, setAzimute] = useState(0)
   const [elevacao, setElevacao] = useState(0)
-  /** Muda a cada REINICIAR confirmado: remonta o botão de catálogo (ver comentário no `key`). */
-  const [geracao, setGeracao] = useState(0)
   const sincronizado = useRef(false)
 
   // Primeira leitura da API dá o ponto de partida aos sliders; depois o valor é do utilizador
@@ -621,7 +615,9 @@ export function Controlos({
     setElevacao(vento.elevacao)
   }, [ligado, vento])
 
-  const terminado = estado === "episodio_terminado"
+  // «Terminado» só com o backend a NÃO ser contínuo: com `loop` o episódio seguinte arranca sozinho e o
+  // cartão não deve piscar a vermelho a pedir um REINICIAR que não é preciso.
+  const terminado = estado === "episodio_terminado" && !loop
   const selecao: CorpoVento = { vel: forca, azimute, elevacao }
 
   return (
@@ -630,43 +626,15 @@ export function Controlos({
       data-testid="painel-controlos"
     >
       <CardHeader className="gap-1">
-        <CardTitle className="text-sm font-medium">Controlos</CardTitle>
+        <CardTitle className="text-sm font-medium">
+          Controlos de vento
+        </CardTitle>
         <p className="text-[0.7rem] text-muted-foreground">
           vento físico em tempo real · o site nunca reinicia sozinho
         </p>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-4">
-        <AnimatePresence initial={false} mode="wait">
-          {terminado ? (
-            <motion.p
-              key="terminado"
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ ...ui }}
-              data-testid="aviso-terminado"
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
-            >
-              episódio {fmt(ep, 0)} terminado — clica REINICIAR
-            </motion.p>
-          ) : (
-            <motion.p
-              key="a-correr"
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ ...ui }}
-              data-testid="aviso-a-correr"
-              className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
-            >
-              {loop
-                ? "episódio a correr · LOOP ligado (o backend reinicia ao terminar)"
-                : "episódio a correr · sem auto-restart"}
-            </motion.p>
-          )}
-        </AnimatePresence>
-
         <section aria-label="Vento" className="flex flex-col gap-4">
           <h3 className="flex items-center gap-1.5 text-xs tracking-wide text-muted-foreground uppercase">
             <Wind className="size-3.5" aria-hidden="true" /> vento
@@ -771,77 +739,145 @@ export function Controlos({
           onEnviar={onVentoDinamico}
         />
 
-        <section
-          aria-label="Episódio"
-          className="flex flex-col gap-2 border-t border-border pt-4"
-        >
-          <h3 className="text-xs tracking-wide text-muted-foreground uppercase">
-            episódio
-          </h3>
-          <div className="relative">
-            {terminado ? (
-              <motion.span
-                aria-hidden="true"
-                className="pointer-events-none absolute -inset-1 rounded-full ring-2 ring-destructive"
-                animate={{ opacity: [0.15, 0.7, 0.15] }}
-                transition={{
-                  duration: 1.6,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
-              />
-            ) : null}
-            <HoldToConfirmButton
-              key={geracao}
-              holdSeconds={1}
-              mode="callback"
-              onConfirm={() => {
-                // O `hold-to-confirm` do catálogo é de UM disparo (o `done` interno só volta com `reset()`,
-                // que o componente não expõe em `mode="callback"`) — remontar por `key` volta a armar o
-                // botão e repõe a escala, sem tocar no source instalado (regra 6 da skill).
-                setGeracao((g) => g + 1)
-                onReiniciar()
-              }}
-              aria-describedby="reiniciar-ajuda"
-              className="h-14! w-full! text-base! font-semibold! tracking-wide"
-            >
-              <RotateCcw className="size-5" aria-hidden="true" />
-              {aReiniciar ? "A REINICIAR…" : "REINICIAR (manter 1 s)"}
-            </HoldToConfirmButton>
-          </div>
-          <p
-            id="reiniciar-ajuda"
-            className="text-[0.65rem] text-muted-foreground"
-          >
-            carrega e mantém ~1 s: o preenchimento confirma · POST
-            /api/reiniciar
-          </p>
-
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="flex flex-col">
-              <span className="text-xs font-medium">LOOP</span>
-              <span className="text-[0.65rem] text-muted-foreground">
-                off por omissão · auto-reset é do backend
-              </span>
-            </div>
-            <SegmentedToggle
-              value={loop ? "on" : "off"}
-              onChange={(v) => onLoop(v === "on")}
-              ariaLabel="LOOP de episódios"
-              className="shrink-0"
-            >
-              <SegmentedToggleOption value="off">OFF</SegmentedToggleOption>
-              <SegmentedToggleOption value="on">ON</SegmentedToggleOption>
-            </SegmentedToggle>
-          </div>
-          <p
-            className="font-mono text-[0.65rem] text-muted-foreground"
-            data-testid="estado-loop"
-          >
-            loop={loop ? "true" : "false"} · estado={estado}
-          </p>
-        </section>
+        <p className="px-1 text-[0.65rem] text-muted-foreground">
+          polling GET /api/sim a 2,9 Hz · ações: POST /api/vento ·
+          /api/vento-dinamico
+        </p>
       </CardContent>
     </Card>
+  )
+}
+
+export interface ControlosEpisodioProps {
+  estado: EstadoEpisodio
+  ep: number
+  ligado: boolean
+  loop: boolean
+  aReiniciar: boolean
+  /**
+   * Compacto = barra fixa do topo (botão curto, ajuda só para leitores de ecrã);
+   * completo = coluna vertical com a explicação à vista.
+   */
+  compacto?: boolean
+  onReiniciar: () => void
+  onLoop: (ativo: boolean) => void
+}
+
+/**
+ * REINICIAR (hold de 1 s) + LOOP — os controlos críticos do episódio, visíveis em QUALQUER secção
+ * (barra fixa do topo em `App.tsx`). O site nunca reinicia sozinho: `/api/reiniciar` é exclusivo deste
+ * botão; com o LOOP ligado quem reinicia é o backend.
+ */
+export function ControlosEpisodio({
+  estado,
+  ep,
+  ligado,
+  loop,
+  aReiniciar,
+  compacto = false,
+  onReiniciar,
+  onLoop,
+}: ControlosEpisodioProps) {
+  /** Muda a cada REINICIAR confirmado: remonta o botão de catálogo (ver comentário no `key`). */
+  const [geracao, setGeracao] = useState(0)
+  /** Terminado E sem continuidade — só aqui o REINICIAR é mesmo preciso (anel + aviso). */
+  const terminado = estado === "episodio_terminado" && !loop
+
+  return (
+    <div
+      data-testid="controlos-episodio"
+      className={compacto ? "flex items-center gap-3" : "flex flex-col gap-2"}
+    >
+      <div className="relative">
+        {terminado ? (
+          <motion.span
+            aria-hidden="true"
+            className="pointer-events-none absolute -inset-1 rounded-full ring-2 ring-destructive"
+            animate={{ opacity: [0.15, 0.7, 0.15] }}
+            transition={{
+              duration: 1.6,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }}
+          />
+        ) : null}
+        <HoldToConfirmButton
+          key={geracao}
+          holdSeconds={1}
+          mode="callback"
+          onConfirm={() => {
+            // O `hold-to-confirm` do catálogo é de UM disparo (o `done` interno só volta com `reset()`,
+            // que o componente não expõe em `mode="callback"`) — remontar por `key` volta a armar o
+            // botão e repõe a escala, sem tocar no source instalado (regra 6 da skill).
+            setGeracao((g) => g + 1)
+            onReiniciar()
+          }}
+          aria-describedby="reiniciar-ajuda"
+          className={
+            compacto
+              ? "h-9! w-auto! px-4! text-xs!"
+              : "h-14! w-full! text-base! font-semibold! tracking-wide"
+          }
+        >
+          <RotateCcw
+            className={compacto ? "size-3.5" : "size-5"}
+            aria-hidden="true"
+          />
+          {aReiniciar
+            ? "A REINICIAR…"
+            : compacto
+              ? "REINICIAR"
+              : "REINICIAR (manter 1 s)"}
+        </HoldToConfirmButton>
+      </div>
+
+      <div
+        className={
+          compacto
+            ? "flex items-center gap-2"
+            : "mt-2 flex items-center justify-between gap-3"
+        }
+      >
+        <div className="flex flex-col">
+          <span className="text-xs font-medium">CONTINUIDADE</span>
+          {compacto ? null : (
+            <span className="text-[0.65rem] text-muted-foreground">
+              contínuo por omissão · «parar no fim» só se quiseres parar o
+              episódio
+            </span>
+          )}
+        </div>
+        <SegmentedToggle
+          value={loop ? "continuo" : "parar"}
+          onChange={(v) => onLoop(v === "continuo")}
+          ariaLabel="continuidade dos episódios (contínuo ou parar no fim)"
+          className="shrink-0"
+        >
+          <SegmentedToggleOption value="parar">
+            PARAR NO FIM
+          </SegmentedToggleOption>
+          <SegmentedToggleOption value="continuo">
+            CONTÍNUO
+          </SegmentedToggleOption>
+        </SegmentedToggle>
+      </div>
+
+      <p
+        id="reiniciar-ajuda"
+        className={
+          compacto ? "sr-only" : "text-[0.65rem] text-muted-foreground"
+        }
+      >
+        carrega e mantém ~1 s: o preenchimento confirma · POST /api/reiniciar
+      </p>
+      {compacto ? (
+        <span className="sr-only">
+          episódio {fmt(ep, 0)} ·{" "}
+          {estado === "episodio_terminado" ? "terminado" : "a correr"} ·
+          {loop ? "modo contínuo" : "parar no fim do episódio"} · ligação{" "}
+          {ligado ? "ativa" : "inativa"}
+        </span>
+      ) : null}
+    </div>
   )
 }

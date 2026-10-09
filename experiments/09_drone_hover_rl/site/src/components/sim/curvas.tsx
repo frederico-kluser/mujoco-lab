@@ -15,14 +15,23 @@ const LARGURA = 320
 const ALTURA = 72
 const PAD_Y = 10
 
+/** Tamanho «grande» (secção Operação: vigiar o voo sem colar o nariz ao ecrã). */
+const LARGURA_GRANDE = 620
+const ALTURA_GRANDE = 132
+
 /** y (viewBox) de um valor, com a mesma escala que o `Sparkline` usa para o histórico. */
-export function yDoValor(historico: number[], valor: number): number | null {
+export function yDoValor(
+  historico: number[],
+  valor: number,
+  altura: number = ALTURA,
+  padY: number = PAD_Y
+): number | null {
   if (historico.length === 0) return null
   const maximo = Math.max(...historico)
   const minimo = Math.min(...historico)
   const intervalo = Math.max(1, maximo - minimo)
   const normalizado = (valor - minimo) / intervalo
-  return ALTURA - PAD_Y - normalizado * (ALTURA - PAD_Y * 2)
+  return altura - padY - normalizado * (altura - padY * 2)
 }
 
 interface CurvaProps {
@@ -36,6 +45,8 @@ interface CurvaProps {
   alvo?: number
   alvoTexto?: string
   tickKey: number
+  /** Curva maior (secção Operação / Tudo em ecrã largo). */
+  grande?: boolean
 }
 
 function Curva({
@@ -48,8 +59,11 @@ function Curva({
   alvo,
   alvoTexto,
   tickKey,
+  grande = false,
 }: CurvaProps) {
-  const yAlvo = alvo === undefined ? null : yDoValor(historico, alvo)
+  const largura = grande ? LARGURA_GRANDE : LARGURA
+  const altura = grande ? ALTURA_GRANDE : ALTURA
+  const yAlvo = alvo === undefined ? null : yDoValor(historico, alvo, altura, PAD_Y)
   const minimo = historico.length > 0 ? Math.min(...historico) : null
   const maximo = historico.length > 0 ? Math.max(...historico) : null
 
@@ -71,8 +85,8 @@ function Curva({
       <CardContent className="flex flex-col gap-1.5">
         <Sparkline
           history={historico}
-          width={LARGURA}
-          height={ALTURA}
+          width={largura}
+          height={altura}
           padY={PAD_Y}
           tone="primary"
           area
@@ -97,9 +111,11 @@ function Curva({
 interface CurvasProps {
   linhas: LinhaSim[]
   zAlvo: number
+  /** Curvas maiores (secção Operação — a monitoria em voo). */
+  grande?: boolean
 }
 
-export function Curvas({ linhas, zAlvo }: CurvasProps) {
+export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
   const z = linhas.map((l) => l.z)
   const yawErr = linhas.map((l) => l.yaw_err)
   const retorno = linhas.map((l) => l.retorno)
@@ -119,6 +135,7 @@ export function Curvas({ linhas, zAlvo }: CurvasProps) {
         alvo={zAlvo}
         alvoTexto={`alvo ${fmt(zAlvo, 1)} m ·`}
         tickKey={tickKey}
+        grande={grande}
       />
       <Curva
         titulo="yaw_err(t)"
@@ -128,6 +145,7 @@ export function Curvas({ linhas, zAlvo }: CurvasProps) {
         unidade="rad"
         casas={3}
         tickKey={tickKey}
+        grande={grande}
       />
       <Curva
         titulo="retorno(t)"
@@ -137,6 +155,7 @@ export function Curvas({ linhas, zAlvo }: CurvasProps) {
         unidade=""
         casas={2}
         tickKey={tickKey}
+        grande={grande}
       />
       <Curva
         titulo="vento_vel(t)"
@@ -146,6 +165,98 @@ export function Curvas({ linhas, zAlvo }: CurvasProps) {
         unidade="m/s"
         casas={2}
         tickKey={tickKey}
+        grande={grande}
+      />
+    </section>
+  )
+}
+
+interface ValorAtualProps {
+  id: string
+  rotulo: string
+  descricao: string
+  valor: number
+  unidade: string
+  casas: number
+}
+
+function ValorAtual({
+  id,
+  rotulo,
+  descricao,
+  valor,
+  unidade,
+  casas,
+}: ValorAtualProps) {
+  return (
+    <Card size="sm" className="gap-1" data-testid={`valor-${id}`} data-valor-atual={valor}>
+      <CardContent className="gap-1">
+        <span className="text-[0.7rem] tracking-wide text-muted-foreground uppercase">
+          {rotulo}
+        </span>
+        <span className="flex items-baseline gap-1.5">
+          <AnimatedNumber
+            value={valor}
+            format={{
+              minimumFractionDigits: casas,
+              maximumFractionDigits: casas,
+            }}
+            className="text-2xl font-semibold tabular-nums"
+          />
+          <span className="text-xs text-muted-foreground">{unidade}</span>
+        </span>
+        <span className="text-[0.65rem] text-muted-foreground">{descricao}</span>
+      </CardContent>
+    </Card>
+  )
+}
+
+interface ValoresAtuaisProps {
+  linha: LinhaSim | null
+}
+
+/**
+ * Valores ATUAIS do voo (z · dist_xy · yaw_err · vento_vel) em números grandes — o essencial para
+ * vigiar o drone em operação sem procurar nas curvas (a mesma telemetria, sem contas novas).
+ */
+export function ValoresAtuais({ linha }: ValoresAtuaisProps) {
+  return (
+    <section
+      aria-label="Valores atuais do voo"
+      data-testid="valores-atuais"
+      className="grid grid-cols-2 gap-3 lg:grid-cols-4"
+    >
+      <ValorAtual
+        id="z"
+        rotulo="z"
+        descricao="altitude atual"
+        valor={linha?.z ?? 0}
+        unidade="m"
+        casas={3}
+      />
+      <ValorAtual
+        id="dist-xy"
+        rotulo="dist_xy"
+        descricao="distância horizontal ao alvo"
+        valor={linha?.dist_xy ?? 0}
+        unidade="m"
+        casas={3}
+      />
+      <ValorAtual
+        id="yaw-err"
+        rotulo="yaw_err"
+        descricao="erro de guinada"
+        valor={linha?.yaw_err ?? 0}
+        unidade="rad"
+        casas={3}
+      />
+      <ValorAtual
+        id="vento-vel"
+        rotulo="vento_vel"
+        descricao="vento aplicado agora"
+        valor={linha?.vento_vel ?? 0}
+        unidade="m/s"
+        casas={2}
       />
     </section>
   )

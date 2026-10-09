@@ -6,7 +6,7 @@
  * próprios números de engagement (`eventsBaseline`/`tickIntervalMs`) e não aceita telemetria.
  */
 
-import { AnimatePresence, motion } from "motion/react"
+import { motion } from "motion/react"
 
 import { AnimatedNumber } from "@/components/motion-ui/animated-number"
 import {
@@ -66,7 +66,6 @@ interface CabecalhoProps {
   retorno: number
   modelo: string | null
   ligacao: Ligacao
-  erro: string | null
   atualizadoEm: number | null
 }
 
@@ -110,13 +109,11 @@ export function Cabecalho({
   retorno,
   modelo,
   ligacao,
-  erro,
   atualizadoEm,
 }: CabecalhoProps) {
   // `modelo` já vem do `modelo_nome` do /api/state (pasta/ficheiro.zip); o caminho ABSOLUTO nunca entra
   // no DOM — este é um rótulo de painel, não um explorador de ficheiros, e a página pode ser partilhada.
   const modeloLegivel = nomeModeloLegivel(modelo)
-  const ui = useMotionUITransition("ui")
   const ligado = ligacao === "ligado"
   const idade =
     atualizadoEm === null ? null : Math.max(0, (Date.now() - atualizadoEm) / 1000)
@@ -168,23 +165,6 @@ export function Cabecalho({
           </span>
         </div>
       </div>
-
-      <AnimatePresence initial={false}>
-        {!ligado && ligacao === "sem_ligacao" ? (
-          <motion.p
-            key="aviso-ligacao"
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ ...ui }}
-            className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            data-testid="aviso-ligacao"
-          >
-            sem resposta do servidor da simulação — a tentar de novo a cada 0,35 s
-            {erro ? ` · ${erro}` : ""}
-          </motion.p>
-        ) : null}
-      </AnimatePresence>
     </Card>
   )
 }

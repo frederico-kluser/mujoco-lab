@@ -57,6 +57,11 @@ export interface RespostaSim {
   retorno: number
   vento: VentoEstado
   ventoDinamico: VentoDinamico
+  /**
+   * Modo de continuidade do BACKEND: `true` = reinicia sozinho ao terminar o episódio (por omissão no
+   * `sim_site.py` novo), `false` = para no fim à espera de REINICIAR; `null` = esta resposta não o diz.
+   */
+  loop: boolean | null
   /** Painel do Raspberry Pi 5; `null` quando o backend ainda não publica `rpi5`. */
   rpi5: Rpi5 | null
   linhas: LinhaSim[]
@@ -74,6 +79,13 @@ export interface ResumoEstado {
   ventoDinamico: VentoDinamico
   /** Painel do RPi 5, quando o resumo o traz (`null` se não vier). */
   rpi5: Rpi5 | null
+  /** Continuidade do backend como o `/api/state` a anuncia (`null` se não vier). */
+  loop: boolean | null
+}
+
+/** `true`/`false` quando o valor é mesmo booleano; `null` para tudo o resto (nunca se inventa). */
+function booleano(bruto: unknown): boolean | null {
+  return typeof bruto === "boolean" ? bruto : null
 }
 
 /** Constantes físicas de recurso (lab/crazyflie.py + env.py) usadas SÓ para derivar valores de ecrã. */
@@ -186,6 +198,7 @@ export function lerSim(bruto: unknown): RespostaSim {
     retorno: numero(o.retorno) ?? ultima?.retorno ?? 0,
     vento: lerVento(o.vento, o.vento_atual),
     ventoDinamico: lerVentoDinamico(o.vento_dinamico),
+    loop: booleano(o.loop),
     rpi5: lerRpi5(o.rpi5),
     linhas,
   }
@@ -234,6 +247,7 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     np: numero(primeiro("np", "np_random")),
     ventoDinamico: lerVentoDinamico(primeiro("vento_dinamico")),
     rpi5: lerRpi5(primeiro("rpi5")),
+    loop: booleano(primeiro("loop")),
   }
 }
 

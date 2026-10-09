@@ -13,12 +13,17 @@ este processo por DOIS FICHEIROS:
       - vento → `env.definir_vento(vel, azimute, elevacao)` (com `ativo: false` → vento 0);
       - `reiniciar` → contador; quando MUDA é um REINICIAR (1.º contador visto é linha de base; um contador
         ≥ 1 que apareça sem ficheiro prévio é um REINICIAR já pedido — mesma regra do net_probe/dashboard);
-      - `loop` → `true` liga o auto-reset no fim do episódio, `false` volta à espera (campo ausente = não mexe).
+      - `loop` → `true` (PADRÃO desde a ronda 7) mantém o rollout CONTÍNUO: no fim do episódio faz reset e
+        segue (ep+1, passo 0) sem congelar nem pedir nada; `false` é opt-in e volta ao comportamento antigo
+        (a física PARA e só um REINICIAR retoma). Campo ausente = não mexe; `--sem-loop` no CLI é o mesmo.
   · TELEMETRIA (escrita AQUI, ~10 Hz = 1 linha JSON por amostra; 1 Hz com o episódio parado)
-      out/sim_telemetria.jsonl = {"t","estado","ep","passo","retorno","z","dist_xy","yaw_err","vento_vel",
-                                  "vento_azim","obs":[16],"act":[4],"ctrl":[4],"h1":[64],"h2":[64]}
+      out/sim_telemetria.jsonl = {"t","estado","loop","ep","passo","retorno","z","dist_xy","yaw_err",
+                                  "vento_vel","vento_azim","vento_vec","vento_modo","obs":[16],"act":[4],
+                                  "ctrl":[4],"h1":[64],"h2":[64]}
     `t` = tempo de SIMULAÇÃO do episódio (s, volta a 0 em cada reset); `estado` = "a_correr" |
-    "episodio_terminado"; `obs`/`act`/`ctrl` na MESMA linha que `h1`/`h2` (ativações da MLP por forward hooks
+    "episodio_terminado" (este SÓ com `loop: false` e o episódio acabado — com o contínuo a transição é
+    invisível e o estado mantém-se "a_correr"); `loop` = modo em vigor no runner (aditivo); `obs`/`act`/`ctrl`
+    na MESMA linha que `h1`/`h2` (ativações da MLP por forward hooks
     nos `nn.Linear`, a mesma técnica do net_probe: `h1` = saída da 1.ª Linear, `h2` = da 2.ª); `act` é a ação
     de política (Box(-1,1)⁴) e `ctrl` o comando FÍSICO que ela produziu (`data.ctrl` = [empuxo N, mx, my, mz
     N·m], via `env.acao_para_ctrl`/`aplicar_acao`) — o site mostra o `ctrl` do backend sem o derivar da ação.
@@ -49,10 +54,15 @@ A assinatura do bloco (`modo`+`params`+`ativo`+`seq`) evita re-disparos: reescre
 bloco não faz nada — o site incrementa o `seq` quando quer disparar outra rajada igual. A telemetria mostra
 `vento_vec` (vx,vy,vz m/s, o vento que a física leva) e `vento_modo` (modo em vigor) em cada amostra.
 
-SEM AUTO-LOOP POR OMISSÃO: quando o episódio termina (`terminated` OU `truncated`) a física PARA (nenhum
-`env.step` a partir daí) e o estado passa a "episodio_terminado"; só um REINICIAR do site (ou `--loop`, ou
-`loop: true` no controlo) arranca o episódio seguinte. Com o episódio parado o processo continua vivo: lê o
-controlo, mantém a janela a responder e escreve um batimento por segundo na telemetria.
+CONTÍNUO POR OMISSÃO (ronda 7, preferência do dono): quando o episódio termina (`terminated` OU `truncated`)
+faz reset e SEGUE — ep+1, passo 0 — sem congelar, sem mensagem de erro e sem pedir nada. A transição é
+INVISÍVEL para quem trabalha: o vento base, o modo dinâmico e uma rajada one-shot a meio ATRAVESSAM o reset
+(`Controlo.reaplicar` volta a escrever o controlo em vigor logo depois do `env.reset`, porque o ficheiro de
+controlo é a fonte); o `seq` do bloco dinâmico não muda, logo nada é re-disparado por engano.
+`loop: false` no controlo (ou `--sem-loop`) é OPT-IN e mantém o comportamento antigo: a física PARA no fim do
+episódio, o estado passa a "episodio_terminado" e só um REINICIAR do site retoma (o processo continua vivo:
+lê o controlo, mantém a janela a responder e escreve um batimento por segundo na telemetria). O contador
+`reiniciar` funciona em QUALQUER estado — é um reset manual, mesmo com o episódio a correr.
 
     uv run --group hover-rl python experiments/09_drone_hover_rl/sim_view.py                    # janela limpa
     uv run --group hover-rl python experiments/09_drone_hover_rl/sim_view.py --fator-tempo 0.5  # metade da velocidade
@@ -454,11 +464,39 @@ class Controlo:
         return True
 
     def cancelar_rajada(self, env: HoverEnv) -> None:
-        """Corta a rajada one-shot (fim de episódio/reinício) e volta ao vento base."""
+        """Corta a rajada one-shot (só quando a física PARA: com o episódio congelado não avança) e volta
+        ao vento base. Um RESET de episódio NÃO corta a rajada — ver `reaplicar`."""
         if self.rajada is None:
             return
         self.rajada = None
         self._aplica_base(env)
+
+    def reaplicar(self, env: HoverEnv) -> None:
+        """Volta a escrever o controlo EM VIGOR depois de um `env.reset` (transição de episódio invisível).
+
+        O ficheiro de controlo é a FONTE: um reset não pode apagar o que o dono pediu. Reaplica o vento
+        base, o modo dinâmico (degrau do `frente` incluído) e RE-ARMA uma rajada one-shot que tenha sido
+        pedida e ainda não tenha corrido (ex.: foi pedida com a física parada ou caiu a meio de um reset) —
+        sem isto, mexer no vento em tempo real "perdia-se" no reset seguinte. Uma rajada já CONCLUÍDA não
+        volta a disparar (o `seq` novo no controlo é que manda).
+        """
+        self._aplica_base(env)
+        din = self.dinamico
+        if din is None or not din.ativo or din.modo == "nenhum":
+            env.definir_vento_dinamico(None)
+            return
+        if din.modo == "rajada_agora":
+            if self.rajada is None and not self.rajada_concluida:
+                self._inicia_rajada(env, din)            # re-arma a rajada perdida
+            return
+        formato, params = _params_frente(din.params) if din.modo == "frente" else ("env", din.params)
+        if formato == "base":
+            self._aplica_degrau(env, params)
+            return
+        try:
+            env.definir_vento_dinamico({"modo": din.modo, **params})
+        except ValueError as erro:                       # já validado quando o bloco entrou: não deve correr
+            self._aviso(f"vento dinamico '{din.modo}' recusado no reset: {erro}")
 
     def modo_efetivo(self) -> str:
         """Modo de vento dinâmico EM VIGOR agora (o que a telemetria publica em `vento_modo`).
@@ -642,7 +680,7 @@ class Estado:
     completos: int = 0               # episódios já terminados nesta sessão
     congelado: bool = False          # episódio terminado: a física está PARADA à espera de REINICIAR
     pausado: bool = False
-    loop: bool = False
+    loop: bool = True                # CONTÍNUO por omissão (o `loop:false` do controlo/`--sem-loop` congela)
     vento_modo: str = "nenhum"       # modo dinâmico EM VIGOR (para a telemetria): nenhum/rajadas/...
     obs: np.ndarray | None = None
     acao: np.ndarray | None = None
@@ -671,6 +709,7 @@ def amostra(env: HoverEnv, est: Estado) -> dict:
     return {
         "t": round(float(env.data.time), PRECISAO),
         "estado": "episodio_terminado" if est.congelado else "a_correr",
+        "loop": bool(est.loop),                         # CONTÍNUO por omissão (aditivo ao contrato)
         "ep": int(est.ep),
         "passo": int(env.passos),
         "retorno": round(float(est.retorno), PRECISAO),
@@ -709,11 +748,13 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     Devolve 0. `viewer=None` → sem janela (nenhum import de GLFW/GL é feito aqui). Um `viewer` falso (testes)
     só precisa de `sync()`, `is_running()`, `lock()`, `m` e `viewport` — nunca se lhe toca no texto/figuras.
     """
-    est = Estado(loop=bool(args.loop), congelado=False)
+    est = Estado(loop=not getattr(args, "sem_loop", False), congelado=False)
     _reiniciar(env, est, sonda, args.seed, ep=1)
     telemetria.escrever(amostra(env, est))               # linha de evento do arranque
     print(f"[sim] rollout: ep 1 comecou (seed {args.seed}, vento {_vento_polar(env)[0]:.2f} m/s); "
-          f"sem --loop a fisica PARA no fim do episodio e so um REINICIAR a retoma", flush=True)
+          + ("CONTINUO: no fim do episodio reinicia sozinho (ep+1, passo 0)"
+             if est.loop else
+             "loop:false -> a fisica PARA no fim do episodio e so um REINICIAR a retoma"), flush=True)
     proximo = time.perf_counter()
     t_ini = proximo
     terminar = False
@@ -743,8 +784,8 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             print(f"[sim] loop {'ligado' if est.loop else 'desligado'} pelo controlo", flush=True)
         if controlo.consumir_reinicio():
             novo_ep = est.ep + 1 if (env.passos > 0 or est.congelado) else est.ep
-            controlo.cancelar_rajada(env)                # um episódio novo não herda a rajada em curso
             _reiniciar(env, est, sonda, args.seed + novo_ep - 1, ep=novo_ep)
+            controlo.reaplicar(env)                      # o reset não apaga o que o dono pediu
             est.vento_modo = controlo.modo_efetivo()
             telemetria.escrever(amostra(env, est))       # evento: episódio novo, passo 0
             print(f"[sim] REINICIAR: ep {est.ep} comecou (passo 0, retorno 0)", flush=True)
@@ -784,18 +825,18 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
                 print(f"[sim] {fim} -> --max-episodios {args.max_episodios} atingido (nao arranca outro)",
                       flush=True)
                 break
-            if est.loop:                                 # auto-reset pedido (--loop ou loop:true)
-                print(f"[sim] {fim} -> auto-reset (--loop)", flush=True)
-                controlo.cancelar_rajada(env)
+            if est.loop:                                 # CONTÍNUO (padrão; `--loop`/`loop:true`)
+                print(f"[sim] {fim} -> auto-reset continuo (ep {est.ep + 1}, passo 0)", flush=True)
                 _reiniciar(env, est, sonda, args.seed + est.ep, ep=est.ep + 1)
+                controlo.reaplicar(env)                  # a transição é INVISÍVEL: o controlo volta a valer
                 est.vento_modo = controlo.modo_efetivo()
                 telemetria.escrever(amostra(env, est))
             else:
-                est.congelado = True                     # SEM auto-loop: a física PARA aqui
+                est.congelado = True                     # `loop:false`: a física PARA aqui
                 controlo.cancelar_rajada(env)            # com a física parada a rajada não avança: corta-se
                 est.vento_modo = controlo.modo_efetivo()
                 telemetria.escrever(amostra(env, est))   # evento imediato (não espera pelos 0,1 s)
-                print(f"[sim] {fim} - episodio_terminado: a fisica esta PARADA, reinicie pelo site",
+                print(f"[sim] {fim} - loop:false: a fisica esta PARADA; um REINICIAR retoma o episodio",
                       flush=True)
         if viewer is not None:
             viewer.sync()
@@ -960,8 +1001,9 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
             "`frente` aceita {vel,azimute,elevacao} (degrau IMEDIATO do vento base) ou {u_max,t_s} (degrau em\n"
             "curso do env); `rajada_agora` = {u,azimute,elevacao,duracao} (one-shot dirigido).\n"
             "\n"
-            "Sem auto-loop por omissão: no fim do episódio a física PARA e só um REINICIAR (site) ou\n"
-            "--loop/loop:true a retoma."
+            "Sem auto-loop por omissão: NÃO — desde a ronda 7 o rollout é CONTÍNUO (no fim do episódio\n"
+            "reinicia sozinho, ep+1, sem congelar). `loop:false` no controlo ou --sem-loop mantêm o\n"
+            "comportamento antigo (física PARADA à espera de um REINICIAR)."
         ),
     )
     p.add_argument("--model", type=Path, default=None,
@@ -979,8 +1021,11 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                    help="ritmo do rollout: 1 = tempo real (PADRÃO), 2 = 2x mais rápido, 0.5 = metade, "
                         "0 = sem travão (o mais rápido possível)")
     p.add_argument("--loop", action="store_true",
-                   help="auto-reset no fim de cada episódio (por omissão a física PARA e espera um "
-                        "REINICIAR; o campo `loop` do controlo liga/desliga isto a quente)")
+                   help="auto-reset no fim de cada episódio — JÁ É O PADRÃO (CONTÍNUO); a flag fica aceite "
+                        "por compatibilidade. O campo `loop` do controlo liga/desliga isto a quente")
+    p.add_argument("--sem-loop", action="store_true",
+                   help="desliga o contínuo: no fim do episódio a física PARA e só um REINICIAR (do site) "
+                        "retoma — é o comportamento antigo, agora opt-in (`loop: false` no controlo faz o mesmo)")
     p.add_argument("--seed", type=int, default=0,
                    help="semente do reset — o episódio N usa seed + N - 1 (padrão: 0)")
     p.add_argument("--max-segundos", type=float, default=0.0, metavar="S",
@@ -1012,7 +1057,8 @@ def main(argv=None) -> int:
     print(f"[sim] modelo: {caminho} ({motivo})")
     print(f"[sim] controlo: {_relativo(args.controlo)} | telemetria: {_relativo(args.telemetria)}")
     print(f"[sim] modo: {modo} | ritmo: {ritmo} | "
-          f"loop: {'ligado' if args.loop else 'desligado (espera REINICIAR)'}", flush=True)
+          f"loop: {'ligado (continuo, padrao)' if not args.sem_loop else 'desligado (--sem-loop: espera REINICIAR)'}",
+          flush=True)
     try:
         if args.sem_janela:
             return correr(env, politica, controlo, telemetria, sonda, args)

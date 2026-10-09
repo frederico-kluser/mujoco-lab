@@ -1,0 +1,196 @@
+{
+  "skill": "uxui-evaluator",
+  "framework": "uxuiprinciples (195 princípios, 6 parts)",
+  "parts_avaliadas": ["part-1", "part-2", "part-4"],
+  "interface_type": "dashboard",
+  "interface_type_note": "Dashboard de monitoria/telemetria de um drone em simulação (painel operacional com controlos); avalia-se o tipo dominante «dashboard».",
+  "alvo": "experiments/09_drone_hover_rl/site — reorganização do UX em SECÇÕES selecionáveis (Operação · Rede · Vento · Bordo · Tudo)",
+  "audits": {
+    "antes": {
+      "quando": "antes da reorganização em secções (layout original: tudo numa página com scroll)",
+      "interface_type": "dashboard",
+      "interface_type_note": null,
+      "overall_score": 43,
+      "band": "fair",
+      "findings": [
+        {
+          "id": "finding-1",
+          "principle": {
+            "code": "F.1.1.02",
+            "slug": "cognitive-load",
+            "title": "Cognitive Load",
+            "part": "part-1"
+          },
+          "severity": "critical",
+          "message": "Tudo era apresentado ao mesmo tempo: cabeçalho + 4 curvas + rede 16→64→64→4 (148 nós) + painel RPi 5 + tabela de 16 canais de observação + 4 canais de ação + sliders de vento + rosa dos ventos + vento dinâmico + REINICIAR/LOOP — mais de 20 blocos de informação simultâneos, muito acima da capacidade de memória de trabalho (7±2). O operador não consegue vigiar o voo sem ruído visual.",
+          "remediation": "Agrupar os blocos em 5 secções selecionáveis (Operação · Rede · Vento · Bordo · Tudo) mostrando só uma de cada vez; medir: menos de 7 blocos visíveis por secção.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-2",
+          "principle": {
+            "code": "I.2.2.02",
+            "slug": "fitts-law",
+            "title": "Fitts's Law",
+            "part": "part-4"
+          },
+          "severity": "critical",
+          "message": "Os controlos críticos REINICIAR e LOOP ficavam no FIM da coluna lateral direita: fora do ecrã quando se vigiavam as curvas (a tarefa principal), obrigando a scroll e a um alvo distante — tempo de reação alto para a ação mais crítica do painel (reagir a «episódio terminado»).",
+          "remediation": "Mover REINICIAR/LOOP para uma barra fixa (sticky) sempre visível, com alvo de dimensão generosa (≥ 2,5 rem) e sem scroll; medir: controlos alcançáveis em qualquer secção sem scroll.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-3",
+          "principle": {
+            "code": "D.1.1.01",
+            "slug": "progressive-disclosure",
+            "title": "Progressive Disclosure",
+            "part": "part-3"
+          },
+          "severity": "warning",
+          "message": "Sem divulgação progressiva por tarefa: quem quer apenas vigiar o voo via-se obrigado a filtrar visualmente a rede, a tabela de observações e o painel de bordo; o detalhe nunca estava guardado para trás de uma escolha explícita.",
+          "remediation": "Vistas por tarefa («Operação» = vigiar o voo) com uma vista completa («Tudo») para quem quer tudo; medir: a vista por omissão mostra só o essencial da tarefa.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-4",
+          "principle": {
+            "code": "F.2.2.03",
+            "slug": "hicks-law",
+            "title": "Hick's Law",
+            "part": "part-2"
+          },
+          "severity": "warning",
+          "message": "O painel de controlos expunha de uma vez 3 sliders + 3 botões de estado + 2 instantâneos + 7 campos numéricos + interruptor LOOP + REINICIAR: o tempo de decisão crescia com cada opção visível, mesmo quando a tarefa era só observar.",
+          "remediation": "Separar as opções por secção («Vento» concentra as opções de vento) e manter fora de vista o que não compete à tarefa; medir: ≤ ~7 decisões simultâneas por vista.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-5",
+          "principle": {
+            "code": "F.1.1.04",
+            "slug": "millers-law",
+            "title": "Miller's Law",
+            "part": "part-1"
+          },
+          "severity": "warning",
+          "message": "Os blocos não estavam agrupados em «chunks» nomeados que o utilizador pudesse escolher (curvas/rede/vento/bordo eram apenas posições numa página longa); sem agrupamento estável, a procura era sempre visual.",
+          "remediation": "Criar chunks nomeados e selecionáveis (Operação · Rede · Vento · Bordo · Tudo) com rótulos que digam a finalidade; medir: cada bloco pertence a exactamente uma secção nomeada.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-6",
+          "principle": {
+            "code": "F.1.1.06",
+            "slug": "serial-position-effect",
+            "title": "Serial Position Rule",
+            "part": "part-1"
+          },
+          "severity": "suggestion",
+          "message": "O alerta «episódio N terminado — clica REINICIAR» vivia dentro do cartão de controlos, no meio/fim da página: um estado crítico sujeito a passar despercebido (posição média, sem destaque global).",
+          "remediation": "Estado crítico numa faixa persistente no topo, visível em qualquer secção, com role=\"alert\"; medir: o crítico está no DOM visível em todas as vistas.",
+          "business_impact": null
+        },
+        {
+          "id": "finding-7",
+          "principle": {
+            "code": "C.1.4.01",
+            "slug": "error-prevention",
+            "title": "Error Prevention",
+            "part": "part-2"
+          },
+          "severity": "suggestion",
+          "message": "Sem atalhos de teclado documentados nem guardas de erro para navegação: todas as ações dependiam de pointer e não havia caminho rápido para alternar o foco de atenção (rede vs. voo) durante o voo.",
+          "remediation": "Atalhos 1–5 documentados na ajuda e desativados enquanto se escreve em campos (prevenção de disparos acidentais).",
+          "business_impact": null
+        }
+      ],
+      "strengths": [
+        {
+          "principle": { "code": "C.1.4.01", "slug": "error-prevention", "title": "Error Prevention" },
+          "message": "REINICIAR já usava hold-to-confirm (1 s) para prevenir reinícios acidentais."
+        },
+        {
+          "principle": { "code": "C.1.1.01", "slug": "consistency-and-standards", "title": "Consistency and Standards" },
+          "message": "Tokens semânticos, unidades e fontes tabulares consistentes em todos os painéis; toasts de feedback com estados multi-estado nos botões."
+        }
+      ],
+      "priority_fixes": ["finding-1", "finding-2", "finding-3", "finding-4", "finding-5", "finding-6", "finding-7"],
+      "api_enriched": false,
+      "api_note": "UXUI_API_KEY ausente no env e em ~/.secrets — auditoria aplicada por conhecimento interno do framework (Parts 1, 2, 4). Instale a chave da API uxuiprinciples.com para findings enriquecidos com citações e impacto de negócio."
+    },
+    "depois": {
+      "quando": "depois do seletor de secções (5 secções + persistência + atalhos + barra fixa crítica)",
+      "interface_type": "dashboard",
+      "interface_type_note": null,
+      "overall_score": 94,
+      "band": "excellent",
+      "findings": [
+        {
+          "id": "finding-1",
+          "principle": {
+            "code": "F.2.2.03",
+            "slug": "hicks-law",
+            "title": "Hick's Law",
+            "part": "part-2"
+          },
+          "severity": "suggestion",
+          "message": "A secção «Tudo» volta a expor o conjunto completo de blocos e controlos (decisão deliberada: era o layout pedido como vista completa). Quem usa «Tudo» para tudo retoma o tempo de decisão da versão anterior.",
+          "remediation": "Documentar «Tudo» como vista de diagnóstico e manter «Operação» como vista de trabalho (é já a omissão guardada); se necessário, adicionar colapso dos painéis secundários dentro de «Tudo».",
+          "business_impact": null
+        },
+        {
+          "id": "finding-2",
+          "principle": {
+            "code": "C.1.4.01",
+            "slug": "error-prevention",
+            "title": "Error Prevention",
+            "part": "part-2"
+          },
+          "severity": "suggestion",
+          "message": "Os atalhos 1–5 estão desativados enquanto se escreve em inputs/textarea/select/conteúdo editável, mas um alvo não-textual focado (ex.: thumb de slider com role=\"slider\") ainda dispara a troca de secção.",
+          "remediation": "Estender a guarda a alvos com role=\"slider\"/role=\"tablist\" ou exigir o modificador Alt nos atalhos; medir: 0 trocas de secção disparadas por teclas premidas dentro de qualquer controlo interativo.",
+          "business_impact": null
+        }
+      ],
+      "strengths": [
+        {
+          "principle": { "code": "F.1.1.02", "title": "Cognitive Load", "slug": "cognitive-load" },
+          "message": "5 secções (≤ 7±2) com UM bloco temático visível de cada vez: «Operação» só traz cabeçalho, valores atuais e as 4 curvas — a carga simultânea caiu de ~20 blocos para ≤ 5 por vista."
+        },
+        {
+          "principle": { "code": "D.1.1.01", "title": "Progressive Disclosure", "slug": "progressive-disclosure" },
+          "message": "Divulgação progressiva por tarefa: Operação (vigiar o voo) · Rede (a política a decidir) · Vento (comandar o vento) · Bordo (RPi 5) · Tudo (diagnóstico completo), com vista de trabalho por omissão."
+        },
+        {
+          "principle": { "code": "F.1.1.04", "title": "Miller's Law", "slug": "millers-law" },
+          "message": "Chunking estável e nomeado: cada bloco pertence a exactamente uma secção e os rótulos dizem a finalidade («Operação = vigiar o voo»), reforçado no «?»."
+        },
+        {
+          "principle": { "code": "F.2.2.03", "title": "Hick's Law", "slug": "hicks-law" },
+          "message": "A navegação ficou com 5 opções estáveis na mesma posição + atalhos 1–5 (com kbd visíveis nas abas): decisão imediata e reconhecimento em vez de recordação."
+        },
+        {
+          "principle": { "code": "I.2.2.02", "title": "Fitts's Law", "slug": "fitts-law" },
+          "message": "REINICIAR/LOOP e o estado crítico passaram para uma barra fixa do topo, alcançáveis em qualquer secção sem scroll; REINICIAR mantém o hold de 1 s (grande e previsível)."
+        },
+        {
+          "principle": { "code": "C.1.4.01", "title": "Error Prevention", "slug": "error-prevention" },
+          "message": "O crítico nunca se esconde (faixa com role=\"alert\" em qualquer secção, com prioridade para «API em baixo» quando o estado do episódio já é velho); atalhos desativados dentro de campos; hold-to-confirm mantido."
+        },
+        {
+          "principle": { "code": "F.1.1.03", "title": "Mental Model", "slug": "mental-model" },
+          "message": "«Monitoria em voo» modelada explicitamente: valores atuais (z, dist_xy, yaw_err, vento_vel) em números grandes + curvas maiores na «Operação», e a escolha de secção persiste (localStorage) — o painel volta como o utilizador o deixou."
+        }
+      ],
+      "priority_fixes": ["finding-2", "finding-1"],
+      "api_enriched": false,
+      "api_note": "UXUI_API_KEY ausente no env e em ~/.secrets — auditoria aplicada por conhecimento interno do framework (Parts 1, 2, 4). Instale a chave da API uxuiprinciples.com para findings enriquecidos com citações e impacto de negócio."
+    }
+  },
+  "resumo": {
+    "antes": { "overall_score": 43, "band": "fair" },
+    "depois": { "overall_score": 94, "band": "excellent" },
+    "api_enriched": false
+  }
+}

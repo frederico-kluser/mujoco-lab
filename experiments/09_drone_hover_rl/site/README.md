@@ -2,8 +2,10 @@
 
 Aplicação **React + TypeScript + Vite + Tailwind/shadcn**, construída com a skill `motion-plus-ui`
 (registry `@motion`) e servida pelo backend `sim_site.py`, que também expõe a API. Uma página, sem
-navegação: cabeçalho · curvas · rede 16→64→64→4 · **Raspberry Pi 5** · observação/ação · controlos
-(vento constante + **vento dinâmico**) · botão **«?»** com a ajuda.
+navegação, organizada em **SECÇÕES selecionáveis** — «eu escolho o que ver, para melhorar a monitoria
+enquanto o drone opera»: **Operação** (vigiar o voo) · **Rede** · **Vento** · **Bordo** (RPi 5) ·
+**Tudo** (layout completo) — mais o botão **«?»** com a ajuda e uma **barra fixa** do topo que nunca se
+esconde (seletor de secções · **REINICIAR** · **LOOP** · estado crítico).
 
 ## Arranque
 
@@ -19,11 +21,36 @@ CORS nem configuração). Para apontar o `dist/` estático a **outro** porto (te
 `index.html?api=http://127.0.0.1:8765` ou `window.__SIM_API_BASE__`. A ajuda também se abre já aberta
 por link: `index.html?ajuda=1` (útil para partilhar e para provas de DOM em headless).
 
+## Secções selecionáveis (monitoria em voo)
+
+O seletor fica na **barra fixa do topo** (`smooth-tabs` do registry `@motion`) com 5 secções; **só uma
+fica visível de cada vez** e a escolha é **persistente** — guardada em `localStorage` sob
+`09_drone_hover_rl:seccao` e recuperada ao reabrir a página.
+
+| secção | tecla | para que serve |
+|---|---|---|
+| **Operação** | `1` | vigiar o voo: cabeçalho (selo de estado, contadores, modelo), **valores atuais** (z, dist_xy, yaw_err, vento_vel) e as 4 curvas **grandes** (z, yaw_err, retorno, vento_vel) |
+| **Rede** | `2` | a política a decidir: rede 16→64→64→4 com ativações ao vivo, observação (16 canais) e ação (4 canais) |
+| **Vento** | `3` | comandar o vento: sliders constantes, rosa dos ventos, APLICAR/PARAR e vento dinâmico (rajadas, Dryden, frente) |
+| **Bordo** | `4` | computador de bordo: painel do Raspberry Pi 5 |
+| **Tudo** | `5` | layout completo: todas as secções, com a coluna de controlos à direita (como antes do seletor) |
+
+- **atalhos 1–5** (documentados no «?» e visíveis nas abas): saltam de secção; as setas do teclado
+  percorrem as abas; os atalhos **não atuam** enquanto se escreve num campo (input/textarea/select ou
+  conteúdo editável) nem com o rato/foco sobre um slider (alvo, foco real ou `pointerover` dentro de
+  `[role="slider"], [data-slider], [data-slot="slider"], [aria-valuenow]`).
+- **o que nunca se esconde**: a faixa de **estado crítico** (API em baixo — e episódio terminado só no modo «parar no fim» — com
+  `role="alert"`; com a API em baixo o alerta de ligação tem prioridade porque o estado do episódio já
+  é velho) e os controlos **REINICIAR/CONTINUIDADE** — ambos na barra fixa, em qualquer secção.
+- **updates continuam com a secção escondida**: os blocos escondem com o atributo `hidden` **sem se
+  desmontarem** (`BlocoSecao`), logo o polling (`GET /api/sim`) continua, os widgets mantêm o estado
+  (sliders e params dinâmicos não perdem o rascunho) e, ao voltar à secção, os valores estão frescos.
+
 ## Contrato da API (é o que o site consome)
 
 | pedido | resposta |
 |---|---|
-| `GET /api/sim` | `{estado:"a_correr"\|"episodio_terminado", ep, passo, retorno, vento:{vel,azimute,elevacao,ativo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,[vel,azimute,elevacao],modo,fonte}, rpi5:{…}, linhas:[{t,estado,ep,passo,retorno,z,dist_xy,yaw_err,vento_vel,vento_azim,vento_vec[3],vento_modo,obs[16],act[4],h1[64],h2[64],ctrl?[4]}]}` |
+| `GET /api/sim` | `{estado:"a_correr"\|"episodio_terminado", ep, passo, retorno, loop?, vento:{vel,azimute,elevacao,ativo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,[vel,azimute,elevacao],modo,fonte}, rpi5:{…}, linhas:[{t,estado,ep,passo,retorno,z,dist_xy,yaw_err,vento_vel,vento_azim,vento_vec[3],vento_modo,obs[16],act[4],h1[64],h2[64],ctrl?[4]}]}` |
 | `GET /api/state` | resumo; o site lê **`modelo_nome`** primeiro (`pasta/ficheiro.zip`, o rótulo legível) e só depois `modelo`/`model`/… — e, se existirem, `mg`, `thrust_max`, `momento_max`, `tau_escala`, `rpi5` |
 | `POST /api/vento` | `{vel 0–5, azimute 0–360, elevacao −90–90}` → 200/400 |
 | `POST /api/vento-dinamico` | `{modo:"nenhum"\|"rajadas"\|"frente"\|"dryden"\|"rajada_agora", params?, ativo?}` → 200/400 |
@@ -54,8 +81,13 @@ rótulo de painel, não um explorador de ficheiros, e a página pode ser partilh
 `best_model.zip`). 34 e não 26 porque os nomes deste laboratório cabem inteiros
 (`vento_r9_polir_vento3/final.zip` = 31, `out/runs/seed0/best_model.zip` = 29).
 
-**Semântica:** o site **nunca** reinicia sozinho. `estado=episodio_terminado` mostra
-«episódio N terminado — clica REINICIAR»; com o **LOOP** ligado quem reinicia é o **backend**. Nenhum
+**Semântica (ronda 4 — continuidade por omissão):** o site **nunca** reinicia sozinho e o
+REINICIAR **nunca é preciso para continuar a trabalhar**. O backend é **CONTÍNUO por omissão**
+(`loop:true`): ao terminar o episódio arranca logo o seguinte, a faixa de estado fica NEUTRA («episódio a
+correr · modo contínuo») e o site limita-se a um **toast discreto** «episódio N · contínuo». A faixa
+vermelha «episódio N terminado — clica REINICIAR» (com `role="alert"` e anel no botão) só aparece no modo
+**«PARAR NO FIM»** (`loop:false`, via `POST /api/loop {ativo:false}`) — e aí o REINICIAR retoma. O que
+exige ação (API em baixo) fica sempre vermelho, em qualquer secção. Nenhum
 controlo de vento (constante ou dinâmico) reinicia o episódio: todos escrevem no ficheiro de controlo e a
 física muda no passo de decisão seguinte.
 
@@ -83,7 +115,9 @@ física muda no passo de decisão seguinte.
 ## Ajuda «?»
 
 `components/sim/ajuda.tsx` — botão fixo (canto inferior direito) que abre uma **folha** (`sheet` do
-catálogo, `<dialog>` nativo, arrastável) com uma secção por elemento visível da página: cabeçalho/selos,
+catálogo, `<dialog>` nativo, arrastável) com uma secção por elemento visível da página: **seletor de
+secções** (o que cada secção serve, atalhos 1–5, persistência e updates com a secção escondida),
+cabeçalho/selos,
 curvas, rede, obs (o que é cada rótulo `dp`/`rpy`/`v`/`ω`/`a_prev`), ação, vento constante, vento
 dinâmico, rosa dos ventos, RPi 5 e episódio/estados. O conteúdo é **estrutura de dados** (`SECOES_AJUDA`)
 e o componente só a percorre: acrescentar uma explicação é acrescentar um objeto, sem tocar em JSX.
@@ -93,18 +127,19 @@ e o componente só a percorre: acrescentar uma explicação é acrescentar um ob
 ```
 src/
   main.tsx                    MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider
-  App.tsx                     grelha: cabeçalho · principal (curvas/rede/RPi5/obs/ação) · controlos (sticky) · ajuda · toasts
+  App.tsx                     barra fixa (seletor · REINICIAR/CONTINUIDADE · estado crítico), `loop` lido da API, aviso de episódio novo + as secções (operacao/rede/vento/bordo/tudo) · ajuda · toasts
   lib/sim.ts                  tipos do contrato, normalização defensiva, rótulos das 16 obs/4 ações
   lib/api.ts                  fetch dos 5 endpoints (erros legíveis; `?api=` para testes)
   hooks/use-sim.ts            polling, fusão do histórico, estado de ligação, ações (POST)
+  components/sim/seccoes.tsx      seletor de secções (smooth-tabs), persistência (localStorage), atalhos 1–5, faixa de estado, BlocoSecao
   components/sim/cabecalho.tsx    estado do episódio, contadores, modelo, ligação
-  components/sim/curvas.tsx       z(t) com a linha do alvo 1,0 · yaw_err · retorno · vento_vel
+  components/sim/curvas.tsx       valores atuais (z, dist_xy, yaw_err, vento_vel) + z(t) com a linha do alvo 1,0 · yaw_err · retorno · vento_vel
   components/sim/rede.tsx         ativações 16→64→64→4 (SVG, cor por |a|)
   components/sim/rpi5.tsx         painel do alvo: imagem, specs, medidores e semáforo
   components/sim/rosa-ventos.tsx  bússola viva: seta do vetor em vigor, seleção, N/E/S/O, rajada
   components/sim/ajuda.tsx        botão «?» + SECOES_AJUDA (o que é cada elemento)
   components/sim/observacoes.tsx  tabela das 16 obs (obs/cru/barra) + ação (empuxo em N e momentos)
-  components/sim/controlos.tsx    vento (sliders + APLICAR/PARAR) · dinâmico · REINICIAR (hold) · LOOP
+  components/sim/controlos.tsx    ControlosVento (sliders + APLICAR/PARAR + dinâmico) · ControlosEpisodio (REINICIAR hold · continuidade, barra fixa)
   components/sim/avisos.tsx       toasts das ações (toast-stack)
   assets/rpi5.webp            imagem do alvo (ilustração de referência; CC BY-SA 3.0)
   components/motion-ui/**     componentes do registry @motion (source do CLI — não editar)
@@ -125,8 +160,8 @@ src/
 | **FRENTE AGORA** | degrau de vento imediato (interruptor: clicar outra vez desliga) |
 | **duração da rajada** | passos de decisão (25 = 0,5 s a 50 Hz) |
 | **PARAR DINÂMICO** | `{"modo":"nenhum","ativo":false}` |
-| **REINICIAR (manter 1 s)** | `hold-to-confirm` — o ÚNICO caminho para reiniciar |
-| **LOOP** | auto-reset pelo BACKEND (off por omissão) |
+| **REINICIAR (manter 1 s)** | `hold-to-confirm` — o ÚNICO caminho para reiniciar (barra fixa do topo, em qualquer secção) |
+| **CONTINUIDADE · CONTÍNUO / PARAR NO FIM** | mostra o que o BACKEND faz (campo `loop` da API, não uma preferência do browser): **CONTÍNUO** (por omissão) reinicia sozinho ao terminar; **PARAR NO FIM** para a física no fim do episódio. `POST /api/loop {ativo}` (barra fixa do topo) |
 
 A **rosa dos ventos** (`rosa-ventos.tsx`) mostra duas setas: a **sólida** é o vetor EM VIGOR
 (base + dinâmica, da telemetria) e a **tracejada** é a seleção dos sliders; tem N/E/S/O com graus
@@ -137,13 +172,14 @@ enquanto há dinâmica ativa e a elevação no centro.
 
 | componente | onde |
 |---|---|
+| `smooth-tabs` (`SmoothTabs`/`SmoothTabsList`/`SmoothTabsTab`) | seletor de secções da barra fixa (pílula deslizante + foco nômade por setas) |
 | `sparkline` | as 4 curvas (`curvas.tsx`), com a linha do alvo na `grid` |
 | `animated-number` | contadores do cabeçalho, valor de cada curva e % dos medidores do RPi 5 |
 | `stagger-reveal` | entrada do título do cabeçalho (`splitText` linha a linha + seguidor) |
 | `progress-bar` | barras da observação/ação e os 3 medidores do RPi 5 (p50, p99, CPU) |
 | `hold-to-confirm` | botão **REINICIAR** (manter 1 s) |
 | `multi-state-button` | **APLICAR VENTO**, **RAJADA AGORA** e **FRENTE AGORA** (pronto/a enviar/ok/erro/ativo) |
-| `segmented-toggle` | **LOOP** e o modo dinâmico contínuo (**PARADO/RAJADAS/DRYDEN**) |
+| `segmented-toggle` | **CONTINUIDADE** (**CONTÍNUO/PARAR NO FIM**) e o modo dinâmico (**PARADO/RAJADAS/DRYDEN**) |
 | `sheet` (`Sheet`/`SheetBackdrop`/`SheetPanel`/`SheetClose`/`useSheet`) | folha da **ajuda «?»** |
 | `accordion` (`Accordion`/`AccordionItem`/`AccordionTrigger`/`AccordionPanel`/`AccordionChevron`) | secções da ajuda |
 | `toast-stack` | avisos das ações e erros da API |
@@ -151,6 +187,10 @@ enquanto há dinâmica ativa e a elevação no centro.
 | `ui-theme`, `motion.theme.ts` | tokens de movimento (`snap`/`ui`/`gentle`/…) |
 
 Passo 4 da cascata (código novo), com justificação de uma linha cada:
+
+- **`seccoes.tsx` · painéis das secções (`hidden`)** — o `smooth-tabs` traz o crossfade de painéis com
+  mount/unmount, mas a monitoria exige widgets vivos e estado (sliders) preservado com a secção
+  escondida: usam-se os TABS do catálogo e os blocos escondem com `hidden` sem se desmontarem.
 
 - **`rede.tsx`** — o catálogo não tem visualizador de ativações (`sparkline` é série temporal,
   `progress-bar` é barra): grelha SVG por camada, cor por `|a|`. Sem arestas porque o contrato só traz
@@ -183,6 +223,11 @@ que serve o `dist/` **e** a API (com `rpi5` em quatro modos: `proxy`, `real`, `s
   sliders e a duração do campo), **FRENTE AGORA**, **RAJADAS**, **PARAR DINÂMICO**
   (`{"modo":"nenhum","ativo":false}`), anel da rajada na rosa, e a prova de que **nenhum**
   `POST /api/reiniciar` sai do site;
+- provas do **seletor de secções** (Puppeteer + mock `/api/sim` que evolui no tempo): as 5 secções
+  presentes, cada uma a mostrar SÓ o seu conteúdo (blocos alheios `hidden`), «Tudo» completo, estado
+  crítico (episódio terminado · API em baixo) visível em qualquer secção, persistência da secção após
+  reload, valores frescos com «Operação» escondida, atalhos 1–5 (e a guarda dentro de campos) e
+  REINICIAR/LOOP acessíveis em qualquer secção;
 - contra o **backend real** (`sim_site.py --sem-janela --sem-browser --port N`): os modos pedidos
   aparecem em `vento_dinamico`, em `vento_atual.modo` e no `vento_modo`/`vento_vec` das linhas da
   telemetria, o painel mostra os números do benchmark e o contador de reinícios do servidor não mexe.

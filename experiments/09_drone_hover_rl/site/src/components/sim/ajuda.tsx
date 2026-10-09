@@ -54,9 +54,66 @@ export interface SeccaoAjuda {
 /** Conteúdo da ajuda, secção a secção (PT-PT, curto). */
 export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
+    id: "seccoes",
+    titulo: "Seletor de secções (e escolha guardada)",
+    onde: "barra fixa do topo — visível em qualquer secção",
+    itens: [
+      {
+        rotulo: "o que é",
+        texto:
+          "A barra do topo tem 5 secções e só se vê UMA de cada vez: escolhes o que queres ver em vez de ver tudo ao mesmo tempo (menos ruído para vigiar o voo).",
+      },
+      {
+        rotulo: "Operação (tecla 1)",
+        texto:
+          "vigiar o voo: cabeçalho (selo de estado, contadores, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel) e as 4 curvas grandes (z, yaw_err, retorno, vento_vel).",
+      },
+      {
+        rotulo: "Rede (tecla 2)",
+        texto:
+          "ver a política a decidir: rede 16→64→64→4 com ativações ao vivo, observação de 16 canais e ação de 4 canais.",
+      },
+      {
+        rotulo: "Vento (tecla 3)",
+        texto:
+          "comandar o vento: sliders do vento constante, rosa dos ventos, APLICAR/PARAR e o vento dinâmico (rajadas, Dryden, frente).",
+      },
+      {
+        rotulo: "Bordo (tecla 4)",
+        texto:
+          "acompanhar o computador de bordo: painel do Raspberry Pi 5 (p50/p99 vs budget, semáforo, specs).",
+      },
+      {
+        rotulo: "Tudo (tecla 5)",
+        texto:
+          "layout completo: todas as secções de uma vez, com a coluna de controlos à direita (como o painel era antes do seletor).",
+      },
+      {
+        rotulo: "atalhos 1–5",
+        texto:
+          "as teclas 1–5 saltam para a secção correspondente; as setas do teclado percorrem as abas. Os atalhos NÃO atuam enquanto escreves num campo nem com o rato/foco sobre um slider.",
+      },
+      {
+        rotulo: "escolha guardada",
+        texto:
+          "a secção ativa fica guardada no navegador (localStorage) e reaparece quando reabres a página.",
+      },
+      {
+        rotulo: "o que nunca se esconde",
+        texto:
+          "o estado crítico (API em baixo; episódio terminado SÓ no modo «parar no fim») e os controlos REINICIAR/CONTINUIDADE ficam sempre na barra do topo, em qualquer secção.",
+      },
+      {
+        rotulo: "updates com a secção escondida",
+        texto:
+          "a telemetria continua a chegar (GET /api/sim) mesmo com a secção escondida: os widgets só não estão à vista; ao voltares, os valores estão frescos.",
+      },
+    ],
+  },
+  {
     id: "cabecalho",
     titulo: "Cabeçalho, selos e contadores",
-    onde: "topo da página",
+    onde: "secção «Operação» (e «Tudo»)",
     itens: [
       {
         rotulo: "título e subtítulo",
@@ -66,7 +123,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "selo de estado",
         texto:
-          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando acabou (z fora dos limites, passo máximo, etc.). O site nunca reinicia sozinho.",
+          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando acabou (z fora dos limites, passo máximo, etc.). No modo contínuo (por omissão) o backend arranca logo o episódio seguinte; o site nunca reinicia sozinho — só o REINICIAR com hold faz POST /api/reiniciar.",
       },
       {
         rotulo: "selo de ligação",
@@ -93,7 +150,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "curvas",
     titulo: "Curvas ao vivo",
-    onde: "coluna principal, 4 gráficos",
+    onde: "secção «Operação» (e «Tudo»), 4 gráficos",
     itens: [
       {
         rotulo: "z(t)",
@@ -125,7 +182,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rede",
     titulo: "Rede da política · ativações",
-    onde: "coluna principal, sob as curvas",
+    onde: "secção «Rede» (e «Tudo»), coluna principal",
     itens: [
       {
         rotulo: "16 → 64 → 64 → 4",
@@ -147,7 +204,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "obs",
     titulo: "Observação · 16 canais",
-    onde: "coluna principal, canto inferior esquerdo",
+    onde: "secção «Rede» (e «Tudo»), sob a rede",
     itens: [
       {
         rotulo: "dp · dp_x, dp_y, dp_z",
@@ -184,7 +241,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "acao",
     titulo: "Ação · 4 canais",
-    onde: "coluna principal, canto inferior direito",
+    onde: "secção «Rede» (e «Tudo»), ao lado da observação",
     itens: [
       {
         rotulo: "a₀ · empuxo (N)",
@@ -206,7 +263,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "vento",
     titulo: "Vento constante (sliders)",
-    onde: "painel Controlos, secção «vento»",
+    onde: "secção «Vento» (e «Tudo»), painel Controlos de vento",
     itens: [
       {
         rotulo: "força (0–5 m/s)",
@@ -238,7 +295,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "dinamico",
     titulo: "Vento dinâmico (rajadas · turbulência · frente)",
-    onde: "painel Controlos, caixa «vento dinâmico»",
+    onde: "secção «Vento» (e «Tudo»), caixa «vento dinâmico»",
     itens: [
       {
         rotulo: "selo ativo/inativo e «modo em vigor»",
@@ -280,7 +337,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rosa",
     titulo: "Rosa dos ventos",
-    onde: "painel Controlos, sob os sliders",
+    onde: "secção «Vento» (e «Tudo»), sob os sliders",
     itens: [
       {
         rotulo: "seta sólida = vento em vigor",
@@ -307,7 +364,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rpi5",
     titulo: "Raspberry Pi 5 (computador de bordo)",
-    onde: "coluna principal, sob a rede da política",
+    onde: "secção «Bordo» (e «Tudo»), coluna principal",
     itens: [
       {
         rotulo: "imagem e fonte",
@@ -353,28 +410,33 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   },
   {
     id: "episodio",
-    titulo: "REINICIAR · LOOP · estados e avisos",
-    onde: "painel Controlos, fundo",
+    titulo: "REINICIAR · CONTINUIDADE · estados e avisos",
+    onde: "barra fixa do topo (REINICIAR · CONTINUIDADE) + faixa de estado",
     itens: [
       {
         rotulo: "REINICIAR (manter 1 s)",
         texto:
-          "Único controlo que reinicia: mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. O drone volta a assentar no chão pela física.",
+          "Único controlo que reinicia: está na barra fixa do topo (em qualquer secção); mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. O drone volta a assentar no chão pela física. Está sempre disponível, mas NUNCA é preciso para continuar a trabalhar: no modo contínuo o backend vira o episódio sozinho.",
       },
       {
-        rotulo: "LOOP",
+        rotulo: "CONTINUIDADE · CONTÍNUO / PARAR NO FIM",
         texto:
-          "Desligado por omissão. Ligado, é o BACKEND que reinicia ao terminar o episódio; o site limita-se a fazer o POST /api/loop. Desligado, o episódio fica terminado até carregares em REINICIAR.",
+          "Está na barra fixa do topo (em qualquer secção) e mostra o que o BACKEND está a fazer (campo `loop` da API), não uma preferência do browser. CONTÍNUO (por omissão) = ao terminar, o backend arranca já o episódio seguinte; PARAR NO FIM = a física para no fim do episódio e só um REINICIAR a retoma. O site limita-se a fazer POST /api/loop.",
       },
       {
         rotulo: "faixa de estado do episódio",
         texto:
-          "«episódio a correr · sem auto-restart» ou «LOOP ligado»; quando termina, fica vermelha a pedir REINICIAR e o cartão ganha um anel de aviso.",
+          "Em «contínuo» diz «episódio a correr · modo contínuo» e, na transição, «episódio N terminado · o backend arranca já o seguinte» numa linha NEUTRA (sem pedir nada). Só em «parar no fim» a faixa fica vermelha a pedir REINICIAR e o botão ganha um anel de aviso. O que exige ação — API em baixo — fica sempre vermelho, em qualquer secção.",
+      },
+      {
+        rotulo: "aviso de episódio novo",
+        texto:
+          "No modo contínuo aparece um toast discreto «episódio N · contínuo» quando o backend vira o episódio (não bloqueia nada nem pede clique); um REINICIAR teu já tem o seu próprio aviso e não é duplicado.",
       },
       {
         rotulo: "avisos (toasts)",
         texto:
-          "No fundo do ecrã: confirmações e erros das ações (vento aplicado, rajada enviada, LOOP, reinício) e os 400 do servidor com o motivo. Erros ficam 8 s e sucesso 5 s.",
+          "No fundo do ecrã: confirmações e erros das ações (vento aplicado, rajada enviada, continuidade, reinício) e os 400 do servidor com o motivo. Erros ficam 8 s e sucesso 5 s.",
       },
       {
         rotulo: "esqueleto e «sem passos»",
@@ -384,7 +446,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "como os dados chegam",
         texto:
-          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST. Não há websockets nem recarregamento da página.",
+          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST. Não há websockets nem recarregamento da página — e com uma secção escondida os updates CONTINUAM (o seletor só esconde a renderização); ao voltares, os valores estão frescos.",
       },
     ],
   },

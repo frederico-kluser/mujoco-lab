@@ -1,12 +1,12 @@
 # 09 · Crazyflie 2 (Bitcraze) — hover a 1 m por RL (PPO → ONNX → deploy)
 
 Política de **aprendizagem por reforço** que faz o quadricóptero **Crazyflie 2** da Bitcraze subir do
-chão e estabilizar a **1 m**. Usa o mesmo modelo **pronto** do
+chão e estabilizar a **1 m**. Usa o modelo **pronto** do
 [mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie/tree/main/bitcraze_crazyflie_2)
-do experimento 08 (`models/bitcraze_crazyflie_2/`, MIT, **intocado**) com a camada de sensores/controles
-`lab/crazyflie.py`. Aqui acrescenta-se o que o 08 não tinha: **ambiente Gymnasium**, **treino PPO**,
-**UI web local**, **viewer com HUD da rede** e o **caminho de deploy** (ONNX → validação numérica →
-benchmark → multi-IA).
+vendorizado em `models/bitcraze_crazyflie_2/` (MIT, **intocado**) com a camada de sensores/controles
+`lab/crazyflie.py`. Aqui junta-se tudo o que um projeto do laboratório precisa: **ambiente Gymnasium**,
+**treino PPO**, **UI web local**, **viewer com HUD da rede** e o **caminho de deploy** (ONNX →
+validação numérica → benchmark → multi-IA).
 
 O simulador é **sempre físico**: o drone arranca **pousado no chão, com os motores desligados**, e sobe
 por empuxo comandado — sem teleporte, sem cinemática, sem corpo congelado. O `reset` larga-o a 1 dm do
@@ -531,5 +531,7 @@ o `deploy.py` regista o `/proc/loadavg` antes/depois em todos os relatórios exa
 - [crazyflie_ros (whoenig)](https://github.com/whoenig/crazyflie_ros) — URDF de origem do modelo, via menagerie.
 - [Datasheet Crazyflie 2.0 (Bitcraze)](https://www.bitcraze.io/documentation/hardware/crazyflie_2_0/crazyflie_2_0-datasheet.pdf) — 27 g; base do `thrust_max = 0,589 N` (4 × 15 gf → T/W ≈ 2,22).
 
-Ver também o experimento 08 (`experiments/08_crazyflie_motores/`) para o modelo, a camada `lab/crazyflie.py`,
-os sensores e as constantes físicas do Crazyflie 2.
+Para o modelo, a camada `lab/crazyflie.py`, os sensores e as constantes físicas do Crazyflie 2, ver
+[`models/bitcraze_crazyflie_2/`](../../models/bitcraze_crazyflie_2/) e
+[`lab/crazyflie.py`](../../lab/crazyflie.py) (o antigo experimento `08_crazyflie_motores` foi removido
+em 2026-10-08 — histórico no git).

@@ -17,10 +17,12 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
   · `GET  /`                      → `site/dist/index.html` (ou a mensagem "corra npm run build em site/");
                                     qualquer caminho que não seja ficheiro cai no index (rotas do site);
   · `GET  /assets/...`            → ficheiros de `site/dist/` (sem sair da pasta: path traversal é 404);
-  · `GET  /api/sim`               → `{"estado","ep","passo","retorno","vento":{...},"linhas":[…]}` com as
-                                    ≤200 últimas amostras da telemetria (objetos JSON, já parseados), mais
+  · `GET  /api/sim`               → `{"estado","loop","ep","passo","retorno","vento":{...},"linhas":[…]}` com
+                                    as ≤200 últimas amostras da telemetria (objetos JSON, já parseados), mais
                                     `modelo`/`modelo_nome`, `vento_dinamico` (o que foi pedido) e
                                     `vento_atual` (vetor vx,vy,vz + polar + modo, lido da telemetria);
+                                    `loop` = modo EFETIVO do runner (o default é CONTÍNUO: o episódio
+                                    reinicia sozinho no fim; `loop:false`/`--sem-loop` congela);
   · `GET  /api/state`             → resumo (acima + `modelo`/`modelo_nome`/`modelo_motivo`, `sim_vivo`,
                                     `pid`, `porta`, caminhos, nº de amostras, idade da última amostra) e o
                                     painel `rpi5` (specs oficiais citadas + inferência medida no proxy +
@@ -36,9 +38,10 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
                                     `nenhum`/`ativo:false` desliga;
   · `POST /api/vento`             → `{"vel","azimute","elevacao"}` (qualquer subconjunto; faixas 0-5 m/s,
                                     0-360°, −90..90°; NaN/inf → 400) e escreve o controlo;
-  · `POST /api/reiniciar`         → incrementa `reiniciar` no controlo → `{"contador": n}` (é o ÚNICO
-                                    caminho para recomeçar o episódio: o runner não tem auto-loop);
-  · `POST /api/loop`              → `{"ativo": bool}` liga/desliga o auto-reset no fim do episódio.
+  · `POST /api/reiniciar`         → incrementa `reiniciar` no controlo → `{"contador": n}`: reset MANUAL,
+                                    válido em qualquer estado (a correr, congelado ou no meio de um episódio);
+  · `POST /api/loop`              → `{"ativo": bool}` liga/desliga o contínuo a quente (`false` = a física
+                                    PARA no fim do episódio e um REINICIAR retoma). O PADRÃO é `true`.
 
 O ficheiro de controlo (o site escreve, o runner lê a cada passo de decisão) e a telemetria (o runner
 escreve, o site lê) estão descritos no cabeçalho do `sim_view.py` — este processo só os toca para os criar
@@ -102,7 +105,7 @@ RPI5_SPECS = {
     "nota": "specs do ALVO (Raspberry Pi 5); a imagem que o dono tem num B+ de 2014 nao tem estes numeros",
 }
 CONTROLO_INICIAL = {"vel": 0.0, "azimute": 0.0, "elevacao": 0.0, "ativo": False, "reiniciar": 0,
-                    "loop": False}
+                    "loop": True}        # CONTÍNUO por omissão (ronda 7): o episódio reinicia sozinho no fim
 MAX_LINHAS = 200                                   # teto de amostras devolvidas por `GET /api/sim`
 MAX_CORPO = 64 * 1024                              # teto do corpo de um POST (64 kB chega e sobra)
 MAX_LEITURA = 4 * 1024 * 1024                      # bytes lidos do fim da telemetria por pedido
@@ -171,20 +174,36 @@ def ultimas_linhas(caminho: Path, n: int = MAX_LINHAS) -> list[dict]:
 
 
 def resumo_telemetria(caminho: Path) -> dict:
-    """Resumo do fim da telemetria: estado/ep/passo/retorno + o VENTO EM VIGOR da última amostra."""
+    """Resumo do fim da telemetria: estado/ep/passo/retorno + o VENTO EM VIGOR da última amostra.
+
+    `loop` vem do runner quando ele o publica (é o modo EFETIVO); sem telemetria fica `None` e quem
+    responde usa o do controlo (`loop_em_vigor`).
+    """
     linhas = ultimas_linhas(caminho, MAX_LINHAS)
     if not linhas:
         return {"estado": "desconhecido", "ep": 0, "passo": 0, "retorno": 0.0, "linhas": 0, "t": None,
-                "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None}
+                "loop": None, "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None}
     ultima = linhas[-1]
     vec = ultima.get("vento_vec")
+    loop = ultima.get("loop")
     return {"estado": str(ultima.get("estado", "desconhecido")), "ep": int(ultima.get("ep", 0) or 0),
             "passo": int(ultima.get("passo", 0) or 0), "retorno": float(ultima.get("retorno", 0.0) or 0.0),
             "linhas": len(linhas), "t": ultima.get("t"),
+            "loop": None if loop is None else bool(loop),
             "vento_vec": [float(v) for v in vec] if isinstance(vec, list) and len(vec) == 3 else None,
             "vento_vel": float(ultima.get("vento_vel", 0.0) or 0.0),
             "vento_azim": float(ultima.get("vento_azim", 0.0) or 0.0),
             "vento_modo": str(ultima.get("vento_modo", "nenhum") or "nenhum")}
+
+
+def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
+    """`loop` em vigor: o que o RUNNER publica na telemetria (efetivo) e, sem ela, o do controlo.
+
+    O controlo é o PEDIDO; a telemetria é o que o runner está mesmo a fazer (pode diferir se o runner foi
+    arrancado com `--sem-loop`). O `/api/state` e o `/api/sim` publicam este valor.
+    """
+    valor = resumo.get("loop")
+    return bool(controlo.get("loop", True)) if valor is None else bool(valor)
 
 
 def vento_do_controlo(controlo: dict) -> dict:
@@ -453,6 +472,8 @@ class Handler(BaseHTTPRequestHandler):
             "ep": resumo["ep"],
             "passo": resumo["passo"],
             "retorno": resumo["retorno"],
+            "loop": loop_em_vigor(resumo, controlo),    # CONTÍNUO por omissão (o runner publica-o na telemetria)
+            "reiniciar": int(controlo.get("reiniciar", 0) or 0),
             "vento": {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")},
             "vento_dinamico": vento_do_controlo(controlo),
             "vento_atual": vento_em_vigor(resumo, controlo),
@@ -480,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
             "modelo": None if self.servidor.modelo is None else str(self.servidor.modelo),
             "modelo_nome": self.servidor.modelo_nome,
             "modelo_motivo": self.servidor.modelo_motivo,
-            "loop": bool(controlo.get("loop", False)),
+            "loop": loop_em_vigor(resumo, controlo),    # CONTÍNUO por omissão (efetivo: telemetria do runner)
             "reiniciar": int(controlo.get("reiniciar", 0) or 0),
             "sim_vivo": self.servidor.sim_vivo,
             "pid": None if filho is None else filho.pid,
@@ -895,7 +916,9 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
     if args.fator_tempo is not None:
         comando += ["--fator-tempo", f"{args.fator_tempo:g}"]
     if args.loop:
-        comando.append("--loop")
+        comando.append("--loop")                        # já é o padrão: aceite por compatibilidade
+    if args.sem_loop:
+        comando.append("--sem-loop")
     return comando
 
 
@@ -954,6 +977,8 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                 "POST /api/vento-dinamico {modo,params?,ativo?} — `frente` aceita {vel,azimute,elevacao} "
                 "(degrau IMEDIATO do vento base) OU {u_max,t_s} (degrau em curso do env); "
                 "POST /api/reiniciar · POST /api/loop {\"ativo\": bool}\n"
+                "CONTÍNUO por omissão: no fim do episódio o runner reinicia sozinho (loop=true, ep+1, sem\n"
+                "congelar); --sem-loop/loop:false é opt-in e mantém a física PARADA à espera de um REINICIAR.\n"
                 "SIGINT/SIGTERM: fecha o servidor e mata o runner (exit 0)."),
     )
     p.add_argument("--model", type=Path, default=None,
@@ -975,7 +1000,12 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                    help=f"ficheiro JSONL de telemetria do runner; padrão: {TELEMETRIA_OMISSAO}")
     p.add_argument("--fator-tempo", type=float, default=None, metavar="F",
                    help="ritmo do runner (1 = tempo real; 0 = sem travão); por omissão usa o do sim_view.py")
-    p.add_argument("--loop", action="store_true", help="arranca o runner com auto-reset no fim do episódio")
+    p.add_argument("--loop", action="store_true",
+                   help="auto-reset no fim do episódio — JÁ É O PADRÃO (CONTÍNUO); a flag fica aceite por "
+                        "compatibilidade (o campo `loop` do controlo manda a quente)")
+    p.add_argument("--sem-loop", action="store_true",
+                   help="desliga o contínuo: o runner arranca com `--sem-loop` e o ficheiro de controlo nasce "
+                        "com `loop: false` (no fim do episódio a física PARA e um REINICIAR retoma)")
     p.add_argument("--sem-browser", action="store_true", help="não abre o browser (o URL sai na mesma)")
     p.add_argument("--verboso", action="store_true", help="mostra cada pedido HTTP no terminal")
     return p.parse_args(argv)
@@ -993,9 +1023,10 @@ def main(argv=None) -> int:
     if not INDEX.is_file():
         print(f"[site] aviso: {MENSAGEM_SEM_DIST.format(pasta=DIST.parent)}", flush=True)
     if not args.controlo.exists():
-        # o `loop` inicial segue o CLI: se o ficheiro nascesse com `loop: false`, desligava logo o `--loop`
-        escrever_controlo(args.controlo, {**CONTROLO_INICIAL, "loop": bool(args.loop)})
-        print(f"[site] controlo criado: {args.controlo} (loop={bool(args.loop)})", flush=True)
+        # CONTÍNUO por omissão (ronda 7): o ficheiro nasce com `loop: true` (só `--sem-loop` o desliga)
+        escrever_controlo(args.controlo, {**CONTROLO_INICIAL, "loop": not args.sem_loop})
+        print(f"[site] controlo criado: {args.controlo} (loop={not args.sem_loop}"
+              f"{'' if args.sem_loop else ', continuo por omissao'})", flush=True)
 
     # o runner corre com cwd=experiments/09_drone_hover_rl: `--model` relativo resolve-se contra o cwd do SITE
     modelo, motivo = escolher_modelo(args)

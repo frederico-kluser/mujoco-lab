@@ -49,6 +49,12 @@ export interface SimStream {
   ventoDinamico: VentoDinamico
   /** Painel do RPi 5 (`/api/sim` e, em reforço, `/api/state`); `null` = o backend não o publica. */
   rpi5: Rpi5 | null
+  /**
+   * Continuidade do BACKEND (`loop` do `/api/sim`, em reforço do `/api/state`): `true` = reinicia
+   * sozinho ao terminar, `false` = para no fim. `null` quando nenhuma das respostas o diz — nesse caso
+   * quem manda é o estado local otimista do `App`.
+   */
+  loop: boolean | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -82,6 +88,7 @@ export function useSim(): SimStream {
     vento: VentoEstado
     ventoDinamico: VentoDinamico
     rpi5: Rpi5 | null
+    loop: boolean | null
   }>({
     estado: "a_correr",
     ep: 0,
@@ -90,6 +97,7 @@ export function useSim(): SimStream {
     vento: VENTO_ZERO,
     ventoDinamico: VENTO_DINAMICO_PARADO,
     rpi5: null,
+    loop: null,
   })
   const [resumo, setResumo] = useState<ResumoEstado | null>(null)
   const [ligacao, setLigacao] = useState<Ligacao>("a_ligar")
@@ -109,6 +117,9 @@ export function useSim(): SimStream {
         // `/api/sim` é a fonte principal do rpi5; se esta versão do backend ainda não o trouxer, mantém-se
         // o que o `/api/state` tiver dito (nunca se apaga um painel que já estava a mostrar números).
         rpi5: dados.rpi5 ?? anterior.rpi5,
+        // Igual ao rpi5: um backend que ainda não publique `loop` no `/api/sim` não apaga o que o
+        // `/api/state` (ou o próprio POST /api/loop) já disse.
+        loop: dados.loop ?? anterior.loop,
       }))
       if (dados.linhas.length === 0) return
       setLinhas((anteriores) => {
@@ -150,6 +161,9 @@ export function useSim(): SimStream {
         // existir, sem apagar números já mostrados quando este resumo não os traz.
         if (dados.rpi5 !== null) {
           setCabecalho((anterior) => ({ ...anterior, rpi5: dados.rpi5 }))
+        }
+        if (dados.loop !== null) {
+          setCabecalho((anterior) => ({ ...anterior, loop: dados.loop }))
         }
       } catch {
         /* o resumo é acessório: a falta dele não derruba a página */
@@ -253,6 +267,7 @@ export function useSim(): SimStream {
     vento: cabecalho.vento,
     ventoDinamico: cabecalho.ventoDinamico,
     rpi5: cabecalho.rpi5,
+    loop: cabecalho.loop ?? resumo?.loop ?? null,
     resumo,
     ligacao,
     erro,
