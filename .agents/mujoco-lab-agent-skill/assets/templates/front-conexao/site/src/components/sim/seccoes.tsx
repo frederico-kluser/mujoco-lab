@@ -1,0 +1,299 @@
+/**
+ * SECÇÕES selecionáveis do painel + barra de estado crítico persistente.
+ *
+ * Pedido do dono: «eu não quero ter de ver tudo ao mesmo tempo, eu escolho o que ver, para melhorar a
+ * monitoria enquanto o drone opera». Daí o seletor de secções (Operação · Rede · Vento · Bordo · Tudo)
+ * no topo do conteúdo, com a escolha guardada no `localStorage` e atalhos de teclado 1–5.
+ *
+ * Cascata (motion-plus-ui): `motion-ui.mjs search "tabs"` → **`smooth-tabs`** (pílula deslizante com
+ * `layoutId` + navegação por setas com foco nômade) para o seletor — instalado com
+ * `motion-ui.mjs add smooth-tabs`. Os PAINÉIS não usam o `SmoothTabsPanels` (crossfade que monta/desmonta
+ * os widgets) porque a monitoria exige que os updates continuem vivos e que o estado dos sliders não se
+ * perca na troca: cada bloco esconde-se com o atributo `hidden` (`BlocoSecao`), o que a aceitação prevê
+ * («ausentes do DOM ou hidden») e mantém os widgets a atualizar com a secção escondida.
+ *
+ * NUNCA se esconde o crítico: `BarraEstado` (episódio terminado · API em baixo) e os controlos
+ * REINICIAR/LOOP ficam visíveis em QUALQUER secção (barra fixa do topo, ver `App.tsx`).
+ */
+
+import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { motion } from "motion/react"
+
+import {
+  SmoothTabs,
+  SmoothTabsList,
+  SmoothTabsTab,
+} from "@/components/motion-ui/smooth-tabs"
+import { useMotionUITransition } from "@/components/motion-ui/ui-theme"
+import { fmt, type EstadoEpisodio } from "@/lib/sim"
+import type { Ligacao } from "@/hooks/use-sim"
+
+/** Identificador estável de cada secção (também é o valor guardado no `localStorage`). */
+export type IdSecao = "operacao" | "rede" | "vento" | "bordo" | "tudo"
+
+export interface MetaSecao {
+  id: IdSecao
+  /** Rótulo da aba (PT-PT, como o resto do painel). */
+  rotulo: string
+  /** Atalho de teclado (1–5), documentado na ajuda e visível na aba. */
+  tecla: string
+  /** Uma linha sobre o que a secção serve (vai para a ajuda "?"). */
+  paraQueServe: string
+}
+
+/** As 5 secções, pela ordem das abas (e das teclas 1–5). */
+export const SECOES: MetaSecao[] = [
+  {
+    id: "operacao",
+    rotulo: "Operação",
+    tecla: "1",
+    paraQueServe:
+      "vigiar o voo: cabeçalho (selo de estado, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel) e as 4 curvas grandes",
+  },
+  {
+    id: "rede",
+    rotulo: "Rede",
+    tecla: "2",
+    paraQueServe:
+      "ver a política a decidir: rede 16→64→64→4, observação de 16 canais e ação de 4 canais",
+  },
+  {
+    id: "vento",
+    rotulo: "Vento",
+    tecla: "3",
+    paraQueServe:
+      "comandar o vento: sliders do vento constante, rosa dos ventos e vento dinâmico (rajadas, Dryden, frente)",
+  },
+  {
+    id: "bordo",
+    rotulo: "Bordo",
+    tecla: "4",
+    paraQueServe:
+      "acompanhar o computador de bordo: painel do Raspberry Pi 5 (latências, semáforo, specs)",
+  },
+  {
+    id: "tudo",
+    rotulo: "Tudo",
+    tecla: "5",
+    paraQueServe: "layout completo: todas as secções de uma vez, como o painel original",
+  },
+]
+
+/** Chave do `localStorage` onde a secção ativa fica guardada entre sessões. */
+export const CHAVE_SECCAO = "{{NOME_EXPERIMENTO}}:seccao"
+
+/** Seletores de um slider (Base UI: thumb `role="slider"`/`aria-valuenow`; raiz `data-slot="slider"`). */
+const SELETOR_SLIDER =
+  '[role="slider"], [data-slider], [data-slot="slider"], [aria-valuenow]'
+
+/** O alvo é (ou está dentro de) um slider? Serve para os atalhos 1–5 não saltarem de secção. */
+function emSlider(alvo: EventTarget | null): boolean {
+  return alvo instanceof Element && alvo.closest(SELETOR_SLIDER) !== null
+}
+
+function lerSecaoGuardada(): IdSecao {
+  try {
+    const bruta = window.localStorage.getItem(CHAVE_SECCAO)
+    const encontrada = SECOES.find((s) => s.id === bruta)
+    if (encontrada !== undefined) return encontrada.id
+  } catch {
+    /* storage bloqueado (modo privado): segue-se a secção por omissão */
+  }
+  return "operacao"
+}
+
+export interface UseSecaoResultado {
+  seccao: IdSecao
+  escolher: (id: IdSecao) => void
+}
+
+/**
+ * Estado da secção ativa: lê/grava no `localStorage` e responde aos atalhos 1–5.
+ *
+ * Prevenção de erro: os atalhos NÃO atuam enquanto se escreve num campo (input/textarea/select ou
+ * conteúdo editável) nem com alvo/foco/rato sobre um SLIDER (Base UI: thumb `role="slider"`/
+ * `aria-valuenow`, raiz `data-slot="slider"`) — as teclas 1–5 têm de continuar a escrever números e a
+ * não saltar de secção a meio de um arrasto de slider.
+ */
+export function useSecao(): UseSecaoResultado {
+  const [seccao, setSecao] = useState<IdSecao>(lerSecaoGuardada)
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CHAVE_SECCAO, seccao)
+    } catch {
+      /* sem storage persistente: a escolha vive só na sessão */
+    }
+  }, [seccao])
+
+  useEffect(() => {
+    /** O rato está por cima de um slider? (os sliders Base UI nem sempre recebem foco). */
+    let sobreSlider = false
+    const aoApontar = (evento: Event) => {
+      sobreSlider = emSlider(evento.target)
+    }
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if (evento.ctrlKey || evento.metaKey || evento.altKey || evento.repeat)
+        return
+      const alvo = evento.target
+      if (alvo instanceof HTMLElement) {
+        const etiqueta = alvo.tagName.toLowerCase()
+        if (
+          etiqueta === "input" ||
+          etiqueta === "textarea" ||
+          etiqueta === "select" ||
+          alvo.isContentEditable
+        )
+          return
+      }
+      // slider: no alvo, no foco real (pode não ser o alvo) ou sob o rato — nunca saltar de secção
+      if (emSlider(alvo) || emSlider(document.activeElement) || sobreSlider)
+        return
+      const indice = "12345".indexOf(evento.key)
+      if (indice === -1) return
+      evento.preventDefault()
+      setSecao(SECOES[indice].id)
+    }
+    window.addEventListener("pointerover", aoApontar)
+    window.addEventListener("pointerdown", aoApontar, true)
+    window.addEventListener("keydown", aoTeclar)
+    return () => {
+      window.removeEventListener("pointerover", aoApontar)
+      window.removeEventListener("pointerdown", aoApontar, true)
+      window.removeEventListener("keydown", aoTeclar)
+    }
+  }, [])
+
+  const escolher = useCallback((id: IdSecao) => setSecao(id), [])
+  return { seccao, escolher }
+}
+
+interface SeletorSecoesProps {
+  seccao: IdSecao
+  escolher: (id: IdSecao) => void
+}
+
+/** Abas do seletor (`smooth-tabs`: pílula deslizante, setas + Enter no teclado, atalhos 1–5 à parte). */
+export function SeletorSecoes({ seccao, escolher }: SeletorSecoesProps) {
+  return (
+    <SmoothTabs
+      value={seccao}
+      onValueChange={(valor) => escolher(valor as IdSecao)}
+    >
+      <SmoothTabsList
+        ariaLabel="secções do painel (atalhos 1–5)"
+        className="gap-0.5 border-border/60 bg-card/80"
+      >
+        {SECOES.map((s) => (
+          <SmoothTabsTab
+            key={s.id}
+            value={s.id}
+            className="flex-none px-2.5 py-1.5 text-xs sm:px-3.5 sm:py-2 sm:text-sm"
+          >
+            <span className="flex items-center gap-1.5">
+              {s.rotulo}
+              <kbd
+                aria-hidden="true"
+                className="hidden rounded border border-border/70 bg-muted/60 px-1 font-mono text-[0.6rem] text-muted-foreground sm:inline"
+              >
+                {s.tecla}
+              </kbd>
+            </span>
+          </SmoothTabsTab>
+        ))}
+      </SmoothTabsList>
+    </SmoothTabs>
+  )
+}
+
+interface BlocoSecaoProps {
+  /** A que secção pertence o bloco (vai para `data-seccao`, usado pelas provas de DOM). */
+  id: IdSecao
+  /** `false` esconde o bloco com o atributo `hidden` — sem desmontar, para os updates continuarem. */
+  visivel: boolean
+  children: ReactNode
+}
+
+/**
+ * Contentor de um bloco de secção. Escondido com `hidden` (nunca desmontado): os widgets em movimento
+ * continuam a atualizar com a secção escondida e voltam a mostrar-se com os valores já frescos.
+ */
+export function BlocoSecao({ id, visivel, children }: BlocoSecaoProps) {
+  return (
+    <section
+      data-seccao={id}
+      hidden={visivel ? undefined : true}
+      className="flex flex-col gap-4"
+    >
+      {children}
+    </section>
+  )
+}
+
+interface BarraEstadoProps {
+  estado: EstadoEpisodio
+  ep: number
+  loop: boolean
+  ligacao: Ligacao
+  erro: string | null
+}
+
+/**
+ * Faixa de estado SEMPRE visível (qualquer secção): neutra quando tudo corre bem, vermelha e com
+ * `role="alert"` quando há crítico (episódio terminado · API em baixo) — o crítico nunca se esconde.
+ */
+export function BarraEstado({
+  estado,
+  ep,
+  loop,
+  ligacao,
+  erro,
+}: BarraEstadoProps) {
+  const ui = useMotionUITransition("ui")
+  const terminado = estado === "episodio_terminado"
+  const semLigacao = ligacao === "sem_ligacao"
+  const critico = terminado || semLigacao
+  // Com a API em baixo o estado do episódio é VELHO: o alerta fresco (ligação) tem prioridade.
+  const testid = semLigacao
+    ? "aviso-ligacao"
+    : terminado
+      ? "aviso-terminado"
+      : "aviso-a-correr"
+  const texto = semLigacao
+    ? `sem resposta do servidor da simulação — a tentar de novo a cada 0,35 s${erro ? ` · ${erro}` : ""}`
+    : terminado
+      ? `episódio ${fmt(ep, 0)} terminado — clica REINICIAR`
+      : ligacao === "a_ligar"
+        ? "à espera da API…"
+        : loop
+          ? "episódio a correr · LOOP ligado (o backend reinicia ao terminar)"
+          : "episódio a correr · sem auto-restart"
+
+  return (
+    <motion.div
+      layout
+      transition={{ ...ui }}
+      data-testid="aviso-critico"
+      data-critico={critico ? "sim" : "nao"}
+      role={critico ? "alert" : undefined}
+      aria-live={critico ? "assertive" : "polite"}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-3 py-1.5 text-xs ${
+        critico
+          ? "bg-destructive/10 font-medium text-destructive"
+          : "bg-muted/50 text-muted-foreground"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`size-2 shrink-0 rounded-full ${critico ? "bg-destructive" : "bg-primary"}`}
+      />
+      <span data-testid={testid}>{texto}</span>
+      <span
+        className="ml-auto font-mono text-[0.65rem] normal-case"
+        data-testid="estado-loop"
+      >
+        loop={loop ? "true" : "false"} · estado={estado}
+      </span>
+    </motion.div>
+  )
+}

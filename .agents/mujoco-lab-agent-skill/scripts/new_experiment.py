@@ -3,6 +3,7 @@
 
     python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py --list                      # templates disponíveis
     python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py meu_robo --template lab-padrao
+    python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py so_front --template front-conexao
     python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py drone_hover --template quadrotor
     python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py pendulo --template pendulum
     python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py meu_teste                    # template "blank"
@@ -12,9 +13,12 @@ O que faz: acha a raiz do projeto (pyproject.toml), calcula o próximo número N
 (symlink para a skill quando ela mora no projeto, senão cópia) e .gitignore com experiments/*/out/. Não sobrescreve nada existente.
 
 Templates: `blank|pendulum|arm|quadrotor|car` são UM `model.xml` + `run.py` + `README.md` (física + validação).
-`lab-padrao` é o TEMPLATE BASE completo do laboratório (env Gymnasium + run + train PPO + view + sim_view/sim_site
-do padrão `padrao-simulacao-clean-site` + site React + deploy ONNX + LEIAME/INTERFACE). Com ele o nome do
-experimento é substituído nos sítios certos (ver `SUBSTITUICOES`) e o `lab-padrao/LEIAME.md` passou a `LEIAME.md`.
+`lab-padrao` é o TEMPLATE BASE completo do laboratório (env Gymnasium + run + train PPO + view + deploy ONNX +
+LEIAME/INTERFACE) MONTADO POR COMPOSIÇÃO com o bundle `front-conexao` (é de lá que vêm o site React e os
+`sim_view.py`/`sim_site.py` do padrão `padrao-simulacao-clean-site` — uma só cópia do front, nada de duplicar).
+`front-conexao` é só esse BUNDLE portátil (front + códigos de conexão + `CONTRATOS.md`) para colar em QUALQUER
+projeto. Nos dois casos o nome é substituído nos sítios certos (ver `SUBSTITUICOES`) e o LEIAME do template passa
+a `LEIAME.md` na raiz do experimento.
 
 Exit 0 ok · 1 erro operacional · 2 uso inválido.
 """
@@ -30,16 +34,25 @@ SKILL = Path(__file__).resolve().parents[1]
 TEMPLATES = SKILL / "assets" / "templates"
 
 # Templates que NÃO são um único par model.xml+run.py: têm árvore própria (site/, LEIAME.md, vários módulos) e
-# precisam de substituições de nome. `lab-padrao` é o template base do laboratório (padrão janela limpa + site).
-TEMPLATES_ARVORE = {"lab-padrao"}
+# precisam de substituições de nome. `lab-padrao` é o template base do laboratório (o padrão completo) e
+# `front-conexao` é o bundle portátil (front + códigos de conexão) para colar em qualquer projeto.
+TEMPLATES_ARVORE = {"lab-padrao", "front-conexao"}
+# COMPOSIÇÃO: templates que se montam a partir de OUTRO template (o bundle vive numa só cópia — nada de manter
+# 2-3 frentes iguais). A ordem importa: copia-se o bundle PRIMEIRO e o template POR CIMA (o overlay do
+# `lab-padrao` sobrepõe os poucos ficheiros que são do exemplo, ex.: `site/src/lib/config.ts`).
+COMPOSICAO = {"lab-padrao": ("front-conexao",)}
 # (ficheiro relativo ao template, texto a substituir, substituição) — aplicadas depois da cópia, só em ficheiros existentes.
 SUBSTITUICOES = [
     ("README.md", "{{NOME_EXPERIMENTO}}", "{nome}"),
     ("LEIAME.md", "{{NOME_EXPERIMENTO}}", "{nome}"),
     ("INTERFACE.md", "{{NOME_EXPERIMENTO}}", "{nome}"),
+    ("CONTRATOS.md", "{{NOME_EXPERIMENTO}}", "{nome}"),
     ("site/index.html", "{{NOME_EXPERIMENTO}}", "{nome}"),
     ("site/package.json", "{{NOME_PACOTE}}", "{pacote}"),
+    ("site/package.json", "{{NOME_EXPERIMENTO}}", "{nome}"),
+    ("site/src/lib/config.ts", "{{NOME_EXPERIMENTO}}", "{nome}"),
     ("site/src/lib/sim.ts", "{{NOME_EXPERIMENTO}}", "{nome}"),
+    ("site/src/components/sim/seccoes.tsx", "{{NOME_EXPERIMENTO}}", "{nome}"),
 ]
 # Ficheiros/diretórios que o experimento NUNCA deve herdar do template (saídas e caches; o `dist/` é construído).
 IGNORAR = ("__pycache__", "out", "node_modules", "dist", ".vite", "MUJOCO_LOG.TXT", ".pytest_cache", ".ruff_cache")
@@ -77,7 +90,9 @@ def slug(s: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("nome", nargs="?")
-    ap.add_argument("--template", default="blank")
+    ap.add_argument("--template", default="blank", metavar="NOME",
+                    help="template a copiar (ver --list): blank|pendulum|arm|quadrotor|car|"
+                         "lab-padrao|front-conexao")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--lib", choices=["auto", "symlink", "copy"], default="auto", help="como disponibilizar lab/mjkit.py")
     ap.add_argument("--dry-run", action="store_true")
@@ -104,9 +119,13 @@ def main() -> int:
     src = TEMPLATES / a.template
     conteudo = sorted(p.name for p in src.iterdir() if p.is_file() or p.is_dir() and p.name not in IGNORAR)
     plan = [f"criar {dest.relative_to(root)}/ ← template '{a.template}': " + ", ".join(conteudo)]
+    for base in COMPOSICAO.get(a.template, ()):
+        comuns = sorted(p.name for p in (TEMPLATES / base).iterdir()
+                        if p.is_file() or p.is_dir() and p.name not in IGNORAR)
+        plan.append(f"compor com o bundle '{base}' (front + conexão, cópia única): " + ", ".join(comuns))
     if a.template in TEMPLATES_ARVORE:
-        plan.append(f"substituir os marcadores de nome em {len(SUBSTITUICOES)} ficheiro(s) "
-                    f"({{{{NOME_EXPERIMENTO}}}} → {slug(a.nome)}); os passos de validação saem no fim")
+        plan.append(f"substituir os marcadores de nome em {len({r for r, *_ in SUBSTITUICOES})} ficheiro(s) "
+                    f"({{{{NOME_EXPERIMENTO}}}}/{{{{NOME_PACOTE}}}} → {slug(a.nome)}); os passos saem no fim")
 
     lab = root / "lab"
     lib_src = SKILL / "scripts" / "mjkit.py"
@@ -122,7 +141,11 @@ def main() -> int:
     if a.dry_run:
         return 0
 
-    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*IGNORAR))
+    ignorar = shutil.ignore_patterns(*IGNORAR)
+    for base in COMPOSICAO.get(a.template, ()):
+        # `dirs_exist_ok`: o bundle é copiado primeiro e o template sobrepõe-se-lhe (overlay do exemplo).
+        shutil.copytree(TEMPLATES / base, dest, ignore=ignorar, dirs_exist_ok=True)
+    shutil.copytree(src, dest, ignore=ignorar, dirs_exist_ok=dest.exists())
     nome = slug(a.nome)
     # Permissões em TODA a árvore: os .py executáveis (têm shebang) e os DIRETÓRIOS 755 — sem o bit de
     # execução num diretório não se entra nele (bug real apanhado ao criar o 1.º experimento de árvore).
@@ -158,12 +181,22 @@ def main() -> int:
         with gi.open("a", encoding="utf-8") as fh:
             fh.write("\n# saídas geradas pelos experimentos\nexperiments/*/out/\n")
     rel = dest.relative_to(root)
-    if a.template in TEMPLATES_ARVORE:
+    if a.template == "front-conexao":
+        print(f"\nPronto: {rel}  (BUNDLE front + conexão: lê {rel}/LEIAME.md e {rel}/CONTRATOS.md)")
+        print("  1) ligar:    escreve o módulo do ambiente do teu projeto (env.py: novo_env/acao_para_ctrl/"
+              "definir_vento/vento_polar)")
+        print(f"  2) adaptar:  {rel}/site/src/lib/config.ts (rótulos/unidades das métricas; marcadores já substituídos)")
+        print(f"  3) buildar:  (cd {rel}/site && node ensure-setup.mjs && npm run build)  # uma vez")
+        print(f"  4) arrancar: python3 {rel}/sim_site.py        # janela limpa + site + API de 6 rotas "
+              f"(ou --sem-janela)")
+    elif a.template in TEMPLATES_ARVORE:
         print(f"\nPronto: {rel}  (TEMPLATE BASE: lê {rel}/LEIAME.md — o que adaptar e o que NUNCA mudar)")
         print(f"  1) validar:  uv run --group hover-rl python {rel}/run.py            # exit 0 = física sã")
         print(f"  2) treinar:  uv run --group hover-rl python {rel}/train.py --timesteps 200000 --nome base")
         print(f"  3) padrão:   uv run --group hover-rl python {rel}/sim_site.py        # janela 3D limpa + site")
         print(f"     site:      (cd {rel}/site && node ensure-setup.mjs && npm run build)  # uma vez")
+        print("     bundle:    o front e os scripts de conexão vêm de assets/templates/front-conexao "
+              "(ver CONTRATOS.md)")
     else:
         print(f"\nPronto: {rel}\n  rodar:  uv run python {rel}/run.py --sem-video\n  janela: uv run python {rel}/run.py --view")
     return 0

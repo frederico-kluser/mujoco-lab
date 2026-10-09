@@ -9,43 +9,74 @@
  * nunca um número inventado. O site mostra sempre o que o MuJoCo mediu.
  */
 
-// ─────────────────────────────────────────────────────────────────────────── CONFIGURAÇÃO (ADAPTAR)
-/** Uma curva/painel do site: chave na telemetria → rótulo, unidade, cor e casas decimais. */
-export interface Metrica {
-  chave: "theta" | "erro" | "omega" | "vento_vel"
-  rotulo: string
-  curta: string
-  unidade: string
-  cor: string
-  casas: number
-  /** Linha de referência (2 pontos, desenhada no sparkline): `true` = usa o alvo do alvo do episódio. */
-  referencia?: "alvo" | "zero"
+export type EstadoEpisodio = "a_correr" | "pausado" | "episodio_terminado" | "sem_dados"
+
+/** Uma amostra da telemetria (as chaves e a ordem do contrato do `sim_view.py`). */
+export interface LinhaSim {
+  t: number
+  estado: EstadoEpisodio
+  ep: number
+  passo: number
+  retorno: number
+  theta: number | null
+  erro: number | null
+  omega: number | null
+  vento_vel: number | null
+  vento_azim: number | null
+  /** Vetor do vento EM VIGOR `[vx,vy,vz]` (base + dinâmica), ou `null` se a linha não o trouxer. */
+  vento_vec: [number, number, number] | null
+  /** Modo dinâmico que produziu esta linha (`"nenhum"`/`"rajadas"`/…), ou `null` se não vier. */
+  vento_modo: ModoVentoDinamico | null
+  obs: number[]
+  act: number[]
+  ctrl: number[]
+  h1: number[]
+  h2: number[]
 }
 
-/**
- * As 4 curvas do painel. Ao copiar o template para outro robô: troca `chave` pelas tuas 3–4 grandezas
- * (o `sim_view.py` publica-as em `amostra()`) e ajusta rótulo/unidade/casas.
- */
-export const METRICAS: Metrica[] = [
-  { chave: "theta", rotulo: "θ — ângulo da haste", curta: "θ", unidade: "°", cor: "#ffa24a", casas: 2, referencia: "alvo" },
-  { chave: "erro", rotulo: "erro em relação ao alvo", curta: "erro", unidade: "°", cor: "#7dd3fc", casas: 2, referencia: "zero" },
-  { chave: "omega", rotulo: "θ̇ — velocidade angular", curta: "θ̇", unidade: "°/s", cor: "#c4b5fd", casas: 1, referencia: "zero" },
-  { chave: "vento_vel", rotulo: "vento (perturbação) em vigor", curta: "vento", unidade: "m/s", cor: "#86efac", casas: 2 },
-]
+export interface VentoEstado {
+  vel: number
+  azimute: number
+  elevacao: number
+  ativo: boolean
+  /** Vetor em vigor anunciado pelo backend (m/s, mundo); `null` quando só há a forma polar. */
+  vec: [number, number, number] | null
+  /** Modo dinâmico em vigor anunciado pela API (`vento.modo`); `null` se não vier. */
+  modo: ModoVentoDinamico | null
+}
 
-/** Rótulo de cada entrada da observação (o nº real vem da telemetria; o que faltar cai em `obs[i]`). */
-export const ROTULOS_OBS: string[] = ["cos θ", "sin θ", "θ̇/10", "erro/π"]
-/** Rótulo de cada saída da ação (idem: o que faltar cai em `act[i]`). */
-export const ROTULOS_ACT: string[] = ["Δτ (normalizado)"]
-/** Unidade física do comando publicado em `ctrl` (o backend manda o comando REAL aplicado). */
-export const UNIDADE_CTRL = "N·m"
-/** Rótulo do comando físico (`ctrl`). */
-export const ROTULO_CTRL = "τ aplicado"
-/** Nome curto do robô/experimento, usado no título. */
-export const NOME_EXPERIMENTO = "{{NOME_EXPERIMENTO}}"
-/** Limites do vento aceites pela API (têm de bater com o `sim_site.py`). */
-export const VENTO_LIMITES = { vel: [0, 5], azimute: [0, 360], elevacao: [-90, 90] } as const
-// ─────────────────────────────────────────────────────────────────────── fim da CONFIGURAÇÃO
+export interface RespostaSim {
+  estado: EstadoEpisodio
+  ep: number | null
+  passo: number | null
+  retorno: number | null
+  vento: VentoEstado | null
+  /** Modo/params pedidos ao backend (`POST /api/vento-dinamico`); nunca reinicia o episódio. */
+  ventoDinamico: VentoDinamico
+  /** Painel do computador de bordo (Raspberry Pi 5); `null` quando o backend ainda não o publica. */
+  rpi5: Rpi5 | null
+  linhas: LinhaSim[]
+  modelo_nome: string | null
+  sim_vivo: boolean | null
+  loop: boolean | null
+}
+
+export interface ResumoEstado extends Omit<RespostaSim, "linhas"> {
+  contador_reiniciar: number | null
+  n_linhas: number | null
+  modelo_motivo: string | null
+}
+
+export interface CorpoVento {
+  vel: number
+  azimute: number
+  elevacao: number
+}
+
+// ─────────────────────────────────────────────────────────────── configuração do projeto (★ ADAPTAR)
+// Está em `config.ts` para o front poder ser reutilizado sem tocar nos componentes: aqui só se re-exporta.
+export * from "./config"
+import { ROTULOS_ACT, ROTULOS_OBS, type Metrica } from "./config"
 
 // ───────────────────────────────────────────────────────────────── vento dinâmico (r11, ao vivo)
 /**
@@ -304,70 +335,6 @@ export function budgetMs(rpi5: Rpi5): number | null {
 export function pctDoBudget(us: number | null, orcamentoMs: number | null): number | null {
   if (us === null || orcamentoMs === null || orcamentoMs <= 0) return null
   return (us / 1000 / orcamentoMs) * 100
-}
-
-export type EstadoEpisodio = "a_correr" | "pausado" | "episodio_terminado" | "sem_dados"
-
-/** Uma amostra da telemetria (as chaves e a ordem do contrato do `sim_view.py`). */
-export interface LinhaSim {
-  t: number
-  estado: EstadoEpisodio
-  ep: number
-  passo: number
-  retorno: number
-  theta: number | null
-  erro: number | null
-  omega: number | null
-  vento_vel: number | null
-  vento_azim: number | null
-  /** Vetor do vento EM VIGOR `[vx,vy,vz]` (base + dinâmica), ou `null` se a linha não o trouxer. */
-  vento_vec: [number, number, number] | null
-  /** Modo dinâmico que produziu esta linha (`"nenhum"`/`"rajadas"`/…), ou `null` se não vier. */
-  vento_modo: ModoVentoDinamico | null
-  obs: number[]
-  act: number[]
-  ctrl: number[]
-  h1: number[]
-  h2: number[]
-}
-
-export interface VentoEstado {
-  vel: number
-  azimute: number
-  elevacao: number
-  ativo: boolean
-  /** Vetor em vigor anunciado pelo backend (m/s, mundo); `null` quando só há a forma polar. */
-  vec: [number, number, number] | null
-  /** Modo dinâmico em vigor anunciado pela API (`vento.modo`); `null` se não vier. */
-  modo: ModoVentoDinamico | null
-}
-
-export interface RespostaSim {
-  estado: EstadoEpisodio
-  ep: number | null
-  passo: number | null
-  retorno: number | null
-  vento: VentoEstado | null
-  /** Modo/params pedidos ao backend (`POST /api/vento-dinamico`); nunca reinicia o episódio. */
-  ventoDinamico: VentoDinamico
-  /** Painel do computador de bordo (Raspberry Pi 5); `null` quando o backend ainda não o publica. */
-  rpi5: Rpi5 | null
-  linhas: LinhaSim[]
-  modelo_nome: string | null
-  sim_vivo: boolean | null
-  loop: boolean | null
-}
-
-export interface ResumoEstado extends Omit<RespostaSim, "linhas"> {
-  contador_reiniciar: number | null
-  n_linhas: number | null
-  modelo_motivo: string | null
-}
-
-export interface CorpoVento {
-  vel: number
-  azimute: number
-  elevacao: number
 }
 
 // ───────────────────────────────────────────────────────────────────────────── leitura defensiva

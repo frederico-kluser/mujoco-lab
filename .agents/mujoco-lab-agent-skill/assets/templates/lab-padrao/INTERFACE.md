@@ -59,7 +59,13 @@ Teclado: **ESPAÇO** pausa · **R** reinicia · **V** vento ±1 m/s · **X** ven
 fecha. REPL no terminal: `vento 3 45` · `alvo 60` · `reset` · `sair`. Com `--sem-janela` não abre nada:
 imprime a tabela de desempenho e escreve `out/vista_resumo.json`.
 
-## 3. O SITE (todas as métricas e todos os controlos)
+## 3. O SITE (todas as métricas e todos os controlos, em SECÇÕES)
+
+**Secções escolhíveis** (barra fixa do topo): **Operação** (tecla `1`) = cabeçalho + valores atuais + curvas
+grandes · **Rede** (`2`) = ativações, observação e ação · **Vento** (`3`) = sliders, rosa dos ventos e vento
+dinâmico · **Bordo** (`4`) = painel do computador de bordo (RPi 5) · **Tudo** (`5`) = layout completo. A
+escolha fica no `localStorage` (`<nome>:seccao`) e os blocos escondidos continuam a atualizar (escondem-se com
+`hidden`, não são desmontados). A barra mostra SEMPRE o REINICIAR/LOOP e a faixa de estado crítica.
 
 ### 3.1 Cabeçalho
 `episódio` · `passo` · `retorno` (retorno acumulado do episódio) · `reinícios` (contador de pedidos do site) ·

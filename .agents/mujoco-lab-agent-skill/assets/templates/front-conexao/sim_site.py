@@ -41,11 +41,15 @@ montado a partir do relatório do `deploy.py` (`out/deploy_report.json`; `--benc
 Pré-requisito do site (uma vez): `cd site && npm install && npm run build` (ver `site/LEIAME.md`). Se o
 `dist/` não existir, o servidor serve uma página a dizer exatamente isso — e o resto (API) funciona na mesma.
 
-ADAPTAR: nada aqui. O que é do teu robô está em `env.py`, `sim_view.py` (as 3 métricas) e `site/src/lib/sim.ts`.
+PORTÁTIL (bundle `front-conexao`): o módulo do projeto só é importado quando alguém usa o vento
+dinâmico (para validar os modos com as MESMAS regras do `env.py`); sem essa função a validação é
+estrutural (modos do contrato + números finitos). `--env-modulo NOME` escolhe o módulo (padrão `env`).
+ADAPTAR: nada aqui — o que é do teu robô está no `env.py` do projeto e em `site/src/lib/config.ts`.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
@@ -118,6 +122,8 @@ MENSAGEM_SEM_DIST = (
     "e recarregue esta página."
 )
 _VALIDADOR_ENV = None
+# Módulo do PROJETO (lista de 1, para o `--env-modulo` o poder trocar antes do 1.º uso)
+_MODULO_ENV = ["env"]
 
 
 # ------------------------------------------------------------------------------------ utilidades (só stdlib)
@@ -405,19 +411,53 @@ def validar_vento(dados, atual: dict) -> dict:
     return {**atual, **novos, "ativo": (vel > 0.0) if ativo is None else ativo}
 
 
-def _validador_env():
-    """`env.valida_vento_dinamico` importado à primeira utilização (o site é stdlib até aqui).
+def _validador_env(nome: str | None = None):
+    """`valida_vento_dinamico` do módulo do PROJETO, importado à primeira utilização (`None` se não existir).
 
-    Importar o `env.py` puxa o MuJoCo para o processo do SITE: é o preço de validar os modos dinâmicos com as
-    MESMAS regras do treino/runner, em vez de duplicar faixas aqui (uma divergência daria 200 na API e um aviso
-    no runner). Só acontece quando alguém usa o vento dinâmico; sem ele o site nunca importa MuJoCo.
+    Importar o módulo do projeto puxa o MuJoCo para o processo do SITE: é o preço de validar os modos dinâmicos
+    com as MESMAS regras do treino/runner, em vez de duplicar faixas aqui (uma divergência daria 200 na API e um
+    aviso no runner). Só acontece quando alguém usa o vento dinâmico; sem ele o site nunca importa MuJoCo.
+    Um projeto SEM essa função continua a funcionar: a validação é então ESTRUTURAL (ver `_valida_estrutural`).
     """
     global _VALIDADOR_ENV
     if _VALIDADOR_ENV is None:
-        from env import valida_vento_dinamico  # import tardio (pesado): ver o docstring
+        try:
+            modulo = importlib.import_module(nome or _MODULO_ENV[0])
+            _VALIDADOR_ENV = getattr(modulo, "valida_vento_dinamico", False)
+        except ImportError:
+            _VALIDADOR_ENV = False
+    return _VALIDADOR_ENV or None
 
-        _VALIDADOR_ENV = valida_vento_dinamico
-    return _VALIDADOR_ENV
+
+def _valida_estrutural(config: dict | None) -> dict | None:
+    """Validação de RECURSO quando o projeto não tem `valida_vento_dinamico` (modos do CONTRATO + números).
+
+    Aceita os modos `rajadas`/`frente`/`dryden` com os params numéricos finitos conhecidos e recusa chaves
+    desconhecidas — a mesma mensagem clara do validador do `env.py`, sem depender dele. Quem aplica e volta a
+    validar é o RUNNER (`env.definir_vento_dinamico`), portanto isto é só a porta de entrada da API.
+    """
+    if config is None:
+        return None
+    if not isinstance(config, dict) or "modo" not in config:
+        raise ValueError(f"`vento_dinamico` precisa de `modo`, um de {list(MODOS_DINAMICOS_ENV)} (recebido {config!r})")
+    modo = config["modo"]
+    if modo not in MODOS_DINAMICOS_ENV:
+        raise ValueError(f"`modo` tem de ser um de {list(MODOS_DINAMICOS_ENV)} (recebido {modo!r})")
+    chaves = {"modo", "u_max", "p", "duracao", "t_s", "sigma", "L", "v_min"}
+    desconhecidas = set(config) - chaves
+    if desconhecidas:
+        raise ValueError(f"`params` tem chaves desconhecidas {sorted(desconhecidas)} — aceita {sorted(chaves)}")
+    limpos: dict = {"modo": modo}
+    for campo, valor in config.items():
+        if campo == "modo":
+            continue
+        if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(float(valor)):
+            raise ValueError(f"`params.{campo}` tem de ser um número finito (recebido {valor!r})")
+        limpos[campo] = float(valor)
+    limpos.setdefault("u_max", 3.0)
+    if float(limpos["u_max"]) < 0.0:
+        raise ValueError(f"`params.u_max` tem de ser ≥ 0 m/s (recebido {limpos['u_max']!r}): 0 = modo inerte")
+    return limpos
 
 
 def _params_rajada_agora(params: dict) -> dict:
@@ -511,13 +551,14 @@ def validar_vento_dinamico(dados, atual: dict) -> dict:
     ativo = dados.get("ativo", modo != "nenhum")
     if not isinstance(ativo, bool):
         raise ValueError(f"`ativo` tem de ser booleano (recebido {ativo!r})")  # noqa: TRY004 (→ 400)
+    validador = _validador_env() or _valida_estrutural     # o do projeto, ou o estrutural de recurso
     base_novo = None
     if modo == "frente":                                 # 2 formatos: degrau imediato OU modo do env
         params, base_novo = _params_frente(params, atual)
         if base_novo is None:                            # formato (b): quem valida é o `env.py`
-            params = _validador_env()({"modo": modo, **params}) or {}
+            params = validador({"modo": modo, **params}) or {}
     elif modo in MODOS_DINAMICOS_ENV:
-        params = _validador_env()({"modo": modo, **params}) or {}
+        params = validador({"modo": modo, **params}) or {}
     elif modo == "rajada_agora":
         params = _params_rajada_agora(params)
     else:
@@ -838,6 +879,8 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
     p.add_argument("--benchmark", type=Path, default=None, metavar="CAMINHO.json",
                    help="relatório do deploy.py para o painel RPi 5 (padrão: out/deploy_report.json, "
                         "senão out/deploy/deploy.json)")
+    p.add_argument("--env-modulo", default="env", metavar="NOME",
+                   help="módulo do PROJETO para validar o vento dinâmico (padrão: env) — ver CONTRATOS.md")
     p.add_argument("--fator-tempo", type=float, default=1.0, metavar="F",
                    help="ritmo do runner: 1 = tempo real (padrão), 0,5 = metade, 2 = dobro, 0 = sem travão")
     p.add_argument("--seed", type=int, default=0, help="semente do reset (o episódio N usa seed+N)")
@@ -849,6 +892,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = analisar_argumentos(argv)
+    _MODULO_ENV[0] = str(args.env_modulo)
     if not RUNNER.exists():
         print(f"Erro: runner não encontrado: {RUNNER} — Solução: corre a partir do experimento (pasta com sim_view.py)",
               file=sys.stderr)

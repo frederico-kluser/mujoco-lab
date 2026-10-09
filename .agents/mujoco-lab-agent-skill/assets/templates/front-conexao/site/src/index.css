@@ -128,3 +128,9 @@
     @apply font-sans;
     }
 }
+
+/* Secções do seletor: `hidden` tem de vencer qualquer utilitária de display dos blocos
+   (o seletor esconde SEM desmontar — os widgets continuam a atualizar com a secção escondida). */
+[data-seccao][hidden] {
+  display: none !important;
+}

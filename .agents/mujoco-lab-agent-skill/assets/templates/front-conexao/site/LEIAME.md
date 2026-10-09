@@ -1,9 +1,12 @@
-# site/ — o site do `lab-padrao` (todas as métricas e todos os controlos)
+# site/ — o FRONT do bundle `front-conexao` (todas as métricas e todos os controlos)
 
 Aplicação **React + TypeScript + Vite + Tailwind/shadcn**, construída com a skill `motion-plus-ui`
 (registry `@motion`) e servida pelo backend `sim_site.py`, que expõe também a API. Uma página, sem navegação:
-cabeçalho · curvas · rede da política · observação/ação · **painel do computador de bordo (Raspberry Pi 5)** ·
-controlos (vento, **vento dinâmico**, REINICIAR, LOOP) · **ajuda «?»**.
+organizada em **5 SECÇÕES escolhíveis** — **Operação** (cabeçalho, valores atuais, curvas grandes) ·
+**Rede** (ativações, observação, ação) · **Vento** (sliders, rosa dos ventos viva, vento dinâmico) ·
+**Bordo** (painel do computador de bordo, Raspberry Pi 5) · **Tudo** (layout completo) — com o seletor numa
+**barra crítica fixa** (REINICIAR/LOOP e o estado sempre visíveis), atalhos de teclado **1–5**, escolha
+persistida no `localStorage` e **ajuda «?»**. Os contratos estão no `../CONTRATOS.md`.
 
 > Princípio do laboratório (`padrao-simulacao-clean-site`): **a janela do MuJoCo mostra só a simulação 3D;
 > todas as métricas e todos os controlos estão aqui.** O site **nunca reinicia sozinho**: no fim do episódio a
@@ -48,14 +51,16 @@ src/
   main.tsx                       MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider
   App.tsx                        grelha: cabeçalho · curvas · rede · obs/ação · RPi 5 · controlos · ajuda · avisos
   assets/rpi5.webp               imagem de referência do painel do computador de bordo (ver atribuição abaixo)
-  lib/sim.ts                     ★ CONFIGURAÇÃO (METRICAS, ROTULOS_OBS/ACT, unidades) + tipos + leitura defensiva
+  lib/config.ts                  ★ CONFIGURAÇÃO (METRICAS, ROTULOS_OBS/ACT, unidades) — o ÚNICO ficheiro a adaptar
+  lib/sim.ts                     tipos do contrato + leitura defensiva + helpers (re-exporta a configuração)
   lib/api.ts                     fetch dos endpoints do contrato (erros legíveis; `?api=` para testes)
   hooks/use-sim.ts               polling, fusão do histórico por ep:passo, estado de ligação, ações (POST)
   components/sim/cabecalho.tsx      estado do episódio, contadores, política em uso, ligação
-  components/sim/curvas.tsx         as 4 curvas de METRICAS, com a linha do alvo/zero
+  components/sim/curvas.tsx         as curvas de METRICAS (modo `grande`) + a faixa de VALORES ATUAIS
   components/sim/rede.tsx           ativações obs→h1→h2→act (SVG, cor por |a|; sem arestas = sem inventar pesos)
   components/sim/observacoes.tsx    tabela da observação (obs[i]) + painel da ação (act e o `ctrl` físico)
-  components/sim/controlos.tsx      vento (sliders) · VENTO DINÂMICO (rajadas/frente/dryden/rajada) · REINICIAR · LOOP
+  components/sim/seccoes.tsx        SECÇÕES (seletor, atalhos 1–5, localStorage, blocos `hidden`, barra crítica)
+  components/sim/controlos.tsx      ControlosVento (sliders + VENTO DINÂMICO) e ControlosEpisodio (REINICIAR/LOOP)
   components/sim/rosa-ventos.tsx    rosa dos ventos viva: seta cheia = vetor em vigor, tracejada = seleção
   components/sim/rpi5.tsx           painel do computador de bordo: specs, semáforo p50/p99, int8, multi-IA
   components/sim/ajuda.tsx          botão «?» + folha com o significado de CADA elemento (dados, não JSX)
@@ -77,6 +82,7 @@ src/
 | `segmented-toggle` | **LOOP** e o modo dinâmico contínuo (PARADO/RAJADAS/DRYDEN) |
 | `accordion` | as secções da folha de ajuda «?» |
 | `sheet` | a própria folha de ajuda (diálogo nativo, foco preso, arrastar para fechar) |
+| `smooth-tabs` | o seletor de SECÇÕES (pílula deslizante, setas do teclado, foco nômade) |
 | `input` (shadcn) | campos numéricos dos parâmetros dinâmicos (`p`, `duração`, `u_max`, `sigma`, `L`, `v_min`) |
 | `toast-stack` | avisos das ações e erros da API |
 | `ui-theme` + `motion.theme.ts` | tokens de movimento (`snap`/`ui`/`gentle`/…) |
@@ -98,10 +104,9 @@ Código novo (o catálogo não tem equivalente — justificação de uma linha c
 
 ## Adaptar ao teu robô
 
-Muda **só** a secção «CONFIGURAÇÃO» de `src/lib/sim.ts` (`METRICAS`, `ROTULOS_OBS`, `ROTULOS_ACT`,
-`UNIDADE_CTRL`, `NOME_EXPERIMENTO`), os TEXTOS de `components/sim/ajuda.tsx` e, se preciso, o `sim_view.py`
-(as 3 métricas da linha `amostra()`). Nada de tamanhos fixos: o site desenha N entradas e M saídas conforme a
-telemetria. Os painéis `rpi5`, `rosa-ventos` e a folha de ajuda **não** se adaptam (são o padrão).
+Muda **só** `src/lib/config.ts` (`METRICAS`, `ROTULOS_OBS`, `ROTULOS_ACT`, `UNIDADE_CTRL`, `ROTULO_CTRL`,
+`NOME_EXPERIMENTO`). Os componentes, as SECÇÕES e os textos da ajuda «?» leem essa configuração — a adaptação
+é um ficheiro. Nada de tamanhos fixos: o site desenha N entradas e M saídas conforme a telemetria.
 
 ## Testar contra um backend falso
 

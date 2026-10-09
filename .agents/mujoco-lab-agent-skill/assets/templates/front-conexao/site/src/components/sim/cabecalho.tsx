@@ -52,7 +52,7 @@ export function Cabecalho({ resumo, estado, ep, passo, retorno, ligacao, atualiz
   ligacao: Ligacao
   atualizadoEm: number | null
 }) {
-  const modelo = nomeModeloLegivel(resumo?.modelo_nome ?? null) ?? "trim (sem política)"
+  const modelo = nomeModeloLegivel(resumo?.modelo_nome ?? null) ?? "(sem política)"
   const idade = atualizadoEm === null ? null : Math.max(0, (Date.now() - atualizadoEm) / 1000)
   return (
     <Card className="gap-3 py-4">

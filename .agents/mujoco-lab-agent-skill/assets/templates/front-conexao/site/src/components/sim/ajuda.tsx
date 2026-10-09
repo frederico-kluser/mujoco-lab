@@ -2,8 +2,11 @@
  * AJUDA — o «?» que explica CADA elemento visível desta página.
  *
  * O conteúdo vive aqui como ESTRUTURA DE DADOS (`SECOES_AJUDA`), separado do desenho: o template só percorre
- * as secções, portanto acrescentar uma explicação é acrescentar um objecto (sem tocar em JSX). Ao copiar o
- * template para outro robô, é AQUI que os textos se adaptam — o resto do ficheiro não muda.
+ * as secções, portanto acrescentar uma explicação é acrescentar um objecto (sem tocar em JSX).
+ *
+ * As entradas das MÉTRICAS, da OBSERVAÇÃO e da AÇÃO são DERIVADAS de `lib/config.ts` (`METRICAS`,
+ * `ROTULOS_OBS`, `ROTULOS_ACT`, `ROTULO_CTRL`, `UNIDADE_CTRL`): ao adaptar o site a outro robô, estes textos
+ * acompanham a configuração — só os textos do PADRÃO (secções, vento, RPi 5, episódio) são fixos.
  *
  * Cascata (motion-plus-ui): passo 2 — `sheet` (`Sheet` + `SheetBackdrop` + `SheetPanel` + `SheetClose`,
  * diálogo nativo com foco preso e arrasto para fechar) e `accordion` (`Accordion` + `AccordionItem` +
@@ -28,6 +31,7 @@ import {
 import { Sheet, SheetBackdrop, SheetClose, SheetHandle, SheetPanel, useSheet } from "@/components/motion-ui/sheet"
 import { Button } from "@/components/ui/button"
 import { FOCUS_RING } from "@/components/sim/estilo"
+import { METRICAS, NOME_EXPERIMENTO, ROTULOS_ACT, ROTULOS_OBS, ROTULO_CTRL, UNIDADE_CTRL } from "@/lib/sim"
 
 /** Uma entrada da ajuda: o elemento tal como aparece no ecrã + o que ele é. */
 export interface ItemAjuda {
@@ -45,70 +49,93 @@ export interface SeccaoAjuda {
   itens: ItemAjuda[]
 }
 
-/** Conteúdo da ajuda, secção a secção (PT-PT, curto). ADAPTAR ao teu robô: só os textos. */
+/** Sufixo de unidade para os textos ("N·m" → " N·m"; vazio → nada). */
+const unidade = UNIDADE_CTRL ? ` ${UNIDADE_CTRL}` : ""
+
+/** Conteúdo da ajuda, secção a secção (PT-PT, curto). Os itens das métricas/obs/ação vêm da configuração. */
 export const SECOES_AJUDA: SeccaoAjuda[] = [
+  {
+    id: "seccoes",
+    titulo: "Secções e atalhos (o que vês)",
+    onde: "barra fixa do topo",
+    itens: [
+      {
+        rotulo: "Operação · Rede · Vento · Bordo · Tudo",
+        texto:
+          "O painel não mostra tudo ao mesmo tempo: escolhes a secção que queres vigiar. OPERAÇÃO = estado + valores atuais + curvas grandes; REDE = a política a decidir (ativações, observação, ação); VENTO = sliders, rosa e vento dinâmico; BORDO = o computador de bordo (Raspberry Pi 5); TUDO = o layout completo, como dantes.",
+      },
+      {
+        rotulo: "teclas 1–5",
+        texto:
+          "Atalhos para trocar de secção sem largar o rato; as setas do teclado percorrem as abas. Os atalhos NÃO atuam com Ctrl/Alt/Meta, nem enquanto escreves num campo, nem com o rato/foco sobre um SLIDER (as teclas 1–5 têm de continuar a escrever números e um arrasto de slider não pode saltar de secção).",
+      },
+      {
+        rotulo: "a escolha fica guardada",
+        texto:
+          "A secção ativa é gravada no `localStorage` do browser e volta a ser a mesma quando reabres a página (sem storage — modo privado — a escolha vive só na sessão).",
+      },
+      {
+        rotulo: "as secções escondidas continuam vivas",
+        texto:
+          "Esconder uma secção NÃO a desmonta: os widgets continuam a receber telemetria e voltam com os valores frescos. É por isso que a rede e as curvas não «recomeçam» quando trocas de aba.",
+      },
+      {
+        rotulo: "barra crítica (nunca se esconde)",
+        texto:
+          "A faixa do topo mostra sempre o que é crítico — episódio terminado, API em baixo, LOOP ligado — e o REINICIAR/LOOP estão lá em qualquer secção. Nada de avisos escondidos numa aba que não estás a ver.",
+      },
+    ],
+  },
   {
     id: "cabecalho",
     titulo: "Cabeçalho, selos e contadores",
-    onde: "topo da página",
+    onde: "secção «Operação», topo",
     itens: [
       {
         rotulo: "título e subtítulo",
-        texto:
-          "«Haste com alvo de ângulo · política ao vivo»: junta hinge com atuador de torque no MuJoCo 3.15, observação de 4 canais, MLP 4→64→64→1 e alvo de 60°. Tudo o que se vê vem da telemetria real.",
+        texto: `«${NOME_EXPERIMENTO} — padrão janela limpa + site»: a janela do MuJoCo mostra SÓ a simulação 3D; todas as métricas e controlos estão nesta página, alimentados pela telemetria real.`,
       },
       {
         rotulo: "selo de estado",
         texto:
-          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando acabou (erro além do envelope de 80°, teto de passos, etc.). O site nunca reinicia sozinho.",
+          "«a correr» enquanto o episódio decorre; «episódio terminado — clica REINICIAR» quando acabou (o motivo aparece no terminal do runner). O site nunca reinicia sozinho.",
       },
       {
         rotulo: "selo de ligação",
         texto:
-          "Estado do polling: «API ligada» é a última leitura com sucesso; passados 2 s sem resposta mostra há quanto tempo. Com o servidor em baixo fica «API em baixo» e aparece a faixa vermelha.",
+          "Estado do polling: «ligado · N s» é a idade da última resposta com sucesso. Com o servidor em baixo fica «sem ligação» e a barra crítica fica vermelha.",
       },
       {
-        rotulo: "episódio · passos",
+        rotulo: "episódio · passo",
         texto:
           "Número do episódio e passos de decisão já publicados (a política decide a 50 Hz). O episódio novo zera os passos e o histórico.",
       },
       {
         rotulo: "retorno",
         texto:
-          "Retorno acumulado do episódio — a soma das recompensas que a política está a tentar maximizar (chegar ao alvo e ficar dentro da tolerância de 3°).",
+          "Retorno acumulado do episódio — a soma das recompensas que a política está a tentar maximizar (definida no `env.py` do projeto).",
       },
       {
-        rotulo: "modelo",
+        rotulo: "política",
         texto:
-          "A política em uso, como «pasta/ficheiro.zip», lida do GET /api/state. Nunca se mostra o caminho absoluto: é um rótulo de painel, não um explorador de ficheiros.",
+          "O modelo em uso, como «pasta/ficheiro.zip», lido do GET /api/state. Nunca se mostra o caminho absoluto: é um rótulo de painel, não um explorador de ficheiros.",
       },
     ],
   },
   {
-    id: "curvas",
-    titulo: "Curvas ao vivo",
-    onde: "coluna principal, 4 gráficos",
+    id: "operacao",
+    titulo: "Valores atuais e curvas",
+    onde: "secção «Operação»",
     itens: [
       {
-        rotulo: "θ(t)",
+        rotulo: "valores atuais",
         texto:
-          "Ângulo da haste ao longo do episódio, em graus, com a linha fina no alvo do episódio (deduzido da telemetria: erro = θ − alvo). Abaixo do gráfico: mínimo, máximo e nº de pontos guardados.",
+          "Os 4 números grandes da última amostra — é o que se olha em operação, sem procurar nos gráficos. «—» enquanto não houver telemetria (nunca um zero inventado).",
       },
-      {
-        rotulo: "erro(t)",
-        texto:
-          "Erro em relação ao alvo (θ − θ_alvo), em graus, com a linha no zero: é a grandeza que a recompensa castiga e a que decide a terminação.",
-      },
-      {
-        rotulo: "θ̇(t)",
-        texto:
-          "Velocidade angular, em °/s: mostra se a haste está a oscilar (o vento a empurrar e o controlo a repor) ou parada no alvo.",
-      },
-      {
-        rotulo: "vento(t)",
-        texto:
-          "Norma do vento aplicado em cada passo, em m/s. Com rajadas, frente ou turbulência ligadas é aqui que se vê a dinâmica a mexer o vento.",
-      },
+      ...METRICAS.map((m) => ({
+        rotulo: `${m.curta}(t)`,
+        texto: `${m.rotulo} ao longo do episódio, em ${m.unidade}${m.referencia ? `, com a linha de referência (${m.referencia === "alvo" ? "o alvo do episódio" : "o zero"})` : ""}. Abaixo do gráfico: mínimo, máximo e nº de pontos guardados.`,
+      })),
       {
         rotulo: "mín · máx · pts",
         texto:
@@ -119,12 +146,12 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rede",
     titulo: "Rede da política · ativações",
-    onde: "coluna principal, sob as curvas",
+    onde: "secção «Rede»",
     itens: [
       {
-        rotulo: "4 → 64 → 64 → 1",
+        rotulo: "obs → h1 → h2 → act",
         texto:
-          "A rede: 4 entradas (observação), duas camadas escondidas de 64 e 1 saída (ação). As grelhas mostram as ATIVAÇÕES de cada camada neste instante.",
+          "A rede da política: entradas (observação), duas camadas escondidas e as saídas (ação). As grelhas mostram as ATIVAÇÕES de cada camada neste instante, publicadas na telemetria (`h1`/`h2`).",
       },
       {
         rotulo: "cor = |a| / máx da camada",
@@ -136,65 +163,63 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
         texto:
           "Não se desenham ligações entre neurónios porque o backend publica ativações, não pesos — desenhar arestas seria inventar dados.",
       },
+      {
+        rotulo: "«— sem ativações»",
+        texto:
+          "Sem política carregada (o runner com ação nula) não há ativações para mostrar: diz-se isso em vez de desenhar zeros.",
+      },
     ],
   },
   {
     id: "obs",
-    titulo: "Observação · 4 canais",
-    onde: "coluna principal, canto inferior esquerdo",
+    titulo: "Observação (o que a política vê)",
+    onde: "secção «Rede», em baixo",
     itens: [
-      {
-        rotulo: "cos θ · sin θ",
-        texto:
-          "O ângulo da haste em forma contínua (sem saltos no ±180°): é a codificação que a política usa para saber onde está.",
-      },
-      {
-        rotulo: "θ̇/10",
-        texto: "Velocidade angular normalizada por 10 rad/s: quão depressa a haste está a rodar.",
-      },
-      {
-        rotulo: "erro/π",
-        texto:
-          "Erro em relação ao alvo normalizado por π (sempre em [−1, 1]): é o canal que a recompensa transforma em penalidade.",
-      },
+      ...ROTULOS_OBS.map((rotulo, i) => ({
+        rotulo: `obs[${i}] · ${rotulo}`,
+        texto: `Canal ${i} da observação. O número de canais vem da telemetria (o site desenha N entradas, sem tamanhos fixos); os rótulos e as escalas estão em \`lib/config.ts\`.`,
+      })),
       {
         rotulo: "colunas obs / cru / barra",
         texto:
-          "«obs» é o valor normalizado que a rede vê; «cru» devolve a unidade física (obs × escala fixa do env.py); a barra é |obs| face ao canal mais ativo do passo.",
+          "«obs» é o valor normalizado que a rede vê; «cru» devolve a unidade física (obs × escala fixa do `env.py` do projeto); a barra é |obs| face ao canal mais ativo do passo.",
       },
     ],
   },
   {
     id: "acao",
-    titulo: "Ação · 1 canal",
-    onde: "coluna principal, canto inferior direito",
+    titulo: "Ação (o que a política manda)",
+    onde: "secção «Rede», em baixo",
     itens: [
+      ...ROTULOS_ACT.map((rotulo, i) => ({
+        rotulo: `act[${i}] · ${rotulo}`,
+        texto: `Saída ${i} da política, normalizada em [−1, 1]. O \`env.py\` do projeto traduz a ação no comando FÍSICO (a ação é um desvio em torno do equilíbrio, não o esforço absoluto).`,
+      })),
       {
-        rotulo: "a₀ · Δτ normalizado",
+        rotulo: `${ROTULO_CTRL}${unidade ? ` (${UNIDADE_CTRL})` : ""}`,
         texto:
-          "A ação é um DESVIO em torno do torque de equilíbrio, em [−1, 1] — não o esforço absoluto. O env.py traduz: ctrl = trim + a·15 N·m.",
+          "O comando físico que o backend aplicou, publicado em `ctrl` na telemetria. Se a telemetria não o trouxer, o site deriva-o localmente com as constantes do `env.py`.",
       },
       {
-        rotulo: "τ aplicado (N·m)",
+        rotulo: "linhas de evento (passo = 0)",
         texto:
-          "O torque físico que o atuador recebeu, publicado em ctrl pelo backend (o trim de 60° vale ≈20,2 N·m). Se a telemetria não trouxer ctrl, deriva-se localmente com as constantes do env.py.",
+          "No arranque/reinício a ação vale «—» porque NENHUMA ação foi aplicada: zeros seriam um comando inventado que o simulador não executou.",
       },
     ],
   },
   {
     id: "vento",
     titulo: "Vento constante (sliders)",
-    onde: "painel Controlos, secção «vento»",
+    onde: "secção «Vento»",
     itens: [
       {
         rotulo: "força (0–5 m/s)",
         texto:
-          "Velocidade do vento. 0 = ar parado. Escreve-se na física pelo POST /api/vento, sem parar a simulação.",
+          "Velocidade do vento BASE. 0 = ar parado. Escreve-se na física pelo POST /api/vento, sem parar a simulação.",
       },
       {
         rotulo: "azimute (0–360°)",
-        texto:
-          "Direção horizontal: 0° = +x = E, 90° = +y = N (anti-horário). É a direção PARA ONDE o vento aponta no plano.",
+        texto: "Direção horizontal: 0° = +x = E, 90° = +y = N (anti-horário) — a direção para onde o vento aponta.",
       },
       {
         rotulo: "elevação (−90…90°)",
@@ -214,12 +239,12 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "dinamico",
     titulo: "Vento dinâmico (rajadas · turbulência · frente)",
-    onde: "painel Controlos, caixa «vento dinâmico»",
+    onde: "secção «Vento», caixa «vento dinâmico»",
     itens: [
       {
         rotulo: "selo ativo/inativo e «modo em vigor»",
         texto:
-          "O que o servidor está mesmo a fazer: modo, parâmetros e se está ligado. Vem do vento_dinamico do /api/sim e da última linha da telemetria (vento_modo).",
+          "O que o servidor está mesmo a fazer, lido do `vento_dinamico` do /api/sim e da última linha da telemetria (`vento_modo`).",
       },
       {
         rotulo: "PARADO · RAJADAS · DRYDEN",
@@ -229,7 +254,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "p · duração · u_max",
         texto:
-          "Parâmetros das rajadas (valores por omissão do treino: p = 0,02, duração = 10 passos = 0,2 s, u_max = 3,0 m/s). u_max é o teto do modo e u_max = 0 torna-o inerte.",
+          "Parâmetros das rajadas (por omissão: p = 0,02, duração = 10 passos = 0,2 s a 50 Hz, u_max = 3,0 m/s). u_max é o teto do modo e u_max = 0 torna-o inerte.",
       },
       {
         rotulo: "sigma · L · v_min",
@@ -244,7 +269,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "FRENTE AGORA",
         texto:
-          "Degrau de vento imediato: substitui o vento base pelos valores dos sliders (vento que muda de repente a meio do episódio) e vê-se logo na telemetria (vento_vec/vento_vel). Clicar outra vez desliga — o botão fica «FRENTE EM VIGOR» enquanto está ativa.",
+          "Degrau de vento imediato: substitui o vento base pelos valores dos sliders e vê-se logo na telemetria (`vento_vec`/`vento_vel`). Clicar outra vez desliga — o botão fica «FRENTE EM VIGOR» enquanto está ativa.",
       },
       {
         rotulo: "PARAR DINÂMICO",
@@ -256,12 +281,12 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rosa",
     titulo: "Rosa dos ventos",
-    onde: "painel Controlos, sob os sliders",
+    onde: "secção «Vento», sob os sliders",
     itens: [
       {
         rotulo: "seta sólida = vento em vigor",
         texto:
-          "Vetor que está mesmo aplicado na física (vento base + dinâmica), lido de vento_vec na telemetria. O comprimento é a norma (0–5 m/s) e o ângulo é o azimute.",
+          "Vetor que está mesmo aplicado na física (vento base + dinâmica), lido de `vento_vec` na telemetria. O comprimento é a norma (0–5 m/s) e o ângulo é o azimute.",
       },
       {
         rotulo: "seta tracejada = seleção",
@@ -283,17 +308,17 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "rpi5",
     titulo: "Raspberry Pi 5 (computador de bordo)",
-    onde: "coluna principal, sob a rede da política",
+    onde: "secção «Bordo»",
     itens: [
       {
         rotulo: "imagem e fonte",
         texto:
-          "A placa em que a política correria a bordo em TODOS os projetos do laboratório — é uma ILUSTRAÇÃO de referência (Raspberry Pi Model B+, não um Pi 5: Lucasbosch, Wikimedia Commons, CC BY-SA 3.0). O selo «fonte» diz de onde vêm os números: «real» (medidos no Pi 5), «proxy x86 calibrado» (estimados a partir de um PC x86, como o deploy.py faz por omissão) ou «sem benchmark» — neste caso não se inventa nenhum tempo.",
+          "A placa em que a política correria a bordo — é uma ILUSTRAÇÃO de referência (Raspberry Pi Model B+ de 2014, não um Pi 5: Lucasbosch, Wikimedia Commons, CC BY-SA 3.0). O selo «fonte» diz de onde vêm os números: «real» (medidos no Pi 5), «proxy x86 calibrado» (medidos nesta máquina pelo `deploy.py`) ou «sem benchmark» — neste caso não se inventa nenhum tempo.",
       },
       {
         rotulo: "semáforo OK / ATENÇÃO / ERRO",
         texto:
-          "Saúde do tempo real derivada do p99: OK até 70 % do orçamento, ATENÇÃO acima disso (pouca margem) e ERRO quando o p99 passa os 100 %. Sem números não há semáforo.",
+          "Saúde do tempo real derivada do p99: OK até 70 % do orçamento, ATENÇÃO acima disso (pouca margem) e ERRO quando passa os 100 %. Sem números não há semáforo.",
       },
       {
         rotulo: "p50 / p99 vs budget",
@@ -308,7 +333,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "modelo · fator int8 · pior caso · núcleos multi-IA",
         texto:
-          "Tamanho da política em KB, ganho (ou perda) da quantização int8 face ao fp32 medido nesta máquina, o pior caso e quantos núcleos seriam precisos para correr várias políticas em paralelo — tudo calculado pelo backend a partir do relatório do deploy.py.",
+          "Tamanho da política em KB, ganho (ou perda) da quantização int8 face ao fp32 medido nesta máquina, o pior caso e quantos núcleos seriam precisos para correr várias políticas em paralelo — tudo calculado pelo backend a partir do relatório do `deploy.py`.",
       },
       {
         rotulo: "estado do hardware",
@@ -318,24 +343,19 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "nota do jitter do SO",
         texto:
-          "A inferência desta MLP é muito mais barata que o orçamento (dezenas de microssegundos); quem costuma estourá-lo é o jitter do sistema operativo — 9,4 ms de pior caso num kernel normal contra 20 ms de período, e ≤225 µs com um kernel PREEMPT_RT. É por isso que o painel mostra a cauda (p99/pior caso) e não só a média.",
-      },
-      {
-        rotulo: "specs do alvo",
-        texto:
-          "SoC (BCM2712), CPU (4× Cortex-A76 @ 2,4 GHz, 512 kB de L2 por núcleo + 2 MB de L3), RAM (LPDDR4X-4267), orçamento por decisão e núcleos do alvo, como o backend os anuncia. Tudo isto atualiza com o polling (2,9 Hz), sem recarregar a página.",
+          "A inferência de uma MLP pequena é muito mais barata que o orçamento (dezenas de microssegundos); quem costuma estourá-lo é o jitter do sistema operativo — 9,4 ms de pior caso num kernel normal contra 20 ms de período, e ≤225 µs com um kernel PREEMPT_RT. É por isso que o painel mostra a cauda (p99/pior caso) e não só a média.",
       },
     ],
   },
   {
     id: "episodio",
     titulo: "REINICIAR · LOOP · estados e avisos",
-    onde: "painel Controlos, fundo",
+    onde: "barra fixa do topo e canto do ecrã",
     itens: [
       {
         rotulo: "REINICIAR (manter 1 s)",
         texto:
-          "Único controlo que reinicia: mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. A haste volta ao alvo com um jitter de ±5° e velocidade nula.",
+          "Único controlo que reinicia: mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. O BACKEND faz o reset explícito do simulador — o site só pede.",
       },
       {
         rotulo: "LOOP",
@@ -343,14 +363,9 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
           "Desligado por omissão. Ligado, é o BACKEND que reinicia ao terminar o episódio; o site limita-se a fazer o POST /api/loop. Desligado, o episódio fica terminado até carregares em REINICIAR.",
       },
       {
-        rotulo: "faixa de estado do episódio",
-        texto:
-          "«episódio a correr · sem auto-restart» ou «LOOP ligado»; quando termina, fica vermelha a pedir REINICIAR e o cartão ganha um anel de aviso.",
-      },
-      {
         rotulo: "avisos (toasts)",
         texto:
-          "No fundo do ecrã: confirmações e erros das ações (vento aplicado, rajada enviada, LOOP, reinício) e os 400 do servidor com o motivo. Erros ficam 8 s e sucesso 5 s.",
+          "No canto do ecrã: confirmações e erros das ações (vento aplicado, rajada enviada, LOOP, reinício) e os 400 do servidor com o motivo.",
       },
       {
         rotulo: "esqueleto e «sem passos»",
@@ -421,7 +436,7 @@ export function Ajuda({ idTitulo = "ajuda-titulo" }: AjudaProps) {
               O que é cada elemento desta página
             </h2>
             <p className="text-[0.7rem] text-muted-foreground">
-              haste com alvo de ângulo (MuJoCo + política RL) · clica numa secção para abrir ou fechar ·
+              {NOME_EXPERIMENTO} · simulação MuJoCo + política RL · clica numa secção para abrir ou fechar ·
               arrasta a folha para baixo para fechar
             </p>
           </div>

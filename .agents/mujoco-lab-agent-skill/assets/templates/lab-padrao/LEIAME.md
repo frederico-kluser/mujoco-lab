@@ -4,9 +4,17 @@ Este é o template que se copia para **todo** experimento novo com RL + interfac
 `experiments/09_drone_hover_rl/` **é o padrão** e está aqui dentro, reduzido a um exemplo que arranca de raiz
 (uma **haste com junta hinge e alvo de ângulo**, accionada por torque, com perturbação externa = "vento").
 
-O template traz já o padrão na versão **r11**: vento **dinâmico ao vivo** (rajadas/frente/turbulência, sem
-reiniciar o episódio), **painel do computador de bordo (Raspberry Pi 5)** no site, botão de ajuda «?» que
-explica cada elemento, **rosa dos ventos viva** e a API de **6 rotas**.
+O template traz já o padrão na versão **r12**: **site em SECÇÕES** (Operação · Rede · Vento · Bordo · Tudo, com
+atalhos 1–5, persistência e barra crítica fixa), vento **dinâmico ao vivo** (rajadas/frente/turbulência, sem
+reiniciar o episódio), **painel do computador de bordo (Raspberry Pi 5)**, botão de ajuda «?» que explica cada
+elemento, **rosa dos ventos viva** e a API de **6 rotas**.
+
+**Arquitetura (importante):** o **front** (`site/`) e os **códigos de conexão** (`sim_view.py`, `sim_site.py`)
+vivem no bundle reutilizável **`assets/templates/front-conexao/`** — uma só cópia para todos os projetos. Este
+template tem, do lado do site, apenas o **overlay do exemplo** (`site/src/lib/config.ts`: rótulos/unidades das
+métricas da haste) e, do lado do Python, o ambiente/treino/deploy do robô. O `new_experiment.py` **compõe** os
+dois: copia o bundle e sobrepõe-lhe este template. Quem copiar a pasta à mão tem de copiar também
+`front-conexao/{site,sim_view.py,sim_site.py,CONTRATOS.md}` (ou usar o script, que é o caminho recomendado).
 
 ```bash
 # 1) criar o experimento a partir DESTE template (o script faz o número NN e o lab/mjkit.py)
@@ -39,9 +47,9 @@ uv run --group hover-rl python experiments/NN_<nome>/deploy.py --int8       # ON
 | 5 | `env.py` → `_forca_vento()` | a **perturbação física** (no drone é o modelo de fluido do MuJoCo; aqui é arrasto quadrático no site, sem velocidade relativa). Faixas `VENTO_VEL_MAX`. |
 | 6 | `run.py` | as tuas **fórmulas fechadas** em condições isoladas (o que é verificável sem treino), com critério/esperado/medido e exit 0/1. |
 | 7 | `sim_view.py` → `amostra()` | as **3 métricas** do painel (aqui `theta`, `erro`, `omega`) — e o mesmo em `site/src/lib/sim.ts` (`METRICAS`). As chaves `vento_vec`/`vento_modo` ficam: são do contrato. |
-| 8 | `site/src/lib/sim.ts` | a secção **CONFIGURAÇÃO**: `METRICAS`, `ROTULOS_OBS`, `ROTULOS_ACT`, `UNIDADE_CTRL`, `NOME_EXPERIMENTO`. É a ÚNICA parte do site a mexer. |
+| 8 | `site/src/lib/config.ts` | a ★ **CONFIGURAÇÃO** do site: `METRICAS`, `ROTULOS_OBS`, `ROTULOS_ACT`, `UNIDADE_CTRL`, `ROTULO_CTRL`, `NOME_EXPERIMENTO`. É o ÚNICO ficheiro do front a mexer (a ajuda «?» e as secções leem-no). |
 | 9 | `train.py` → `FASES` | o **currículo** (alvo/vento por fase) e o `VentoAleatorio` (DR). |
-| 10 | `site/src/components/sim/ajuda.tsx` | os **textos** de `SECOES_AJUDA` (o desenho não muda): cada elemento do ecrã explicado para quem chega de novo. |
+| 10 | `site/src/components/sim/ajuda.tsx` | os **textos do PADRÃO** de `SECOES_AJUDA` (o desenho e os itens das métricas/obs/ação não mudam — vêm da configuração). Só é preciso mexer se o teu robô tiver elementos que o padrão não preveja. |
 
 **Vento dinâmico: o mínimo honesto que este template traz.** O `env.py` tem os TRÊS modos do treino —
 `rajadas` (envelope `sin(π·k/(N+1))` que SOMA ao vento base), `frente` (degrau que o SUBSTITUI a partir de
@@ -88,7 +96,30 @@ e mantém os nomes dos modos e as chaves dos params (o site, o `train.py` e a AP
 - **Temporários em `$TMPDIR`**, saídas em `out/` (ignorado pelo git), nunca `node_modules/`/`dist/` no git.
 - **Unidades SI, +Z para cima, ângulos em graus no XML**; `import lab.mjkit` **antes** de `import mujoco`.
 
-## 3. Computador de bordo: Raspberry Pi 5 (OBRIGATÓRIO em todos os projetos)
+## 3. Secções do site (UX do painel)
+
+O painel organiza-se em **5 secções escolhíveis** — o seletor está na barra fixa do topo, com **atalhos 1–5** e
+a escolha **persistida no `localStorage`** (`<nome-do-experimento>:seccao`):
+
+| secção | tecla | para que serve |
+|---|---|---|
+| **Operação** | `1` | vigiar a operação: cabeçalho (estado, política), **valores atuais** das 4 métricas e as **curvas grandes** |
+| **Rede** | `2` | ver a política a decidir: ativações por camada, observação e ação |
+| **Vento** | `3` | comandar o vento: sliders, **rosa dos ventos viva** e vento dinâmico (rajadas · Dryden · frente · rajada) |
+| **Bordo** | `4` | acompanhar o computador de bordo (Raspberry Pi 5): latências, semáforo, specs |
+| **Tudo** | `5` | o layout completo (todas as secções de uma vez), como no painel original |
+
+Três regras que fazem parte do padrão (não são decoração):
+
+- **esconder ≠ desmontar** — cada bloco esconde-se com o atributo `hidden` (regra `[data-seccao][hidden]` no
+  `index.css`), por isso os widgets continuam a receber telemetria com a secção escondida e voltam com valores
+  frescos (a rede e as curvas não «recomeçam» ao trocar de aba);
+- **o crítico nunca se esconde** — a barra do topo mostra SEMPRE o REINICIAR/LOOP e a faixa de estado
+  (`episódio terminado` · `API em baixo` · `LOOP ligado`), em qualquer secção;
+- **os atalhos não roubam teclas** — 1–5 não disparam enquanto se escreve num campo (sliders e campos
+  numéricos continuam a aceitar números) nem com Ctrl/Alt/Meta.
+
+## 4. Computador de bordo: Raspberry Pi 5 (OBRIGATÓRIO em todos os projetos)
 
 Todos estes projetos correm num **Raspberry Pi 5** a bordo. O alvo não é uma máquina de treino: é um SBC com
 orçamento de tempo real apertado, e é isso que decide o que cabe.
@@ -128,17 +159,18 @@ o sinal à vista; não se promete ganho nenhum.
 no painel e nos textos de ajuda. Os números do painel são do alvo (Pi 5) e vêm citados no `RPI5_SPECS` do
 `sim_site.py` (Product Brief RP-008348-DS + medições publicadas no A76).
 
-## 4. Mapa dos ficheiros
+## 5. Mapa dos ficheiros
 
 | ficheiro | para que serve |
 |---|---|
 | `model.xml` | modelo de exemplo (haste/alvo). Substitui pelo teu. |
 | `env.py` | ambiente Gymnasium: obs normalizada, ação centrada no trim, recompensa, vento base + **vento dinâmico** (rajadas/frente/dryden), guardas NaN. |
 | `run.py` | **validação** por fórmulas fechadas em condições isoladas (7 checagens, exit 0/1) + `out/resumo.json`. |
-| `sim_view.py` | **runner do padrão**: janela limpa + telemetria JSONL (15+2 chaves) + controlo (vento base, bloco `dinamico`, REINICIAR, LOOP) e a rajada dirigida one-shot. |
-| `sim_site.py` | **UM comando**: arranca o runner, serve `site/dist/` e a API de **6 rotas**; monta o painel RPi 5; abre o browser. |
-| `site/` | app React (motion-plus-ui) com todas as métricas/controlos — ver `site/LEIAME.md`. |
-| `site/src/components/sim/` | `cabecalho`, `curvas`, `rede`, `observacoes`, `controlos` (vento + dinâmico), **`rosa-ventos`**, **`rpi5`** (computador de bordo), **`ajuda`** (o «?»), `avisos`, `estilo`. |
+| `sim_view.py` | **runner do padrão** (vem do bundle `front-conexao`): janela limpa + telemetria JSONL (15+2 chaves) + controlo (vento base, bloco `dinamico`, REINICIAR, LOOP) e a rajada dirigida one-shot. |
+| `sim_site.py` | **UM comando** (vem do bundle): arranca o runner, serve `site/dist/` e a API de **6 rotas**; monta o painel RPi 5; abre o browser. |
+| `CONTRATOS.md` | os contratos literais (controlo atómico, telemetria, API, sem auto-loop, RPi 5) — vem do bundle. |
+| `site/` | front React (motion-plus-ui): **vem do bundle** (secções, curvas, rede, RPi 5, ajuda «?», rosa dos ventos); aqui só existe o overlay `site/src/lib/config.ts`. |
+| `site/src/lib/config.ts` | ★ a configuração do site para ESTE exemplo (haste): rótulos/unidades das 4 métricas do contrato. |
 | `view.py` | bancada: janela **com HUD** (θ(t), erro(t), teclado, REPL) e modo `--sem-janela`. |
 | `train.py` | PPO SB3 headless: currículo, DR, `--retomar`, telemetria JSONL, checkpoints + `best_model.zip`. |
 | `dashboard.py` | gestão de TREINO no terminal: rondas, melhor retorno, checkpoints, comando para retomar. |
@@ -147,7 +179,7 @@ no painel e nos textos de ajuda. Os números do painel são do alvo (Pi 5) e vê
 | `README.md` | README do EXPERIMENTO (o que é, números medidos × teoria, fontes). |
 | `INTERFACE.md` | guia de **tudo o que é visível** (janela, teclas, cada campo do site, ficheiros por baixo). |
 
-## 5. Comandos do dia-a-dia
+## 6. Comandos do dia-a-dia
 
 ```bash
 uv run --group hover-rl python <exp>/run.py --json            # validação + resumo
@@ -157,10 +189,11 @@ uv run --group hover-rl python <exp>/view.py --sem-janela     # bancada sem jane
 uv run --group hover-rl python <exp>/train.py --retomar <exp>/out/runs/base/final.zip --timesteps 100000
 uv run --group hover-rl python <exp>/deploy.py --int8         # ONNX + validação + benchmark (+ painel RPi 5)
 uv run --group hover-rl pytest .agents/mujoco-lab-agent-skill/tests -q   # testes da skill (31+)
+python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template front-conexao  # só o bundle
 ruff check <exp>/*.py && ruff check .agents/mujoco-lab-agent-skill/scripts/new_experiment.py
 ```
 
-## 6. Números do exemplo (para comparar quando adaptares)
+## 7. Números do exemplo (para comparar quando adaptares)
 
 | grandeza | valor medido | fórmula |
 |---|---|---|
@@ -170,5 +203,6 @@ ruff check <exp>/*.py && ruff check .agents/mujoco-lab-agent-skill/scripts/new_e
 | deriva de energia (dt=2 ms, implicitfast) | 0,346 % em 6 s | sem amortecimento |
 | equilíbrio com vento 5 m/s @0° | 38,1474° (erro 0,0000°) | raiz de `τ_trim − m·g·d·sinθ − b·cosθ·F = 0` |
 
-Guia do padrão na memória CoALA: `padrao-simulacao-clean-site` e `padrao-rpi5-computador-bordo`
-(e `experiments/09_drone_hover_rl/INTERFACE.md` como referência canónica).
+Guia do padrão na memória CoALA: `padrao-simulacao-clean-site` (inclui as **secções** do site),
+`padrao-rpi5-computador-bordo` e `front-conexao-para-projetos` (o bundle); referência canónica de ponta a ponta:
+`experiments/09_drone_hover_rl/INTERFACE.md`.

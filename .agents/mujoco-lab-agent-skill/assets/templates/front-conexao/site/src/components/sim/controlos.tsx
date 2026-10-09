@@ -1,19 +1,19 @@
 /**
- * controlos.tsx — TODOS os controlos do experimento (é o princípio do padrão: a janela não tem nenhum).
+ * controlos.tsx — TODOS os controlos do experimento (é o princípio do padrão: a janela não tem nenhum),
+ * separados em DOIS blocos para o site os poder mostrar em sítios diferentes:
  *
- *  · vento (perturbação) em TEMPO REAL: sliders de velocidade/azimute/elevação + APLICAR/PARAR (o POST escreve
- *    o ficheiro de controlo de forma atómica; o runner aplica-o no passo de decisão seguinte);
- *  · VENTO DINÂMICO ao vivo (`POST /api/vento-dinamico`): rajadas contínuas, turbulência Dryden, frente
- *    (degrau imediato do vento base) e RAJADA AGORA (one-shot dirigido) — a física muda no passo seguinte
- *    SEM reiniciar o episódio;
- *  · ROSA DOS VENTOS viva (`sim/rosa-ventos.tsx`): seta cheia = vetor em vigor (telemetria), tracejada = o
- *    que os sliders mandariam;
- *  · REINICIAR — `hold-to-confirm` (manter 1 s): é o ÚNICO caminho de reinício; o backend conta os pedidos;
- *  · LOOP — `segmented-toggle` (desligado por omissão: sem ciclo automático).
+ *  · `ControlosVento` — vento (perturbação) em TEMPO REAL: sliders de velocidade/azimute/elevação +
+ *    APLICAR/PARAR (o POST escreve o ficheiro de controlo de forma atómica; o runner aplica-o no passo de
+ *    decisão seguinte), VENTO DINÂMICO ao vivo (`POST /api/vento-dinamico`: rajadas contínuas, turbulência
+ *    Dryden, frente e RAJADA AGORA) e a ROSA DOS VENTOS viva (`sim/rosa-ventos.tsx`: seta cheia = vetor em
+ *    vigor da telemetria, tracejada = o que os sliders mandariam). Vive na secção «Vento».
+ *  · `ControlosEpisodio` — REINICIAR (`hold-to-confirm`, manter 1 s: é o ÚNICO caminho de reinício; o
+ *    backend conta os pedidos) e LOOP (`segmented-toggle`, desligado por omissão). São os controlos
+ *    CRÍTICOS: ficam na barra fixa do topo (`compacto`) e vêem-se em QUALQUER secção.
  *
  * Cascata (motion-plus-ui): passo 2 — `hold-to-confirm`, `multi-state-button`, `segmented-toggle`; passo 3 —
- * `Slider`/`Card`/`Button`/`Input` (shadcn); passo 4 só na rosa dos ventos (o catálogo não tem mostrador
- * polar) e nos selos de estado, que são texto com classes semânticas.
+ * `Slider`/`Card`/`Button`/`Input` (shadcn); passo 4 só na rosa dos ventos e no anel do REINICIAR (o catálogo
+ * não tem mostrador polar nem indicador pulsante) — SVG/`motion` com classes semânticas.
  */
 
 import { useEffect, useRef, useState } from "react"
@@ -49,7 +49,7 @@ import { FOCUS_RING } from "@/components/sim/estilo"
 export type FaseVento = "pronto" | "a_enviar" | "ok" | "erro"
 
 /** Qual dos botões dinâmicos está a caminho do servidor (os outros ficam em espera). */
-type AlvoDinamico = "modo" | "rajada" | "frente" | "parar"
+export type AlvoDinamico = "modo" | "rajada" | "frente" | "parar"
 
 /** Estados visíveis dos botões dinâmicos: as 4 fases + `ativo` (o interruptor está ligado no servidor). */
 type EstadoBotao = FaseVento | "ativo"
@@ -299,113 +299,75 @@ function Dinamico({ dinamico, modoTelemetria, ligado, fase, emCurso, selecao, on
   )
 }
 
-export function Controlos({ vento, vec, dinamico, modoTelemetria, estado, loop, contadorReiniciar, onVento,
-                            onVentoDinamico, onReiniciar, onLoop, aviso }: {
+export interface ControlosVentoProps {
+  /** Vento BASE em vigor no backend (`/api/sim`): dá o ponto de partida aos sliders. */
   vento: VentoEstado | null
   /** Vetor do vento em vigor (telemetria `vento_vec`), ou `null`. */
   vec: [number, number, number] | null
+  /** Modo/params do vento dinâmico em vigor no backend. */
   dinamico: VentoDinamico
   /** Modo reportado pela última linha de telemetria (o que a física está mesmo a fazer). */
   modoTelemetria: ModoVentoDinamico
-  estado: EstadoEpisodio
-  loop: boolean
-  contadorReiniciar: number | null
-  onVento: (corpo: CorpoVento, ativo: boolean) => Promise<void>
-  onVentoDinamico: (corpo: CorpoVentoDinamico) => Promise<void>
-  onReiniciar: () => Promise<number | null>
-  onLoop: (ativo: boolean) => Promise<void>
-  aviso: (tom: "ok" | "erro" | "info", texto: string) => void
-}) {
-  const ui = useMotionUITransition("ui")
+  /** `false` = a API ainda não respondeu: os botões ficam em espera (nada de pedidos a fingir). */
+  ligado: boolean
+  faseVento: FaseVento
+  faseDinamico: FaseVento
+  emCurso: AlvoDinamico | null
+  onAplicarVento: (corpo: CorpoVento) => void
+  onPararVento: () => void
+  onVentoDinamico: (corpo: CorpoVentoDinamico, alvo: AlvoDinamico, descricao: string) => void
+}
+
+/**
+ * Secção «Vento»: sliders do vento constante + rosa dos ventos + o bloco do vento dinâmico.
+ *
+ * Nenhum destes controlos reinicia o episódio — todos escrevem o vento/modo no ficheiro de controlo
+ * (`POST /api/vento`, `POST /api/vento-dinamico`) e a física muda no passo de decisão seguinte.
+ */
+export function ControlosVento({
+  vento,
+  vec,
+  dinamico,
+  modoTelemetria,
+  ligado,
+  faseVento,
+  faseDinamico,
+  emCurso,
+  onAplicarVento,
+  onPararVento,
+  onVentoDinamico,
+}: ControlosVentoProps) {
   const [vel, setVel] = useState(0)
   const [azimute, setAzimute] = useState(0)
   const [elevacao, setElevacao] = useState(0)
-  const [fase, setFase] = useState<FaseVento>("pronto")
-  const [faseDinamico, setFaseDinamico] = useState<FaseVento>("pronto")
-  const [emCurso, setEmCurso] = useState<AlvoDinamico | null>(null)
-  const [geracao, setGeracao] = useState(0)
-  const primeira = useRef(true)
+  const sincronizado = useRef(false)
 
-  // O servidor é a fonte da verdade do vento em vigor: sincroniza os sliders com o que ele reporta.
+  // Primeira leitura da API dá o ponto de partida aos sliders; depois o valor é do utilizador (o vento só
+  // muda por POST, que é sempre um clique explícito).
   useEffect(() => {
-    if (!vento) return
-    if (!primeira.current) return
-    primeira.current = false
+    if (sincronizado.current || !ligado || !vento) return
+    sincronizado.current = true
     setVel(vento.vel)
     setAzimute(vento.azimute)
     setElevacao(vento.elevacao)
-  }, [vento])
+  }, [ligado, vento])
 
-  async function aplicar(ativo: boolean) {
-    setFase("a_enviar")
-    try {
-      await onVento({ vel, azimute, elevacao }, ativo)
-      setFase("ok")
-      aviso("ok", ativo ? `vento aplicado: ${fmt(vel, 1)} m/s @ ${fmt(azimute, 0)}°` : "vento parado (0 m/s)")
-      setTimeout(() => setFase("pronto"), 1200)
-    } catch (erro) {
-      setFase("erro")
-      aviso("erro", erro instanceof Error ? erro.message : "falha ao enviar o vento")
-      setTimeout(() => setFase("pronto"), 2000)
-    }
-  }
-
-  /** VENTO DINÂMICO: só escreve o modo — o episódio NUNCA é reiniciado. */
-  async function enviarDinamico(corpo: CorpoVentoDinamico, alvo: AlvoDinamico, descricao: string) {
-    setEmCurso(alvo)
-    setFaseDinamico("a_enviar")
-    try {
-      await onVentoDinamico(corpo)
-      setFaseDinamico("ok")
-      aviso("ok", `${descricao} — POST /api/vento-dinamico`)
-    } catch (erro) {
-      setFaseDinamico("erro")
-      aviso("erro", `POST /api/vento-dinamico recusado — ${erro instanceof Error ? erro.message : "falha"}`)
-    } finally {
-      setEmCurso(null)
-      setTimeout(() => setFaseDinamico("pronto"), 1600)
-    }
-  }
-
-  async function reiniciar() {
-    try {
-      const contador = await onReiniciar()
-      setGeracao((g) => g + 1)
-      aviso("ok", `REINICIAR enviado${contador === null ? "" : ` (pedido nº ${contador})`}`)
-    } catch (erro) {
-      aviso("erro", erro instanceof Error ? erro.message : "falha no REINICIAR")
-    }
-  }
-
-  const terminado = estado === "episodio_terminado"
   const selecao: CorpoVento = { vel, azimute, elevacao }
-  const rotuloFase = { pronto: "APLICAR VENTO", a_enviar: "A ENVIAR…", ok: "APLICADO", erro: "ERRO" }[fase]
-  const iconeFase = { pronto: <Wind className="size-4" />, a_enviar: <Loader2 className="size-4 animate-spin" />,
-    ok: <Check className="size-4" />, erro: <TriangleAlert className="size-4" /> }[fase]
+  const iconeFase = { pronto: <Wind className="size-4" aria-hidden="true" />,
+    a_enviar: <Loader2 className="size-4 animate-spin" aria-hidden="true" />,
+    ok: <Check className="size-4" aria-hidden="true" />,
+    erro: <TriangleAlert className="size-4" aria-hidden="true" /> }[faseVento]
 
   return (
-    <Card className={`gap-3 py-4 ${terminado ? "ring-2 ring-destructive/40" : ""}`} data-testid="painel-controlos">
-      <CardHeader className="px-4">
-        <CardTitle className="text-sm font-medium text-muted-foreground">controlos (vento · dinâmico · reiniciar · loop)</CardTitle>
+    <Card className="gap-4" data-testid="painel-controlos">
+      <CardHeader className="gap-1">
+        <CardTitle className="text-sm font-medium">Controlos</CardTitle>
+        <p className="text-[0.7rem] text-muted-foreground">
+          vento físico em tempo real · o site nunca reinicia sozinho
+        </p>
       </CardHeader>
-      <CardContent className="space-y-4 px-4">
-        <AnimatePresence initial={false} mode="wait">
-          {terminado ? (
-            <motion.p key="terminado" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }} transition={{ ...ui }} data-testid="aviso-terminado"
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
-              episódio terminado — clica REINICIAR
-            </motion.p>
-          ) : (
-            <motion.p key="a-correr" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }} transition={{ ...ui }} data-testid="aviso-a-correr"
-              className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-              {loop ? "episódio a correr · LOOP ligado (o backend reinicia ao terminar)"
-                    : "episódio a correr · sem auto-restart"}
-            </motion.p>
-          )}
-        </AnimatePresence>
 
+      <CardContent className="flex flex-col gap-4">
         <section aria-label="Vento" className="flex flex-col gap-3">
           <h3 className="flex items-center gap-1.5 text-xs tracking-wide text-muted-foreground uppercase">
             <Wind className="size-3.5" aria-hidden="true" /> vento
@@ -424,42 +386,112 @@ export function Controlos({ vento, vec, dinamico, modoTelemetria, estado, loop, 
           <RosaDosVentos selecao={selecao} vec={vec} modo={modoTelemetria} />
 
           <div className="flex flex-wrap items-center gap-2">
-            <MultiStateButton state={fase} icon={iconeFase} onClick={() => void aplicar(true)} feedback="pop"
-              widthMorph={false} disabled={fase === "a_enviar" || estado === "sem_dados"} >
-              {rotuloFase}
+            <MultiStateButton state={faseVento} icon={iconeFase} onClick={() => onAplicarVento(selecao)}
+              feedback="pop" widthMorph={false} disabled={faseVento === "a_enviar" || !ligado}
+              aria-label="aplicar vento" className={FOCUS_RING}>
+              {faseVento === "a_enviar" ? "A ENVIAR…" : faseVento === "ok" ? "VENTO APLICADO"
+                : faseVento === "erro" ? "FALHOU — TENTAR DE NOVO" : "APLICAR VENTO"}
             </MultiStateButton>
-            <Button variant="outline" onClick={() => void aplicar(false)} className={FOCUS_RING}>
-              <CircleStop className="size-4" /> PARAR VENTO
+            <Button variant="outline" onClick={onPararVento} className={FOCUS_RING} disabled={!ligado}
+              data-testid="botao-parar-vento">
+              <CircleStop className="size-4" aria-hidden="true" /> PARAR VENTO
             </Button>
           </div>
         </section>
 
-        <Dinamico dinamico={dinamico} modoTelemetria={modoTelemetria} ligado={estado !== "sem_dados"}
-          fase={faseDinamico} emCurso={emCurso} selecao={selecao}
-          onEnviar={(corpo, alvo, descricao) => void enviarDinamico(corpo, alvo, descricao)} />
-
-        <div className="space-y-2 border-t border-border/50 pt-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {/* `key={geracao}`: o `hold-to-confirm` instalado é de UM disparo (o `done` só volta com `reset()`,
-                que ele não expõe em mode="callback") — remontar por `key` volta a armar o botão. */}
-            <HoldToConfirmButton key={geracao} holdSeconds={1} mode="callback" onConfirm={() => void reiniciar()}>
-              <RotateCcw className="size-4" /> REINICIAR (manter 1 s)
-            </HoldToConfirmButton>
-            <span className="text-xs text-muted-foreground">
-              pedidos de reinício: {contadorReiniciar === null ? "—" : contadorReiniciar}
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <SegmentedToggle value={loop ? "on" : "off"} onChange={(v) => void onLoop(v === "on")} ariaLabel="LOOP">
-              <SegmentedToggleOption value="off">LOOP OFF</SegmentedToggleOption>
-              <SegmentedToggleOption value="on">LOOP ON</SegmentedToggleOption>
-            </SegmentedToggle>
-            <span className="text-xs text-muted-foreground">
-              {loop ? "o backend reinicia sozinho no fim do episódio" : "sem ciclo automático: espera pelo REINICIAR"}
-            </span>
-          </div>
-        </div>
+        <Dinamico dinamico={dinamico} modoTelemetria={modoTelemetria} ligado={ligado} fase={faseDinamico}
+          emCurso={emCurso} selecao={selecao} onEnviar={onVentoDinamico} />
       </CardContent>
     </Card>
+  )
+}
+
+export interface ControlosEpisodioProps {
+  estado: EstadoEpisodio
+  ep: number | null
+  ligado: boolean
+  loop: boolean
+  aReiniciar: boolean
+  /**
+   * Compacto = barra fixa do topo (botão curto, ajuda só para leitores de ecrã);
+   * completo = coluna vertical com a explicação à vista.
+   */
+  compacto?: boolean
+  onReiniciar: () => void
+  onLoop: (ativo: boolean) => void
+}
+
+/**
+ * REINICIAR (hold de 1 s) + LOOP — os controlos críticos do episódio, visíveis em QUALQUER secção (barra fixa
+ * do topo em `App.tsx`). O site nunca reinicia sozinho: `/api/reiniciar` é exclusivo deste botão; com o LOOP
+ * ligado quem reinicia no fim do episódio é o BACKEND.
+ */
+export function ControlosEpisodio({
+  estado,
+  ep,
+  ligado,
+  loop,
+  aReiniciar,
+  compacto = false,
+  onReiniciar,
+  onLoop,
+}: ControlosEpisodioProps) {
+  /** Muda a cada REINICIAR confirmado: remonta o botão de catálogo (ver comentário no `key`). */
+  const [geracao, setGeracao] = useState(0)
+  const terminado = estado === "episodio_terminado"
+
+  return (
+    <div data-testid="controlos-episodio" className={compacto ? "flex items-center gap-3" : "flex flex-col gap-2"}>
+      <div className="relative">
+        {terminado ? (
+          <motion.span
+            aria-hidden="true"
+            className="pointer-events-none absolute -inset-1 rounded-full ring-2 ring-destructive"
+            animate={{ opacity: [0.15, 0.7, 0.15] }}
+            transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+          />
+        ) : null}
+        <HoldToConfirmButton
+          key={geracao}
+          holdSeconds={1}
+          mode="callback"
+          onConfirm={() => {
+            // O `hold-to-confirm` do catálogo é de UM disparo (o `done` interno só volta com `reset()`, que
+            // ele não expõe em `mode="callback"`) — remontar por `key` volta a armar o botão e repõe a
+            // escala, sem tocar no source instalado (regra 6 da skill).
+            setGeracao((g) => g + 1)
+            onReiniciar()
+          }}
+          aria-describedby="reiniciar-ajuda"
+          className={compacto ? "h-9! w-auto! px-4! text-xs!" : "h-14! w-full! text-base! font-semibold! tracking-wide"}
+        >
+          <RotateCcw className={compacto ? "size-3.5" : "size-5"} aria-hidden="true" />
+          {aReiniciar ? "A REINICIAR…" : compacto ? "REINICIAR" : "REINICIAR (manter 1 s)"}
+        </HoldToConfirmButton>
+      </div>
+
+      <div className={compacto ? "flex items-center gap-2" : "mt-2 flex items-center justify-between gap-3"}>
+        <div className="flex flex-col">
+          <span className="text-xs font-medium">LOOP</span>
+          {compacto ? null : (
+            <span className="text-[0.65rem] text-muted-foreground">off por omissão · auto-reset é do backend</span>
+          )}
+        </div>
+        <SegmentedToggle value={loop ? "on" : "off"} onChange={(v) => onLoop(v === "on")}
+          ariaLabel="LOOP de episódios" className="shrink-0">
+          <SegmentedToggleOption value="off">OFF</SegmentedToggleOption>
+          <SegmentedToggleOption value="on">ON</SegmentedToggleOption>
+        </SegmentedToggle>
+      </div>
+
+      <p id="reiniciar-ajuda" className={compacto ? "sr-only" : "text-[0.65rem] text-muted-foreground"}>
+        carrega e mantém ~1 s: o preenchimento confirma · POST /api/reiniciar
+      </p>
+      {compacto ? (
+        <span className="sr-only">
+          episódio {fmt(ep, 0)} · {terminado ? "terminado" : "a correr"} · ligação {ligado ? "ativa" : "inativa"}
+        </span>
+      ) : null}
+    </div>
   )
 }

@@ -39,14 +39,24 @@ bloco não faz nada — o site incrementa o `seq` para disparar outra rajada igu
 Teclado (foco na janela): ESPAÇO pausa/retoma · Q ou Esc fecha. Não há mais teclas: o vento e o REINICIAR são
 do site — é o que mantém a janela 100% limpa.
 
-ADAPTAR ao teu robô: (a) `env.py` (modelo/física/observação/recompensa); (b) a linha `amostra()` se quiseres
-outras 3 métricas no painel (renomeia `theta`/`erro`/`omega` — e o mesmo em `site/src/lib/sim.ts`); (c) o
-ficheiro de política (`--model`). O que NÃO muda: as chaves/ordem da telemetria, o ficheiro de controlo, o
-congelamento no fim do episódio e o REINICIAR por contador.
+PORTÁTIL (bundle `front-conexao`): este ficheiro NÃO importa nada do projeto ao nível do módulo — o módulo do
+ambiente é importado dentro do `main()`, por isso o `--help` funciona antes de existir um `env.py`. O que o
+projeto tem de dar está no `CONTRATOS.md` (e é curto):
+
+  · `novo_env(seed=…)` (ou a classe `EnvPadrao(seed=…)`) → env Gymnasium com `reset()`/`step(a)`;
+  · `acao_para_ctrl(acao)` → comando FÍSICO que a ação produz (o `ctrl` da telemetria);
+  · `definir_vento(vel, azimute, elevacao)` e `vento_polar()` → (vel m/s, azimute °);
+  · opcionais: `vento_vec` (vector em vigor), `vento_modo`, `definir_vento_dinamico(cfg)` (sem ele os modos
+    dinâmicos ficam inertes e o runner avisa uma vez);
+  · as 3 métricas do painel em `info` (`theta`/`erro`/`omega`) ou como atributos do env — em falta valem 0,0.
+
+`--env-modulo NOME` escolhe o módulo do projeto (padrão `env`). O que NÃO muda (é o contrato): as chaves/ordem
+da telemetria, o ficheiro de controlo, o congelamento no fim do episódio e o REINICIAR por contador.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
@@ -61,9 +71,8 @@ _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml
 _AQUI = Path(__file__).resolve().parent
 sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 
-# Ordem intencional (I001 desligado nesta linha): o `mjkit` define MUJOCO_GL=egl ANTES de `import mujoco`.
-
-import env as env_mod
+# O módulo do PROJETO (o que dá o modelo/ambiente) NÃO se importa aqui: é importado dentro do `main()`, para
+# este ficheiro poder ser colado em qualquer projeto — o `--help` funciona antes de existir um `env.py`.
 import numpy as np
 
 CONTROLO_OMISSAO = _AQUI / "out" / "controle_vento.json"
@@ -74,16 +83,81 @@ PERIODO_AMOSTRA = 0.1     # s de tempo SIMULADO entre amostras a correr (= 10 Hz
 PERIODO_PARADO = 1.0      # s de PAREDE entre batimentos com o episódio congelado/pausado (prova de vida:
 # aí o tempo simulado não anda, por isso a cadência só pode ser de parede)
 PRECISAO = 6              # casas decimais (linhas pequenas e legíveis)
-VEL_MAX = env_mod.VENTO_VEL_MAX            # m/s — teto do contrato (o mesmo do env.py)
+VEL_MAX = 5.0                              # m/s — teto do CONTRATO do controlo (0–5 m/s)
 AZIM_MAX, ELEV_MAX = 360.0, 90.0           # graus — faixas do contrato
 # vento DINÂMICO ao vivo: 3 modos são do `env.py`, `rajada_agora` é um one-shot dirigido aplicado AQUI e
 # `nenhum` é inerte (ver o cabeçalho do módulo).
 MODOS_DINAMICOS = ("nenhum", "rajadas", "frente", "dryden", "rajada_agora")
-MODOS_DINAMICOS_ENV = env_mod.VENTO_DINAMICO_MODOS        # os que o `env.definir_vento_dinamico` conhece
+MODOS_DINAMICOS_ENV = ("rajadas", "frente", "dryden")     # os modos que o `env.definir_vento_dinamico` conhece
 FRENTE_BASE, FRENTE_ENV = ("vel", "azimute", "elevacao"), ("u_max", "t_s")   # os 2 formatos do `frente`
 RAJADA_DURACAO_PADRAO = 25       # passos de decisão (0,5 s a 50 Hz) — duração da rajada one-shot
 RAJADA_U_PADRAO = 3.0            # m/s — amplitude da rajada one-shot quando `u` não vem nos params
 RAJADA_U_MAX = VEL_MAX           # m/s — teto do contrato para a rajada one-shot
+# ------------------------------------------------------------------------------------- vento (matemática)
+def vetor_vento(vel: float, azimute_graus: float, elevacao_graus: float = 0.0) -> np.ndarray:
+    """Vector do vento (m/s, frame mundo): azimute em graus a partir de +x, elevação positiva para +z.
+
+    É a MESMA convenção do `env.py` do padrão; vive aqui para o runner não depender de funções do projeto.
+    """
+    a, e = math.radians(float(azimute_graus)), math.radians(float(elevacao_graus))
+    return float(vel) * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
+
+
+def azimute_graus(vento) -> float:
+    """Azimute (graus, [0, 360)) de um vector de vento (m/s, mundo); vector nulo → 0°."""
+    v = np.asarray(vento, dtype=float).reshape(-1)
+    if v.size < 2 or (v[0] == 0.0 and v[1] == 0.0):
+        return 0.0
+    return float(math.degrees(math.atan2(v[1], v[0])) % 360.0)
+
+
+def polar_do_vetor(v) -> tuple[float, float, float]:
+    """(velocidade, azimute, elevação) de um vector de vento (m/s, mundo) — o inverso de `vetor_vento`."""
+    w = np.asarray(v, dtype=float).reshape(-1)
+    norma = float(np.linalg.norm(w))
+    if norma < 1e-12:
+        return 0.0, 0.0, 0.0
+    elevacao = float(math.degrees(math.asin(max(-1.0, min(1.0, w[2] / norma)))))
+    return norma, azimute_graus(w), elevacao
+
+
+# --------------------------------------------------------------------------- módulo do PROJETO (tarde)
+def modulo_env(nome: str):
+    """Importa (uma vez) o módulo do PROJETO que dá o modelo/ambiente — `--env-modulo` (padrão `env`).
+
+    O contrato de funções que esse módulo tem de cumprir está no `CONTRATOS.md` e no `LEIAME.md`: `novo_env`
+    (ou a classe `EnvPadrao`) com `reset`/`step` (Gymnasium), `acao_para_ctrl`, `definir_vento`,
+    `vento_polar` e — para o vento dinâmico — `definir_vento_dinamico`. Sem ele não há simulação: a mensagem
+    diz exatamente o que falta (nada de import a meio do `--help`).
+    """
+    try:
+        return importlib.import_module(nome)
+    except ImportError as erro:
+        raise SystemExit(f"[sim] não encontrei o módulo do projeto '{nome}' ({erro}) — Solução: cria o "
+                         f"módulo do ambiente (ver CONTRATOS.md) ou passa --env-modulo NOME") from erro
+
+
+def criar_env(mod, seed: int):
+    """`mod.novo_env(seed=…)` ou, se não existir, a classe `mod.EnvPadrao(seed=…)` do projeto."""
+    fabrica = getattr(mod, "novo_env", None)
+    if callable(fabrica):
+        return fabrica(seed=seed)
+    classe = getattr(mod, "EnvPadrao", None)
+    if classe is not None:
+        return classe(seed=seed)
+    raise SystemExit(f"[sim] o módulo '{getattr(mod, '__name__', mod)}' não tem `novo_env()` nem `EnvPadrao` — "
+                     "o contrato pede uma fábrica `novo_env(**kwargs)` (ver CONTRATOS.md)")
+
+
+def tamanho_acao(env, acao=None) -> int:
+    """Nº de canais da ação: do vector em mãos, do `action_space` do env ou 1 (último recurso)."""
+    if acao is not None:
+        return int(np.asarray(acao, dtype=float).reshape(-1).size)
+    espaco = getattr(env, "action_space", None)
+    forma = getattr(espaco, "shape", None)
+    return int(forma[0]) if forma else 1
+
+
 # Conteúdo de arranque do ficheiro de controlo (o site edita-o; a chave `dinamico` é o vento ao vivo)
 CONTROLO_INICIAL = {"vel": 0.0, "azimute": 0.0, "elevacao": 0.0, "ativo": False, "reiniciar": 0,
                     "loop": False, "dinamico": {"modo": "nenhum", "params": {}, "ativo": False, "seq": 0},
@@ -363,7 +437,8 @@ class Controlo:
             if self.rajada is not None:
                 self.rajada = None
                 self._aplica_base(env)
-            env.definir_vento_dinamico(None)
+            if callable(getattr(env, "definir_vento_dinamico", None)):
+                env.definir_vento_dinamico(None)
             print("[sim] vento dinâmico -> nenhum (só o vento base)", flush=True)
             return
         if din.modo == "rajada_agora":
@@ -374,10 +449,15 @@ class Controlo:
         if formato == "base":
             self._aplica_degrau(env, params)            # `frente` (a): degrau imediato do vento base
             return
+        definir = getattr(env, "definir_vento_dinamico", None)
+        if not callable(definir):
+            self._aviso(f"o env do projeto não tem `definir_vento_dinamico` — o modo '{din.modo}' fica inerte "
+                        "(os botões de vento constante continuam a funcionar); ver CONTRATOS.md")
+            return
         try:
-            config = env.definir_vento_dinamico({"modo": din.modo, **params})
+            config = definir({"modo": din.modo, **params})
         except ValueError as erro:
-            self._aviso(f"vento dinamico '{din.modo}' recusado pelo env: {erro} — mantenho o anterior")
+            self._aviso(f"vento dinâmico '{din.modo}' recusado pelo env: {erro} — mantenho o anterior")
             return
         print(f"[sim] vento dinâmico -> {din.modo} {config}", flush=True)
 
@@ -388,7 +468,8 @@ class Controlo:
         escreve o vento base já: a física do passo seguinte leva com ele (é o `definir_vento`, o mesmo caminho
         do `vel`/`azimute`/`elevacao` do controlo — nada de forças mágicas).
         """
-        env.definir_vento_dinamico(None)
+        if callable(getattr(env, "definir_vento_dinamico", None)):
+            env.definir_vento_dinamico(None)
         env.definir_vento(float(params["vel"]), float(params["azimute"]), float(params["elevacao"]))
         print(f"[sim] frente -> degrau imediato do vento base: {params['vel']:.2f} m/s @ "
               f"{params['azimute']:.1f}°"
@@ -397,8 +478,7 @@ class Controlo:
     def _inicia_rajada(self, env, din: Dinamico) -> None:
         """Arranca a rajada one-shot: vector dirigido + envelope `sin(π·k/(N+1))` (o mesmo do env)."""
         p = din.params
-        self.rajada = {"u": float(p["u"]), "vec": env_mod.vetor_vento(float(p["u"]), float(p["azimute"]),
-                                                                     float(p["elevacao"])),
+        self.rajada = {"u": float(p["u"]), "vec": vetor_vento(float(p["u"]), float(p["azimute"]), float(p["elevacao"])),
                        "k": 0, "n": int(p["duracao"]), "azimute": float(p["azimute"]),
                        "elevacao": float(p["elevacao"])}
         print(f"[sim] rajada_agora -> u {p['u']:.2f} m/s @ {p['azimute']:.1f}° (elev {p['elevacao']:+.1f}°), "
@@ -422,9 +502,7 @@ class Controlo:
             return True
         envelope = math.sin(math.pi * self.rajada["k"] / (self.rajada["n"] + 1.0))
         total = self._vetor_base() + self.rajada["vec"] * envelope
-        env.definir_vento(float(np.linalg.norm(total)), env_mod.azimute_graus(total),
-                          float(np.degrees(np.arcsin(np.clip(total[2] / max(1e-12, np.linalg.norm(total)),
-                                                            -1.0, 1.0)))))
+        env.definir_vento(*polar_do_vetor(total))
         return True
 
     def cancelar_rajada(self, env) -> None:
@@ -453,7 +531,7 @@ class Controlo:
         r = self.ultimo
         if r is None or not r.ativo:
             return np.zeros(3)
-        return env_mod.vetor_vento(r.vel, r.azimute, r.elevacao)
+        return vetor_vento(r.vel, r.azimute, r.elevacao)
 
     def _actualiza_comandos(self, registo: Registo) -> None:
         """Regra do contador: 1.º visto = linha de base; ≥ 1 sem ficheiro prévio = REINICIAR já pedido."""
@@ -545,10 +623,11 @@ class Politica:
         self.env = env
 
     def acao(self, obs) -> np.ndarray:
+        # Sem política a ação é NULA: `ctrl = acao_para_ctrl(0)` = o equilíbrio do projeto (o "trim").
         if self.modelo is None:
-            return np.zeros(env_mod.N_ACT, dtype=np.float32)
+            return np.zeros(tamanho_acao(self.env), dtype=np.float32)
         acao, _ = self.modelo.predict(obs, deterministic=True)
-        return np.asarray(acao, dtype=np.float32).reshape(-1)[: env_mod.N_ACT]
+        return np.asarray(acao, dtype=np.float32).reshape(-1)
 
     def ativacoes(self, obs) -> tuple[list[float], list[float]]:
         """(h1, h2) da MLP da política — vazio quando não há política (nada de números inventados)."""
@@ -604,6 +683,27 @@ def _lista(v, n: int) -> list[float]:
     return [round(float(x), PRECISAO) for x in np.asarray(v, dtype=float).reshape(-1)[:n]]
 
 
+def campo_do_env(env, est: Estado, nome: str) -> float:
+    """Valor de um campo do CONTRATO (`theta`/`erro`/`omega`): do `info` do passo, senão do atributo do env.
+
+    O `env.py` do projeto pode publicar o campo no `info` do `step` (caminho preferido) ou expô-lo como
+    atributo/propriedade. Se não existir nenhum, vale 0,0 — o runner não pode morrer por causa de uma métrica
+    em falta; o site mostra «—» quando a linha não traz o campo (não se inventam números aqui).
+    """
+    if nome in est.info and est.info[nome] is not None:
+        return float(est.info[nome])
+    return float(getattr(env, nome, 0.0))
+
+
+def vetor_vento_do_env(env) -> np.ndarray:
+    """Vector (vx,vy,vz m/s) do vento EM VIGOR: `env.vento_vec` (preferido) ou derivado do `vento_polar()`."""
+    vetor = getattr(env, "vento_vec", None)
+    if vetor is not None:
+        return np.asarray(vetor, dtype=float).reshape(3)
+    vel, azim = env.vento_polar()
+    return vetor_vento(float(vel), float(azim), 0.0)
+
+
 def amostra(env, est: Estado, controlo: Controlo | None = None) -> dict:
     """Uma linha de telemetria com as chaves (e a ordem) do contrato. ADAPTAR: as 3 métricas do painel.
 
@@ -617,28 +717,28 @@ def amostra(env, est: Estado, controlo: Controlo | None = None) -> dict:
     (esse modo é do runner, não do env).
     """
     vel, azim = env.vento_polar()
-    vec = np.asarray(env.vento_vec, dtype=float).reshape(3)
+    vec = vetor_vento_do_env(env)
     if est.acao is None:
         act: list[float] = []
         ctrl: list[float] = []
     else:
-        act = _lista(est.acao, env_mod.N_ACT)
+        act = _lista(est.acao, tamanho_acao(env, est.acao))
         ctrl = [round(env.acao_para_ctrl(est.acao), PRECISAO)]
-    modo = controlo.modo_efetivo() if controlo is not None else str(env.vento_modo)
+    modo = controlo.modo_efetivo() if controlo is not None else str(getattr(env, "vento_modo", "nenhum"))
     return {
-        "t": round(float(env.data.time), PRECISAO),
+        "t": round(float(getattr(getattr(env, "data", None), "time", 0.0)), PRECISAO),
         "estado": est.nome_estado,
         "ep": int(est.ep),
-        "passo": int(env.passos),
+        "passo": int(getattr(env, "passos", 0)),
         "retorno": round(float(est.retorno), PRECISAO),
-        "theta": round(float(est.info.get("theta", env.theta)), PRECISAO),
-        "erro": round(float(est.info.get("erro", env.erro)), PRECISAO),
-        "omega": round(float(est.info.get("omega", env.omega)), PRECISAO),
+        "theta": round(campo_do_env(env, est, "theta"), PRECISAO),
+        "erro": round(campo_do_env(env, est, "erro"), PRECISAO),
+        "omega": round(campo_do_env(env, est, "omega"), PRECISAO),
         "vento_vel": round(vel, PRECISAO),
         "vento_azim": round(azim, PRECISAO),
         "vento_vec": [round(float(v), PRECISAO) for v in vec],
         "vento_modo": modo,
-        "obs": _lista(est.obs, env_mod.N_OBS),
+        "obs": _lista(est.obs, 0 if est.obs is None else len(np.asarray(est.obs).reshape(-1))),
         "act": act,
         "ctrl": ctrl,
         "h1": list(est.h1),
@@ -806,6 +906,8 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
         epilog=("Quem arranca isto é o `sim_site.py` (um comando: runner + servidor + site).\n"
                 "Controlo: out/controle_vento.json · telemetria: out/sim_telemetria.jsonl\n"
                 "SEM auto-reset: no fim do episódio a física congela até o site pedir REINICIAR."))
+    p.add_argument("--env-modulo", default="env", metavar="NOME",
+                   help="módulo do PROJETO que dá o modelo/ambiente (padrão: env) — ver CONTRATOS.md")
     p.add_argument("--model", type=Path, default=None, metavar="CAMINHO.zip",
                    help="política PPO (Stable-Baselines3) a pilotar; por omissão a ação nula (ctrl = τ_trim)")
     p.add_argument("--sem-janela", action="store_true",
@@ -826,7 +928,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = analisar_argumentos(argv)
-    env = env_mod.novo_env(seed=args.seed)
+    env = criar_env(modulo_env(args.env_modulo), seed=args.seed)
     est = Estado(loop=bool(args.loop))
     politica = Politica(args.model, env)
     controlo = Controlo(args.controlo)

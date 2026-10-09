@@ -2,7 +2,7 @@
 
 Como CRIAR, VALIDAR e REGISTRAR experimentos no laboratório: método, esqueleto executável, validação de energia, caso-estudo (triângulo invertido) e catálogo de 17 experimentos com valor analítico × medido.
 
-> Verificado em MuJoCo 3.15.0 (2026-10-07). Fontes: `pesquisas/conhecimento/Q15.md` (principal), `Q3.md`/`Q4.md`/`Q14.md` (consulta), `experiments/01_triangulo_invertido/`, `experiments/02_pendulo/`, `.agents/mujoco-lab-agent-skill/scripts/{mjkit,new_experiment,inspect_model}.py`, `docs/upstream/mujoco/doc/{XMLreference,modeling,computation/index,computation/fluid}.rst`, `docs/upstream/mujoco/model/{slider_crank,arch,replicate}/` e testes locais (✔).
+> Verificado em MuJoCo 3.15.0 (2026-10-07). Fontes: `pesquisas/conhecimento/Q15.md` (principal), `Q3.md`/`Q4.md`/`Q14.md` (consulta), `experiments/01_triangulo_invertido/`, `experiments/02_pendulo/` (ambos **removidos em 2026-10-08**; histórico no git), `.agents/mujoco-lab-agent-skill/scripts/{mjkit,new_experiment,inspect_model}.py`, `docs/upstream/mujoco/doc/{XMLreference,modeling,computation/index,computation/fluid}.rst`, `docs/upstream/mujoco/model/{slider_crank,arch,replicate}/` e testes locais (✔).
 
 ## Quando ler este arquivo
 - Ao criar um experimento (`experiments/NN_nome/`) ou validar um modelo contra física analítica antes de confiar em resultados complexos.
@@ -23,7 +23,7 @@ Regra: **nunca "rodar e olhar o vídeo"** — todo experimento termina em crité
 | 6 | Critério | Lista `(nome, ok, detalhe)` com ≥ 3 grandezas comparadas a fórmulas fechadas; `sys.exit(0 if todos ok else 1)` | exit code |
 | 7 | Convergência | Repetir com `dt/2`: a métrica converge na ordem esperada? (§4) | tabela erro × dt |
 | 8 | Mídia | `mjkit.record(mp4=, gif=, sheet=)` + `mjkit.plot` → `out/` (ignorado pelo git); para um MJCF qualquer sem controlador: `render_video.py <modelo> --gif --sheet --camera frontal --out out/video` (✔) | vídeo, GIF, filmstrip, gráfico |
-| 9 | README | Molde: `experiments/01_triangulo_invertido/README.md` (Rodar · Resultados analítico × simulado · O que observar · Botões · Como foi construído · Lições) | `README.md` |
+| 9 | README | Molde: `experiments/09_drone_hover_rl/README.md` (o molde original era o `experiments/01_triangulo_invertido/README.md`, removido em 2026-10-08 — histórico no git) — Rodar · Resultados analítico × simulado · O que observar · Botões · Como foi construído · Lições | `README.md` |
 | 10 | Memória CoALA | `python3 .agents/mujoco-lab-agent-skill/scripts/coala.py add --type procedural --key experimento/NN_nome --tags experimento --content "<números e lições>"` (✔ sintaxe e supersessão por `--key` testadas num banco temporário via `--db`; `recall` no início da tarefa) | registro `#id` |
 
 Critérios de aceitação típicos (✔ todos medidos aqui; relaxe só com motivo documentado):
@@ -34,25 +34,25 @@ Critérios de aceitação típicos (✔ todos medidos aqui; relaxe só com motiv
 | instante de impacto (cruzamento interpolado de `qpos`) | ±0.2·dt ao redor de √(2h/g) − dt/2 | exato |
 | 1º contato visível em `data.ncon` | ≥ 3·dt | 1–2 passos |
 | energia com contato | envelope: ≤ 0.5–1 % de E0 (+ ~1 J) | +0.3 % transitório |
-| repouso · altura de repouso | \|v\| < 1e-3 m/s e \|ω\| < 1e-2 rad/s · ±3 mm (`run.py` do exp. 01) | 1e-12 · 0.108 mm de penetração |
-| período/frequência (sem contato) | 0.5 % (`--tol` do exp. 02) | Euler 2 ms: 2e-4 %; RK4: ≲ 1e-6 % |
+| repouso · altura de repouso | \|v\| < 1e-3 m/s e \|ω\| < 1e-2 rad/s · ±3 mm (`run.py` do exp. 01 — removido em 2026-10-08; histórico no git) | 1e-12 · 0.108 mm de penetração |
+| período/frequência (sem contato) | 0.5 % (`--tol` do exp. 02 — removido em 2026-10-08) | Euler 2 ms: 2e-4 %; RK4: ≲ 1e-6 % |
 | atrito, rolamento, cone (contato mole) | 1–3 % | 0.1–2 % (E3–E5) |
 | momento (forças internas) | 1e-12 relativo | 7e-16 (E10) |
 
 ## 2. Estrutura, ferramentas e esqueleto
 - Pasta: `experiments/NN_nome/{model.xml, run.py, README.md, out/}`; `lab/mjkit.py` = symlink/cópia de `scripts/mjkit.py`.
-- `new_experiment.py` (só stdlib): acha a raiz (`pyproject.toml`), escolhe o próximo NN (hoje **03**), copia o template, cria `lab/mjkit.py` e `experiments/*/out/` no `.gitignore`; nunca sobrescreve; `--list`, `--dry-run`, `--template blank|pendulum|arm|quadrotor|car`.
+- `new_experiment.py` (só stdlib): acha a raiz (`pyproject.toml`), escolhe o próximo NN (hoje **10** — existe só o `09_drone_hover_rl`), copia o template, cria `lab/mjkit.py` e `experiments/*/out/` no `.gitignore`; nunca sobrescreve; `--list`, `--dry-run`, `--template blank|pendulum|arm|quadrotor|car`.
 - `mjkit` (importe ANTES de `mujoco`: define `MUJOCO_GL=egl`): `load(caminho|string)` liga `data.energy`; `Ctrl` escreve controles por NOME (correto p/ atuadores multi-entrada `pid`/`dcmotor`/`orientation`); `record(model, data, controller, duration, slowmo, camera, mp4, gif, sheet, probes, hud, contacts, track, consistent)` chama `controller` ANTES de cada `mj_step` (`consistent=True` faz `mj_forward` após o passo: sondas, contatos e energia correspondem a `data.time` — ✔ erro de `xipos` 1.96 mm → 0) → `{"log": {t, ncon, pe, ke, <probes>}, "frames", "wall_s"}`; `plot(log, keys, path, refs=)`.
-- Esperados em `<custom><numeric name="esperado_x" data="…"/>` → `float(model.numeric("esperado_x").data[0])` (opcional: `mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_NUMERIC, nome) >= 0`, como `numerico()` do exp. 01).
-- Janela só a pedido do usuário (aparece na tela dele): `run.py --view` nos templates; `view.py` no exp. 01.
+- Esperados em `<custom><numeric name="esperado_x" data="…"/>` → `float(model.numeric("esperado_x").data[0])` (opcional: `mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_NUMERIC, nome) >= 0`, como fazia `numerico()` do exp. 01 — removido em 2026-10-08).
+- Janela só a pedido do usuário (aparece na tela dele): `run.py --view` nos templates; `view.py`/`sim_view.py` nos experimentos.
 - `inspect_model.py` precisa de numpy+mujoco: use `.venv/bin/python` (exit 0 ok · 1 WARN de risco · 2 erro). Rode scripts com cwd fora da raiz (o MuJoCo grava `MUJOCO_LOG.TXT` no cwd).
 
 ```bash
 python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py --list                            # blank pendulum arm quadrotor car
-python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py queda_ressalto --template blank   # cria experiments/03_queda_ressalto/
+python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py queda_ressalto --template blank   # cria experiments/10_queda_ressalto/
 # ... substitua model.xml e run.py pelos dois blocos abaixo ...
-.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py experiments/03_queda_ressalto/model.xml --steps 500
-.venv/bin/python experiments/03_queda_ressalto/run.py --sem-video; echo "exit=$?"   # sem a flag grava out/video.mp4, video.gif, filmstrip.png
+.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py experiments/10_queda_ressalto/model.xml --steps 500
+.venv/bin/python experiments/10_queda_ressalto/run.py --sem-video; echo "exit=$?"   # sem a flag grava out/video.mp4, video.gif, filmstrip.png
 ```
 ✔ testado num projeto-espelho (cwd com `pyproject.toml`, 2 experimentos prévios). Esqueleto completo — queda de esfera com restituição, valores esperados no MJCF:
 ```xml
@@ -203,8 +203,8 @@ print(f"resíduo máx {res:.3e} J  ({100 * res / dEmax:.3f} % de max|ΔE| = {dEm
 ```
 ✔ Vale para Euler, `implicit`, `implicitfast` e `discrete` (0.43 % nos quatro); ⚠ com RK4 o resíduo vai a 22.7 % (após `mj_step`, `energy` e `qfrc_constraint` vêm de um estágio intermediário — `physics-tuning.md`). Mesmo resultado no prisma de face para baixo, queda de 1 m (resíduo 0.90 J de 210 J = 0.43 %; ΔE final −203.919 J = trabalho do contato −203.919 J). Não verificado: somar a energia elástica via `efc_KBIP·efc_pos` (discussão #2347 do GitHub, citada na ficha Q15).
 
-## 6. Caso-estudo: triângulo de cabeça para baixo (experimento 01)
-Prisma triangular equilátero (aresta 0.4 m, comprimento 0.3 m, 20.78 kg) solto a 1 m com a aresta para baixo; tomba e repousa numa face. `experiments/01_triangulo_invertido/run.py [--modelo models/tetraedro_invertido.xml] [--sem-video] [--saida DIR]` valida tudo e dá exit 0/1 (✔ prisma e tetraedro passam). Script mínimo (MJCF + checagens; vértices relativos ao CM):
+## 6. Caso-estudo: triângulo de cabeça para baixo (experimento 01 — **removido em 2026-10-08**; histórico no git)
+Prisma triangular equilátero (aresta 0.4 m, comprimento 0.3 m, 20.78 kg) solto a 1 m com a aresta para baixo; tomba e repousa numa face. O `experiments/01_triangulo_invertido/run.py [--modelo models/tetraedro_invertido.xml] [--sem-video] [--saida DIR]` validava tudo e dava exit 0/1 (✔ prisma e tetraedro passavam; o script foi removido em 2026-10-08 — histórico no git; os modelos `models/triangulo_invertido.xml` e `models/tetraedro_invertido.xml` mantêm-se). Script mínimo (MJCF + checagens; vértices relativos ao CM):
 ```python
 import numpy as np, mujoco
 
@@ -266,7 +266,7 @@ print(f"z_CM final {d.xipos[b, 2]:.7f} m (raio inscrito {num('esperado_altura_re
 | `-2500 -10` / `-2500 0` (direto) | 74.8 mm / — | 542 mm / não repousa | 0.736 / 1.002 | 0.729 / 1 |
 | `0.005 1` / `0.05 1` | 7.0 / 77.9 mm | 11.8 mm / nenhum | — | — |
 
-Repouso no exp. 01 (`solref` timeconst 0.01, 4 contatos): `dampratio` ≥ 0.5 repousa em ~0.8 s; 0.3 e 0.4 não repousam em 8 s e 0.45 fica no limite ✔; numa esfera 0.2 repousa e ≲ 0.1 vibra > 30 s (ficha Q4). Não existe atributo `restitution` (✔ rejeitado: «unrecognized attribute»): use `solref` (doc: `modeling.rst`, §Restitution).
+Repouso no exp. 01 (removido em 2026-10-08; medições preservadas — histórico no git; `solref` timeconst 0.01, 4 contatos): `dampratio` ≥ 0.5 repousa em ~0.8 s; 0.3 e 0.4 não repousam em 8 s e 0.45 fica no limite ✔; numa esfera 0.2 repousa e ≲ 0.1 vibra > 30 s (ficha Q4). Não existe atributo `restitution` (✔ rejeitado: «unrecognized attribute»): use `solref` (doc: `modeling.rst`, §Restitution).
 
 ## 7. Catálogo de experimentos
 Tabela A — o que cada um demonstra, como modelar e as pegadinhas. Tabela B — números (analítico × medido; os 17 foram executados em 3.15.0 = ✔, nenhum «não testado»; os scripts de medição, de 20–40 linhas, não foram versionados: reimplemente-os a partir das colunas «Modelo» e «Analítico», usando o esqueleto do §2).
@@ -278,7 +278,7 @@ Tabela A — o que cada um demonstra, como modelar e as pegadinhas. Tabela B —
 | E3 | Bloco com atrito | `box` achatado em `plane`; `friction="μ 0.005 0.0001"` | μ do contato = MÁX(geom1, geom2) (padrão 1); cubo com μ ≥ w/h tomba; meça a inclinação de v(t), não o instante em que v < ε (creep = deslize lento no fim) |
 | E4 | Plano inclinado | plano `euler="0 θ 0"` (desce para +x); `cone`, `impratio` | cone `pyramidal` (padrão) é anisotrópico; abaixo do limiar há creep ~1e-3 m/s: use v(2 s) > 0.05 |
 | E5 | Rolamento sem deslizar | `sphere`/`cylinder euler="90 0 0"`; casca: `<inertial>` + geom `mass="0"`; `condim` 3 vs 6 | `condim=6` + `friction[2]` (rolamento) freia; μ ≥ tanθ·k/(1+k), k = I/(m r²) |
-| E6 | Pêndulo simples | `experiments/02_pendulo` / template `pendulum`; I_pivô por `mj_fullM`, CM por `xipos` | `qpos` da junta em rad mesmo com `angle="degree"`; RK4 p/ energia |
+| E6 | Pêndulo simples | template `pendulum` (o `experiments/02_pendulo` foi removido em 2026-10-08); I_pivô por `mj_fullM`, CM por `xipos` | `qpos` da junta em rad mesmo com `angle="degree"`; RK4 p/ energia |
 | E7 | Pêndulo duplo (caos) | 2 hinges, massas pontuais `<inertial … diaginertia="1e-9 1e-9 1e-9">`, `<flag contact="disable"/>` | q2 é RELATIVO (θ2 = q1 + q2); referência = `scipy` DOP853; só compare até t_div |
 | E8 | Massa-mola-amortecedor | `slide` com `stiffness`, `damping` + `<inertial>`; `gravity="0 0 0"` | `armature` soma à massa; mola explícita limita dt (ω·dt < 2); `data.energy` inclui a mola |
 | E9 | Projétil com arrasto quadrático | `<option density viscosity integrator="implicitfast">`; geom `fluidshape="ellipsoid" fluidcoef="Cb 0.25 1.5 1 1"` ou modelo padrão (caixa de inércia) | F = ρ·C·A·v² SEM o ½ (C_D de livro = 2·Cb); caixa: f = 2ρ·r_j·r_k·\|v\|v (r = semi-lados da caixa equivalente: esfera r = R√(3/5)); sem empuxo (balões usam `gravcomp`) |
@@ -298,7 +298,7 @@ Tabela A — o que cada um demonstra, como modelar e as pegadinhas. Tabela B —
 | E3 | a e distância (v0 = 2 m/s) | μ·g; v0²/(2μg) | μ=0.5: 4.895 (4.905), 0.4061 m (0.4077); μ=0.3: 2.947 (2.943); chão 1.0 + bloco 0.5: 9.596 (9.81 = μ_máx·g) | ±3 % |
 | E4 | θ crítico e a (μ=0.5) | atan μ = 26.57°; g(sinθ − μcosθ) = 1.6088 em 35° | elliptic: v(2 s) 26° 0.0016, 27° 0.174 m/s; a = 1.6099; pyramidal alinhado 1.6113; **pyramidal a 45°: limiar 19–20° (atan(μ/√2) = 19.47°), a = 2.765 (+72 %)** | ±1° ; a ±1 % |
 | E5 | a (θ=20°) | g·sinθ/(1+k): esfera 2.3966; cil. 2.2368; oco 1.6776 | 2.3942 / 2.2354 / 1.6760 (−0.10 / −0.07 / −0.10 %); `condim=6`: rolling 1e-4 → −0.08 %, 2e-3 → −4.3 %; μ=0.05 < μ_min=0.104: 2.894 | ±0.5 % |
-| E6 | T (exp. 02) | T0·(2/π)·K(sin²(θ0/2)) | θ0=5°, 2 ms: −0.0002 % (RK4 0.0000 %), deriva E +0.0024 % (RK4 ≈ 0); θ0=150°, 50 ms: Euler +0.111 % (E +0.28 %), RK4 −0.013 % (−0.011 %) | 0.5 % (`--tol`) |
+| E6 | T (exp. 02 — removido em 2026-10-08) | T0·(2/π)·K(sin²(θ0/2)) | θ0=5°, 2 ms: −0.0002 % (RK4 0.0000 %), deriva E +0.0024 % (RK4 ≈ 0); θ0=150°, 50 ms: Euler +0.111 % (E +0.28 %), RK4 −0.013 % (−0.011 %) | 0.5 % (`--tol`) |
 | E7 | θ1(t) vs scipy; λ | Lagrange (L1=1, L2=0.8, m=1/0.5; 120°, −10°) | RK4 1 ms: \|Δθ1\| 1.5e-10 (1 s) → 1.7e-6 (6 s); > 1e-3 só em 9.56 s; λ ≈ 1.17 s⁻¹; máx\|ΔE\| (5 ms): Euler 1.75 J, RK4 6.9e-4 J | \|Δθ\|<1e-3 até t_div |
 | E8 | ω_d, T_d, ζ (m=2, k=800, c=8) | ω_n=√(k/m)=20; ζ=c/(2√(km))=0.1; ω_d=ω_n√(1−ζ²)=19.8997 → T_d=0.31574 s | Euler 2 ms: +0.184 %, −0.21 %; RK4: 0.000 %; Euler 10 ms: +0.83 %, −1.15 %; E0 = ½kx0² = 4.000 J | 0.3 % (Euler 2 ms) |
 | E9 | v_t, v(t), alcance (r=0.05, m=0.1, ρ=1.2) | √(m g/k); v_t·tanh(g t/v_t) | caixa: k = 0.0036 → 16.5076 (16.5076), erro de v(t) ≤ 0.029 %; elipsoide Cb=0.5: 14.4283 (14.4283), Cb=0.235: 21.0452 (21.0458); alcance 30 m/s, 45°: 25.761 m (scipy 25.747; sem arrasto 91.74); Stokes (β=1): 1.34376 / 1.04087 exatos | 0.1 % |
@@ -312,7 +312,7 @@ Tabela A — o que cada um demonstra, como modelar e as pegadinhas. Tabela B —
 | E17 | s* (n=4, w=0.2; s = sobressalência/crítica) e torre de 10 cubos (10 s) | s* = 1 ((w/2)·H_n = 0.20833 m) | s* = 0.946 (padrão), 0.972 (`solref 0.004 1`); torre: topo desloca 26.84 mm (pyramidal) / 8.62 (elliptic) / 2.25 (elliptic + `impratio 10`); PGS 100 it 26.85; **PGS 10 e 3 it: colapsa**; Newton converge em ≤ 3 it; arcos oficiais 30 s: 3.9 / 1.5 / 0.6 mm | s* ≥ 0.9 |
 
 ## 8. Ordem de aprendizado e próximos experimentos
-1. Experimento 01 (§6) e E1 → E3/E4 (atrito, cone) → E6/E8 (osciladores e integradores) → E5 → E2/E10 (contato mole, restituição) → E9 (fluido) → E12/E13 (rotação) → E14–E16 (laços fechados) → E17 (redes de contato). Cada um é um `new_experiment.py <nome> --template blank` (E6 parte de `--template pendulum`).
+1. Caso-estudo do experimento 01 (§6; o experimento foi removido em 2026-10-08) e E1 → E3/E4 (atrito, cone) → E6/E8 (osciladores e integradores) → E5 → E2/E10 (contato mole, restituição) → E9 (fluido) → E12/E13 (rotação) → E14–E16 (laços fechados) → E17 (redes de contato). Cada um é um `new_experiment.py <nome> --template blank` (E6 parte de `--template pendulum`).
 2. **Robôs** (`robots.md`) — templates em `.agents/mujoco-lab-agent-skill/assets/templates/`: `arm/` (3 GDL, servos `<position>` kp=400 kv=40, IK por Jacobiano, alvo mocap; ✔ RMS da ponta 3.96 mm, tol. 10 mm, exit 0) — valide antes o servo como E8 (ω_n, ζ) e use `implicitfast`.
 3. **Drones** (`drones.md`): `quadrotor/` (0.892 kg, 4 `<motor>` em sites, controlador geométrico SO(3); empuxo de pairar m·g/4 = 2.19 N por rotor ✔; waypoints ≤ 0.3 cm, RMS 3.0 cm ✔; `--ar --vento` usa o fluido do E9 — confira a convenção de C).
 4. **Veículos** (`vehicles.md`): `car/` (modelo de bicicleta: R = L/tanδ = 0.82 m, ψ̇ = v·tanδ/L: 1.705 medido × 1.819 rad/s, Δ 6.3 % ✔; pneus `condim=4`, `cone="elliptic"`, `impratio=10`; use o que o E4 mostrou sobre o cone).
