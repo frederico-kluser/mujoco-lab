@@ -3,6 +3,8 @@ name = "mujoco-lab"
 version = "0.1.0"
 description = "Laboratório MuJoCo: experimentos físicos e mecânicos, robôs, drones e veículos"
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "Frederico Kluser", email = "kluserhuu@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "mujoco>=3.15,<3.16",   # motor + bindings Python + viewer (wheel oficial da DeepMind)
