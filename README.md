@@ -79,8 +79,9 @@ Nunca editar o upstream: sensores (via MjSpec), escalas de atuadores e modos viv
 
 ### 3 · Experimento (`run.py` valida, `view.py` mostra)
 ```bash
-python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car
+python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao
 ```
+`lab-padrao` é o template do padrão completo (RL + interface CLEAN + site, ver §4-§6).
 `experiments/NN_nome/`: `run.py` (validação por **fórmulas fechadas em condições isoladas** — modelo fresco, sem histórico — com `exit 0/1`), `view.py`, `README.md` (tabelas medido × teoria + fontes) e `out/` (gerado, ignorado pelo git). Antes de simular a sério: `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py <modelo.xml> --tree`.
 
 ### 4 · RL (quando a tarefa é *aprender* uma política)
@@ -95,9 +96,9 @@ cd experiments/NN_nome/site && npm install && npm run build      # 1.ª vez (faz
 uv run --group hover-rl python experiments/NN_nome/sim_site.py  # o comando único: janela + site
 ```
 - **`sim_view.py`** — janela 100 % **CLEAN** (só o 3D: `show_left_ui=False`, `show_right_ui=False`, `clear_texts`, zero `set_texts`/`set_figures`), telemetria JSONL (~10 Hz) e **sem auto-loop**: o fim do episódio **congela** a física e só o botão REINICIAR (contador atómico no ficheiro de controlo) recomeça.
-- **`site/`** — React construído com a skill **`motion-plus-ui`** (cascata `search`→`add`→`compor`; `../motion.theme`; npm, **não** pnpm): *todas* as métricas e controlos (curvas, rede 16→64→64→4 ao vivo, obs/ações, vento em tempo real, REINICIAR, LOOP). Nunca reinicia sozinho.
+- **`site/`** — React construído com a skill **`motion-plus-ui`** (cascata `search`→`add`→`compor`; `../motion.theme`; npm, **não** pnpm): *todas* as métricas e controlos (curvas, rede 16→64→64→4 ao vivo, obs/ações, vento em tempo real, **vento dinâmico** — rajadas/frente/dryden/rajada, **rosa dos ventos viva**, **painel do Raspberry Pi 5**, **ajuda «?»** que explica cada elemento, REINICIAR, LOOP). Nunca reinicia sozinho.
 - **`INTERFACE.md`** — tudo o que é visível, elemento a elemento; auditoria `uxui-evaluator` (41 → 88/100).
-- Contratos: `out/controle_vento.json` (7 campos) · `out/sim_telemetria.jsonl` (15 chaves) · API de 5 rotas.
+- Contratos: `out/controle_vento.json` (7 campos + bloco `dinamico`) · `out/sim_telemetria.jsonl` (**15 + 2 chaves**, com `vento_vec`/`vento_modo`) · API de **6 rotas** (com `POST /api/vento-dinamico`).
 
 ### 6 · Deploy no alvo (Raspberry Pi 5)
 ```bash
@@ -105,8 +106,10 @@ uv run --group hover-rl python experiments/NN_nome/deploy.py --model <final.zip>
 ```
 SB3 → ONNX (exporter legacy `dynamo=False`, opset 17, batch = 1 estático; comparar com a **média** da política, não com amostras), validação numérica (medida: `max|Δ|` 5,7e-06), benchmark `p50/p99/max` com `intra_op=1` e multi-IA em processos com o mapa de cores decidido no pai. Regra: **o limite do alvo aplica-se na RUN; o treino usa o poder máximo**.
 
+**O Raspberry Pi 5 é o computador de bordo de TODOS os projetos** (é o padrão, não uma opção): o relatório do `deploy.py` (`out/deploy_report.json`) alimenta o **painel RPi 5 do site** — specs do alvo (BCM2712, 4× Cortex-A76 @ 2,4 GHz, 512 kB L2/núcleo + 2 MB L3, LPDDR4X-4267, 5 V/5 A, *throttle* 80→85 °C), orçamento de **50 Hz = 20 ms**, p50/p99 medidos, fator int8, multi-IA e semáforo OK/ATENÇÃO. A lição que o painel mostra: o gargalo a 50 Hz é o **jitter do SO** (kernel normal ≈ 9,4 ms de pior caso; **PREEMPT_RT ≤ 225 µs**), **não** a inferência (MLP ≈ µs; o int8 só compensa com SDOT — no x86 ficou mais lento, medido). `sim_site.py --benchmark CAMINHO.json` aponta o painel a outro relatório; sem relatório diz «sem benchmark». Detalhes e atribuição da imagem: [`lab-padrao/LEIAME.md`](.agents/mujoco-lab-agent-skill/assets/templates/lab-padrao/LEIAME.md) §3.
+
 ### 7 · Validação e qualidade
-`run.py` dos experimentos → `exit 0/1` · `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (29 passed) · `ruff check` · verificadores adversariais por peça e um do conjunto no fim · `git status` limpo. **Validação SEM janelas** (regra do dono): agentes nunca abrem viewer/janela — provam por headless, mocks e handles falsos; o smoke visual é do dono.
+`run.py` dos experimentos → `exit 0/1` · `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (31 passed) · `ruff check` · verificadores adversariais por peça e um do conjunto no fim · `git status` limpo. **Validação SEM janelas** (regra do dono): agentes nunca abrem viewer/janela — provam por headless, mocks e handles falsos; o smoke visual é do dono.
 
 ### 8 · Registar (nada fica “na cabeça”)
 README do experimento com as tabelas medido × teoria e as fontes · `coala.py add` (episódico/semântico/procedural — chaves estáveis por assunto e **supersessão em vez de reescrita**) · catálogo de robôs adaptados no [`AGENTS.md`](AGENTS.md).
