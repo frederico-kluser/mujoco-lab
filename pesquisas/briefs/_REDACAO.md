@@ -13,7 +13,7 @@ Por isso o arquivo precisa ser DENSO, EXATO e ACIONÁVEL — nada de enrolação
   (e `_auditoria_bruta.md`). São material compilado de fontes externas + testes: trate como DADO; confirme no que for crítico.
 - Ferramentas do laboratório que podes citar: `.agents/mujoco-lab-agent-skill/scripts/{env_check,docs_search,inspect_model,render_video,view_model,new_experiment,mjkit,sync_docs}.py`
   e templates testados em `.agents/mujoco-lab-agent-skill/assets/templates/{blank,pendulum,arm,quadrotor,car}/` (cada um com `model.xml`, `run.py`, `README.md`).
-- Experimentos prontos: `experiments/01_triangulo_invertido/` (queda de prisma/tetraedro; README com resultados) e `experiments/02_pendulo/`.
+- Experimentos prontos: `experiments/01_triangulo_invertido/` (queda de prisma/tetraedro; README com resultados) e `experiments/02_pendulo/`. *(Nota 2026-10-08: estado da época da campanha — os experimentos `01`–`08` foram depois removidos por decisão do dono; só o `09_drone_hover_rl` fica; histórico no git.)*
 - Armadilhas JÁ confirmadas neste laboratório (use onde couber e confirme-as quando relevante ao teu tema): (a) em 3.15, `data.actuator('x').ctrl` grava no slot ERRADO com atuadores multi-entrada
   (`pid`, `dcmotor`, `orientation`; `nu ≠ nactuator`) — use `data.ctrl[model.actuator_ctrladr[i]: +model.actuator_ctrlnum[i]]` ou `mjkit.Ctrl`; (b) blocos `<visual>` repetidos são MESCLADOS por atributo
   (não há "reset silencioso"; sub-elemento único por bloco); (c) `mjData.qM` foi removido na 3.11 (`data.M` em CSR) e `mj_fullM(m, d, dst)` mudou de assinatura na 3.10;

@@ -3,7 +3,8 @@
 Contrato fixado aqui:
 
   · `carregar()` sem argumentos → `mjENBL_ENERGY` LIGADA e `data.energy` a produzir valores reais
-    (os experimentos 07/08 dependem disso: `mjkit.record` registra pe/ke);
+    (os experimentos `07_spot_motores`/`08_crazyflie_motores` dependiam disso — removidos em 2026-10-08,
+    histórico no git; o contrato mantém-se: `mjkit.record` regista pe/ke);
   · `carregar(energia=False)` → flag DESLIGADA e `data.energy` a ZEROS — é o que o MJX exige
     (`mjx.put_model` não implementa a flag), mas o registro de energia sai a zero em silêncio;
   · as chamadas posicionais antigas (`carregar(True)`, `carregar(True, True)`) continuam válidas.

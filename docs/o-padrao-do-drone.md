@@ -612,9 +612,13 @@ do menagerie.
 | modelo vendorizado | `models/bitcraze_crazyflie_2/` | `models/boston_dynamics_spot/` |
 | atuadores | 4 canais *wrench* (empuxo + 3 momentos) | 12 servos `position` |
 | sensores pedidos pelo padrão | IMU + posição/velocidade | IMU + encoders + forças dos pés (`touch`) |
-| experimento de motores | `08_crazyflie_motores` · **8/8 [OK]** | `07_spot_motores` · **9/9 [OK]** |
+| experimento de motores | `08_crazyflie_motores` · **8/8 [OK]** *(removido em 2026-10-08; histórico no git)* | `07_spot_motores` · **9/9 [OK]** *(removido em 2026-10-08; histórico no git)* |
 | arranque físico (regra do dono) | motores desligados, **assenta no chão** | servos na postura `home`, **de pé pelos próprios motores** |
 | RL + interface + deploy | `09_drone_hover_rl` (o padrão completo) | — (o padrão está pronto a aplicar) |
+
+> **Nota (2026-10-08):** os experimentos `01`–`08` (incluindo os dois de motores acima) foram **removidos
+> por decisão do dono** — por enquanto fica só o `experiments/09_drone_hover_rl/`. Os resultados da tabela
+> são históricos (histórico no git); os `models/` e o `lab/` mantêm-se.
 
 **O que é partilhado:** as sete camadas, os contratos de ficheiro/API, a janela limpa, a regra do
 simulador físico, a validação por fórmulas fechadas, o ciclo de registo na memória.

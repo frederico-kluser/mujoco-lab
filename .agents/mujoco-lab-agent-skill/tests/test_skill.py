@@ -3,7 +3,8 @@
     uv run pytest .agents/mujoco-lab-agent-skill/tests -q            # tudo (~1-2 min)
     uv run pytest .agents/mujoco-lab-agent-skill/tests -q -k "not templates"   # só scripts/biblioteca
 
-Cada template e o experimento 01 têm `run.py` que valida a física e sai com 0/1: aqui exigimos exit 0.
+Cada template e o experimento 09 têm `run.py` que valida a física/contrato e sai com 0/1: aqui exigimos exit 0.
+(Os testes dos experimentos 01 e 03 caíram com a remoção dos experimentos 01–08 em 2026-10-08 — histórico no git.)
 """
 from __future__ import annotations
 
@@ -19,7 +20,9 @@ SKILL = Path(__file__).resolve().parents[1]
 ROOT = next(p for p in SKILL.parents if (p / "pyproject.toml").exists())
 SCRIPTS = SKILL / "scripts"
 TEMPLATES = SKILL / "assets" / "templates"
-ENV = dict(os.environ, MUJOCO_GL="egl")
+# `PYTHONDONTWRITEBYTECODE=1`: os `run.py` dos templates importam módulos irmãos (`env.py`, `lab/…`) e o Python
+# gravaria `__pycache__` DENTRO dos templates (poluía `assets/templates/**` a cada corrida da suíte).
+ENV = dict(os.environ, MUJOCO_GL="egl", PYTHONDONTWRITEBYTECODE="1")
 
 
 def run(args: list[str], timeout: int = 300, cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -139,19 +142,18 @@ def test_env_check_json():
 
 
 # --------------------------------------------------------------------------- experimentos e templates
-def test_experiment_01_physics_checks(tmp_path):
-    r = run(["experiments/01_triangulo_invertido/run.py", "--sem-video", "--saida", str(tmp_path)])
+def test_experiment_09_run_py():
+    """O único experimento atual (09_drone_hover_rl): `run.py` valida o contrato do env por fórmulas fechadas e sai 0.
+
+    Substitui os antigos `test_experiment_01_physics_checks` e `test_experiment_03_report_example`
+    (experimentos 01–08 removidos em 2026-10-08 por decisão do dono; histórico no git). Precisa do grupo
+    `hover-rl` (gymnasium + stable-baselines3): sem ele o teste é pulado em vez de falhar.
+    """
+    pytest.importorskip("gymnasium", reason="grupo hover-rl não instalado")
+    pytest.importorskip("stable_baselines3", reason="grupo hover-rl não instalado")
+    r = run(["experiments/09_drone_hover_rl/run.py"], timeout=300)
     assert r.returncode == 0, r.stdout[-800:]
-    res = json.loads((tmp_path / "resumo.json").read_text())
-    assert all(c["ok"] for c in res["checks"]) and abs(res["altura_final_m"] - 0.11547) < 3e-3
-
-
-def test_experiment_03_report_example(tmp_path):
-    """O exemplo do relatório: corrigido oscila, o original trava por colisão, pêndulo forçado × EDO."""
-    r = run(["experiments/03_haste_relatorio/run.py", "--sem-video", "--saida", str(tmp_path)])
-    assert r.returncode == 0, r.stdout[-900:]
-    res = json.loads((tmp_path / "resumo.json").read_text())
-    assert res["original"]["theta_max"] < 0.05 < 0.5 < res["corrigido"]["theta_max"] and res["pendulo_forcado"]["rms_rad"] < 0.01
+    assert "checagens [OK]" in r.stdout and "0 [FALHA]" in r.stdout
 
 
 @pytest.mark.parametrize("modelo,massa", [("models/triangulo_invertido.xml", 20.7846), ("models/tetraedro_invertido.xml", 7.5425)])
