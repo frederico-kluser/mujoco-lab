@@ -13,13 +13,18 @@ import {
   enviarLoop,
   enviarReiniciar,
   enviarVento,
+  enviarVentoDinamico,
 } from "@/lib/api"
 import {
   chaveLinha,
+  VENTO_DINAMICO_PARADO,
   type CorpoVento,
+  type CorpoVentoDinamico,
   type EstadoEpisodio,
   type LinhaSim,
   type ResumoEstado,
+  type Rpi5,
+  type VentoDinamico,
   type VentoEstado,
 } from "@/lib/sim"
 
@@ -40,6 +45,10 @@ export interface SimStream {
   passo: number
   retorno: number
   vento: VentoEstado
+  /** Modo dinâmico em vigor (`POST /api/vento-dinamico`); nunca reinicia o episódio. */
+  ventoDinamico: VentoDinamico
+  /** Painel do RPi 5 (`/api/sim` e, em reforço, `/api/state`); `null` = o backend não o publica. */
+  rpi5: Rpi5 | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -50,10 +59,18 @@ export interface SimStream {
   reiniciar: () => Promise<number | null>
   aplicarVento: (corpo: CorpoVento) => Promise<void>
   pararVento: (ventoAtual: VentoEstado) => Promise<void>
+  aplicarVentoDinamico: (corpo: CorpoVentoDinamico) => Promise<void>
   definirLoop: (ativo: boolean) => Promise<void>
 }
 
-const VENTO_ZERO: VentoEstado = { vel: 0, azimute: 0, elevacao: 0, ativo: false }
+const VENTO_ZERO: VentoEstado = {
+  vel: 0,
+  azimute: 0,
+  elevacao: 0,
+  ativo: false,
+  vec: null,
+  modo: null,
+}
 
 export function useSim(): SimStream {
   const [linhas, setLinhas] = useState<LinhaSim[]>([])
@@ -63,33 +80,49 @@ export function useSim(): SimStream {
     passo: number
     retorno: number
     vento: VentoEstado
-  }>({ estado: "a_correr", ep: 0, passo: 0, retorno: 0, vento: VENTO_ZERO })
+    ventoDinamico: VentoDinamico
+    rpi5: Rpi5 | null
+  }>({
+    estado: "a_correr",
+    ep: 0,
+    passo: 0,
+    retorno: 0,
+    vento: VENTO_ZERO,
+    ventoDinamico: VENTO_DINAMICO_PARADO,
+    rpi5: null,
+  })
   const [resumo, setResumo] = useState<ResumoEstado | null>(null)
   const [ligacao, setLigacao] = useState<Ligacao>("a_ligar")
   const [erro, setErro] = useState<string | null>(null)
   const [atualizadoEm, setAtualizadoEm] = useState<number | null>(null)
   const [respostas, setRespostas] = useState(0)
 
-  const aplicar = useCallback(    (dados: Awaited<ReturnType<typeof buscarSim>>) => {
-      setCabecalho({
+  const aplicar = useCallback(
+    (dados: Awaited<ReturnType<typeof buscarSim>>) => {
+      setCabecalho((anterior) => ({
         estado: dados.estado,
         ep: dados.ep,
         passo: dados.passo,
         retorno: dados.retorno,
         vento: dados.vento,
-      })
+        ventoDinamico: dados.ventoDinamico,
+        // `/api/sim` é a fonte principal do rpi5; se esta versão do backend ainda não o trouxer, mantém-se
+        // o que o `/api/state` tiver dito (nunca se apaga um painel que já estava a mostrar números).
+        rpi5: dados.rpi5 ?? anterior.rpi5,
+      }))
       if (dados.linhas.length === 0) return
       setLinhas((anteriores) => {
         const vistos = new Set(anteriores.map(chaveLinha))
         const novas = dados.linhas.filter((l) => !vistos.has(chaveLinha(l)))
         if (novas.length === 0) return anteriores
         const epNovo = novas[novas.length - 1].ep
-        const epAntigo = anteriores.length > 0 ? anteriores[anteriores.length - 1].ep : epNovo
+        const epAntigo =
+          anteriores.length > 0 ? anteriores[anteriores.length - 1].ep : epNovo
         const base = epNovo !== epAntigo ? [] : anteriores
         return [...base, ...novas].slice(-MAX_PONTOS)
       })
     },
-    [],
+    []
   )
 
   /** Um fetch imediato (usado depois de cada ação para o ecrã não esperar o próximo ciclo). */
@@ -111,7 +144,13 @@ export function useSim(): SimStream {
     const carregarResumo = async () => {
       try {
         const dados = await buscarEstado(controlador.signal)
-        if (vivo) setResumo(dados)
+        if (!vivo) return
+        setResumo(dados)
+        // O `rpi5` pode vir só no `/api/state` (o `/api/sim` é a fonte principal): aproveita-se o que
+        // existir, sem apagar números já mostrados quando este resumo não os traz.
+        if (dados.rpi5 !== null) {
+          setCabecalho((anterior) => ({ ...anterior, rpi5: dados.rpi5 }))
+        }
       } catch {
         /* o resumo é acessório: a falta dele não derruba a página */
       }
@@ -128,9 +167,15 @@ export function useSim(): SimStream {
         setRespostas((n) => n + 1)
         if (ciclos % POLLS_POR_RESUMO === 0) void carregarResumo()
       } catch (falha) {
-        if (!vivo || (falha instanceof DOMException && falha.name === "AbortError")) return
+        if (
+          !vivo ||
+          (falha instanceof DOMException && falha.name === "AbortError")
+        )
+          return
         setLigacao("sem_ligacao")
-        setErro(falha instanceof Error ? falha.message : "falha desconhecida na API")
+        setErro(
+          falha instanceof Error ? falha.message : "falha desconhecida na API"
+        )
       } finally {
         ciclos += 1
         if (vivo) temporizador = window.setTimeout(ciclo, INTERVALO_POLLING_MS)
@@ -156,17 +201,21 @@ export function useSim(): SimStream {
       await enviarVento(corpo)
       await pollAgora()
     },
-    [pollAgora],
+    [pollAgora]
   )
 
   const pararVento = useCallback(
     async (ventoAtual: VentoEstado) => {
       // "PARAR VENTO" = velocidade 0 no MESMO azimute/elevação: o contrato do POST só tem
       // {vel,azimute,elevacao}, logo não se inventa uma chave extra que o backend possa recusar.
-      await enviarVento({ vel: 0, azimute: ventoAtual.azimute, elevacao: ventoAtual.elevacao })
+      await enviarVento({
+        vel: 0,
+        azimute: ventoAtual.azimute,
+        elevacao: ventoAtual.elevacao,
+      })
       await pollAgora()
     },
-    [pollAgora],
+    [pollAgora]
   )
 
   const definirLoop = useCallback(
@@ -174,17 +223,36 @@ export function useSim(): SimStream {
       await enviarLoop(ativo)
       await pollAgora()
     },
-    [pollAgora],
+    [pollAgora]
+  )
+
+  /** Última linha do histórico (valor atual das curvas e do mostrador de vento). */
+  const ultima = linhas.length > 0 ? linhas[linhas.length - 1] : null
+
+  /**
+   * `POST /api/vento-dinamico` — só escreve o modo; o episódio continua a correr.
+   *
+   * O payload é SEMPRE o do contrato (`frente` incluído: `{vel,azimute,elevacao}` = degrau imediato);
+   * um 400 do servidor chega ao utilizador como aviso, não se reescreve o pedido noutro formato.
+   */
+  const aplicarVentoDinamico = useCallback(
+    async (corpo: CorpoVentoDinamico) => {
+      await enviarVentoDinamico(corpo)
+      await pollAgora()
+    },
+    [pollAgora]
   )
 
   return {
     linhas,
-    ultima: linhas.length > 0 ? linhas[linhas.length - 1] : null,
+    ultima,
     estado: cabecalho.estado,
     ep: cabecalho.ep,
     passo: cabecalho.passo,
     retorno: cabecalho.retorno,
     vento: cabecalho.vento,
+    ventoDinamico: cabecalho.ventoDinamico,
+    rpi5: cabecalho.rpi5,
     resumo,
     ligacao,
     erro,
@@ -193,6 +261,7 @@ export function useSim(): SimStream {
     reiniciar,
     aplicarVento,
     pararVento,
+    aplicarVentoDinamico,
     definirLoop,
   }
 }

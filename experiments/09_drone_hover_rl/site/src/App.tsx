@@ -1,23 +1,37 @@
 /**
  * SITE do experimento 09 (drone a pairar com política RL) — monta tudo:
- * cabeçalho · curvas · rede 16→64→64→4 · obs/ações · controlos (vento, REINICIAR, LOOP).
+ * cabeçalho · curvas · rede 16→64→64→4 · RPi 5 · obs/ações · controlos (vento, dinâmico, REINICIAR,
+ * LOOP) · botão de ajuda «?».
  *
  * Semântica de episódio: NADA de auto-restart no cliente. Quando `estado=episodio_terminado` o ecrã diz
  * "clica REINICIAR"; se o LOOP estiver ligado quem reinicia é o BACKEND (o site só faz o POST).
+ * Os controlos de vento (constante e dinâmico) escrevem no ficheiro de controlo e nunca reiniciam.
  */
 
 import { useCallback, useState } from "react"
 
+import { Ajuda } from "@/components/sim/ajuda"
 import { Cabecalho } from "@/components/sim/cabecalho"
 import { Curvas } from "@/components/sim/curvas"
-import { Controlos, type FaseVento } from "@/components/sim/controlos"
+import {
+  Controlos,
+  type AlvoDinamico,
+  type FaseVento,
+} from "@/components/sim/controlos"
 import { PainelAct, TabelaObs } from "@/components/sim/observacoes"
 import { PilhaAvisos, useAvisos } from "@/components/sim/avisos"
+import { PainelRpi5 } from "@/components/sim/rpi5"
 import { Rede } from "@/components/sim/rede"
 import { Skeleton, SkeletonReveal } from "@/components/motion-ui/skeleton"
 import { Card, CardContent } from "@/components/ui/card"
 import { useSim } from "@/hooks/use-sim"
-import { ALVO_Z, fmt, fmtGraus, type CorpoVento } from "@/lib/sim"
+import {
+  ALVO_Z,
+  fmt,
+  fmtGraus,
+  type CorpoVento,
+  type CorpoVentoDinamico,
+} from "@/lib/sim"
 
 function Esqueleto() {
   return (
@@ -46,6 +60,10 @@ export function App() {
   const sim = useSim()
   const { toasts, conteudo, notificar, fechar } = useAvisos()
   const [faseVento, setFaseVento] = useState<FaseVento>("pronto")
+  const [faseDinamico, setFaseDinamico] = useState<FaseVento>("pronto")
+  const [dinamicoEmCurso, setDinamicoEmCurso] = useState<AlvoDinamico | null>(
+    null
+  )
   const [aReiniciar, setAReiniciar] = useState(false)
   const [loop, setLoop] = useState(false)
 
@@ -58,7 +76,7 @@ export function App() {
           setFaseVento("ok")
           notificar(
             `vento aplicado: ${fmt(corpo.vel, 2)} m/s · azimute ${fmtGraus(corpo.azimute)} · elevação ${fmtGraus(corpo.elevacao)}`,
-            "ok",
+            "ok"
           )
           window.setTimeout(() => setFaseVento("pronto"), 1800)
         })
@@ -66,12 +84,12 @@ export function App() {
           setFaseVento("erro")
           notificar(
             `POST /api/vento recusado — ${erro instanceof Error ? erro.message : "falha desconhecida"}`,
-            "erro",
+            "erro"
           )
           window.setTimeout(() => setFaseVento("pronto"), 2500)
         })
     },
-    [notificar, sim],
+    [notificar, sim]
   )
 
   const pararVento = useCallback(() => {
@@ -81,10 +99,39 @@ export function App() {
       .catch((erro: unknown) =>
         notificar(
           `não foi possível parar o vento — ${erro instanceof Error ? erro.message : "falha desconhecida"}`,
-          "erro",
-        ),
+          "erro"
+        )
       )
   }, [notificar, sim])
+
+  /**
+   * VENTO DINÂMICO (rajadas · turbulência · frente): só escreve o modo — o episódio NUNCA é reiniciado.
+   * O `alvo` diz qual dos botões está a caminho do servidor, para os outros ficarem em espera.
+   */
+  const enviarVentoDinamico = useCallback(
+    (corpo: CorpoVentoDinamico, alvo: AlvoDinamico, descricao: string) => {
+      setDinamicoEmCurso(alvo)
+      setFaseDinamico("a_enviar")
+      void sim
+        .aplicarVentoDinamico(corpo)
+        .then(() => {
+          setFaseDinamico("ok")
+          notificar(`${descricao} — POST /api/vento-dinamico`, "ok")
+        })
+        .catch((erro: unknown) => {
+          setFaseDinamico("erro")
+          notificar(
+            `POST /api/vento-dinamico recusado — ${erro instanceof Error ? erro.message : "falha desconhecida"}`,
+            "erro"
+          )
+        })
+        .finally(() => {
+          setDinamicoEmCurso(null)
+          window.setTimeout(() => setFaseDinamico("pronto"), 1600)
+        })
+    },
+    [notificar, sim]
+  )
 
   const reiniciar = useCallback(() => {
     setAReiniciar(true)
@@ -95,14 +142,14 @@ export function App() {
           contador === null
             ? "episódio reiniciado"
             : `episódio reiniciado (contador do servidor: ${fmt(contador, 0)})`,
-          "ok",
+          "ok"
         )
       })
       .catch((erro: unknown) =>
         notificar(
           `POST /api/reiniciar falhou — ${erro instanceof Error ? erro.message : "falha desconhecida"}`,
-          "erro",
-        ),
+          "erro"
+        )
       )
       .finally(() => setAReiniciar(false))
   }, [notificar, sim])
@@ -117,22 +164,28 @@ export function App() {
             ativo
               ? "LOOP ligado: o backend reinicia o episódio ao terminar"
               : "LOOP desligado: o episódio fica terminado até clicares REINICIAR",
-            "info",
-          ),
+            "info"
+          )
         )
         .catch((erro: unknown) => {
           setLoop(!ativo)
           notificar(
             `POST /api/loop falhou — ${erro instanceof Error ? erro.message : "falha desconhecida"}`,
-            "erro",
+            "erro"
           )
         })
     },
-    [notificar, sim],
+    [notificar, sim]
   )
 
   const semDados = sim.ligacao === "a_ligar" && sim.linhas.length === 0
   const vazio = sim.ligacao === "ligado" && sim.linhas.length === 0
+  // Vetor do vento EM VIGOR: o `/api/sim` anuncia-o em `vento.vec` (contrato) ou em `vento_atual.vec`
+  // (o `sim_site.py`); em último recurso, na própria linha da telemetria (`vento_vec`).
+  const ventoVec = sim.vento.vec ?? sim.ultima?.vento_vec ?? null
+  // O que a FÍSICA está a fazer: `vento_atual.modo` da API, senão o `vento_modo` da linha, senão o pedido.
+  const modoTelemetria =
+    sim.vento.modo ?? sim.ultima?.vento_modo ?? sim.ventoDinamico.modo
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -162,15 +215,19 @@ export function App() {
                 className="rounded-xl bg-muted/50 px-4 py-3 text-xs text-muted-foreground"
                 data-testid="estado-vazio"
               >
-                o servidor responde mas ainda não publicou passos: as curvas e a rede ficam vazias até o
-                episódio arrancar.
+                o servidor responde mas ainda não publicou passos: as curvas e a
+                rede ficam vazias até o episódio arrancar.
               </p>
             ) : null}
 
             <SkeletonReveal loading={semDados} skeleton={<Esqueleto />}>
               <div className="flex flex-col gap-4">
                 <Curvas linhas={sim.linhas} zAlvo={ALVO_Z} />
-                <Rede linha={sim.ultima} estadoCorrendo={sim.estado === "a_correr"} />
+                <Rede
+                  linha={sim.ultima}
+                  estadoCorrendo={sim.estado === "a_correr"}
+                />
+                <PainelRpi5 rpi5={sim.rpi5} ligado={sim.ligacao === "ligado"} />
                 <div className="grid gap-4 xl:grid-cols-2">
                   <TabelaObs linha={sim.ultima} />
                   <PainelAct linha={sim.ultima} resumo={sim.resumo} />
@@ -185,25 +242,33 @@ export function App() {
           >
             <Controlos
               vento={sim.vento}
+              vec={ventoVec}
+              dinamico={sim.ventoDinamico}
+              modoTelemetria={modoTelemetria}
               estado={sim.estado}
               ep={sim.ep}
               ligado={sim.ligacao === "ligado"}
               loop={loop}
               faseVento={faseVento}
+              faseDinamico={faseDinamico}
+              emCurso={dinamicoEmCurso}
               aReiniciar={aReiniciar}
               onAplicarVento={aplicarVento}
               onPararVento={pararVento}
+              onVentoDinamico={enviarVentoDinamico}
               onReiniciar={reiniciar}
               onLoop={definirLoop}
             />
             <p className="px-1 text-[0.65rem] text-muted-foreground">
-              polling GET /api/sim a 2,9 Hz · {fmt(sim.linhas.length, 0)} linhas no histórico local ·
-              ações: POST /api/vento · /api/reiniciar · /api/loop
+              polling GET /api/sim a 2,9 Hz · {fmt(sim.linhas.length, 0)} linhas
+              no histórico local · ações: POST /api/vento · /api/vento-dinamico
+              · /api/reiniciar · /api/loop
             </p>
           </aside>
         </div>
       </div>
 
+      <Ajuda />
       <PilhaAvisos toasts={toasts} conteudo={conteudo} fechar={fechar} />
     </div>
   )

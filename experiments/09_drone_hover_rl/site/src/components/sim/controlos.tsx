@@ -1,16 +1,31 @@
 /**
- * Bloco de controlos (coluna fixa à direita): vento ao vivo, REINICIAR e LOOP.
+ * Bloco de controlos (coluna fixa à direita): vento constante, VENTO DINÂMICO, REINICIAR e LOOP.
  *
  * Cascata:
- *  · passo 2 — `hold-to-confirm` (REINICIAR), `multi-state-button` (APLICAR/PARAR VENTO), `segmented-toggle` (LOOP)
- *  · passo 3 — `Slider` (primitivo Base UI via shadcn) + `Card` + `Button`
- *  · passo 4 — SÓ a rosa dos ventos (SVG polar): o catálogo tem séries temporais (`sparkline`) e barras,
- *    não um mostrador de azimute/elevação; 30 linhas de SVG com `transform: rotate` (regra 8).
+ *  · passo 2 — `hold-to-confirm` (REINICIAR), `multi-state-button` (APLICAR/PARAR VENTO, RAJADA AGORA,
+ *    FRENTE AGORA), `segmented-toggle` (LOOP e o modo dinâmico contínuo)
+ *  · passo 3 — `Slider` + `Card` + `Button` + `Input` (primitivos Base UI via shadcn)
+ *  · passo 4 — SÓ a rosa dos ventos (`rosa-ventos.tsx`): o catálogo tem séries temporais (`sparkline`) e
+ *    barras, não um mostrador polar; 30 linhas de SVG só com `transform`/`opacity` (regra 8).
+ *
+ * Regra de ouro deste painel: NENHUM destes controlos reinicia o episódio — todos escrevem o modo/vento e
+ * a física muda no passo de decisão seguinte (`POST /api/vento`, `POST /api/vento-dinamico`).
+ * `/api/reiniciar` é exclusivo do botão com hold de 1 s.
  */
 
 import { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { Check, CircleStop, Loader2, RotateCcw, TriangleAlert, Wind } from "lucide-react"
+import {
+  Check,
+  CircleStop,
+  Gauge,
+  Loader2,
+  RotateCcw,
+  TriangleAlert,
+  Waves,
+  Wind,
+  Zap,
+} from "lucide-react"
 
 import { HoldToConfirmButton } from "@/components/motion-ui/hold-to-confirm"
 import { MultiStateButton } from "@/components/motion-ui/multi-state-button"
@@ -20,15 +35,23 @@ import {
 } from "@/components/motion-ui/segmented-toggle"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Slider } from "@/components/ui/slider"
 import { useMotionUITransition } from "@/components/motion-ui/ui-theme"
+import { RosaDosVentos } from "@/components/sim/rosa-ventos"
 import {
   fmt,
   fmtGraus,
+  fmtParams,
+  PARAMS_DINAMICOS_PADRAO,
+  ROTULO_MODO,
   VENTO_LIMITES,
-  ventoCartesiano,
   type CorpoVento,
+  type CorpoVentoDinamico,
   type EstadoEpisodio,
+  type ModoContinuo,
+  type ModoVentoDinamico,
+  type VentoDinamico,
   type VentoEstado,
 } from "@/lib/sim"
 import { FOCUS_RING } from "@/components/sim/estilo"
@@ -36,12 +59,23 @@ import { FOCUS_RING } from "@/components/sim/estilo"
 /** Estados visíveis dos botões de vento (chaves do `multi-state-button`). */
 export type FaseVento = "pronto" | "a_enviar" | "ok" | "erro"
 
-const SUPERFICIE_VENTO: Record<FaseVento, string> = {
+/** Qual dos botões dinâmicos está a caminho do servidor (os outros ficam em espera). */
+export type AlvoDinamico = "modo" | "rajada" | "frente" | "parar"
+
+/** Estados visíveis dos botões dinâmicos: as 4 fases + `ativo` (o interruptor está ligado no servidor). */
+type EstadoBotao = FaseVento | "ativo"
+
+const SUPERFICIE_VENTO: Record<EstadoBotao, string> = {
   pronto: "bg-primary text-primary-foreground",
   a_enviar: "bg-secondary text-secondary-foreground",
   ok: "bg-primary text-primary-foreground",
   erro: "bg-destructive/15 text-destructive",
+  // modo em vigor no servidor (o botão é um interruptor: clicar outra vez desliga)
+  ativo: "bg-primary text-primary-foreground ring-2 ring-ring",
 }
+
+/** Passos de decisão por segundo (o mesmo 50 Hz do contrato do RPi 5). */
+const PASSOS_POR_SEGUNDO = 50
 
 interface LinhaSliderProps {
   id: string
@@ -94,89 +128,478 @@ function LinhaSlider({
   )
 }
 
-interface RosaDosVentosProps {
-  vento: CorpoVento
-  ativo: boolean
+interface CampoNumericoProps {
+  id: string
+  rotulo: string
+  valor: number
+  min: number
+  max: number
+  passo: number
+  sufixo?: string
+  dica?: string
+  onChange: (valor: number) => void
 }
 
-/** Mostrador polar: seta a girar pelo azimute, comprimento pela velocidade (0–5 m/s). */
-function RosaDosVentos({ vento, ativo }: RosaDosVentosProps) {
-  const ui = useMotionUITransition("ui")
-  const comprimento = 12 + (Math.min(vento.vel, VENTO_LIMITES.vel[1]) / VENTO_LIMITES.vel[1]) * 22
-  const [x, y, z] = ventoCartesiano(vento)
+/** Campo numérico curto dos parâmetros dinâmicos (o `Input` do shadcn, em tamanho de painel). */
+function CampoNumerico({
+  id,
+  rotulo,
+  valor,
+  min,
+  max,
+  passo,
+  sufixo,
+  dica,
+  onChange,
+}: CampoNumericoProps) {
   return (
-    <div className="flex items-center gap-3">
-      <svg
-        viewBox="-44 -44 88 88"
-        className="size-20 shrink-0"
-        role="img"
-        aria-label={`vento ${fmt(vento.vel, 2)} m/s a ${fmtGraus(vento.azimute)} de azimute`}
-      >
-        <circle r="40" className="fill-muted/30 stroke-border" strokeWidth="1" />
-        <line x1="-40" y1="0" x2="40" y2="0" className="stroke-border" strokeWidth="1" />
-        <line x1="0" y1="-40" x2="0" y2="40" className="stroke-border" strokeWidth="1" />
-        <text x="34" y="-4" style={{ fontSize: 8 }} className="fill-muted-foreground">
-          +x
-        </text>
-        <text x="-4" y="-32" style={{ fontSize: 8 }} className="fill-muted-foreground">
-          +y
-        </text>
-        <motion.g
-          initial={false}
-          // azimute 90° → +y: no SVG o y cresce para BAIXO, logo o ângulo é negativo em ecrã
-          animate={{ rotate: -vento.azimute }}
-          transition={{ ...ui }}
+    <label htmlFor={id} className="flex flex-col gap-0.5">
+      <span className="text-[0.65rem] text-muted-foreground">{rotulo}</span>
+      <span className="flex items-center gap-1">
+        <Input
+          id={id}
+          data-testid={`campo-${id}`}
+          type="number"
+          inputMode="decimal"
+          min={min}
+          max={max}
+          step={passo}
+          value={valor}
+          onChange={(evento) => {
+            const n = Number(evento.target.value)
+            onChange(Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min)
+          }}
+          className="h-7 w-16 rounded-md px-2 font-mono text-xs"
+        />
+        {sufixo ? (
+          <span className="text-[0.6rem] text-muted-foreground">{sufixo}</span>
+        ) : null}
+      </span>
+      {dica ? (
+        <span className="text-[0.6rem] text-muted-foreground">{dica}</span>
+      ) : null}
+    </label>
+  )
+}
+
+interface DinamicoProps {
+  dinamico: VentoDinamico
+  /** Modo que a TELEMETRIA reporta na última linha (é o que a física está a fazer). */
+  modoTelemetria: ModoVentoDinamico
+  ligado: boolean
+  fase: FaseVento
+  emCurso: AlvoDinamico | null
+  /** Força/azimute/elevação dos sliders — a rajada e a frente usam-nos como estão. */
+  selecao: CorpoVento
+  onEnviar: (
+    corpo: CorpoVentoDinamico,
+    alvo: AlvoDinamico,
+    descricao: string
+  ) => void
+}
+
+/**
+ * Sub-painel do vento dinâmico (ronda 10): um modo CONTÍNUO (rajadas ou turbulência Dryden), dois
+ * instantâneos (RAJADA AGORA, FRENTE AGORA) e o reset `{"modo":"nenhum","ativo":false}`.
+ */
+function Dinamico({
+  dinamico,
+  modoTelemetria,
+  ligado,
+  fase,
+  emCurso,
+  selecao,
+  onEnviar,
+}: DinamicoProps) {
+  const ui = useMotionUITransition("ui")
+  const [p, setP] = useState<number>(PARAMS_DINAMICOS_PADRAO.rajadas.p)
+  const [duracaoRajadas, setDuracaoRajadas] = useState<number>(
+    PARAMS_DINAMICOS_PADRAO.rajadas.duracao
+  )
+  const [uMax, setUMax] = useState<number>(
+    PARAMS_DINAMICOS_PADRAO.rajadas.u_max
+  )
+  const [sigma, setSigma] = useState<number>(
+    PARAMS_DINAMICOS_PADRAO.dryden.sigma
+  )
+  const [comprimento, setComprimento] = useState<number>(
+    PARAMS_DINAMICOS_PADRAO.dryden.L
+  )
+  const [vMin, setVMin] = useState<number>(PARAMS_DINAMICOS_PADRAO.dryden.v_min)
+  const [duracaoRajada, setDuracaoRajada] = useState<number>(
+    PARAMS_DINAMICOS_PADRAO.rajada_agora.duracao
+  )
+
+  const modoContinuo: ModoContinuo =
+    dinamico.ativo &&
+    (dinamico.modo === "rajadas" || dinamico.modo === "dryden")
+      ? dinamico.modo
+      : "nenhum"
+  const rajadaEmCurso = dinamico.ativo && modoTelemetria === "rajada_agora"
+  const frenteAtiva = dinamico.ativo && dinamico.modo === "frente"
+  const ocupado = emCurso !== null
+  const desativado = !ligado || ocupado
+
+  const paramsRajadas = { p, duracao: Math.round(duracaoRajadas), u_max: uMax }
+  const paramsDryden = { sigma, L: comprimento, v_min: vMin }
+
+  const trocarModo = (alvo: ModoContinuo) => {
+    if (alvo === modoContinuo) return
+    if (alvo === "nenhum") {
+      onEnviar(
+        { modo: "nenhum", ativo: false },
+        "modo",
+        "vento dinâmico desligado"
+      )
+      return
+    }
+    if (alvo === "rajadas") {
+      onEnviar(
+        { modo: "rajadas", ativo: true, params: paramsRajadas },
+        "modo",
+        `rajadas contínuas ligadas (p=${fmt(p, 3)}, duração=${Math.round(duracaoRajadas)} passos, u_max=${fmt(uMax, 1)} m/s)`
+      )
+      return
+    }
+    onEnviar(
+      { modo: "dryden", ativo: true, params: paramsDryden },
+      "modo",
+      `turbulência Dryden ligada (σ=${fmt(sigma, 2)}, L=${fmt(comprimento, 1)}, v_min=${fmt(vMin, 1)} m/s)`
+    )
+  }
+
+  return (
+    <section
+      aria-label="Vento dinâmico"
+      data-testid="painel-dinamico"
+      className="flex flex-col gap-3 rounded-lg border border-border/70 bg-muted/20 p-3"
+    >
+      <div className="flex items-center gap-1.5">
+        <Zap className="size-3.5" aria-hidden="true" />
+        <h4 className="text-[0.7rem] tracking-wide uppercase">
+          vento dinâmico
+        </h4>
+        <span
+          data-testid="estado-dinamico"
+          className={`ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[0.6rem] ${
+            dinamico.ativo
+              ? "bg-primary/10 text-primary"
+              : "bg-muted text-muted-foreground"
+          }`}
         >
-          <line
-            x1="0"
-            y1="0"
-            x2={comprimento}
-            y2="0"
-            className={ativo ? "stroke-primary" : "stroke-muted-foreground"}
-            strokeWidth="3"
-            strokeLinecap="round"
+          <motion.span
+            aria-hidden="true"
+            className={`size-1.5 rounded-full ${dinamico.ativo ? "bg-primary" : "bg-muted-foreground"}`}
+            animate={
+              dinamico.ativo ? { opacity: [1, 0.25, 1] } : { opacity: 1 }
+            }
+            transition={
+              dinamico.ativo
+                ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" }
+                : { duration: 0.2 }
+            }
           />
-          <circle cx="0" cy="0" r="3" className="fill-primary" />
-        </motion.g>
-      </svg>
-      <dl className="grid flex-1 grid-cols-2 gap-x-3 gap-y-0.5 font-mono text-[0.7rem]">
-        <dt className="text-muted-foreground">vetor (mundo)</dt>
-        <dd className="text-right tabular-nums">
-          {fmt(x, 2)}, {fmt(y, 2)}, {fmt(z, 2)}
-        </dd>
-        <dt className="text-muted-foreground">elevação</dt>
-        <dd className="text-right tabular-nums">{fmtGraus(vento.elevacao)}</dd>
-        <dt className="text-muted-foreground">estado</dt>
-        <dd className="text-right">{ativo ? "ativo" : "parado"}</dd>
-      </dl>
-    </div>
+          {dinamico.ativo ? "ativo" : "inativo"}
+        </span>
+      </div>
+
+      <p className="text-[0.65rem] text-muted-foreground">
+        modo em vigor:{" "}
+        <span className="text-foreground">{ROTULO_MODO[dinamico.modo]}</span>
+        {dinamico.ativo ? "" : " · sem dinâmica"} · params{" "}
+        <span className="font-mono">{fmtParams(dinamico.params)}</span> · a
+        física muda no passo seguinte,{" "}
+        <span className="text-foreground">sem reiniciar o episódio</span>
+      </p>
+
+      <SegmentedToggle
+        value={modoContinuo}
+        onChange={(v) => trocarModo(v as ModoContinuo)}
+        ariaLabel="modo dinâmico contínuo"
+        className="w-full"
+      >
+        <SegmentedToggleOption value="nenhum">PARADO</SegmentedToggleOption>
+        <SegmentedToggleOption value="rajadas">RAJADAS</SegmentedToggleOption>
+        <SegmentedToggleOption value="dryden">DRYDEN</SegmentedToggleOption>
+      </SegmentedToggle>
+
+      <AnimatePresence initial={false} mode="wait">
+        {modoContinuo === "rajadas" ? (
+          <motion.div
+            key="rajadas"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ ...ui }}
+            className="flex flex-wrap gap-3"
+            data-testid="params-rajadas"
+          >
+            <CampoNumerico
+              id="rajadas-p"
+              rotulo="p (probabilidade)"
+              valor={p}
+              min={0}
+              max={1}
+              passo={0.005}
+              onChange={setP}
+            />
+            <CampoNumerico
+              id="rajadas-duracao"
+              rotulo="duração"
+              valor={duracaoRajadas}
+              min={1}
+              max={200}
+              passo={1}
+              sufixo="passos"
+              dica={`${fmt(duracaoRajadas / PASSOS_POR_SEGUNDO, 2)} s @ 50 Hz`}
+              onChange={setDuracaoRajadas}
+            />
+            <CampoNumerico
+              id="rajadas-umax"
+              rotulo="u_max"
+              valor={uMax}
+              min={0}
+              max={5}
+              passo={0.1}
+              sufixo="m/s"
+              onChange={setUMax}
+            />
+          </motion.div>
+        ) : modoContinuo === "dryden" ? (
+          <motion.div
+            key="dryden"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ ...ui }}
+            className="flex flex-wrap gap-3"
+            data-testid="params-dryden"
+          >
+            <CampoNumerico
+              id="dryden-sigma"
+              rotulo="sigma"
+              valor={sigma}
+              min={0.05}
+              max={3}
+              passo={0.05}
+              onChange={setSigma}
+            />
+            <CampoNumerico
+              id="dryden-L"
+              rotulo="L"
+              valor={comprimento}
+              min={0.5}
+              max={40}
+              passo={0.5}
+              sufixo="m"
+              onChange={setComprimento}
+            />
+            <CampoNumerico
+              id="dryden-vmin"
+              rotulo="v_min"
+              valor={vMin}
+              min={0.1}
+              max={5}
+              passo={0.1}
+              sufixo="m/s"
+              onChange={setVMin}
+            />
+          </motion.div>
+        ) : (
+          <motion.p
+            key="parado"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ ...ui }}
+            className="text-[0.65rem] text-muted-foreground"
+          >
+            RAJADAS = rajadas que <span className="text-foreground">somam</span>{" "}
+            ao vento base · DRYDEN = turbulência que passeia em torno dele. Os
+            params ficam editáveis no modo escolhido.
+          </motion.p>
+        )}
+      </AnimatePresence>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <MultiStateButton
+          state={
+            emCurso === "rajada" ? fase : rajadaEmCurso ? "ativo" : "pronto"
+          }
+          onClick={() =>
+            onEnviar(
+              {
+                modo: "rajada_agora",
+                ativo: true,
+                params: {
+                  duracao: Math.round(duracaoRajada),
+                  u: selecao.vel,
+                  azimute: selecao.azimute,
+                  elevacao: selecao.elevacao,
+                },
+              },
+              "rajada",
+              `rajada agora: ${fmt(selecao.vel, 2)} m/s · ${fmtGraus(selecao.azimute)} · ${Math.round(duracaoRajada)} passos`
+            )
+          }
+          disabled={desativado}
+          surfaceClassName={
+            SUPERFICIE_VENTO[
+              emCurso === "rajada" ? fase : rajadaEmCurso ? "ativo" : "pronto"
+            ]
+          }
+          feedback={fase === "erro" && emCurso === null ? "shake" : "pop"}
+          announce={rajadaEmCurso ? "rajada em curso" : undefined}
+          aria-label="rajada agora"
+          icon={
+            emCurso === "rajada" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Zap className="size-4" />
+            )
+          }
+          className={FOCUS_RING}
+          pillClassName="rounded-full px-4 py-2 text-xs font-medium shadow-sm"
+        >
+          {emCurso === "rajada"
+            ? "A ENVIAR…"
+            : rajadaEmCurso
+              ? "RAJADA EM CURSO"
+              : "RAJADA AGORA"}
+        </MultiStateButton>
+
+        <MultiStateButton
+          state={emCurso === "frente" ? fase : frenteAtiva ? "ativo" : "pronto"}
+          onClick={() =>
+            frenteAtiva
+              ? onEnviar(
+                  { modo: "nenhum", ativo: false },
+                  "frente",
+                  "frente desligada"
+                )
+              : onEnviar(
+                  {
+                    modo: "frente",
+                    ativo: true,
+                    params: {
+                      vel: selecao.vel,
+                      azimute: selecao.azimute,
+                      elevacao: selecao.elevacao,
+                    },
+                  },
+                  "frente",
+                  `frente agora: degrau para ${fmt(selecao.vel, 2)} m/s · ${fmtGraus(selecao.azimute)}`
+                )
+          }
+          disabled={desativado}
+          surfaceClassName={
+            SUPERFICIE_VENTO[
+              emCurso === "frente" ? fase : frenteAtiva ? "ativo" : "pronto"
+            ]
+          }
+          feedback="pop"
+          announce={frenteAtiva ? "frente em vigor" : undefined}
+          aria-label="frente agora"
+          icon={
+            emCurso === "frente" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Waves className="size-4" />
+            )
+          }
+          className={FOCUS_RING}
+          pillClassName="rounded-full px-4 py-2 text-xs font-medium shadow-sm"
+        >
+          {emCurso === "frente"
+            ? "A ENVIAR…"
+            : frenteAtiva
+              ? "FRENTE EM VIGOR"
+              : "FRENTE AGORA"}
+        </MultiStateButton>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 rounded-full px-3 text-xs"
+          onClick={() =>
+            onEnviar(
+              { modo: "nenhum", ativo: false },
+              "parar",
+              "vento dinâmico parado"
+            )
+          }
+          disabled={desativado}
+          data-testid="botao-parar-dinamico"
+        >
+          <CircleStop className="size-3.5" aria-hidden="true" />
+          PARAR DINÂMICO
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <CampoNumerico
+          id="rajada-duracao"
+          rotulo="duração da rajada"
+          valor={duracaoRajada}
+          min={1}
+          max={500}
+          passo={1}
+          sufixo="passos"
+          dica={`${fmt(duracaoRajada / PASSOS_POR_SEGUNDO, 2)} s · env: u=força, azimute, elevação dos sliders`}
+          onChange={setDuracaoRajada}
+        />
+        <p className="flex items-center gap-1 pb-1 font-mono text-[0.6rem] text-muted-foreground">
+          <Gauge className="size-3" aria-hidden="true" />
+          última linha: modo={modoTelemetria}
+        </p>
+      </div>
+    </section>
   )
 }
 
 interface ControlosProps {
   vento: VentoEstado
+  /** Vetor do vento em vigor (telemetria `vento_vec`), ou `null`. */
+  vec: [number, number, number] | null
+  dinamico: VentoDinamico
+  /** Modo reportado pela última linha de telemetria (o que a física está mesmo a fazer). */
+  modoTelemetria: ModoVentoDinamico
   estado: EstadoEpisodio
   ep: number
   ligado: boolean
   loop: boolean
   faseVento: FaseVento
+  faseDinamico: FaseVento
+  emCurso: AlvoDinamico | null
   aReiniciar: boolean
   onAplicarVento: (corpo: CorpoVento) => void
   onPararVento: () => void
+  onVentoDinamico: (
+    corpo: CorpoVentoDinamico,
+    alvo: AlvoDinamico,
+    descricao: string
+  ) => void
   onReiniciar: () => void
   onLoop: (ativo: boolean) => void
 }
 
 export function Controlos({
   vento,
+  vec,
+  dinamico,
+  modoTelemetria,
   estado,
   ep,
   ligado,
   loop,
   faseVento,
+  faseDinamico,
+  emCurso,
   aReiniciar,
   onAplicarVento,
   onPararVento,
+  onVentoDinamico,
   onReiniciar,
   onLoop,
 }: ControlosProps) {
@@ -285,7 +708,7 @@ export function Controlos({
             onChange={setElevacao}
           />
 
-          <RosaDosVentos vento={selecao} ativo={forca > 0} />
+          <RosaDosVentos selecao={selecao} vec={vec} modo={modoTelemetria} />
 
           <div className="flex flex-wrap items-center gap-2">
             <MultiStateButton
@@ -338,18 +761,34 @@ export function Controlos({
           </div>
         </section>
 
+        <Dinamico
+          dinamico={dinamico}
+          modoTelemetria={modoTelemetria}
+          ligado={ligado}
+          fase={faseDinamico}
+          emCurso={emCurso}
+          selecao={selecao}
+          onEnviar={onVentoDinamico}
+        />
+
         <section
           aria-label="Episódio"
           className="flex flex-col gap-2 border-t border-border pt-4"
         >
-          <h3 className="text-xs tracking-wide text-muted-foreground uppercase">episódio</h3>
+          <h3 className="text-xs tracking-wide text-muted-foreground uppercase">
+            episódio
+          </h3>
           <div className="relative">
             {terminado ? (
               <motion.span
                 aria-hidden="true"
                 className="pointer-events-none absolute -inset-1 rounded-full ring-2 ring-destructive"
                 animate={{ opacity: [0.15, 0.7, 0.15] }}
-                transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+                transition={{
+                  duration: 1.6,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
               />
             ) : null}
             <HoldToConfirmButton
@@ -370,8 +809,12 @@ export function Controlos({
               {aReiniciar ? "A REINICIAR…" : "REINICIAR (manter 1 s)"}
             </HoldToConfirmButton>
           </div>
-          <p id="reiniciar-ajuda" className="text-[0.65rem] text-muted-foreground">
-            carrega e mantém ~1 s: o preenchimento confirma · POST /api/reiniciar
+          <p
+            id="reiniciar-ajuda"
+            className="text-[0.65rem] text-muted-foreground"
+          >
+            carrega e mantém ~1 s: o preenchimento confirma · POST
+            /api/reiniciar
           </p>
 
           <div className="mt-2 flex items-center justify-between gap-3">
@@ -391,7 +834,10 @@ export function Controlos({
               <SegmentedToggleOption value="on">ON</SegmentedToggleOption>
             </SegmentedToggle>
           </div>
-          <p className="font-mono text-[0.65rem] text-muted-foreground" data-testid="estado-loop">
+          <p
+            className="font-mono text-[0.65rem] text-muted-foreground"
+            data-testid="estado-loop"
+          >
             loop={loop ? "true" : "false"} · estado={estado}
           </p>
         </section>

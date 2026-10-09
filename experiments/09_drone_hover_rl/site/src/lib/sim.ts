@@ -27,6 +27,10 @@ export interface LinhaSim {
   yaw_err: number
   vento_vel: number
   vento_azim: number
+  /** Vetor do vento EM VIGOR `[vx,vy,vz]` (base + dinâmica), ou `null` se a linha não o trouxer. */
+  vento_vec: [number, number, number] | null
+  /** Modo dinâmico que produziu esta linha (`"nenhum"`/`"rajadas"`/…), ou `null` se não vier. */
+  vento_modo: ModoVentoDinamico | null
   obs: number[]
   act: number[]
   h1: number[]
@@ -40,6 +44,10 @@ export interface VentoEstado {
   azimute: number
   elevacao: number
   ativo: boolean
+  /** Vetor em vigor anunciado pelo backend (m/s, mundo); `null` quando só há a forma polar. */
+  vec: [number, number, number] | null
+  /** Modo dinâmico em vigor anunciado pela API (`vento_atual.modo`); `null` se não vier. */
+  modo: ModoVentoDinamico | null
 }
 
 export interface RespostaSim {
@@ -48,6 +56,9 @@ export interface RespostaSim {
   passo: number
   retorno: number
   vento: VentoEstado
+  ventoDinamico: VentoDinamico
+  /** Painel do Raspberry Pi 5; `null` quando o backend ainda não publica `rpi5`. */
+  rpi5: Rpi5 | null
   linhas: LinhaSim[]
 }
 
@@ -59,6 +70,10 @@ export interface ResumoEstado {
   momentoMax: [number, number, number] | null
   tauEscala: number | null
   np: number | null
+  /** Modo dinâmico em vigor (o `/api/state` também o publica; serve de reforço ao `/api/sim`). */
+  ventoDinamico: VentoDinamico
+  /** Painel do RPi 5, quando o resumo o traz (`null` se não vier). */
+  rpi5: Rpi5 | null
 }
 
 /** Constantes físicas de recurso (lab/crazyflie.py + env.py) usadas SÓ para derivar valores de ecrã. */
@@ -83,19 +98,44 @@ function vetor(bruto: unknown, n: number): number[] {
 }
 
 function objeto(bruto: unknown): Record<string, unknown> {
-  return typeof bruto === "object" && bruto !== null ? (bruto as Record<string, unknown>) : {}
+  return typeof bruto === "object" && bruto !== null
+    ? (bruto as Record<string, unknown>)
+    : {}
 }
 
 function estado(bruto: unknown): EstadoEpisodio {
   return bruto === "episodio_terminado" ? "episodio_terminado" : "a_correr"
 }
 
-function lerVento(bruto: unknown): VentoEstado {
+/**
+ * `vento` do controlo (o que foi pedido) + `vento_atual` da API (o que a física leva).
+ *
+ * O contrato diz `vento.vec`; o `sim_site.py` publica o mesmo em `vento_atual.vec` (com o modo dinâmico em
+ * vigor) — lê-se o primeiro que existir, para o mostrador nunca ficar sem o vetor.
+ */
+function lerVento(bruto: unknown, atualBruto?: unknown): VentoEstado {
   const o = objeto(bruto)
-  const vel = numero(o.vel) ?? 0
-  const azimute = numero(o.azimute) ?? 0
-  const elevacao = numero(o.elevacao) ?? 0
-  return { vel, azimute, elevacao, ativo: o.ativo === true || vel > 0 }
+  const atual = objeto(atualBruto)
+  const vel = numero(o.vel) ?? numero(atual.vel) ?? 0
+  const azimute = numero(o.azimute) ?? numero(atual.azimute) ?? 0
+  const elevacao = numero(o.elevacao) ?? numero(atual.elevacao) ?? 0
+  return {
+    vel,
+    azimute,
+    elevacao,
+    ativo: o.ativo === true || vel > 0,
+    vec: lerVetor3(o.vec) ?? lerVetor3(atual.vec),
+    modo: lerModo(o.modo) ?? lerModo(atual.modo),
+  }
+}
+
+/** `[x,y,z]` finito, ou `null` (nunca `[0,0,0]` a fingir de vetor que não veio). */
+function lerVetor3(bruto: unknown): [number, number, number] | null {
+  if (!Array.isArray(bruto) || bruto.length < 3) return null
+  const x = numero(bruto[0])
+  const y = numero(bruto[1])
+  const z = numero(bruto[2])
+  return x === null || y === null || z === null ? null : [x, y, z]
 }
 
 /** Uma linha do stream → `LinhaSim`, ou `null` se nem `t` nem `passo` forem numéricos. */
@@ -116,6 +156,8 @@ export function lerLinha(bruto: unknown): LinhaSim | null {
     yaw_err: numero(o.yaw_err) ?? 0,
     vento_vel: numero(o.vento_vel) ?? 0,
     vento_azim: numero(o.vento_azim) ?? 0,
+    vento_vec: lerVetor3(o.vento_vec),
+    vento_modo: lerModo(o.vento_modo),
     obs: vetor(o.obs, N_OBS),
     act: vetor(o.act, N_ACT),
     h1: vetor(o.h1, N_H1),
@@ -142,7 +184,9 @@ export function lerSim(bruto: unknown): RespostaSim {
     ep: numero(o.ep) ?? ultima?.ep ?? 0,
     passo: numero(o.passo) ?? ultima?.passo ?? 0,
     retorno: numero(o.retorno) ?? ultima?.retorno ?? 0,
-    vento: lerVento(o.vento),
+    vento: lerVento(o.vento, o.vento_atual),
+    ventoDinamico: lerVentoDinamico(o.vento_dinamico),
+    rpi5: lerRpi5(o.rpi5),
     linhas,
   }
 }
@@ -160,12 +204,26 @@ export function lerResumo(bruto: unknown): ResumoEstado {
   }
   // `modelo_nome` PRIMEIRO: o `sim_site.py` envia os dois e o `modelo_nome` já é o rótulo legível
   // (`pasta/ficheiro.zip`); o `modelo` é o caminho ABSOLUTO (só serve de tooltip).
-  const nome = primeiro("modelo_nome", "nome_modelo", "modelo", "model", "politica", "policy", "run")
+  const nome = primeiro(
+    "modelo_nome",
+    "nome_modelo",
+    "modelo",
+    "model",
+    "politica",
+    "policy",
+    "run"
+  )
   const momentos = primeiro("momento_max", "momentos_max")
-  const listaMomentos = Array.isArray(momentos) ? momentos.map((m) => numero(m)) : []
+  const listaMomentos = Array.isArray(momentos)
+    ? momentos.map((m) => numero(m))
+    : []
   const momentoMax =
     listaMomentos.length === 3 && listaMomentos.every((m) => m !== null)
-      ? ([listaMomentos[0], listaMomentos[1], listaMomentos[2]] as [number, number, number])
+      ? ([listaMomentos[0], listaMomentos[1], listaMomentos[2]] as [
+          number,
+          number,
+          number,
+        ])
       : null
   return {
     modelo: typeof nome === "string" && nome.length > 0 ? nome : null,
@@ -174,6 +232,8 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     momentoMax,
     tauEscala: numero(primeiro("tau_escala")),
     np: numero(primeiro("np", "np_random")),
+    ventoDinamico: lerVentoDinamico(primeiro("vento_dinamico")),
+    rpi5: lerRpi5(primeiro("rpi5")),
   }
 }
 
@@ -233,20 +293,326 @@ export function ventoCartesiano(vento: CorpoVento): [number, number, number] {
   const az = (vento.azimute * Math.PI) / 180
   const el = (vento.elevacao * Math.PI) / 180
   const horizontal = vento.vel * Math.cos(el)
-  return [horizontal * Math.cos(az), horizontal * Math.sin(az), vento.vel * Math.sin(el)]
+  return [
+    horizontal * Math.cos(az),
+    horizontal * Math.sin(az),
+    vento.vel * Math.sin(el),
+  ]
+}
+
+// ------------------------------------------------------------------------------ vento dinâmico
+
+/**
+ * Modos do vento dinâmico (ronda 10) aceites por `POST /api/vento-dinamico`.
+ *
+ * `nenhum` desliga; `rajadas`/`dryden` são CONTÍNUOS (ficam ligados até se desligar);
+ * `frente` é um degrau imediato que substitui o vento base; `rajada_agora` é uma rajada única.
+ */
+export type ModoVentoDinamico =
+  "nenhum" | "rajadas" | "frente" | "dryden" | "rajada_agora"
+
+/** Defaults REAIS do ambiente (`env.valida_vento_dinamico`) — nunca inventados aqui. */
+export const PARAMS_DINAMICOS_PADRAO = {
+  rajadas: { p: 0.02, duracao: 10, u_max: 3 },
+  dryden: { sigma: 0.5, L: 10, v_min: 1 },
+  rajada_agora: { duracao: 25 },
+} as const
+
+/** Modos contínuos mostrados no seletor (os instantâneos têm botão próprio). */
+export const MODOS_CONTINUOS = ["nenhum", "rajadas", "dryden"] as const
+export type ModoContinuo = (typeof MODOS_CONTINUOS)[number]
+
+/** Rótulos curtos dos modos (PT-PT) para selos e toasts. */
+export const ROTULO_MODO: Record<ModoVentoDinamico, string> = {
+  nenhum: "sem dinâmica",
+  rajadas: "rajadas contínuas",
+  frente: "frente (degrau)",
+  dryden: "turbulência Dryden",
+  rajada_agora: "rajada única",
+}
+
+export interface VentoDinamico {
+  modo: ModoVentoDinamico
+  /** Parâmetros em vigor, já só com números finitos (`{}` quando não vêm). */
+  params: Record<string, number>
+  ativo: boolean
+}
+
+/** Estado de repouso do vento dinâmico (o mesmo que `{"modo":"nenhum","ativo":false}`). */
+export const VENTO_DINAMICO_PARADO: VentoDinamico = {
+  modo: "nenhum",
+  params: {},
+  ativo: false,
+}
+
+/** Corpo de `POST /api/vento-dinamico` (contrato: 200/400, sem reiniciar o episódio). */
+export interface CorpoVentoDinamico {
+  modo: ModoVentoDinamico
+  params?: Record<string, number>
+  ativo?: boolean
+}
+
+function lerModo(bruto: unknown): ModoVentoDinamico | null {
+  return typeof bruto === "string" && bruto in ROTULO_MODO
+    ? (bruto as ModoVentoDinamico)
+    : null
+}
+
+/** `vento_dinamico` do backend → estado tolerante (modo desconhecido conta como `nenhum`). */
+export function lerVentoDinamico(bruto: unknown): VentoDinamico {
+  const o = objeto(bruto)
+  const params: Record<string, number> = {}
+  for (const [chave, valor] of Object.entries(objeto(o.params))) {
+    const n = numero(valor)
+    if (n !== null) params[chave] = n
+  }
+  return {
+    modo: lerModo(o.modo) ?? "nenhum",
+    params,
+    ativo: o.ativo === true,
+  }
+}
+
+/** Parâmetros em vigor → texto curto (`p=0,02 · duracao=10 · u_max=3`), ou "—". */
+export function fmtParams(params: Record<string, number>): string {
+  const entradas = Object.entries(params)
+  if (entradas.length === 0) return "—"
+  return entradas
+    .map(
+      ([chave, valor]) =>
+        `${chave}=${fmt(valor, valor === Math.round(valor) ? 0 : 2)}`
+    )
+    .join(" · ")
+}
+
+// ------------------------------------------------------------------------------ vetor do vento
+
+export interface DirecaoVento {
+  /** Norma do vetor (m/s). */
+  modulo: number
+  /** Azimute em graus [0,360): 0° = +x, 90° = +y (anti-horário). */
+  azimute: number
+  /** Elevação em graus [-90,90]: positivo = vento a subir. */
+  elevacao: number
+  /** Componente horizontal ‖[vx,vy]‖ (m/s) — o que a rosa dos ventos desenha. */
+  horizontal: number
+}
+
+/** Vetor do mundo → direção polar (azimute/elevação/norma). Vetor nulo → tudo a zero. */
+export function direcaoDoVetor(vec: readonly number[]): DirecaoVento {
+  const vx = numero(vec[0]) ?? 0
+  const vy = numero(vec[1]) ?? 0
+  const vz = numero(vec[2]) ?? 0
+  const horizontal = Math.hypot(vx, vy)
+  const modulo = Math.hypot(horizontal, vz)
+  const azimute =
+    horizontal === 0 && vz === 0
+      ? 0
+      : ((Math.atan2(vy, vx) * 180) / Math.PI + 360) % 360
+  const elevacao = modulo === 0 ? 0 : (Math.asin(vz / modulo) * 180) / Math.PI
+  return { modulo, azimute, elevacao, horizontal }
+}
+
+/** Ponto cardeal do azimute (só para o rótulo humano ao lado dos graus). */
+export function pontoCardeal(azimute: number): string {
+  const setores = ["E", "NE", "N", "NO", "O", "SO", "S", "SE"]
+  const indice = Math.round((((azimute % 360) + 360) % 360) / 45) % 8
+  return setores[indice]
+}
+
+// ------------------------------------------------------------------------------ Raspberry Pi 5
+
+/**
+ * TIPO da procedência dos números (cor do selo). O TEXTO mostrado é sempre o que o backend mandar
+ * (o `sim_site.py` escreve «proxy x86 calibrado (1 core do A76; nao e o RPi)»): aqui só se classifica
+ * pelo prefixo, para o painel poder pintar o selo sem reescrever a frase do backend.
+ */
+export type TipoFonteRpi5 = "real" | "proxy" | "sem_benchmark" | "outro"
+
+export interface Rpi5Specs {
+  cpu: string | null
+  /** SoC (ex.: «Broadcom BCM2712»), quando anunciado. */
+  soc: string | null
+  /** RAM em GB (número) — quando o backend manda um número. */
+  ramGb: number | null
+  /** RAM como TEXTO (ex.: «LPDDR4X-4267, 1-16 GB (variante)») — o `sim_site.py` manda assim. */
+  ramTexto: string | null
+  /** Orçamento de latência por decisão (ms) — 20 ms @ 50 Hz. */
+  budgetMs: number | null
+  /** Frequência de decisão do alvo (Hz). */
+  hz: number | null
+  /** Núcleos físicos do alvo. */
+  nucleos: number | null
+  npu: string | null
+  /** Nota de throttling térmico do alvo, quando anunciada. */
+  throttle: string | null
+}
+
+export interface Rpi5Inferencia {
+  p50Us: number | null
+  p99Us: number | null
+  maxUs: number | null
+  modeloKb: number | null
+  int8Fator: number | null
+  /** O backend diz que cabe nos 50 Hz? `null` quando não se pronuncia. */
+  cabe50hz: boolean | null
+  /** O benchmark é do MESMO .zip que o runner carregou? `null` quando não dá para saber. */
+  modeloCoincide: boolean | null
+}
+
+export interface Rpi5Uso {
+  decisoesS: number | null
+  latenciaEstimadaUs: number | null
+  pctBudget: number | null
+  pctCpuEquivalente: number | null
+  nucleosMultiIa: number | null
+  /** Frase do backend sobre o gargalo real (ex.: jitter do SO). */
+  gargalo: string | null
+  jitterMsStandard: number | null
+  jitterUsPreemptRt: number | null
+}
+
+export interface Rpi5 {
+  specs: Rpi5Specs
+  inferencia: Rpi5Inferencia
+  uso: Rpi5Uso
+  /** Estado do próprio hardware; `null` = sem Pi 5 ligado (o painel diz «sem hardware»). */
+  hardware: Rpi5Hardware | null
+  /** Texto CRU da procedência, tal como o backend o escreve (nunca reescrito pelo site). */
+  fonte: string
+  tipoFonte: TipoFonteRpi5
+  /** O backend publicou mesmo um benchmark (inferência com números)? Se não, o painel não inventa nada. */
+  temBenchmark: boolean
+}
+
+/** Estado do hardware (`vcgencmd get_throttled` e temperatura), quando o backend o publica. */
+export interface Rpi5Hardware {
+  /** Texto do `get_throttled` tal como vem (ex.: `0x0`) — o site não o interpreta. */
+  throttled: string | null
+  tempC: number | null
+}
+
+/** Classifica a frase da procedência pelo prefixo (o backend é livre de a detalhar). */
+export function tipoFonteRpi5(bruto: string | null): TipoFonteRpi5 {
+  if (bruto === null) return "sem_benchmark"
+  const texto = bruto.toLowerCase()
+  if (
+    texto.startsWith("real") ||
+    texto.includes("no proprio pi") ||
+    texto.includes("no próprio pi")
+  )
+    return "real"
+  if (texto.startsWith("proxy")) return "proxy"
+  if (texto.includes("sem benchmark")) return "sem_benchmark"
+  return "outro"
+}
+
+function texto(bruto: unknown): string | null {
+  return typeof bruto === "string" && bruto.trim().length > 0 ? bruto : null
+}
+
+/** `get_throttled` + temperatura, quando existirem (aceita `hardware` ou as chaves no topo). */
+function lerHardwareRpi5(o: Record<string, unknown>): Rpi5Hardware | null {
+  const h = objeto(o.hardware)
+  const bruto = h.throttled ?? h.get_throttled ?? o.throttled
+  const throttled = typeof bruto === "string" ? bruto : null
+  const tempC = numero(h.temp_c ?? h.temperatura_c ?? o.temp_c)
+  if (throttled === null && tempC === null) return null
+  return { throttled, tempC }
+}
+
+/**
+ * `rpi5` do backend → painel normalizado; `null` quando a chave não vem (o painel diz "sem benchmark").
+ *
+ * Nenhum valor é inventado: o que faltar fica `null` e o ecrã mostra "—".
+ */
+export function lerRpi5(bruto: unknown): Rpi5 | null {
+  if (typeof bruto !== "object" || bruto === null) return null
+  const o = objeto(bruto)
+  if (Object.keys(o).length === 0) return null
+  const specs = objeto(o.specs)
+  // `inferencia` pode vir a `null` (o `sim_site.py` fá-lo quando não há benchmark): `objeto()` dá `{}`.
+  const inferencia = objeto(o.inferencia)
+  const uso = objeto(o.uso)
+  const temBenchmark = numero(inferencia.p50_us) !== null
+  const leitura: Rpi5 = {
+    specs: {
+      cpu: texto(specs.cpu),
+      soc: texto(specs.soc),
+      ramGb: numero(specs.ram_gb),
+      ramTexto: texto(specs.ram),
+      budgetMs: numero(specs.budget_ms),
+      hz: numero(
+        specs.hz ?? specs.freq_hz ?? specs.alvo_hz ?? specs.decisoes_s
+      ),
+      nucleos: numero(specs.nucleos ?? specs.n_cores ?? specs.cores),
+      npu: texto(specs.npu),
+      throttle: texto(specs.throttle),
+    },
+    inferencia: {
+      p50Us: numero(inferencia.p50_us),
+      p99Us: numero(inferencia.p99_us),
+      maxUs: numero(inferencia.max_us),
+      modeloKb: numero(inferencia.modelo_kb),
+      int8Fator: numero(inferencia.int8_fator),
+      cabe50hz:
+        typeof inferencia.cabe_50hz === "boolean" ? inferencia.cabe_50hz : null,
+      modeloCoincide:
+        typeof inferencia.modelo_coincide === "boolean"
+          ? inferencia.modelo_coincide
+          : null,
+    },
+    uso: {
+      decisoesS: numero(uso.decisoes_s),
+      latenciaEstimadaUs: numero(uso.latencia_estimada_us),
+      pctBudget: numero(uso.pct_budget),
+      pctCpuEquivalente: numero(uso.pct_cpu_equivalente),
+      nucleosMultiIa: numero(uso.nucleos_multi_ia),
+      gargalo: texto(uso.gargalo),
+      jitterMsStandard: numero(uso.jitter_ms_standard),
+      jitterUsPreemptRt: numero(uso.jitter_us_preempt_rt),
+    },
+    hardware: lerHardwareRpi5(o),
+    fonte: texto(o.fonte) ?? "sem benchmark",
+    tipoFonte: tipoFonteRpi5(texto(o.fonte)),
+    temBenchmark,
+  }
+  return leitura
+}
+
+/** Orçamento de latência em ms: o que o backend disser ou `1000/hz`; `null` se não der para saber. */
+export function budgetMs(rpi5: Rpi5): number | null {
+  if (rpi5.specs.budgetMs !== null && rpi5.specs.budgetMs > 0)
+    return rpi5.specs.budgetMs
+  const hz = rpi5.specs.hz ?? rpi5.uso.decisoesS
+  return hz !== null && hz > 0 ? 1000 / hz : null
+}
+
+/** Percentagem de um tempo (µs) face ao orçamento (ms); `null` quando não há orçamento. */
+export function pctDoBudget(
+  us: number | null,
+  orcamentoMs: number | null
+): number | null {
+  if (us === null || orcamentoMs === null || orcamentoMs <= 0) return null
+  return (us / 1000 / orcamentoMs) * 100
 }
 
 // --------------------------------------------------------------------------------------- formatação
 
 /** Número → texto pt-PT com casas fixas; `null`/não finito → "—". */
 export function fmt(valor: number | null | undefined, casas = 2): string {
-  if (valor === null || valor === undefined || !Number.isFinite(valor)) return "—"
-  return valor.toLocaleString("pt-PT", { minimumFractionDigits: casas, maximumFractionDigits: casas })
+  if (valor === null || valor === undefined || !Number.isFinite(valor))
+    return "—"
+  return valor.toLocaleString("pt-PT", {
+    minimumFractionDigits: casas,
+    maximumFractionDigits: casas,
+  })
 }
 
 /** Igual a `fmt`, com sinal explícito (para deltas e momentos). */
 export function fmtSinal(valor: number | null | undefined, casas = 2): string {
-  if (valor === null || valor === undefined || !Number.isFinite(valor)) return "—"
+  if (valor === null || valor === undefined || !Number.isFinite(valor))
+    return "—"
   const texto = fmt(Math.abs(valor), casas)
   return valor < 0 ? `−${texto}` : `+${texto}`
 }
@@ -257,9 +623,25 @@ export function fmtGraus(valor: number | null | undefined, casas = 0): string {
 
 /** Inteiro com separador de milhares pt-PT; não finito → "—". */
 export function fmtInteiro(valor: number | null | undefined): string {
-  if (valor === null || valor === undefined || !Number.isFinite(valor)) return "—"
+  if (valor === null || valor === undefined || !Number.isFinite(valor))
+    return "—"
   return Math.round(valor).toLocaleString("pt-PT")
 }
+
+/**
+ * Latência em µs → texto com a unidade LEGÍVEL, pela MESMA régua em todo o painel:
+ *  · abaixo de **100 µs** (0,1 ms) mostra µs com 1 casa — é aí que o número fino é o que interessa
+ *    («4,6 µs», «6,8 µs»); a 2 casas em ms sairia «0,00 ms» e o valor medido desaparecia;
+ *  · a partir de 100 µs mostra ms com 2 casas («0,16 ms», «2,50 ms»), comparável com o orçamento de
+ *    20 ms que está ao lado.
+ */
+export function fmtLatencia(us: number | null | undefined): string {
+  if (us === null || us === undefined || !Number.isFinite(us)) return "—"
+  return us < LIMIAR_US_PARA_MS ? `${fmt(us, 1)} µs` : `${fmt(us / 1000, 2)} ms`
+}
+
+/** Fronteira µs↔ms da `fmtLatencia` (100 µs = 0,1 ms). */
+export const LIMIAR_US_PARA_MS = 100
 
 // --------------------------------------------------------------------------------------- derivados
 
@@ -275,7 +657,10 @@ export interface DerivadosAct {
  * Ação normalizada → comando físico. Reproduz `HoverEnv.acao_para_ctrl` (env.py):
  * metade inferior 0…mg, metade superior mg…thrust_max; momentos = `tau_escala · momento_max · a`.
  */
-export function derivarAct(linha: LinhaSim | null, constantes = FISICA_PADRAO): DerivadosAct | null {
+export function derivarAct(
+  linha: LinhaSim | null,
+  constantes = FISICA_PADRAO
+): DerivadosAct | null {
   if (!linha) return null
   const a = linha.act
   if (linha.ctrl) {
@@ -287,9 +672,11 @@ export function derivarAct(linha: LinhaSim | null, constantes = FISICA_PADRAO): 
   }
   const a0 = a[0] ?? 0
   const empuxo =
-    a0 <= 0 ? constantes.mg * (1 + a0) : constantes.mg + (constantes.thrustMax - constantes.mg) * a0
+    a0 <= 0
+      ? constantes.mg * (1 + a0)
+      : constantes.mg + (constantes.thrustMax - constantes.mg) * a0
   const momentos = [0, 1, 2].map(
-    (i) => constantes.tauEscala * constantes.momentoMax[i] * (a[i + 1] ?? 0),
+    (i) => constantes.tauEscala * constantes.momentoMax[i] * (a[i + 1] ?? 0)
   ) as [number, number, number]
   return { empuxo, momentos, doBackend: false }
 }
@@ -308,22 +695,134 @@ export interface RotuloObs {
 
 /** Os 16 canais da observação, na ordem de `HoverEnv.observacao()`. */
 export const ROTULOS_OBS: RotuloObs[] = [
-  { indice: 0, grupo: "dp", nome: "dp_x", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 1, grupo: "dp", nome: "dp_y", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 2, grupo: "dp", nome: "dp_z", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 3, grupo: "rpy", nome: "roll/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π" },
-  { indice: 4, grupo: "rpy", nome: "pitch/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π" },
-  { indice: 5, grupo: "rpy", nome: "yaw/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π" },
-  { indice: 6, grupo: "v", nome: "v_x", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 7, grupo: "v", nome: "v_y", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 8, grupo: "v", nome: "v_z", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 9, grupo: "ω", nome: "ω_x", unidade: "rad/s", escala: 10, escalaTexto: "÷10 rad/s" },
-  { indice: 10, grupo: "ω", nome: "ω_y", unidade: "rad/s", escala: 10, escalaTexto: "÷10 rad/s" },
-  { indice: 11, grupo: "ω", nome: "ω_z", unidade: "rad/s", escala: 10, escalaTexto: "÷10 rad/s" },
-  { indice: 12, grupo: "a_prev", nome: "a_prev·empuxo", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 13, grupo: "a_prev", nome: "a_prev·mx", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 14, grupo: "a_prev", nome: "a_prev·my", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 15, grupo: "a_prev", nome: "a_prev·mz", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+  {
+    indice: 0,
+    grupo: "dp",
+    nome: "dp_x",
+    unidade: "m",
+    escala: 1,
+    escalaTexto: "÷1 m",
+  },
+  {
+    indice: 1,
+    grupo: "dp",
+    nome: "dp_y",
+    unidade: "m",
+    escala: 1,
+    escalaTexto: "÷1 m",
+  },
+  {
+    indice: 2,
+    grupo: "dp",
+    nome: "dp_z",
+    unidade: "m",
+    escala: 1,
+    escalaTexto: "÷1 m",
+  },
+  {
+    indice: 3,
+    grupo: "rpy",
+    nome: "roll/π",
+    unidade: "rad",
+    escala: Math.PI,
+    escalaTexto: "÷π",
+  },
+  {
+    indice: 4,
+    grupo: "rpy",
+    nome: "pitch/π",
+    unidade: "rad",
+    escala: Math.PI,
+    escalaTexto: "÷π",
+  },
+  {
+    indice: 5,
+    grupo: "rpy",
+    nome: "yaw/π",
+    unidade: "rad",
+    escala: Math.PI,
+    escalaTexto: "÷π",
+  },
+  {
+    indice: 6,
+    grupo: "v",
+    nome: "v_x",
+    unidade: "m/s",
+    escala: 1,
+    escalaTexto: "÷1 m/s",
+  },
+  {
+    indice: 7,
+    grupo: "v",
+    nome: "v_y",
+    unidade: "m/s",
+    escala: 1,
+    escalaTexto: "÷1 m/s",
+  },
+  {
+    indice: 8,
+    grupo: "v",
+    nome: "v_z",
+    unidade: "m/s",
+    escala: 1,
+    escalaTexto: "÷1 m/s",
+  },
+  {
+    indice: 9,
+    grupo: "ω",
+    nome: "ω_x",
+    unidade: "rad/s",
+    escala: 10,
+    escalaTexto: "÷10 rad/s",
+  },
+  {
+    indice: 10,
+    grupo: "ω",
+    nome: "ω_y",
+    unidade: "rad/s",
+    escala: 10,
+    escalaTexto: "÷10 rad/s",
+  },
+  {
+    indice: 11,
+    grupo: "ω",
+    nome: "ω_z",
+    unidade: "rad/s",
+    escala: 10,
+    escalaTexto: "÷10 rad/s",
+  },
+  {
+    indice: 12,
+    grupo: "a_prev",
+    nome: "a_prev·empuxo",
+    unidade: "[-1,1]",
+    escala: 1,
+    escalaTexto: "1:1",
+  },
+  {
+    indice: 13,
+    grupo: "a_prev",
+    nome: "a_prev·mx",
+    unidade: "[-1,1]",
+    escala: 1,
+    escalaTexto: "1:1",
+  },
+  {
+    indice: 14,
+    grupo: "a_prev",
+    nome: "a_prev·my",
+    unidade: "[-1,1]",
+    escala: 1,
+    escalaTexto: "1:1",
+  },
+  {
+    indice: 15,
+    grupo: "a_prev",
+    nome: "a_prev·mz",
+    unidade: "[-1,1]",
+    escala: 1,
+    escalaTexto: "1:1",
+  },
 ]
 
 /** Os 4 canais da ação, na ordem de `HoverEnv.aplicar_acao()`. */

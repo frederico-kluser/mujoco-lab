@@ -28,6 +28,27 @@ este processo por DOIS FICHEIROS:
     Cada linha é escrita com `flush` para o site a ver sem esperar; no fim do episódio escreve-se LOGO uma
     linha de evento (não se espera pelos 0,1 s).
 
+VENTO DINÂMICO AO VIVO (campo `"dinamico"` do controlo, sem reset nenhum — a política continua a voar):
+`{"dinamico": {"modo": ..., "params": {...}, "ativo": bool, "seq": int}}`, com `modo` num de
+`nenhum | rajadas | frente | dryden | rajada_agora`:
+  · `rajadas`/`dryden` → `env.definir_vento_dinamico({modo, **params})` (os MESMOS modos e a mesma
+    validação do treino: `p`/`duracao`/`u_max`, `sigma`/`L`/`u_max`/`v_min`); `u_max = 0` fica inerte.
+    Trocar de modo/ligar/desligar é imediato (o env re-planeia o resto do episódio);
+  · `frente` aceita DOIS formatos de `params` (contrato final): (a) `vel`/`azimute`/`elevacao` = degrau
+    IMEDIATO do vento base (`definir_vento`, validado com as faixas do vento base, sem passar pelo
+    `env.valida_vento_dinamico`) — é o que o site manda quando o dono muda o vento no modo `frente`;
+    (b) `u_max`/`t_s` = degrau em curso do env, ao instante `t_s` do modo, como sempre;
+  · `rajada_agora` → rajada DIRIGIDA one-shot (o env não tem rajadas dirigidas): `params` = `u` [0, 5] m/s,
+    `azimute` [0, 360)°, `elevacao` ±90°, `duracao` (passos de decisão, 25 por omissão). O envelope é
+    `sin(π·k/(N+1))` — o MESMO do modo `rajadas` do env — somado ao vento base em vigor e escrito no
+    `opt.wind` passo a passo com `definir_vento` (nada de forças mágicas); no fim volta ao vento base;
+  · `nenhum` (ou `ativo: false`) → inerte: `definir_vento_dinamico(None)` e a rajada em curso é cortada (o
+    vento base em vigor mantém-se). O campo `"vel"/"azimute"/"elevacao"` continua a mandar no vento BASE e
+    pode mudar a qualquer instante, com ou sem dinâmica.
+A assinatura do bloco (`modo`+`params`+`ativo`+`seq`) evita re-disparos: reescrever o ficheiro com o mesmo
+bloco não faz nada — o site incrementa o `seq` quando quer disparar outra rajada igual. A telemetria mostra
+`vento_vec` (vx,vy,vz m/s, o vento que a física leva) e `vento_modo` (modo em vigor) em cada amostra.
+
 SEM AUTO-LOOP POR OMISSÃO: quando o episódio termina (`terminated` OU `truncated`) a física PARA (nenhum
 `env.step` a partir daí) e o estado passa a "episodio_terminado"; só um REINICIAR do site (ou `--loop`, ou
 `loop: true` no controlo) arranca o episódio seguinte. Com o episódio parado o processo continua vivo: lê o
@@ -50,7 +71,7 @@ import os
 import signal
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
@@ -74,12 +95,35 @@ PERIODO_OCIO = 0.02              # s — ritmo do ciclo quando não há física 
 VEL_MAX, AZIM_MAX, ELEV_MAX = 5.0, 360.0, 90.0      # faixas do contrato do controlo
 PRECISAO = 6                     # casas decimais na telemetria (linhas pequenas e legíveis)
 TECLA_ESPACO, TECLA_Q, TECLA_ESC = 32, 81, 256      # códigos GLFW entregues pelo viewer
+# vento DINÂMICO ao vivo (ver o cabeçalho do módulo): 3 modos são do `env.py`, `rajada_agora` é um one-shot
+# dirigido aplicado AQUI (o env não tem rajadas dirigidas) e `nenhum` é inerte.
+MODOS_DINAMICOS = ("nenhum", "rajadas", "frente", "dryden", "rajada_agora")
+MODOS_DINAMICOS_ENV = ("rajadas", "frente", "dryden")
+FRENTE_BASE, FRENTE_ENV = ("vel", "azimute", "elevacao"), ("u_max", "t_s")   # os 2 formatos do `frente`
+RAJADA_DURACAO_PADRAO = 25       # passos de decisão (0,5 s a 50 Hz) — duração da rajada one-shot
+RAJADA_U_PADRAO = 3.0            # m/s — amplitude da rajada one-shot quando `u` não vem nos params
+RAJADA_U_MAX = 5.0               # m/s — teto do contrato para a rajada one-shot
 
 
 # ---------------------------------------------------------------------------------------------- controlo
 @dataclass
+class Dinamico:
+    """Bloco `"dinamico"` do controlo: `{modo, params, ativo, seq}` (o `seq` é do site, para re-disparos)."""
+
+    modo: str = "nenhum"
+    params: dict = field(default_factory=dict)
+    ativo: bool = False
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        """Assinatura estável do bloco: só uma MUDANÇA dela (re)dispara um modo/rajada."""
+        return json.dumps({"modo": self.modo, "params": self.params, "ativo": self.ativo, "seq": self.seq},
+                          sort_keys=True)
+
+
+@dataclass
 class Registo:
-    """Conteúdo validado do ficheiro de controlo (vento + comandos de episódio)."""
+    """Conteúdo validado do ficheiro de controlo (vento base + comandos de episódio + vento dinâmico)."""
 
     vel: float = 0.0
     azimute: float = 0.0
@@ -87,6 +131,7 @@ class Registo:
     ativo: bool = True
     reiniciar: int | None = None     # None = campo ausente: não mexe no contador
     loop: bool | None = None         # None = campo ausente: não mexe no modo
+    dinamico: Dinamico | None = None  # None = campo ausente: não mexe no vento dinâmico
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -109,12 +154,101 @@ def _booleano(dados: dict, campo: str) -> bool | None:
     raise ValueError(f"`{campo}` tem de ser booleano (recebido {valor!r})")
 
 
+def _params_rajada_agora(params: dict) -> dict:
+    """Valida/normaliza os params da rajada one-shot: `u` [0, 5] m/s, `azimute` [0, 360)°, `elevacao` ±90°."""
+    desconhecidas = set(params) - {"u", "azimute", "elevacao", "duracao"}
+    if desconhecidas:
+        raise ValueError(f"`dinamico.params` (rajada_agora) tem chaves desconhecidas {sorted(desconhecidas)} "
+                         "— aceita ['azimute', 'duracao', 'elevacao', 'u']")
+    u = _numero(params, "u", RAJADA_U_PADRAO)
+    if not 0.0 <= u <= RAJADA_U_MAX:
+        raise ValueError(f"`dinamico.params.u` tem de estar em [0, {RAJADA_U_MAX}] m/s (recebido {u!r})")
+    duracao = params.get("duracao", RAJADA_DURACAO_PADRAO)
+    if isinstance(duracao, bool) or not isinstance(duracao, (int,)) or int(duracao) < 1:
+        raise ValueError(f"`dinamico.params.duracao` tem de ser um inteiro ≥ 1 passos de decisão "
+                         f"(recebido {duracao!r})")
+    return {"u": u, "azimute": _numero(params, "azimute", 0.0) % AZIM_MAX,
+            "elevacao": min(ELEV_MAX, max(-ELEV_MAX, _numero(params, "elevacao", 0.0))),
+            "duracao": int(duracao)}
+
+
+def _params_frente(params: dict) -> tuple[str, dict]:
+    """Params do modo `frente` → `("base"|"env", params)`: aceita os DOIS formatos do contrato.
+
+    · formato (a) `{"vel", "azimute", "elevacao"}` → degrau IMEDIATO do vento base (`definir_vento`),
+      validado AQUI com as faixas do vento base (as mesmas do `POST /api/vento`: `vel` [0, 5] m/s,
+      `azimute` [0, 360]°, `elevacao` ±90°) — NÃO passa pelo `env.valida_vento_dinamico`, que espera
+      `u_max`/`t_s` e recusaria estas chaves (o site manda este formato para um degrau imediato). Campo
+      ausente vale 0 (o site manda sempre os três: o que não vem lá mantém o vento base em vigor);
+    · formato (b) `{"u_max", "t_s"}` (ou sem params) → modo em curso do env (`t_s` = instante do degrau
+      dentro do modo), como sempre: quem valida é o `env.definir_vento_dinamico`.
+    Chaves desconhecidas ou mistura dos dois formatos → `ValueError`. O `"modo"` dentro dos `params` (o
+    `env.valida_vento_dinamico` devolve-o e o site guarda-o tal e qual) é tolerado quando diz "frente".
+    """
+    limpos = dict(params)
+    if limpos.get("modo") == "frente":                   # params normalizados do env trazem o `modo` dentro
+        limpos.pop("modo")
+    desconhecidas = set(limpos) - set(FRENTE_BASE) - set(FRENTE_ENV)
+    if desconhecidas:
+        raise ValueError(f"`dinamico.params` (frente) tem chaves desconhecidas {sorted(desconhecidas)} — aceita "
+                         f"{list(FRENTE_BASE)} (degrau imediato do vento base) ou {list(FRENTE_ENV)} "
+                         "(modo em curso do env)")
+    da_base = [c for c in FRENTE_BASE if c in limpos]
+    do_env = [c for c in FRENTE_ENV if c in limpos]
+    if da_base and do_env:
+        raise ValueError(f"`dinamico.params` (frente) não pode misturar os dois formatos: {da_base} são um "
+                         f"degrau imediato do vento base e {do_env} o modo em curso do env")
+    if not da_base:
+        return "env", dict(params)                       # (b): sem params = defaults do env
+    vel = _numero(limpos, "vel", 0.0)
+    if not 0.0 <= vel <= VEL_MAX:
+        raise ValueError(f"`dinamico.params.vel` tem de estar em [0, {VEL_MAX}] m/s (recebido {vel!r})")
+    azimute = _numero(limpos, "azimute", 0.0)
+    if not 0.0 <= azimute <= AZIM_MAX:
+        raise ValueError(f"`dinamico.params.azimute` tem de estar em [0, {AZIM_MAX}] graus (recebido {azimute!r})")
+    elevacao = _numero(limpos, "elevacao", 0.0)
+    if not -ELEV_MAX <= elevacao <= ELEV_MAX:
+        raise ValueError(f"`dinamico.params.elevacao` tem de estar em [-{ELEV_MAX}, {ELEV_MAX}] graus "
+                         f"(recebido {elevacao!r})")
+    return "base", {"vel": vel, "azimute": azimute, "elevacao": elevacao}
+
+
+def _ler_dinamico(bruto) -> Dinamico | None:
+    """`"dinamico"` do controlo → `Dinamico` validado (`None` se o campo não vier).
+
+    Valida só a ESTRUTURA (modo conhecido, `params` objeto, `ativo` booleano, `seq` inteiro), as faixas do
+    `rajada_agora` e os DOIS formatos do `frente` (o (a) é nosso: degrau imediato do vento base). Nos
+    `rajadas`/`dryden` — e no `frente` do formato (b) — quem valida os parâmetros é o PRÓPRIO
+    `env.definir_vento_dinamico` (mesmas regras do treino — não se duplicam aqui).
+    """
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`dinamico` tem de ser um objeto JSON {modo, params, ativo}")  # noqa: TRY004
+    modo = bruto.get("modo", "nenhum")
+    if modo not in MODOS_DINAMICOS:
+        raise ValueError(f"`dinamico.modo` tem de ser um de {MODOS_DINAMICOS} (recebido {modo!r})")
+    params = bruto.get("params") or {}
+    if not isinstance(params, dict):
+        raise ValueError("`dinamico.params` tem de ser um objeto JSON")  # noqa: TRY004
+    ativo = _booleano(bruto, "ativo")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int)):
+        raise ValueError(f"`dinamico.seq` tem de ser um inteiro (recebido {seq!r})")
+    if modo == "rajada_agora":
+        params = _params_rajada_agora(params)
+    elif modo == "frente":
+        params = _params_frente(params)[1]          # valida os 2 formatos e guarda os params normalizados
+    return Dinamico(modo, params, (modo != "nenhum") if ativo is None else bool(ativo), seq)
+
+
 def ler_registo(dados) -> Registo:
     """Ficheiro de controlo → `Registo` validado (mesmas regras do net_probe/dashboard).
 
     `vel` ∈ [0, 5] e finita; `azimute` reduzido a [0, 360); `elevacao` cortada a [-90, 90]; `ativo` booleano
-    (predefinido `True`, como no contrato v2); `reiniciar` inteiro ≥ 0 e `loop` booleano, ambos OPCIONAIS
-    (`None` = «não mexe»). Fora disto é `ValueError` e o vento anterior fica em vigor.
+    (predefinido `True`, como no contrato v2); `reiniciar` inteiro ≥ 0, `loop` booleano e `dinamico` um bloco
+    `{modo, params, ativo, seq}`, todos OPCIONAIS (`None` = «não mexe»). Fora disto é `ValueError` e o vento
+    anterior fica em vigor.
     """
     if not isinstance(dados, dict):
         raise ValueError("o ficheiro não é um objeto JSON")  # noqa: TRY004  (conteúdo, não um tipo errado)
@@ -130,7 +264,7 @@ def ler_registo(dados) -> Registo:
             raise ValueError(f"`reiniciar` tem de ser um inteiro ≥ 0 (recebido {reiniciar!r})")
         reiniciar = int(reiniciar)
     return Registo(vel, azimute, elevacao, True if ativo is None else ativo, reiniciar,
-                   _booleano(dados, "loop"))
+                   _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")))
 
 
 class Controlo:
@@ -149,6 +283,10 @@ class Controlo:
         self.n_ventos = 0
         self.n_reinicios = 0
         self.ultimo: Registo | None = None
+        self.dinamico: Dinamico | None = None   # último bloco `dinamico` APLICADO
+        self.rajada: dict | None = None         # rajada one-shot em curso: {u, vec, k, n}
+        self.rajada_concluida = False           # a última rajada one-shot já terminou (modo volta a "nenhum")
+        self._assinatura_dinamica: str | None = None
         self._assinatura: tuple[int, int] | None = None
         self._avisos: set[str] = set()
         self._le_contador_inicial()
@@ -207,16 +345,141 @@ class Controlo:
         self.reiniciar = int(registo.reiniciar)
 
     def _aplica(self, env: HoverEnv, registo: Registo) -> None:
-        """`ativo` → `definir_vento(vel, azimute, elevacao)`; inativo → `definir_vento(0, 0, 0)`."""
-        if registo.ativo:
-            env.definir_vento(registo.vel, registo.azimute, registo.elevacao)
-        else:
-            env.definir_vento(0.0, 0.0, 0.0)
+        """`ativo` → `definir_vento(vel, azimute, elevacao)`; inativo → `definir_vento(0, 0, 0)`.
+
+        A seguir trata o bloco `dinamico` (vento ao vivo): ver `_aplica_dinamico`.
+        """
+        self._aplica_base(env, registo)
+        self._aplica_dinamico(env, registo.dinamico)
         self.n_ventos += 1
         self.ultimo = registo
         print(f"[sim] vento -> {registo.vel:.2f} m/s @ {registo.azimute:.1f} deg"
               + (f" (elev {registo.elevacao:+.1f} deg)" if registo.elevacao else "")
               + ("" if registo.ativo else " [desligado]"), flush=True)
+
+    def _aplica_base(self, env: HoverEnv, registo: Registo | None = None) -> None:
+        """Escreve o VENTO BASE do registo em vigor (`definir_vento`); não toca no vento dinâmico."""
+        r = registo if registo is not None else self.ultimo
+        if r is None:
+            return
+        if r.ativo:
+            env.definir_vento(r.vel, r.azimute, r.elevacao)
+        else:
+            env.definir_vento(0.0, 0.0, 0.0)
+
+    def _aplica_dinamico(self, env: HoverEnv, din: Dinamico | None) -> None:
+        """Liga/desliga/reconfigura o vento dinâmico quando o bloco `dinamico` MUDA (sem reset nenhum).
+
+        · `nenhum`/`ativo: false` → `env.definir_vento_dinamico(None)` (volta ao vento base) e a rajada
+          one-shot em curso é cancelada;
+        · `rajadas`/`dryden` → `env.definir_vento_dinamico({modo, **params})` (quem valida os parâmetros é
+          o env: `ValueError` → aviso e mantém-se o modo anterior);
+        · `frente` aceita DOIS formatos (ver `_params_frente`): `{vel, azimute, elevacao}` = degrau
+          IMEDIATO do vento base (`_aplica_degrau`, sem passar pelo env) e `{u_max, t_s}` = modo em curso
+          do env (como os anteriores);
+        · `rajada_agora` → arranca uma rajada DIRIGIDA one-shot (o env não tem rajadas dirigidas): o
+          envelope é escrito no vento BASE passo a passo por `passo_rajada`, por cima do base em vigor.
+        A assinatura do bloco evita re-disparos: reescrever o ficheiro com o MESMO bloco não faz nada (o
+        site muda o `seq` quando quer disparar outra vez).
+        """
+        assinatura = "nenhum" if din is None else din.assinatura()
+        if assinatura == self._assinatura_dinamica:
+            return
+        self._assinatura_dinamica = assinatura
+        self.dinamico = din
+        self.rajada_concluida = False            # bloco novo: uma rajada one-shot pode voltar a disparar
+        if din is None or not din.ativo or din.modo == "nenhum":
+            if self.rajada is not None:
+                self.rajada = None
+                self._aplica_base(env)
+            env.definir_vento_dinamico(None)
+            print("[sim] vento dinamico -> nenhum (so o vento base)", flush=True)
+            return
+        if din.modo == "rajada_agora":
+            self._inicia_rajada(env, din)
+            return
+        self.rajada = None                              # mudar de modo cancela a rajada one-shot
+        formato, params = _params_frente(din.params) if din.modo == "frente" else ("env", din.params)
+        if formato == "base":
+            self._aplica_degrau(env, params)            # `frente` (a): degrau imediato do vento base
+            return
+        try:
+            config = env.definir_vento_dinamico({"modo": din.modo, **params})
+        except ValueError as erro:
+            self._aviso(f"vento dinamico '{din.modo}' recusado pelo env: {erro} — mantenho o anterior")
+            return
+        print(f"[sim] vento dinamico -> {din.modo} {config}", flush=True)
+
+    def _aplica_degrau(self, env: HoverEnv, params: dict) -> None:
+        """`frente` formato (a): degrau IMEDIATO do vento base, sem passar pelo validador do env.
+
+        Desliga a camada dinâmica do env (para não ficar turbulência de um modo anterior a somar ao degrau)
+        e escreve o vento base já: a física do passo seguinte leva com ele (é o `definir_vento`, o mesmo
+        caminho do `vel`/`azimute`/`elevacao` do controlo — nada de forças mágicas).
+        """
+        env.definir_vento_dinamico(None)
+        env.definir_vento(float(params["vel"]), float(params["azimute"]), float(params["elevacao"]))
+        print(f"[sim] frente -> degrau imediato do vento base: {params['vel']:.2f} m/s @ "
+              f"{params['azimute']:.1f} deg"
+              + (f" (elev {params['elevacao']:+.1f} deg)" if params["elevacao"] else ""), flush=True)
+
+    def _inicia_rajada(self, env: HoverEnv, din: Dinamico) -> None:
+        """Arranca a rajada one-shot: vector dirigido + envelope `sin(pi·k/(N+1))` (o do env)."""
+        p = din.params
+        vetor = _vetor_vento(float(p["u"]), float(p["azimute"]), float(p["elevacao"]))
+        self.rajada = {"u": float(p["u"]), "vec": vetor, "k": 0, "n": int(p["duracao"]),
+                       "azimute": float(p["azimute"]), "elevacao": float(p["elevacao"])}
+        print(f"[sim] rajada_agora -> u {p['u']:.2f} m/s @ {p['azimute']:.1f} deg (elev {p['elevacao']:+.1f}), "
+              f"{p['duracao']} passos", flush=True)
+
+    def passo_rajada(self, env: HoverEnv) -> bool:
+        """Avança a rajada one-shot UM passo de decisão (venta BASE + rajada·envelope); `True` se escreveu.
+
+        Chamado antes de cada `env.step` (o `env` escreve `opt.wind` no início do passo, a partir do vento
+        base que aqui fica) — logo a física do passo já leva com a rajada. No fim do envelope volta ao vento
+        base em vigor. Não mexe no modo dinâmico do env (composição: base+rajada+modo).
+        """
+        if self.rajada is None:
+            return False
+        self.rajada["k"] += 1
+        if self.rajada["k"] > self.rajada["n"]:
+            self.rajada = None
+            self.rajada_concluida = True         # o modo em vigor volta a "nenhum" (a rajada já passou)
+            self._aplica_base(env)
+            print("[sim] rajada_agora terminou: volta ao vento base", flush=True)
+            return True
+        env_k = math.sin(math.pi * self.rajada["k"] / (self.rajada["n"] + 1.0))
+        total = self._vetor_base() + self.rajada["vec"] * env_k
+        env.definir_vento(*_polar_do_vetor(total))
+        return True
+
+    def cancelar_rajada(self, env: HoverEnv) -> None:
+        """Corta a rajada one-shot (fim de episódio/reinício) e volta ao vento base."""
+        if self.rajada is None:
+            return
+        self.rajada = None
+        self._aplica_base(env)
+
+    def modo_efetivo(self) -> str:
+        """Modo de vento dinâmico EM VIGOR agora (o que a telemetria publica em `vento_modo`).
+
+        `rajada_agora` só enquanto a rajada one-shot está a decorrer: depois de terminar o modo em vigor é
+        `nenhum` (o vento já voltou ao base), mesmo que o bloco do controlo continue a dizer `rajada_agora`.
+        """
+        if self.rajada is not None:
+            return "rajada_agora"
+        if self.dinamico is None or not self.dinamico.ativo:
+            return "nenhum"
+        if self.dinamico.modo == "rajada_agora":
+            return "nenhum" if self.rajada_concluida else "rajada_agora"
+        return self.dinamico.modo
+
+    def _vetor_base(self) -> np.ndarray:
+        """Vector do vento BASE em vigor (m/s, mundo) — o que a rajada one-shot soma."""
+        r = self.ultimo
+        if r is None or not r.ativo:
+            return np.zeros(3)
+        return _vetor_vento(r.vel, r.azimute, r.elevacao)
 
     def consumir_reinicio(self) -> bool:
         """`True` uma única vez por cada REINICIAR pedido (o pedido é limpo ao consumir)."""
@@ -327,6 +590,24 @@ def _lista(vetor, n: int) -> list[float]:
     return [round(float(v), PRECISAO) for v in a]
 
 
+def _vetor_vento(vel: float, azimute_graus: float, elevacao_graus: float) -> np.ndarray:
+    """Vector de vento (m/s, frame mundo) da convenção do `env.definir_vento` (azimute 0° = +x)."""
+    azim, elev = math.radians(azimute_graus), math.radians(elevacao_graus)
+    return float(vel) * np.array([math.cos(elev) * math.cos(azim), math.cos(elev) * math.sin(azim),
+                                  math.sin(elev)])
+
+
+def _polar_do_vetor(v) -> tuple[float, float, float]:
+    """`(vel, azimute, elevação)` em m/s e GRAUS do vector CARTESIANO (inversa de `_vetor_vento`)."""
+    w = np.asarray(v, dtype=float).reshape(3)
+    vel = float(np.linalg.norm(w))
+    if vel == 0.0:
+        return 0.0, 0.0, 0.0
+    elevacao = round(float(np.degrees(np.arcsin(np.clip(w[2] / vel, -1.0, 1.0)))), 9)
+    azimute = round(float(np.degrees(np.arctan2(w[1], w[0]))), 9) % AZIM_MAX
+    return vel, azimute, elevacao
+
+
 def _vento_polar(env: HoverEnv) -> tuple[float, float]:
     """`(vel, azimute)` em m/s e graus do vento ATIVO (`env.vento_atual`; azimute 0° → +x, 90° → +y)."""
     v = np.asarray(env.vento_atual, dtype=float).reshape(3)
@@ -362,6 +643,7 @@ class Estado:
     congelado: bool = False          # episódio terminado: a física está PARADA à espera de REINICIAR
     pausado: bool = False
     loop: bool = False
+    vento_modo: str = "nenhum"       # modo dinâmico EM VIGOR (para a telemetria): nenhum/rajadas/...
     obs: np.ndarray | None = None
     acao: np.ndarray | None = None
     h1: np.ndarray | None = None
@@ -397,6 +679,8 @@ def amostra(env: HoverEnv, est: Estado) -> dict:
         "yaw_err": round(float(info.get("yaw_err", 0.0)), PRECISAO),
         "vento_vel": round(vento_vel, PRECISAO),
         "vento_azim": round(vento_azim, PRECISAO),
+        "vento_vec": _lista(env.vento_atual, 3),        # [vx, vy, vz] m/s — o vento que a física leva
+        "vento_modo": str(est.vento_modo or "nenhum"),  # modo dinâmico em vigor (aditivo)
         "obs": _lista(est.obs, 16),
         "act": _lista(est.acao, 4),
         "ctrl": _lista(env.data.ctrl, 4),
@@ -459,9 +743,12 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             print(f"[sim] loop {'ligado' if est.loop else 'desligado'} pelo controlo", flush=True)
         if controlo.consumir_reinicio():
             novo_ep = est.ep + 1 if (env.passos > 0 or est.congelado) else est.ep
+            controlo.cancelar_rajada(env)                # um episódio novo não herda a rajada em curso
             _reiniciar(env, est, sonda, args.seed + novo_ep - 1, ep=novo_ep)
+            est.vento_modo = controlo.modo_efetivo()
             telemetria.escrever(amostra(env, est))       # evento: episódio novo, passo 0
             print(f"[sim] REINICIAR: ep {est.ep} comecou (passo 0, retorno 0)", flush=True)
+        est.vento_modo = controlo.modo_efetivo()         # o modo em vigor já vai nesta amostra
 
         # 2) com o episódio terminado (ou em pausa) não há física: janela viva + batimento na telemetria
         if est.congelado or est.pausado:
@@ -477,6 +764,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             continue
 
         # 3) passo de decisão: rede -> ação -> física (10 passos de física a 500 Hz)
+        controlo.passo_rajada(env)                       # rajada one-shot: base+envelope DESTE passo
         try:
             acao, _estado = politica.predict(est.obs, deterministic=True)
             est.acao = np.asarray(acao, dtype=float).reshape(4)
@@ -498,10 +786,14 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
                 break
             if est.loop:                                 # auto-reset pedido (--loop ou loop:true)
                 print(f"[sim] {fim} -> auto-reset (--loop)", flush=True)
+                controlo.cancelar_rajada(env)
                 _reiniciar(env, est, sonda, args.seed + est.ep, ep=est.ep + 1)
+                est.vento_modo = controlo.modo_efetivo()
                 telemetria.escrever(amostra(env, est))
             else:
                 est.congelado = True                     # SEM auto-loop: a física PARA aqui
+                controlo.cancelar_rajada(env)            # com a física parada a rajada não avança: corta-se
+                est.vento_modo = controlo.modo_efetivo()
                 telemetria.escrever(amostra(env, est))   # evento imediato (não espera pelos 0,1 s)
                 print(f"[sim] {fim} - episodio_terminado: a fisica esta PARADA, reinicie pelo site",
                       flush=True)
@@ -662,8 +954,11 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
         epilog=(
             "Teclado (foco na janela): ESPACO pausa/retoma · Q ou Esc fecha.\n"
             "\n"
-            "Ficheiros: --controlo {\"vel\",\"azimute\",\"elevacao\",\"ativo\",\"reiniciar\",\"loop\",\"t\"} (lido a\n"
-            "cada passo de decisão) e --telemetria JSONL a ~10 Hz (1 Hz com o episódio parado).\n"
+            "Ficheiros: --controlo {\"vel\",\"azimute\",\"elevacao\",\"ativo\",\"reiniciar\",\"loop\",\"t\",\n"
+            "\"dinamico\"} (lido a cada passo de decisão) e --telemetria JSONL a ~10 Hz (1 Hz com o episódio\n"
+            "parado). `dinamico` = {modo: nenhum|rajadas|frente|dryden|rajada_agora, params, ativo, seq}:\n"
+            "`frente` aceita {vel,azimute,elevacao} (degrau IMEDIATO do vento base) ou {u_max,t_s} (degrau em\n"
+            "curso do env); `rajada_agora` = {u,azimute,elevacao,duracao} (one-shot dirigido).\n"
             "\n"
             "Sem auto-loop por omissão: no fim do episódio a física PARA e só um REINICIAR (site) ou\n"
             "--loop/loop:true a retoma."
