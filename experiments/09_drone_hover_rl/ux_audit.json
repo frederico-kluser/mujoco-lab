@@ -1,0 +1,279 @@
+{
+  "interface_type": "dashboard",
+  "interface_type_note": "Dashboard local de um só utilizador (o dono do experimento), 6 secções empilhadas: treino, runs, curvas, rede ao vivo (MLP 16→64→64→4), vento ao vivo e log. Avaliado nas Partes 1, 2 e 4 (dashboard) + 3 onde toca a apresentação. Segunda avaliação (esta), depois das correções da ronda 3; a primeira está em `auditoria_antes`.",
+  "overall_score": 88,
+  "band": "excellent",
+  "findings": [
+    {
+      "id": "finding-1",
+      "principle": {
+        "code": "F.1.1.02",
+        "slug": "cognitive-load",
+        "title": "Cognitive Load",
+        "part": "part-1"
+      },
+      "severity": "suggestion",
+      "message": "A densidade continua alta (é um painel de diagnóstico: 4 listas de valores, 2 gráficos, tabela de runs, log e 3 pares slider+número), mas já está fatiada: o essencial (guia, ação, estado ao vivo) fica à vista e o resto está em blocos recolhíveis. Continua a haver texto mono denso em 4 blocos `.meta` seguidos.",
+      "remediation": "Substituir os parágrafos `.meta` por uma linha de estado compacta (chave: valor) com possibilidade de expandir o detalhe, e limitar cada `.meta` a 3 linhas.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-2",
+      "principle": {
+        "code": "F.2.2.03",
+        "slug": "hicks-law",
+        "title": "Hick's Law",
+        "part": "part-1"
+      },
+      "severity": "suggestion",
+      "message": "Ainda há 12 botões e 6 seletores na página. A hierarquia melhorou (um primário por secção, destrutivos a vermelho, secundários discretos) e o guia do topo indica UMA ação de cada vez, mas a secção 5 mantém 7 botões em duas linhas (APLICAR/PARAR + 4 atalhos de azimute).",
+      "remediation": "Fundir os 4 atalhos de azimute num controlo segmentado único (um grupo com 4 segmentos) e mover os atalhos para uma linha secundária menos proeminente.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-3",
+      "principle": {
+        "code": "C.1.1.01",
+        "slug": "consistency-and-standards",
+        "title": "Consistency and Standards",
+        "part": "part-2"
+      },
+      "severity": "suggestion",
+      "message": "As ações ficaram consistentes (verbo + objeto: «▶ Treinar», «■ Parar treino», «▶ Rede ao vivo», «■ Parar rede») e as referências cruzadas passaram a «secção N», mas os nomes dos campos misturam PT e EN («run», «overlay», «evals», «out-dir», «timesteps») com os rótulos em português.",
+      "remediation": "Uniformizar os rótulos visíveis para português («run» → «ensaio», «overlay» → «sobrepor») mantendo os nomes técnicos só nos `title`/`placeholder`.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-4",
+      "principle": {
+        "code": "D.2.1.02",
+        "slug": "visual-hierarchy",
+        "title": "Visual Hierarchy",
+        "part": "part-3"
+      },
+      "severity": "suggestion",
+      "message": "O feedback imediato já existe (toast no canto + linha `.aviso` na secção) e a secção ao vivo tem destaque (barra azul à esquerda + anel), mas o `#meta-vento` e o `#meta-rede` estão ao mesmo peso visual dos valores ao vivo, competindo com o que interessa.",
+      "remediation": "Baixar a opacidade/`font-size` dos blocos `.meta` e reservar o contraste alto para os valores ao vivo (estado, ação, vento).",
+      "business_impact": null
+    }
+  ],
+  "strengths": [
+    {
+      "principle": {
+        "code": "C.1.4.01",
+        "slug": "error-prevention",
+        "title": "Error Prevention"
+      },
+      "message": "Ações destrutivas passaram a ter rede de proteção: «■ Parar treino» exige um segundo clique de confirmação (com aviso do que se perde), «PARAR VENTO» oferece «↩ repor» com o vento anterior no próprio toast, os pedidos desativam o botão enquanto correm (nada de duplo clique) e o LOOP recusado repõe a caixa no estado do servidor."
+    },
+    {
+      "principle": {
+        "code": "I.2.2.02",
+        "slug": "fitts-law",
+        "title": "Fitts's Law"
+      },
+      "message": "Alvos de clique com mínimo garantido: 34 px para qualquer botão e 40 px para primário/rede/perigo/reiniciar, 24 px para os botões do toast e para os links da navegação; os botões destrutivos deixaram de estar encostados aos primários."
+    },
+    {
+      "principle": {
+        "code": "D.1.1.01",
+        "slug": "progressive-disclosure",
+        "title": "Progressive Disclosure"
+      },
+      "message": "Os textos longos («como funciona o treino», «como funciona o vento ao vivo», legenda/obs da rede) e os campos avançados do treino (seed, n_envs, out-dir) passaram a blocos recolhíveis: a primeira dobra mostra só o que se usa a cada minuto."
+    },
+    {
+      "principle": {
+        "code": "F.1.1.03",
+        "slug": "mental-model",
+        "title": "Mental Model"
+      },
+      "message": "O guia no topo diz em texto o estado atual e a próxima ação («escolhe a política e clica ▶ Rede ao vivo», «episódio terminado (terminado, nº 4) — clica ↻ REINICIAR»), e o selo «episódio N terminou (motivo)» torna o SEM LOOP visível sem ler documentação."
+    },
+    {
+      "principle": {
+        "code": "F.1.1.06",
+        "slug": "serial-position-effect",
+        "title": "Serial Position Effect"
+      },
+      "message": "O guia + os controlos de episódio ficaram no topo (primeira posição) e a navegação do cabeçalho salta direto para «rede ao vivo», «vento», «curvas» e «log», reduzindo a caça em 6 secções."
+    }
+  ],
+  "priority_fixes": [
+    "finding-1",
+    "finding-4",
+    "finding-2",
+    "finding-3"
+  ],
+  "api_enriched": false,
+  "api_note": "UXUI_API_KEY ausente no ambiente (verificado: `env | grep -i uxui` vazio e nada em ~/.secrets): a auditoria foi feita aplicando o framework internamente (Partes 1/2/4 + 3), com códigos de princípio do próprio framework. Para achados enriquecidos com citações e business impact: uxuiprinciples.com/en/checkout.",
+  "ronda": 3,
+  "data": "2026-10-08",
+  "auditoria_antes": {
+    "interface_type": "dashboard",
+    "interface_type_note": "Mesma interface ANTES das correções da ronda 3 (sem controlos de episódio, sem guia, sem toasts, sem blocos recolhíveis, botões de 34 px e notas longas sempre à vista).",
+    "overall_score": 41,
+    "band": "fair",
+    "findings": [
+      {
+        "id": "antes-1",
+        "principle": {
+          "code": "F.1.1.02",
+          "slug": "cognitive-load",
+          "title": "Cognitive Load",
+          "part": "part-1"
+        },
+        "severity": "critical",
+        "message": "Mais de 40 elementos interativos/leitura em simultâneo (12 botões, 6 seletores, 3 pares slider+número, 4 listas de valores, 2 gráficos, tabela de 6 colunas, log, 5 pílulas de estado) sem nenhuma indicação de «o que fazer agora»; cada secção traz ainda um parágrafo explicativo sempre visível. O operador tem de varrer a página toda para decidir o próximo clique.",
+        "remediation": "Introduzir um guia de próxima ação no topo, esconder a documentação em blocos recolhíveis e reduzir os controlos visíveis por omissão.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-2",
+        "principle": {
+          "code": "F.2.2.03",
+          "slug": "hicks-law",
+          "title": "Hick's Law",
+          "part": "part-1"
+        },
+        "severity": "warning",
+        "message": "12 botões com o mesmo peso visual (▶ Treinar, ■ Parar, rede ao vivo ▶, ■ parar rede, APLICAR VENTO, PARAR VENTO, 4 atalhos de azimute, evals) e 6 seletores: o tempo de decisão cresce com o número de alternativas e não há um primário evidente por contexto.",
+        "remediation": "Definir um primário por secção, agrupar os atalhos de azimute e esconder o avançado.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-3",
+        "principle": {
+          "code": "C.1.4.01",
+          "slug": "error-prevention",
+          "title": "Error Prevention",
+          "part": "part-2"
+        },
+        "severity": "warning",
+        "message": "Ações com consequência imediata e sem confirmação nem desfazer: «■ Parar» mata um treino de horas com um clique (e fica ao lado de «▶ Treinar», mesmo tamanho), «PARAR VENTO» zera o vento sem forma de repor, e «parar rede»/«parar vento»/«parar treino» usam todos o mesmo vermelho.",
+        "remediation": "Confirmação em dois passos para o treino, desfazer para o vento, estados desativados durante o pedido e cores/rotulos que distingam reversível de destrutivo.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-4",
+        "principle": {
+          "code": "I.2.2.02",
+          "slug": "fitts-law",
+          "title": "Fitts's Law",
+          "part": "part-4"
+        },
+        "severity": "warning",
+        "message": "Botões de ~34 px de altura (9 px de padding + 13 px de fonte), atalhos de azimute pequenos e encostados uns aos outros (4 alvos de ~70x34 px lado a lado) e uma checkbox de «seguir o fim» com área de clique mínima: abaixo do alvo confortável de 44 px e no limite do mínimo de 24 px.",
+        "remediation": "Garantir altura mínima de 34-40 px com espaçamento entre alvos adjacentes e aumentar a área da checkbox.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-5",
+        "principle": {
+          "code": "C.1.1.01",
+          "slug": "consistency-and-standards",
+          "title": "Consistency and Standards",
+          "part": "part-2"
+        },
+        "severity": "warning",
+        "message": "Rótulos e referências inconsistentes: «rede ao vivo ▶» vs «■ parar rede» vs «▶ Treinar»/«■ Parar» (ordem verbo/ícone trocada, maiúsculas diferentes) e as notas apontam para «painel 4»/«painel 5» enquanto os títulos dizem «secção 4»/«5» — a nota da secção 1 manda o utilizador para o painel 4 quando queria dizer o log (secção 6).",
+        "remediation": "Uniformizar as etiquetas (verbo + objeto) e corrigir as referências cruzadas para os números reais das secções.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-6",
+        "principle": {
+          "code": "F.1.1.03",
+          "slug": "mental-model",
+          "title": "Mental Model",
+          "part": "part-1"
+        },
+        "severity": "warning",
+        "message": "O painel nunca diz o que a sonda está a fazer AGORA: as pílulas mostram pid e nº de linhas, mas não há estado de episódio, nem se a física está parada, nem qual seria o próximo passo. Com o modo SEM LOOP (novo), o utilizador não tem como saber que o episódio acabou e que a sonda está à espera.",
+        "remediation": "Mostrar o estado do episódio (a correr/sem loop/terminado + motivo + número) e um guia textual com a próxima ação, incluindo o botão ↻ REINICIAR no sítio onde o olhar está.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-7",
+        "principle": {
+          "code": "D.1.1.01",
+          "slug": "progressive-disclosure",
+          "title": "Progressive Disclosure",
+          "part": "part-3"
+        },
+        "severity": "suggestion",
+        "message": "Tudo está expandido: as duas notas longas (rede e vento) ocupam parágrafos inteiros sempre visíveis, as 4 listas de valores estão abertas e os campos avançados do treino (seed, n_envs, out-dir) competem com o timesteps.",
+        "remediation": "Blocos `<details>` para a documentação e para o avançado.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-8",
+        "principle": {
+          "code": "D.2.1.02",
+          "slug": "visual-hierarchy",
+          "title": "Visual Hierarchy",
+          "part": "part-3"
+        },
+        "severity": "suggestion",
+        "message": "O feedback de cada ação é uma linha de texto discreta no fundo da secção (`.aviso`), longe do botão clicado e fácil de perder; nada destaca a secção «ao vivo», que é o motivo de existir do painel.",
+        "remediation": "Toast transitório junto ao canto + feedback junto ao controlo + destaque visual da secção ao vivo.",
+        "business_impact": null
+      },
+      {
+        "id": "antes-9",
+        "principle": {
+          "code": "F.1.1.06",
+          "slug": "serial-position-effect",
+          "title": "Serial Position Effect",
+          "part": "part-1"
+        },
+        "severity": "suggestion",
+        "message": "Os controlos que o dono usa a cada minuto (rede ao vivo e vento) estão a meio de 6 secções, sem navegação interna: obriga a rolar para cima e para baixo entre o vento e a rede.",
+        "remediation": "Navegação no cabeçalho + guia/controlos de episódio na primeira posição.",
+        "business_impact": null
+      }
+    ],
+    "strengths": [
+      {
+        "principle": {
+          "code": "F.1.1.04",
+          "slug": "millers-law",
+          "title": "Miller's Law"
+        },
+        "message": "Os valores ao vivo estão agrupados em listas curtas (obs 16, ação 4, estado 6, vento 4) em vez de um único bloco de 30 números."
+      },
+      {
+        "principle": {
+          "code": "C.1.1.01",
+          "slug": "consistency-and-standards",
+          "title": "Consistency and Standards"
+        },
+        "message": "As pílulas de estado (servidor/treino/rede/linha/vento) usam a mesma gramática visual (ponto + rótulo + valor) em todo o painel."
+      }
+    ],
+    "priority_fixes": [
+      "antes-1",
+      "antes-3",
+      "antes-6",
+      "antes-2"
+    ],
+    "api_enriched": false,
+    "api_note": "Sem UXUI_API_KEY: framework aplicado internamente, como na segunda avaliação."
+  },
+  "melhorias_aplicadas": [
+    "Guia «o que fazer agora» no topo (`#guia` + `#guia-selo` + `#guia-texto`): estado atual (a ligar / pronta / a correr / episódio terminado / a treinar / sonda parada) e a próxima ação em texto, com os controlos ↻ REINICIAR e LOOP ao lado.",
+    "Controlos de episódio: `↻ REINICIAR` (POST /api/reiniciar → contador `reiniciar` +1 no ficheiro de controlo) e interruptor `LOOP` (POST /api/loop {ativo}) no guia e na secção 4, com o selo `#estado-episodio` («episódio N terminou (motivo) — clica ↻ REINICIAR»).",
+    "Toasts de feedback imediato (canto inferior direito, 5 s, com ação opcional): todas as ações passam a confirmar-se visualmente junto do olhar, mantendo a linha `.aviso` da secção.",
+    "Prevenção de erros: «■ Parar treino» pede um segundo clique (com aviso do que se perde), «PARAR VENTO» mostra «↩ repor <vento anterior>» no toast, os botões ficam desativados durante o pedido e o LOOP recusado repõe a caixa no estado do servidor.",
+    "Alvos de clique: mínimo de 34 px em qualquer botão, 40 px nos primários/destrutivos/reiniciar, 24 px nos botões do toast e nos links de navegação; espaço entre o primário e o destrutivo na secção 1.",
+    "Divulgação progressiva: `<details>` para «como funciona o treino», «como funciona o vento ao vivo», «detalhes da rede (obs 16, h1/h2 e legenda)» e «avançado (seed, n_envs, out-dir)»; a primeira dobra fica com o essencial.",
+    "Hierarquia e consistência: um primário por secção, secção ao vivo com barra de destaque, etiquetas uniformizadas («▶ Treinar», «■ Parar treino», «▶ Rede ao vivo», «■ Parar rede») e referências cruzadas corrigidas para «secção N».",
+    "Navegação no cabeçalho (rede ao vivo · vento · curvas · log) e atalhos de teclado `R` (reiniciar) e `L` (alternar LOOP), ignorados enquanto se escreve num campo."
+  ],
+  "evidencias": {
+    "api_key": "UXUI_API_KEY ausente → api_enriched:false (framework interno)",
+    "sem_loop_aceitacao": "sem_loop_r3.py: ficheiro antigo → espera (sem auto-reset); REINICIAR → novo episódio; LOOP → auto-reset; LOOP off + contador; alinhamento h1/h2/act erro máx 2,2e-05 (55 linhas, incluindo as de evento)",
+    "dashboard_aceitacao": "episodio_r3.py: 8/8 OK (estado neutro com reiniciar/loop, espera com física parada, POST /api/reiniciar → novo episódio, LOOP → auto-reset, validação 400 do /api/loop, vento ao vivo 3 m/s @ 90° com contador preservado, DOM headless com 0 «undefined», alinhamento 2,0e-05)",
+    "dom": "google-chrome-stable --headless=new --dump-dom: exit 0, 189 377 bytes, todos os ids novos presentes, `#erros-js` com display:none, selo «episódio 4 terminou (terminado) — clica ↻ REINICIAR»"
+  }
+}

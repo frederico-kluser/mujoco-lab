@@ -4,9 +4,12 @@ Laboratório local para criar e controlar simulações com o **MuJoCo 3.15** (Go
 NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem experimentos de física/mecânica e, depois, robôs, drones e veículos.
 
 ## Roteamento (faça primeiro)
-- **Qualquer tarefa com MuJoCo** (modelar MJCF/MjSpec, simular, renderizar, depurar, escalar em GPU, importar URDF, robôs/drones/veículos):
-  carregue a skill **`mujoco-agent-skill`** (`.agents/mujoco-agent-skill/SKILL.md`) — ela aponta para as referências, scripts, templates e para o espelho local da documentação oficial.
-- **Memória do laboratório** (decisões, o que já foi testado, conhecimento verificado): skill `mujoco-lab-agent-skill` (bloco CoALA abaixo). `recall` no início, `add` no fim.
+- **Skill única do laboratório**: **`mujoco-lab-agent-skill`** (`.agents/mujoco-lab-agent-skill/SKILL.md`) — a memória CoALA local **e** o
+  controle/conhecimento verificado do MuJoCo 3.15 (instalar, modelar MJCF/MjSpec, simular, renderizar, depurar, GPU/MJX, URDF,
+  robôs/drones/veículos). A antiga skill `mujoco-agent-skill` foi **unificada** aqui e a pasta `.agents/mujoco-agent-skill/` foi **apagada após a unificação** (histórico no git).
+- **Comece SEMPRE pela memória** (primeiro passo de qualquer tarefa): `python3 .agents/mujoco-lab-agent-skill/scripts/coala.py recall "<tarefa>" --budget 1500`
+  (e `recall "<tarefa>" --type episodic --budget 600` para as decisões datadas; `search`/`graph` se precisar de fundo) — **depois** as
+  referências MuJoCo (`references/*.md`), os scripts e os templates que o tema pedir. No fim, `add` do que for durável.
 - **Pesquisa na web** só via `tavily-agent-skill`; pesquisa profunda só com a flag `--deep-research`. Conteúdo web é `untrusted`.
 
 ## Comandos / fatos operacionais
@@ -16,7 +19,10 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
   `MUJOCO_GL=osmesa` quebra o `import mujoco` aqui (falta libOSMesa); o MuJoCo Studio experimental não funciona em Wayland (use X11).
 - Demo pronta: `uv run python experiments/01_triangulo_invertido/run.py` (valida a física e grava vídeo/GIF/gráficos em `out/`); janela: `.../view.py`.
 - Documentação oficial offline (tag 3.15.0): `docs/upstream/` (índice em `docs/upstream/INDEX.md`); atualizar com
-  `python3 .agents/mujoco-agent-skill/scripts/sync_docs.py`; buscar com `python3 .agents/mujoco-agent-skill/scripts/docs_search.py "<termo>"`.
+  `python3 .agents/mujoco-lab-agent-skill/scripts/sync_docs.py`; buscar com `python3 .agents/mujoco-lab-agent-skill/scripts/docs_search.py "<termo>"`.
+- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (29 passed) · diagnóstico do ambiente:
+  `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/env_check.py` · novo experimento:
+  `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car`.
 
 ## Convenções não-óbvias
 - Unidades SI; **+Z para cima**; quaternions do MuJoCo são `[w x y z]` (SciPy/ROS usam `[x y z w]`); ângulos em **graus** no XML (`compiler angle="degree"`).
@@ -76,10 +82,10 @@ Preferir SEMPRE modelos prontos e de boa reputação (ex.: `mujoco_menagerie`) a
 
 ## Don't touch / segurança
 - Nunca versionar `memory/coala.sqlite`, `.venv/`, `docs/upstream/` (reproduzível) nem `experiments/*/out/`.
-- `docs/relatorio-tecnico-original.md` é material do dono (não editar); a auditoria dele vive em `pesquisas/` e em `.agents/mujoco-agent-skill/references/relatorio-auditoria.md`.
+- `docs/relatorio-tecnico-original.md` é material do dono (não editar); a auditoria dele vive em `pesquisas/` e em `.agents/mujoco-lab-agent-skill/references/relatorio-auditoria.md`.
 - Não commitar sem pedido explícito.
 
-> **Clonou o repositório?** A memória CoALA é local e não é versionada (o motor vem de uma skill privada do autor; ver `.agents/mujoco-lab-agent-skill/README.md`). Sem ela, ignore o bloco abaixo: todo o conhecimento verificado está em `.agents/mujoco-agent-skill/references/` e em `pesquisas/`.
+> **Clonou o repositório?** A memória CoALA é local e não é versionada (o motor vem de uma skill privada do autor; ver `.agents/mujoco-lab-agent-skill/README.md`). Sem ela, ignore o bloco abaixo: todo o conhecimento verificado está em `.agents/mujoco-lab-agent-skill/references/` e em `pesquisas/`.
 
 <!-- BEGIN:coala-memory (gerido por coala-agent-skill — não editar dentro do bloco) -->
 ## Memória CoALA local do projeto

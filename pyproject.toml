@@ -21,13 +21,34 @@ urdf = ["urdf2mjcf", "robot_descriptions", "trimesh"]   # URDF→MJCF e modelos 
 rl = ["gymnasium[mujoco]>=1.0"]                # ambientes de RL/controle (opcional)
 # dm_control exige `labmaze`, que NÃO tem wheel para Python 3.13 (só cp37–cp312): use um venv Python 3.12 (`uv sync --group dmc --python 3.12`)
 dmc = ["dm_control"]
-# GPU (opcional, pesado). Receita MEDIDA nesta máquina (RTX 4070 Laptop 8 GB): venv SEPARADO `.venv-gpu`, sem tocar no `.venv` (ver .agents/mujoco-agent-skill/references/gpu-benchmarks.md):
+# GPU (opcional, pesado). Receita MEDIDA nesta máquina (RTX 4070 Laptop 8 GB): venv SEPARADO `.venv-gpu`, sem tocar no `.venv` (ver .agents/mujoco-lab-agent-skill/references/gpu-benchmarks.md):
 #   uv venv --python 3.13 .venv-gpu && uv pip install --python .venv-gpu/bin/python "mujoco==3.15.0" "mujoco-mjx==3.15.0" "mujoco-warp==3.15.0" warp-lang "jax[cuda12]"
 # O grupo abaixo declara as mesmas versões (jax[cuda12] e jax[cuda13] rodaram; o extra mujoco-mjx[warp] é desnecessário e fixa warp-lang 1.17). Não testado: `UV_PROJECT_ENVIRONMENT=.venv-gpu uv sync --group gpu`.
 gpu = ["mujoco-mjx>=3.15,<3.16", "mujoco-warp>=3.15,<3.16", "warp-lang", "jax[cuda12]"]
+# hover-rl (opcional): treino PPO com Stable-Baselines3 + exportação/execução ONNX, tudo em CPU.
+# `torch` vem do índice pytorch-cpu (abaixo) → wheel "+cpu", SEM as dependências CUDA (~2,5 GB); a GPU fica para o MJX (grupo gpu).
+# Instalar: uv sync --group hover-rl
+hover-rl = [
+    "stable-baselines3>=2.3",  # PPO/SAC/TD3 sobre gymnasium
+    "gymnasium[mujoco]>=1.0",  # igual ao grupo rl (o grupo é autossuficiente: ambientes + treino)
+    "torch",                   # CPU-only via [tool.uv.sources] (ver abaixo)
+    "onnx",                    # exportação do grafo da política
+    "onnxruntime",             # execução/inferência ONNX sem o torch
+    "plotext",                 # gráficos de treino no terminal
+    "rich",                    # barras de progresso/estatísticas (não estava em nenhum grupo)
+]
 
 [tool.uv]
 default-groups = ["dev"]
+
+# Índice explícito: só é consultado para os pacotes que o referenciam em [tool.uv.sources].
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }  # impede a wheel CUDA do PyPI (~2,5 GB) — medido: torch 2.14.1+cpu
 
 [tool.ruff]
 line-length = 100

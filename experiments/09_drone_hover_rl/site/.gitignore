@@ -1,0 +1,28 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Artefactos de instalação/build — o SOURCE (src/, index.html, motion.theme.ts, configs) é versionado.
+# `.npmrc` fica versionado de propósito: só tem o placeholder ${MOTION_TOKEN}, nunca o valor.
+node_modules/
+node_modules
+dist/
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

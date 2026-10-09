@@ -10,14 +10,18 @@ __pycache__/
 # saídas geradas pelos experimentos (vídeos, gráficos, métricas): reproduzíveis com run.py
 experiments/*/out/
 
-# espelho local da documentação oficial (reproduzível: .agents/mujoco-agent-skill/scripts/sync_docs.py)
+# espelho local da documentação oficial (reproduzível: .agents/mujoco-lab-agent-skill/scripts/sync_docs.py)
 docs/upstream/
 
-# memória CoALA: o banco SQLite tem o próprio .gitignore (.agents/mujoco-lab-agent-skill/memory/).
-# O MOTOR (scripts/coala.py, SKILL.md e references/ da memória) é cópia vendorizada de um repo privado do autor: NÃO é publicado.
-# Para recriar a memória: instale a skill `coala-agent-skill` e rode `coala.py ingest` com a config versionada em .agents/mujoco-lab-agent-skill/ingest.json.
-.agents/mujoco-lab-agent-skill/scripts/
-.agents/mujoco-lab-agent-skill/references/
+# skill ÚNICA do laboratório (memória CoALA + controle do MuJoCo): .agents/mujoco-lab-agent-skill/.
+# A base SQLite tem o próprio .gitignore (memory/). Do conteúdo da skill, só ficam de fora — por serem
+# cópia vendorizada de um repo privado do autor, NÃO publicada — o motor, o schema da memória e o SKILL.md.
+# Tudo o que é conhecimento verificado do projeto — references/ e scripts/ do MuJoCo, assets/, tests/ —
+# FICA versionado (é o que sobra para quem clona sem memória).
+# Para recriar a memória: instale a skill `coala-agent-skill` e rode `coala.py ingest` com a config
+# versionada em .agents/mujoco-lab-agent-skill/ingest.json.
+.agents/mujoco-lab-agent-skill/scripts/coala.py
+.agents/mujoco-lab-agent-skill/references/schema.md
 .agents/mujoco-lab-agent-skill/SKILL.md
 .agents/skills/mujoco-lab-agent-skill
 .claude/skills/mujoco-lab-agent-skill

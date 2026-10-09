@@ -1,1 +1,1 @@
-../.agents/mujoco-agent-skill/scripts/mjkit.py
+../.agents/mujoco-lab-agent-skill/scripts/mjkit.py

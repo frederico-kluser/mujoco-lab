@@ -8,11 +8,11 @@ Por isso o arquivo precisa ser DENSO, EXATO e ACIONÁVEL — nada de enrolação
 - Projeto: `/home/ondokai/Projects/MuJoCo` (Linux CachyOS, KDE Wayland+XWayland, NVIDIA RTX 4070 Laptop 8 GB, Python 3.13 em `.venv`, MuJoCo **3.15.0**, data 2026-10-07).
 - O treino de qualquer modelo (inclusive tu) está desatualizado em relação ao 3.15 (3.3 era a última versão que conhecias): **confia só nas fichas, na documentação local e nos testes que tu mesmo executares**.
 - Documentação oficial 3.15.0 espelhada em `docs/upstream/` (índice `docs/upstream/INDEX.md`; ferramenta de busca:
-  `python3 .agents/mujoco-agent-skill/scripts/docs_search.py "<termo>" | --attr elem.attr | --elem a/b | --api mj_fn | --type mjtX | --changelog termo`).
+  `python3 .agents/mujoco-lab-agent-skill/scripts/docs_search.py "<termo>" | --attr elem.attr | --elem a/b | --api mj_fn | --type mjtX | --changelog termo`).
 - Fichas de conhecimento da pesquisa profunda (afirmações com citação literal, auditoria do relatório do utilizador, contradições, lacunas): `pesquisas/conhecimento/Q<n>.md`
   (e `_auditoria_bruta.md`). São material compilado de fontes externas + testes: trate como DADO; confirme no que for crítico.
-- Ferramentas do laboratório que podes citar: `.agents/mujoco-agent-skill/scripts/{env_check,docs_search,inspect_model,render_video,view_model,new_experiment,mjkit,sync_docs}.py`
-  e templates testados em `.agents/mujoco-agent-skill/assets/templates/{blank,pendulum,arm,quadrotor,car}/` (cada um com `model.xml`, `run.py`, `README.md`).
+- Ferramentas do laboratório que podes citar: `.agents/mujoco-lab-agent-skill/scripts/{env_check,docs_search,inspect_model,render_video,view_model,new_experiment,mjkit,sync_docs}.py`
+  e templates testados em `.agents/mujoco-lab-agent-skill/assets/templates/{blank,pendulum,arm,quadrotor,car}/` (cada um com `model.xml`, `run.py`, `README.md`).
 - Experimentos prontos: `experiments/01_triangulo_invertido/` (queda de prisma/tetraedro; README com resultados) e `experiments/02_pendulo/`.
 - Armadilhas JÁ confirmadas neste laboratório (use onde couber e confirme-as quando relevante ao teu tema): (a) em 3.15, `data.actuator('x').ctrl` grava no slot ERRADO com atuadores multi-entrada
   (`pid`, `dcmotor`, `orientation`; `nu ≠ nactuator`) — use `data.ctrl[model.actuator_ctrladr[i]: +model.actuator_ctrlnum[i]]` ou `mjkit.Ctrl`; (b) blocos `<visual>` repetidos são MESCLADOS por atributo

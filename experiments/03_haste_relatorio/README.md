@@ -1,7 +1,7 @@
 # Experimento 03 — o exemplo do relatório (haste articulada + motor), corrigido e validado
 
 O §4.2 do relatório técnico do usuário traz um exemplo de controle (uma haste articulada numa base, acionada por um motor com torque senoidal). Este experimento o **reproduz, corrige e valida**.
-O código completo corrigido, com a tabela linha a linha das diferenças, está em `.agents/mujoco-agent-skill/references/relatorio-auditoria.md` (§ "Código do relatório, corrigido").
+O código completo corrigido, com a tabela linha a linha das diferenças, está em `.agents/mujoco-lab-agent-skill/references/relatorio-auditoria.md` (§ "Código do relatório, corrigido").
 
 ## O bug do modelo original
 

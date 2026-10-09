@@ -1,12 +1,14 @@
 {
-  "_doc": "Fontes do material do projeto para `coala.py ingest`. mode: markdown|text|whole|pdf · type: episodic|semantic|procedural · origin: owner|agent|untrusted|system · tags aceitam {stem} {name} {dir} {rule}. Primeira regra que apanha um ficheiro ganha. O motor exclui `.agents/**` por omissão: por isso a skill de controle é ingerida pelo symlink `docs/skill` (→ ../.agents/mujoco-agent-skill). Proveniência: relatório = owner; docs oficiais e pesquisa web = untrusted; skill/código/modelos/experimentos nossos = agent.",
+  "_doc": "Fontes do material do projeto para `coala.py ingest`. mode: markdown|text|whole|pdf · type: episodic|semantic|procedural · origin: owner|agent|untrusted|system · tags aceitam {stem} {name} {dir} {rule}. Primeira regra que apanha um ficheiro ganha. O motor exclui `.agents/**` por omissão: por isso a skill ÚNICA (memória + MuJoCo, `.agents/mujoco-lab-agent-skill/`, que aposentou a antiga `mujoco-agent-skill` em 2026-10-08) é ingerida pelo symlink `docs/skill` (→ ../.agents/mujoco-lab-agent-skill): SKILL.md, references/ do MuJoCo, templates e scripts. Ficam de fora pelo `exclude` o motor `scripts/coala.py` e `references/schema.md`, cópia vendorizada privada do autor (não é conhecimento do projeto). Proveniência: relatório = owner; docs oficiais e pesquisa web = untrusted; skill/código/modelos/experimentos nossos = agent.",
   "version": 1,
   "key_prefix": "mujoco",
   "path_prefix": "",
   "exclude": [
     "docs/upstream/**/SOURCE.json",
     "docs/upstream/INDEX.md",
-    "docs/upstream/mujoco/doc/images/**"
+    "docs/upstream/mujoco/doc/images/**",
+    "docs/skill/scripts/coala.py",
+    "docs/skill/references/schema.md"
   ],
   "rules": [
     {
@@ -40,7 +42,7 @@
       "mode": "markdown",
       "type": "semantic",
       "origin": "agent",
-      "tags": "skill,mujoco-agent-skill"
+      "tags": "skill,mujoco-lab-agent-skill"
     },
     {
       "name": "skill-referencias",
@@ -214,12 +216,8 @@
         "kind": "modelos-prontos"
       },
       {
-        "name": "mujoco-agent-skill",
-        "kind": "skill"
-      },
-      {
         "name": "mujoco-lab-agent-skill",
-        "kind": "memoria"
+        "kind": "skill-unica-memoria-mujoco"
       },
       {
         "name": "Rerun",
@@ -251,18 +249,18 @@
         "MuJoCo Warp"
       ],
       [
-        "mujoco-agent-skill",
+        "mujoco-lab-agent-skill",
         "controla",
         "MuJoCo"
       ],
       [
-        "mujoco-agent-skill",
+        "mujoco-lab-agent-skill",
         "consulta",
         "MuJoCo Menagerie"
       ],
       [
         "mujoco-lab-agent-skill",
-        "memoriza",
+        "substitui",
         "mujoco-agent-skill"
       ],
       [
