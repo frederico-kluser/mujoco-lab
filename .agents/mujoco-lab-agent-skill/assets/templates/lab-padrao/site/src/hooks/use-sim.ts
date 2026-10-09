@@ -13,13 +13,18 @@ import {
   enviarLoop,
   enviarReiniciar,
   enviarVento,
+  enviarVentoDinamico,
 } from "@/lib/api"
 import {
   chaveLinha,
+  VENTO_DINAMICO_PARADO,
   type CorpoVento,
+  type CorpoVentoDinamico,
   type EstadoEpisodio,
   type LinhaSim,
   type ResumoEstado,
+  type Rpi5,
+  type VentoDinamico,
   type VentoEstado,
 } from "@/lib/sim"
 
@@ -40,6 +45,10 @@ export interface SimStream {
   passo: number | null
   retorno: number | null
   vento: VentoEstado | null
+  /** Modo/params do vento dinâmico em vigor no backend (nunca reinicia o episódio). */
+  ventoDinamico: VentoDinamico
+  /** Painel do computador de bordo (Raspberry Pi 5); `null` = o backend não o publica. */
+  rpi5: Rpi5 | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -50,6 +59,7 @@ export interface SimStream {
   reiniciar: () => Promise<number | null>
   aplicarVento: (corpo: CorpoVento) => Promise<void>
   pararVento: (ventoAtual: VentoEstado) => Promise<void>
+  aplicarVentoDinamico: (corpo: CorpoVentoDinamico) => Promise<void>
   definirLoop: (ativo: boolean) => Promise<void>
 }
 
@@ -62,7 +72,10 @@ export function useSim(): SimStream {
     passo: number | null
     retorno: number | null
     vento: VentoEstado | null
-  }>({ estado: "sem_dados", ep: null, passo: null, retorno: null, vento: null })
+    ventoDinamico: VentoDinamico
+    rpi5: Rpi5 | null
+  }>({ estado: "sem_dados", ep: null, passo: null, retorno: null, vento: null,
+       ventoDinamico: VENTO_DINAMICO_PARADO, rpi5: null })
   const [resumo, setResumo] = useState<ResumoEstado | null>(null)
   const [ligacao, setLigacao] = useState<Ligacao>("a_ligar")
   const [erro, setErro] = useState<string | null>(null)
@@ -70,13 +83,17 @@ export function useSim(): SimStream {
   const [respostas, setRespostas] = useState(0)
 
   const aplicar = useCallback(    (dados: Awaited<ReturnType<typeof buscarSim>>) => {
-      setCabecalho({
+      setCabecalho((anterior) => ({
         estado: dados.estado,
         ep: dados.ep,
         passo: dados.passo,
         retorno: dados.retorno,
         vento: dados.vento,
-      })
+        ventoDinamico: dados.ventoDinamico,
+        // `/api/sim` é a fonte principal do rpi5; se esta versão do backend ainda não o trouxer, mantém-se o
+        // que o `/api/state` tiver dito (nunca se apaga um painel que já estava a mostrar números).
+        rpi5: dados.rpi5 ?? anterior.rpi5,
+      }))
       if (dados.linhas.length === 0) return
       setLinhas((anteriores) => {
         const vistos = new Set(anteriores.map(chaveLinha))
@@ -110,7 +127,10 @@ export function useSim(): SimStream {
     const carregarResumo = async () => {
       try {
         const dados = await buscarEstado(controlador.signal)
-        if (vivo) setResumo(dados)
+        if (!vivo) return
+        setResumo(dados)
+        // O `rpi5` pode vir só no `/api/state`: aproveita-se o que existir, sem apagar números já mostrados.
+        if (dados.rpi5 !== null) setCabecalho((anterior) => ({ ...anterior, rpi5: dados.rpi5 }))
       } catch {
         /* o resumo é acessório: a falta dele não derruba a página */
       }
@@ -168,6 +188,20 @@ export function useSim(): SimStream {
     [pollAgora],
   )
 
+  /**
+   * `POST /api/vento-dinamico` — só escreve o modo; o episódio continua a correr.
+   *
+   * O payload é SEMPRE o do contrato (`frente` incluído: `{vel,azimute,elevacao}` = degrau imediato); um 400
+   * do servidor chega ao utilizador como aviso, não se reescreve o pedido noutro formato.
+   */
+  const aplicarVentoDinamico = useCallback(
+    async (corpo: CorpoVentoDinamico) => {
+      await enviarVentoDinamico(corpo)
+      await pollAgora()
+    },
+    [pollAgora],
+  )
+
   const definirLoop = useCallback(
     async (ativo: boolean) => {
       await enviarLoop(ativo)
@@ -184,6 +218,8 @@ export function useSim(): SimStream {
     passo: cabecalho.passo,
     retorno: cabecalho.retorno,
     vento: cabecalho.vento,
+    ventoDinamico: cabecalho.ventoDinamico,
+    rpi5: cabecalho.rpi5,
     resumo,
     ligacao,
     erro,
@@ -192,6 +228,7 @@ export function useSim(): SimStream {
     reiniciar,
     aplicarVento,
     pararVento,
+    aplicarVentoDinamico,
     definirLoop,
   }
 }

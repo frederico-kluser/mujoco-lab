@@ -106,7 +106,7 @@ def main() -> int:
     plan = [f"criar {dest.relative_to(root)}/ ← template '{a.template}': " + ", ".join(conteudo)]
     if a.template in TEMPLATES_ARVORE:
         plan.append(f"substituir os marcadores de nome em {len(SUBSTITUICOES)} ficheiro(s) "
-                    f"({{{{NOME_EXPERIMENTO}}}} → {slug(a.nome)}) e correr `run.py` de validação no fim")
+                    f"({{{{NOME_EXPERIMENTO}}}} → {slug(a.nome)}); os passos de validação saem no fim")
 
     lab = root / "lab"
     lib_src = SKILL / "scripts" / "mjkit.py"

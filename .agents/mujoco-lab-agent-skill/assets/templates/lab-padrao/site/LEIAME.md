@@ -2,7 +2,8 @@
 
 Aplicação **React + TypeScript + Vite + Tailwind/shadcn**, construída com a skill `motion-plus-ui`
 (registry `@motion`) e servida pelo backend `sim_site.py`, que expõe também a API. Uma página, sem navegação:
-cabeçalho · curvas · rede da política · observação/ação · controlos (vento, REINICIAR, LOOP).
+cabeçalho · curvas · rede da política · observação/ação · **painel do computador de bordo (Raspberry Pi 5)** ·
+controlos (vento, **vento dinâmico**, REINICIAR, LOOP) · **ajuda «?»**.
 
 > Princípio do laboratório (`padrao-simulacao-clean-site`): **a janela do MuJoCo mostra só a simulação 3D;
 > todas as métricas e todos os controlos estão aqui.** O site **nunca reinicia sozinho**: no fim do episódio a
@@ -28,9 +29,10 @@ Comandos úteis: `npm run dev` (desenvolvimento), `npm run typecheck` (`tsc -b`)
 
 | pedido | resposta |
 |---|---|
-| `GET /api/sim` | `{estado:"a_correr"\|"pausado"\|"episodio_terminado", ep, passo, retorno, vento:{vel,azimute,elevacao,ativo}, linhas:[{t,estado,ep,passo,retorno,theta,erro,omega,vento_vel,vento_azim,obs[],act[],ctrl[],h1[],h2[]}], modelo_nome, sim_vivo, loop}` |
-| `GET /api/state` | resumo (o mesmo sem `linhas`, mais `contador_reiniciar`, `n_linhas`, `modelo`, `modelo_motivo`) |
+| `GET /api/sim` | `{estado:"a_correr"\|"pausado"\|"episodio_terminado", ep, passo, retorno, vento:{vel,azimute,elevacao,ativo,vec:[vx,vy,vz],modo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,vel,azimute,elevacao,modo,fonte}, rpi5:{…}, linhas:[{t,estado,ep,passo,retorno,theta,erro,omega,vento_vel,vento_azim,vento_vec[],vento_modo,obs[],act[],ctrl[],h1[],h2[]}], modelo_nome, sim_vivo, loop}` |
+| `GET /api/state` | resumo (o mesmo sem `linhas`, mais `contador_reiniciar`, `n_linhas`, `modelo`, `modelo_motivo`, `pid`, `porta`, `idade_telemetria_s` e o painel `rpi5` completo) |
 | `POST /api/vento` | `{vel 0–5, azimute 0–360, elevacao −90–90}` (subconjunto aceite) → 200/400 |
+| `POST /api/vento-dinamico` | `{modo:"nenhum"\|"rajadas"\|"frente"\|"dryden"\|"rajada_agora", params:{…}, ativo:bool}` → 200/400 (**nunca** reinicia o episódio) |
 | `POST /api/reiniciar` | → `{contador: n}` (o contador é o mecanismo: valor novo = um pedido) |
 | `POST /api/loop` | `{ativo: bool}` → 200 |
 
@@ -44,7 +46,8 @@ números inventados. `theta`/`erro`/`omega` vêm em **rad** e **rad/s** e são c
 ```
 src/
   main.tsx                       MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider
-  App.tsx                        grelha: cabeçalho · curvas · rede · obs/ação · controlos · avisos
+  App.tsx                        grelha: cabeçalho · curvas · rede · obs/ação · RPi 5 · controlos · ajuda · avisos
+  assets/rpi5.webp               imagem de referência do painel do computador de bordo (ver atribuição abaixo)
   lib/sim.ts                     ★ CONFIGURAÇÃO (METRICAS, ROTULOS_OBS/ACT, unidades) + tipos + leitura defensiva
   lib/api.ts                     fetch dos endpoints do contrato (erros legíveis; `?api=` para testes)
   hooks/use-sim.ts               polling, fusão do histórico por ep:passo, estado de ligação, ações (POST)
@@ -52,7 +55,10 @@ src/
   components/sim/curvas.tsx         as 4 curvas de METRICAS, com a linha do alvo/zero
   components/sim/rede.tsx           ativações obs→h1→h2→act (SVG, cor por |a|; sem arestas = sem inventar pesos)
   components/sim/observacoes.tsx    tabela da observação (obs[i]) + painel da ação (act e o `ctrl` físico)
-  components/sim/controlos.tsx      vento (sliders + rosa dos ventos) · REINICIAR (hold 1 s) · LOOP
+  components/sim/controlos.tsx      vento (sliders) · VENTO DINÂMICO (rajadas/frente/dryden/rajada) · REINICIAR · LOOP
+  components/sim/rosa-ventos.tsx    rosa dos ventos viva: seta cheia = vetor em vigor, tracejada = seleção
+  components/sim/rpi5.tsx           painel do computador de bordo: specs, semáforo p50/p99, int8, multi-IA
+  components/sim/ajuda.tsx          botão «?» + folha com o significado de CADA elemento (dados, não JSX)
   components/sim/avisos.tsx         toasts das ações e dos erros da API (`toast-stack`)
   components/motion-ui/**        componentes do registry @motion (source do CLI — não editar)
   components/ui/**               primitivos shadcn (button, card, slider)
@@ -65,10 +71,13 @@ src/
 | `sparkline` | as 4 curvas (`curvas.tsx`), com a linha de referência na `grid` |
 | `animated-number` | contadores do cabeçalho e valor atual de cada curva |
 | `stagger-reveal` | entrada do título e dos contadores do cabeçalho |
-| `progress-bar` | barras da observação e da ação |
+| `progress-bar` | barras da observação, da ação e os medidores do painel RPi 5 |
 | `hold-to-confirm` | botão **REINICIAR** (manter 1 s) |
-| `multi-state-button` | **APLICAR VENTO** (pronto/a enviar/ok/erro) |
-| `segmented-toggle` | **LOOP** (OFF por omissão) |
+| `multi-state-button` | **APLICAR VENTO**, **RAJADA AGORA**, **FRENTE AGORA** (pronto/a enviar/ok/erro/ativo) |
+| `segmented-toggle` | **LOOP** e o modo dinâmico contínuo (PARADO/RAJADAS/DRYDEN) |
+| `accordion` | as secções da folha de ajuda «?» |
+| `sheet` | a própria folha de ajuda (diálogo nativo, foco preso, arrastar para fechar) |
+| `input` (shadcn) | campos numéricos dos parâmetros dinâmicos (`p`, `duração`, `u_max`, `sigma`, `L`, `v_min`) |
 | `toast-stack` | avisos das ações e erros da API |
 | `ui-theme` + `motion.theme.ts` | tokens de movimento (`snap`/`ui`/`gentle`/…) |
 
@@ -77,8 +86,12 @@ Código novo (o catálogo não tem equivalente — justificação de uma linha c
 - **`rede.tsx`: visualizador de ativações** — o catálogo não traz visualizador de rede (`sparkline` é série
   temporal, `progress-bar` é barra): grelha SVG por camada, cor por `|a|`. **Sem arestas**, porque o contrato
   traz ativações e não pesos — desenhar ligações seria inventar dados.
-- **`controlos.tsx`: rosa dos ventos** — mostrador polar de azimute/elevação, também ausente do catálogo
-  (~30 linhas de SVG com `transform: rotate`).
+- **`rosa-ventos.tsx`: rosa dos ventos viva** — mostrador polar de azimute/elevação, ausente do catálogo
+  (`sparkline` é série temporal e `progress-bar` é barra): SVG com `transform`/`opacity` apenas.
+- **`rpi5.tsx`: painel do computador de bordo** — o catálogo não tem cartão de especificações nem indicador de
+  saúde ligado a telemetria; usa `Card` + `ProgressBar` + `AnimatedNumber` e classes semânticas.
+- **`ajuda.tsx`: a folha de ajuda** — usa `sheet` + `accordion` do catálogo e guarda o conteúdo como DADOS
+  (`SECOES_AJUDA`), para acrescentar uma explicação sem tocar em JSX.
 - **`controlos.tsx`: `key={geracao}` no REINICIAR** — o `hold-to-confirm` instalado é de **um disparo** (o
   `done` interno só volta com `reset()`, que ele não expõe em `mode="callback"`): remontar por `key` volta a
   armar o botão sem tocar no source instalado.
@@ -86,8 +99,9 @@ Código novo (o catálogo não tem equivalente — justificação de uma linha c
 ## Adaptar ao teu robô
 
 Muda **só** a secção «CONFIGURAÇÃO» de `src/lib/sim.ts` (`METRICAS`, `ROTULOS_OBS`, `ROTULOS_ACT`,
-`UNIDADE_CTRL`, `NOME_EXPERIMENTO`) e, se preciso, o `sim_view.py` (as 3 métricas da linha `amostra()`).
-Nada de tamanhos fixos: o site desenha N entradas e M saídas conforme a telemetria.
+`UNIDADE_CTRL`, `NOME_EXPERIMENTO`), os TEXTOS de `components/sim/ajuda.tsx` e, se preciso, o `sim_view.py`
+(as 3 métricas da linha `amostra()`). Nada de tamanhos fixos: o site desenha N entradas e M saídas conforme a
+telemetria. Os painéis `rpi5`, `rosa-ventos` e a folha de ajuda **não** se adaptam (são o padrão).
 
 ## Testar contra um backend falso
 
@@ -95,3 +109,9 @@ Qualquer servidor stdlib que responda ao contrato serve (mock que serve o `dist/
 registados em JSONL). Verificação feita neste template: `npm run build` limpo (`tsc -b` + `vite build`) e
 `google-chrome-stable --headless=new --dump-dom` sobre o `dist/` servido pelo `sim_site.py` **sem** erros de
 JS nem `undefined` no DOM.
+
+## Atribuição da imagem do painel
+
+`src/assets/rpi5.webp` é uma **ilustração de referência** (Raspberry Pi **Model B+**, 2014 — não é um Pi 5):
+Lucasbosch, Wikimedia Commons, **CC BY-SA 3.0**. A atribuição aparece no painel e nos textos da ajuda; os
+números mostrados são do ALVO (Pi 5) e vêm citados no `RPI5_SPECS` do `sim_site.py`.

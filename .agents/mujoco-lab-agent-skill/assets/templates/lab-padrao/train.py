@@ -212,8 +212,10 @@ def treinar(args) -> int:
             """Muda alvo + vento dinâmico da fase (recalcula o trim) e anuncia a transição."""
             _limiar, alvo, vento_max, dinamico = fases[indice]
             base.definir_alvo(alvo)
-            base.vento = np.zeros(3)
-            base.vento_dinamico = dict(dinamico) if dinamico else None
+            base.definir_vento(0.0, 0.0, 0.0)      # o vento BASE quem o sorteia é o DR, a cada reset
+            # Validado pelo PRÓPRIO env (as mesmas regras do site e da CLI): uma gralha no currículo falha
+            # aqui, com mensagem clara, em vez de estourar a meio do treino com um KeyError.
+            base.vento_dinamico = env_mod.valida_vento_dinamico(dinamico)
             dr.vel_max = float(vento_max)
             print(f"[treino] fase {indice + 1}/{len(fases)}: alvo {alvo:.0f}° · vento base ≤ {vento_max:.1f} m/s · "
                   f"dinâmico {dinamico or '—'} (trim {base.trim:.2f} N·m)", flush=True)

@@ -14,6 +14,11 @@ O que o ambiente faz (o padrão que se repete em todos os experimentos de RL do 
   4. PERTURBAÇÃO ("VENTO") em tempo real — `definir_vento(vel, azimute, elevacao)` aplica uma força de
      arrasto quadrático NO SITE `ponta` que entra na física como torque generalizado (`qfrc_applied`), lida
      a cada passo de decisão. É o análogo do modelo de fluido do MuJoCo usado no drone.
+     Por cima do vento BASE há VENTO DINÂMICO (`definir_vento_dinamico`): `rajadas` (envelope senoidal que
+     SOMA ao base), `frente` (degrau que o SUBSTITUI a partir de `t_s`) e `dryden` (turbulência OU de 1.ª
+     ordem saturada em norma a `u_max`). Trocar de modo a meio do episódio NÃO reinicia nada — é o que o
+     site usa nos controlos de vento ao vivo (`POST /api/vento-dinamico`). `u_max = 0` = modo inerte
+     (ar parado, sem consumir o `rng`: os runs sem dinâmica ficam bit-idênticos).
   5. GUARDAS NaN — nenhum estado não finito passa em silêncio: `_verifica_sanidade` levanta `RuntimeError`
      com o motivo (o MuJoCo só avisa e devolve "huge values", que envenenariam o treino em silêncio).
 
@@ -87,9 +92,12 @@ AREA_VELA = 0.5                   # m²  — área de referência exposta ao ven
 CD_VELA = 1.2                     # —   coeficiente de arrasto
 RHO_AR = 1.225                    # kg/m³
 VENTO_DINAMICO_MODOS = ("rajadas", "frente", "dryden")
+VENTO_DINAMICO_CHAVES = frozenset({"modo", "u_max", "p", "duracao", "t_s", "sigma", "L", "v_min"})
+VENTO_DINAMICO_U_MAX = 3.0        # m/s — teto do modo (amplitude da rajada/frente ou saturação da turbulência)
 RAJADAS_P = 0.02                  # 1/passo de decisão
 RAJADAS_DURACAO = 10              # passos
 FRENTE_T_S = 2.0                  # s — instante da frente
+FRENTE_U_MIN = 0.5                # m/s — piso da amostra da frente (U[0,5; u_max] quando o teto o permite)
 DRYDEN_SIGMA = 0.5                # m/s
 DRYDEN_L = 10.0                   # m
 DRYDEN_V_MIN = 1.0                # m/s
@@ -130,6 +138,73 @@ def azimute_graus(vento) -> float:
     if v.size < 2 or not np.all(np.isfinite(v[:2])) or np.hypot(v[0], v[1]) < 1e-12:
         return 0.0
     return float(np.degrees(np.arctan2(v[1], v[0])) % 360.0)
+
+
+def valida_vento_dinamico(config: dict | None) -> dict | None:
+    """Valida e NORMALIZA a config do vento dinâmico (`None` = sem vento dinâmico).
+
+    Devolve um dict NOVO só com as chaves do modo e os defaults preenchidos (o dict recebido nunca é
+    tocado) — ou `None`. Levanta `ValueError` com mensagem clara para: config que não é dict, `modo` em
+    falta/desconhecido, chave desconhecida (apanha gralhas como `durancao`, que passariam em silêncio),
+    valores não finitos e faixas impossíveis. É usado pelo `__init__`, pelo `definir_vento_dinamico` (site
+    e treino) e pelo `train.py`, que valida os `--vento-dinamico-params` ANTES de criar os envs.
+
+    `u_max = 0` é válido e significa modo INERTE (ar parado, nada de dinâmica entra na física).
+    """
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError(  # noqa: TRY004  (o contrato do laboratório pede ValueError também para o tipo)
+            f"`vento_dinamico` tem de ser um dict (ou None) — ex.: {{'modo': 'rajadas', 'p': 0.02}} "
+            f"(recebido {config!r})")
+    if "modo" not in config:
+        raise ValueError(f"`vento_dinamico` precisa da chave `modo`, uma de {VENTO_DINAMICO_MODOS} "
+                         f"(recebido {config!r})")
+    modo = config["modo"]
+    if modo not in VENTO_DINAMICO_MODOS:
+        raise ValueError(f"`vento_dinamico['modo']` tem de ser um de {VENTO_DINAMICO_MODOS} (recebido {modo!r})")
+    desconhecidas = set(config) - VENTO_DINAMICO_CHAVES
+    if desconhecidas:
+        raise ValueError(f"`vento_dinamico` tem chaves desconhecidas {sorted(desconhecidas)} — aceita "
+                         f"{sorted(VENTO_DINAMICO_CHAVES)} (gralhas como `durancao` são recusadas à entrada, "
+                         "em vez de ignoradas em silêncio)")
+    u_max = finito("vento_dinamico['u_max']", config.get("u_max", VENTO_DINAMICO_U_MAX))
+    if u_max < 0.0:
+        raise ValueError(f"`vento_dinamico['u_max']` tem de ser ≥ 0 m/s (recebido {u_max!r}): 0 = modo "
+                         "inerte (ar parado, nenhuma dinâmica entra na física)")
+
+    if modo == "rajadas":
+        p = finito("vento_dinamico['p']", config.get("p", RAJADAS_P))
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"`vento_dinamico['p']` tem de estar em [0, 1] (recebido {p!r}): é a "
+                             "probabilidade de começar uma rajada POR passo de decisão")
+        duracao = config.get("duracao", RAJADAS_DURACAO)
+        if isinstance(duracao, bool) or not isinstance(duracao, (int, np.integer)) or int(duracao) < 1:
+            raise ValueError(f"`vento_dinamico['duracao']` tem de ser um inteiro ≥ 1 passos de decisão "
+                             f"(recebido {duracao!r}): 0 não faria rajada nenhuma e um float não teria "
+                             "envelope definido")
+        return {"modo": modo, "u_max": u_max, "p": p, "duracao": int(duracao)}
+
+    if modo == "frente":
+        t_s = finito("vento_dinamico['t_s']", config.get("t_s", FRENTE_T_S))
+        if t_s < 0.0:
+            raise ValueError(f"`vento_dinamico['t_s']` tem de ser ≥ 0 s (recebido {t_s!r}): é o instante do "
+                             "episódio em que a frente chega (0 = frente no 1.º passo de decisão)")
+        return {"modo": modo, "u_max": u_max, "t_s": t_s}
+
+    sigma = finito("vento_dinamico['sigma']", config.get("sigma", DRYDEN_SIGMA))
+    if sigma <= 0.0:
+        raise ValueError(f"`vento_dinamico['sigma']` tem de ser > 0 m/s (recebido {sigma!r}): é o "
+                         "desvio-padrão estacionário da turbulência (σ = 0 seria um modo inerte)")
+    comprimento = finito("vento_dinamico['L']", config.get("L", DRYDEN_L))
+    if comprimento <= 0.0:
+        raise ValueError(f"`vento_dinamico['L']` tem de ser > 0 m (recebido {comprimento!r}): é a escala de "
+                         "comprimento do modelo de Dryden (α = exp(−Δt·V/L))")
+    v_min = finito("vento_dinamico['v_min']", config.get("v_min", DRYDEN_V_MIN))
+    if v_min <= 0.0:
+        raise ValueError(f"`vento_dinamico['v_min']` tem de ser > 0 m/s (recebido {v_min!r}): com vento base "
+                         "nulo a escala de tempo L/V seria infinita (α = 1) e a turbulência congelava em zero")
+    return {"modo": modo, "u_max": u_max, "sigma": sigma, "L": comprimento, "v_min": v_min}
 
 
 def bonus_no_alvo(erro: float, tol: float = BONUS_TOL) -> bool:
@@ -175,15 +250,16 @@ class EnvPadrao(gym.Env):
         self.decimacao = int(decimacao)
         self.passos_max = int(passos_max)
         self.jitter = bool(jitter)
-        self.vento_dinamico = dict(vento_dinamico) if vento_dinamico else None
+        self.vento_dinamico = valida_vento_dinamico(vento_dinamico)   # normalizado uma vez, aqui
         self.rng = np.random.default_rng(seed)
         self.passos = 0
         self.retorno = 0.0
         self.episodios = 0
         self.acao_anterior = 0.0
-        self.vento = np.zeros(3)                                # velocidade do vento em vigor (mundo)
-        self._vento_dinamico_estado = np.zeros(2)               # estado interno do modo "dryden"
-        self._vento_dinamico_pedido: tuple[float, float] | None = None
+        self._base_vento = np.zeros(3)                          # vento BASE (o que o definir_vento escreveu)
+        self.vento = np.zeros(3)                                # vento EM VIGOR = base + dinâmica (mundo)
+        self.dt_decisao = float(self.model.opt.timestep) * self.decimacao   # Δt do passo de decisão (s)
+        self._reinicia_dinamico()                               # estado da dinâmica (rajada/frente/turbulência)
         self.nan_detetados = 0
 
         # ---- constantes FÍSICAS lidas do MODELO COMPILADO (nada de números mágicos no código) ----
@@ -257,14 +333,32 @@ class EnvPadrao(gym.Env):
         return torque
 
     # ------------------------------------------------------------------ perturbação ("vento")
-    def definir_vento(self, vel: float, azimute: float, elevacao: float = 0.0) -> None:
-        """Põe o vento em vigor (m/s, graus, graus). Aplicado à física no passo de decisão seguinte."""
+    def definir_vento(self, vel: float, azimute: float, elevacao: float = 0.0) -> np.ndarray:
+        """Vento BASE constante em POLAR (`vel` m/s, ângulos em GRAUS) — cortado ao teto, nunca NaN.
+
+        É o vento que a UI/CLI manda (`POST /api/vento`; campos `vel`/`azimute`/`elevacao` do ficheiro de
+        controlo) e a base sobre a qual a dinâmica atua: as `rajadas` SOMAM-se-lhe, a `frente`/`dryden`
+        substituem-no enquanto o modo durar. Devolve o vector escrito (m/s, frame mundo).
+        """
         v = min(max(finito("vel", vel), 0.0), VENTO_VEL_MAX)
-        self.vento = vetor_vento(v, finito("azimute", azimute), finito("elevacao", elevacao))
+        self._base_vento = vetor_vento(v, finito("azimute", azimute), finito("elevacao", elevacao))
+        self.vento = np.array(self._base_vento, dtype=float)   # a dinâmica reescreve-o no passo seguinte
+        return np.array(self.vento, dtype=float)
+
+    @property
+    def vento_vec(self) -> np.ndarray:
+        """Cópia do vector de vento EM VIGOR (m/s, frame mundo) — o que a física leva agora (base + dinâmica)."""
+        return np.array(self.vento, dtype=float)
 
     def vento_polar(self) -> tuple[float, float]:
         """(velocidade m/s, azimute graus) do vento em vigor — o que a telemetria publica."""
         return float(np.linalg.norm(self.vento)), azimute_graus(self.vento)
+
+    @property
+    def vento_modo(self) -> str:
+        """Modo de vento dinâmico EM VIGOR (`"nenhum"` quando não há dinâmica ou o teto é 0)."""
+        cfg = self.vento_dinamico
+        return "nenhum" if cfg is None or float(cfg["u_max"]) == 0.0 else str(cfg["modo"])
 
     def _forca_vento(self) -> np.ndarray:
         """Força de arrasto quadrático (N) no site da ponta. ADAPTAR: A/Cd do teu robô (ou o fluido do MuJoCo)."""
@@ -281,41 +375,132 @@ class EnvPadrao(gym.Env):
         self.data.qfrc_applied[self.dof] = tau   # força externa REAL: entra no mj_step (nada de teleporte)
         return tau
 
-    def vento_dinamico_passo(self) -> None:
-        """Avança um modo de vento DINÂMICO (domain randomization): rajadas, frente ou turbulência Dryden."""
-        cfg = self.vento_dinamico or {}
-        modo = str(cfg.get("modo", "rajadas"))
-        u_max = float(cfg.get("u_max", 3.0))
-        if modo not in VENTO_DINAMICO_MODOS:
-            raise ValueError(f"modo de vento dinâmico desconhecido: {modo!r} (use {VENTO_DINAMICO_MODOS})")
-        vel, azim = self.vento_polar()
-        if modo == "rajadas":
-            if self._vento_dinamico_pedido is None and self.rng.random() < float(cfg.get("p", RAJADAS_P)):
-                dur = int(cfg.get("duracao", RAJADAS_DURACAO))
-                self._vento_dinamico_pedido = (float(self.rng.uniform(0.0, u_max)), float(self.rng.uniform(0.0, 360.0)))
-                self._vento_dinamico_estado = np.array([dur], dtype=float)
-            if self._vento_dinamico_pedido is not None:
-                self._vento_dinamico_estado[0] -= 1
-                if self._vento_dinamico_estado[0] <= 0:
-                    self._vento_dinamico_pedido = None
-                else:
-                    vel, azim = self._vento_dinamico_pedido
-        elif modo == "frente":
-            t = self.passos * self.model.opt.timestep * self.decimacao
-            if t >= float(cfg.get("t_s", FRENTE_T_S)):
-                vel = min(u_max, max(0.5, float(self.rng.uniform(0.5, u_max))))
-                azim = float(cfg.get("azimute", 0.0))
-        else:  # dryden: AR(1) com correlação α = exp(−Δt·V/L) sobre a componente transversal
-            dt = self.model.opt.timestep * self.decimacao
-            sigma = float(cfg.get("sigma", DRYDEN_SIGMA))
-            L = float(cfg.get("L", DRYDEN_L))
-            V = max(vel, float(cfg.get("v_min", DRYDEN_V_MIN)))
-            alpha = float(np.exp(-dt * V / L))
-            ruido = self.rng.normal(0.0, sigma * np.sqrt(max(1e-12, 1 - alpha**2)))
-            self._vento_dinamico_estado[1] = alpha * self._vento_dinamico_estado[1] + ruido
-            vel = float(np.clip(np.hypot(vel, self._vento_dinamico_estado[1]), 0.0, u_max))
-            azim = azimute_graus(vetor_vento(1.0, azim)) + float(np.degrees(np.arctan2(self._vento_dinamico_estado[1], max(vel, 1e-6))))
-        self.definir_vento(min(vel, u_max), azim, 0.0)
+    # ------------------------------------------------------------------ vento DINÂMICO (ao vivo)
+    def _reinicia_dinamico(self) -> None:
+        """Reinicia o estado da dinâmica no passo ACTUAL do episódio (não toca no vento base).
+
+        O relógio da dinâmica arranca nos passos já decorridos, para o agendamento da frente continuar a usar
+        o tempo do EPISÓDIO mesmo quando isto é chamado a meio (troca de modo a quente, `--vento-dinamico`).
+        A frente é reamostrada aqui; a turbulência arranca em zero (cresce até σ na escala L/V — arranque
+        calmo) e não há rajada em curso.
+        """
+        self._din_passo = int(self.passos)
+        self._rajada_k = 0
+        self._rajada_n = 0
+        self._rajada_vec = np.zeros(3)
+        self._turb = np.zeros(3)
+        self._frente_passo = 1
+        self._frente_vec = np.zeros(3)
+        if self.vento_dinamico is not None and self.vento_dinamico["modo"] == "frente":
+            self._frente_passo = self._passo_da_frente(self.vento_dinamico["t_s"])
+            self._frente_vec = self._sorteia_frente()
+
+    def _passo_da_frente(self, t_s: float) -> int:
+        """Passo de decisão (1-based) em que a frente entra: o 1.º cujo intervalo `[t, t+Δt)` contém `t_s`.
+
+        `k = floor(t_s/Δt + 1e-9) + 1` com Δt = `dt_decisao`: o vento é constante DENTRO do passo, logo o
+        degrau entra no passo que contém `t_s` (se `t_s` cair numa fronteira, no passo que aí começa).
+        """
+        return int(np.floor(float(t_s) / self.dt_decisao + 1e-9)) + 1
+
+    def _sorteia_frente(self) -> np.ndarray:
+        """Amostra a frente: `u ~ U[min(0,5; u_max), u_max]`, azimute U[0, 360)°, elevação ±20°.
+
+        O piso de 0,5 m/s (`FRENTE_U_MIN`) só se aplica quando o teto o permite; com `0 < u_max < 0,5` a
+        frente vale `u_max`. Com `u_max = 0` o modo é INERTE: devolve o vector nulo e NÃO consome o `rng`.
+        """
+        u_max = float(self.vento_dinamico["u_max"])
+        if u_max == 0.0:
+            return np.zeros(3)
+        u = float(self.rng.uniform(min(FRENTE_U_MIN, u_max), u_max))
+        azimute = float(self.rng.uniform(0.0, 360.0))
+        elevacao = float(np.degrees(self.rng.uniform(-VENTO_ELEV_MAX, VENTO_ELEV_MAX)))
+        return vetor_vento(u, azimute, elevacao)
+
+    def definir_vento_dinamico(self, config: dict | None) -> dict | None:
+        """Liga/reconfigura/desliga o vento dinâmico em RUNTIME (mesma validação do `__init__`).
+
+        Trocar de modo (ou ligar/desligar) re-planeia o RESTO do episódio: a frente é reamostrada e a
+        rajada/turbulência recomeçam (o vento já escrito para este passo mantém-se até ao passo seguinte).
+        Manter o mesmo modo só troca os parâmetros — é o que o treino faz quando o estágio do currículo sobe
+        (`u_max` novo): a rajada em curso e a turbulência continuam, e uma frente ainda não chegada é
+        reamostrada com o teto novo. Com `u_max = 0` o modo fica inerte (volta/fica o vento base, sem degrau
+        nem turbulência e sem consumir o `rng`). Devolve a config NORMALIZADA (ou `None`).
+        """
+        novo = valida_vento_dinamico(config)
+        antigo = self.vento_dinamico
+        mudou_modo = ((novo is None) != (antigo is None)
+                      or (novo is not None and antigo is not None and novo["modo"] != antigo["modo"]))
+        self.vento_dinamico = novo
+        if novo is None:
+            if antigo is not None:
+                self.vento = np.array(self._base_vento, dtype=float)   # volta ao vento base, sem dinâmica
+            return None
+        if mudou_modo:
+            self._reinicia_dinamico()
+            self._passo_vento()                    # o vento do próximo passo já é o dinâmico
+        elif novo["modo"] == "frente" and self.passos + 1 < self._frente_passo:
+            self._frente_vec = self._sorteia_frente()              # a frente ainda não chegou: teto novo
+        return novo
+
+    def _passo_vento(self) -> None:
+        """Escreve em `self.vento` o vento do passo de decisão que agora começa (BASE + dinâmica).
+
+        Chamado UMA vez por passo de decisão: no fim do `reset` (passo 1, logo o arranque já é contra o
+        vento) e no início de cada `step` — a guarda em `step` evita repetir o passo já aplicado.
+
+        `u_max = 0` é o único caso de INÉRCIA e é tratado AQUI, antes de qualquer modo: fica exactamente o
+        vento base e NÃO se sorteia nada do `rng` (nem rajada, nem frente, nem ξ da turbulência) — é o que
+        torna um run com dinâmica bit-idêntico a um run sem ela enquanto o teto for 0.
+        """
+        self._din_passo += 1
+        cfg = self.vento_dinamico
+        if cfg is None or float(cfg["u_max"]) == 0.0:
+            self.vento = np.array(self._base_vento, dtype=float)
+            return
+        if cfg["modo"] == "rajadas":
+            self._passo_rajada(cfg)
+        elif cfg["modo"] == "frente":
+            self.vento = np.array(self._frente_vec if self._din_passo >= self._frente_passo
+                                  else self._base_vento, dtype=float)
+        else:
+            self._passo_dryden(cfg)
+
+    def _passo_rajada(self, cfg: dict) -> None:
+        """RAJADA: sorteia com prob. `p` e aplica o envelope `sin(π·k/(N+1))` SOBRE o vento base."""
+        if self._rajada_k >= self._rajada_n:                    # nenhuma rajada activa → sorteia
+            self._rajada_k = 0
+            self._rajada_n = 0                                  # limpa a duração antiga (senão re-aplicava-a)
+            if float(self.rng.random()) < cfg["p"]:
+                u = float(self.rng.uniform(0.0, cfg["u_max"]))
+                azimute = float(self.rng.uniform(0.0, 360.0))
+                elevacao = float(np.degrees(self.rng.uniform(-VENTO_ELEV_MAX, VENTO_ELEV_MAX)))
+                self._rajada_vec = vetor_vento(u, azimute, elevacao)
+                self._rajada_n = int(cfg["duracao"])
+        if self._rajada_k < self._rajada_n:                     # rajada activa: envelope 0→u→0
+            self._rajada_k += 1
+            env = float(np.sin(np.pi * self._rajada_k / (self._rajada_n + 1.0)))
+            self.vento = np.asarray(self._base_vento + self._rajada_vec * env, dtype=float)
+        else:                                                   # entre rajadas: fica o vento base
+            self.vento = np.array(self._base_vento, dtype=float)
+
+    def _passo_dryden(self, cfg: dict) -> None:
+        """Turbulência OU por passo: `x ← α·x + σ·√(1−α²)·ξ`, `α = exp(−Δt·V/L)`, `V = max(‖base‖, v_min)`.
+
+        O vento aplicado é `base + x`, saturado em NORMA a `u_max` quando há teto (o estado `x` do OU não é
+        saturado, para o processo continuar a ser exactamente o da fórmula). Com `u_max = 0` este método NÃO
+        é chamado (o `_passo_vento` trata a inércia antes de escolher o modo).
+        """
+        v_ref = max(float(np.linalg.norm(self._base_vento)), float(cfg["v_min"]))
+        alpha = float(np.exp(-self.dt_decisao * v_ref / float(cfg["L"])))
+        xi = self.rng.normal(0.0, 1.0, 3)
+        self._turb = alpha * self._turb + float(cfg["sigma"]) * float(np.sqrt(1.0 - alpha * alpha)) * xi
+        total = np.asarray(self._base_vento + self._turb, dtype=float)
+        norma = float(np.linalg.norm(total))
+        u_max = float(cfg["u_max"])
+        if u_max > 0.0 and norma > u_max:
+            total = total * (u_max / norma)
+        self.vento = total
 
     # ------------------------------------------------------------------ guardas de sanidade
     def _verifica_sanidade(self, onde: str) -> None:
@@ -347,13 +532,16 @@ class EnvPadrao(gym.Env):
         self.retorno = 0.0
         self.episodios += 1
         self.acao_anterior = 0.0
+        self.vento = np.array(self._base_vento, dtype=float)   # o vento BASE mantém-se entre episódios
+        self._reinicia_dinamico()               # rajada/turbulência a zero, frente reamostrada para o ep.
+        self._passo_vento()                     # 1.º passo de decisão já leva o vento (base + dinâmica)
         self._verifica_sanidade("reset")
-        return self.observacao(), {"theta": self.theta, "theta_alvo": self.theta_alvo, "trim": self.trim}
+        return self.observacao(), {"theta": self.theta, "theta_alvo": self.theta_alvo, "trim": self.trim,
+                                   "vento_modo": self.vento_modo}
 
     def step(self, acao):
         """Um passo de DECISÃO = `decimacao` passos de física (`mj_step`) com o comando e o vento em vigor."""
-        if self.vento_dinamico:
-            self.vento_dinamico_passo()
+        self._passo_vento()                     # vento do passo que agora começa (base + dinâmica)
         ctrl = self.aplicar_acao(acao)
         tau_vento = self._aplica_vento()
         for _ in range(self.decimacao):
@@ -374,7 +562,7 @@ class EnvPadrao(gym.Env):
         vel_vento, azim_vento = self.vento_polar()
         info = {"theta": self.theta, "theta_alvo": self.theta_alvo, "erro": erro, "omega": omega, "ctrl": ctrl,
                 "tau_vento": tau_vento, "vento_vel": vel_vento, "vento_azim": azim_vento, "trim": self.trim,
-                "no_alvo": bonus_no_alvo(erro), "retorno": self.retorno}
+                "vento_modo": self.vento_modo, "no_alvo": bonus_no_alvo(erro), "retorno": self.retorno}
         return self.observacao(), float(r), bool(terminado), bool(truncado), info
 
 

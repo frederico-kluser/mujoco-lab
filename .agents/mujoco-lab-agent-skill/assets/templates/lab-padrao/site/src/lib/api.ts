@@ -11,6 +11,7 @@ import {
   lerSim,
   numero,
   type CorpoVento,
+  type CorpoVentoDinamico,
   type RespostaSim,
   type ResumoEstado,
 } from "./sim"
@@ -97,6 +98,22 @@ export async function buscarEstado(sinal?: AbortSignal): Promise<ResumoEstado> {
 /** `POST /api/vento {vel,azimute,elevacao}` → 200 ou 400 (a mensagem do 400 chega ao utilizador). */
 export async function enviarVento(corpo: CorpoVento): Promise<void> {
   const bruto = await pedirJson("/api/vento", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(corpo),
+  })
+  const o = typeof bruto === "object" && bruto !== null ? (bruto as Record<string, unknown>) : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+}
+
+/**
+ * `POST /api/vento-dinamico` `{modo, params?, ativo?}` → 200 ou 400.
+ *
+ * É o ÚNICO caminho para ligar/desligar a dinâmica do vento: escreve o controlo e a física muda no passo de
+ * decisão seguinte — **nunca** reinicia o episódio (`/api/reiniciar` é só do botão com hold de 1 s).
+ */
+export async function enviarVentoDinamico(corpo: CorpoVentoDinamico): Promise<void> {
+  const bruto = await pedirJson("/api/vento-dinamico", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(corpo),

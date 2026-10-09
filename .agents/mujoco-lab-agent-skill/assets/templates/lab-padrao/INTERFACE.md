@@ -18,7 +18,7 @@ uv run --group hover-rl python experiments/NN_{{NOME_EXPERIMENTO}}/sim_site.py
 Um comando arranca três coisas (é o `sim_site.py`):
 
 1. o **runner** `sim_view.py` como subprocesso — abre a janela limpa e escreve a telemetria;
-2. um servidor HTTP local (só stdlib) que serve o **site** (`site/dist/`) e a **API** (5 rotas);
+2. um servidor HTTP local (só stdlib) que serve o **site** (`site/dist/`) e a **API** (6 rotas);
 3. imprime o URL (`[site] site em http://127.0.0.1:8080`) e **abre o browser**.
 
 | flag | para quê |
@@ -82,14 +82,38 @@ Tabela das entradas da observação (rótulo, valor cru, barra) e painel da aç�
 por baixo, o **`ctrl` FÍSICO** que o backend aplicou (em N·m) — é o número que corresponde ao que o robô faz.
 Nas linhas de evento (arranque/reinício, `passo = 0`) a ação vale «—» porque **nenhuma** ação foi aplicada.
 
-### 3.5 Controlos
+### 3.5 Controlos (vento · dinâmico · reiniciar · loop)
 `velocidade do vento` (0–5 m/s) · `azimute` (0–360°) · `elevação` (−90–90°) · **APLICAR VENTO** (botão
 multi-estado: pronto → a enviar → aplicado/erro) · **PARAR VENTO** (velocidade 0 no mesmo azimute) ·
-**rosa dos ventos** (direção/elevação em vigor; o comprimento do vetor é a velocidade) · **REINICIAR**
-(manter premido 1 s — é o ÚNICO caminho de reinício) · **LOOP OFF/ON** (OFF por omissão) · `pedidos de
-reinício` (contador).
+**REINICIAR** (manter premido 1 s — é o ÚNICO caminho de reinício) · **LOOP OFF/ON** (OFF por omissão) ·
+`pedidos de reinício` (contador).
 
-### 3.6 Estados honestos
+### 3.6 Vento dinâmico (caixa «vento dinâmico», sem reiniciar o episódio)
+Selo `ativo/inativo` + `modo em vigor` (o que a telemetria diz que a física está a fazer) · seletor contínuo
+**PARADO · RAJADAS · DRYDEN** (com os campos `p`/`duração`/`u_max` e `sigma`/`L`/`v_min`) · **RAJADA AGORA**
+(rajada única dirigida, com `duração da rajada` em passos) · **FRENTE AGORA** (degrau imediato para os valores
+dos sliders) · **PARAR DINÂMICO** (`{modo:"nenhum", ativo:false}`). Escreve no controlo por
+`POST /api/vento-dinamico`; a física muda no passo de decisão seguinte e o episódio **continua**.
+
+### 3.7 Rosa dos ventos (viva)
+Bússola polar com N/E/S/O e marcas de 30°: a seta **cheia** é o vetor EM VIGOR (telemetria `vento_vec`,
+base + dinâmica) e a **tracejada**, o que os sliders mandariam — assim vê-se quando a física está a fazer algo
+diferente do que está nos sliders (rajadas, frente, turbulência). O anel pulsa quando há dinâmica ativa.
+
+### 3.8 Painel do computador de bordo (Raspberry Pi 5)
+A imagem de referência da placa (ilustração Model B+, Lucasbosch/Wikimedia, CC BY-SA 3.0) com o selo `fonte`
+(«real» / «proxy x86 calibrado» / «sem benchmark»), o semáforo **OK / ATENÇÃO / ERRO** derivado do p99,
+os medidores `p50 vs budget`, `p99 vs budget` e `CPU equivalente` (orçamento de **20 ms @ 50 Hz**), e a linha
+`modelo · fator int8 · pior caso · núcleos multi-IA` + specs do alvo (BCM2712, 4× A76 @ 2,4 GHz, LPDDR4X).
+Alimentado pelo relatório do `deploy.py` (`out/deploy_report.json`; `sim_site.py --benchmark CAMINHO.json`
+aponta a outro). Sem relatório diz «sem benchmark» — nunca inventa tempos.
+
+### 3.9 Ajuda «?»
+Botão redondo no canto inferior direito: abre uma folha com **10 secções** (cabeçalho, curvas, rede,
+observação, ação, vento, vento dinâmico, rosa, RPi 5, episódio) que explicam cada elemento do ecrã, todas
+abertas por omissão. Link partilhável: `?ajuda=1` abre-a logo no arranque.
+
+### 3.10 Estados honestos
 400 (valor/faixa inválida), 404 (rota/asset/path traversal), 500; `—` quando não há dados; o site **nunca**
 reinicia sozinho e **nunca** inventa números. Quando o episódio termina, a física está mesmo parada: a
 telemetria continua a 1 Hz só como prova de vida (`estado: episodio_terminado`).
@@ -98,8 +122,8 @@ telemetria continua a 1 Hz só como prova de vida (`estado: episodio_terminado`)
 
 | ficheiro | conteúdo |
 |---|---|
-| `out/sim_telemetria.jsonl` | 1 linha JSON por amostra (0,1 s de tempo **simulado** a correr; 1 Hz de parede parado): `t, estado, ep, passo, retorno, theta, erro, omega, vento_vel, vento_azim, obs[], act[], ctrl[], h1[], h2[]` |
-| `out/controle_vento.json` | `{vel, azimute, elevacao, ativo, reiniciar, loop, t}` — escrito **atomicamente** pelo site, lido a cada passo de decisão pelo runner |
+| `out/sim_telemetria.jsonl` | 1 linha JSON por amostra (0,1 s de tempo **simulado** a correr; 1 Hz de parede parado), **15+2 chaves**: `t, estado, ep, passo, retorno, theta, erro, omega, vento_vel, vento_azim, vento_vec[], vento_modo, obs[], act[], ctrl[], h1[], h2[]` |
+| `out/controle_vento.json` | `{vel, azimute, elevacao, ativo, reiniciar, loop, dinamico:{modo,params,ativo,seq}, t}` — escrito **atomicamente** pelo site, lido a cada passo de decisão pelo runner (o bloco `dinamico` só atua quando a assinatura muda) |
 | `out/runs/<ronda>/` | treino: `final.zip`, `best_model.zip`, `checkpoints/ppo_<passos>.zip`, `treino.jsonl`, `resumo_treino.json` |
 | `out/resumo.json` | validação do `run.py`: as 7 checagens com critério/esperado/medido/ok |
 | `out/vista_resumo.json` | desempenho do `view.py --sem-janela` |
@@ -119,11 +143,13 @@ comando inventado.
 - `net_probe.py` — sonda a rede passo a passo: para uma observação (aleatória, de um `.zip` ou de um estado
   imposto) mostra `obs`, `h1`, `h2`, `act` e o `ctrl` resultante; **sem auto-loop por omissão**.
 - `deploy.py` — export **ONNX** (entrada estática, opset 17) + validação numérica contra o PyTorch +
-  **benchmark proxy RPi** (p50/p99, «cabe a 50 Hz?») + **multi-IA** (N processos, cada um com a sua sessão).
+  **benchmark proxy RPi** (p50/p99, «cabe a 50 Hz?», `--int8`) + **multi-IA** (N processos, 1 por política,
+  com afinidade de core). O relatório alimenta o painel do RPi 5 no site.
 
 ## 6. Limites conhecidos (deste exemplo)
 
 Modelo rígido de 1 DOF com pivô fixo; sem atrito nem folgas; a perturbação é um arrasto quadrático no site
 (sem velocidade relativa — o modelo de fluido do MuJoCo, usado no drone do exp. 09, já a considera);
-`<motor>` sem dinâmica (comando instantâneo). Ao adaptar, mantém esta secção: os limites são parte da
-interface.
+`<motor>` sem dinâmica (comando instantâneo); o painel do RPi 5 mede no **proxy x86** desta máquina (o
+`deploy.py` no Pi 5 é que dá números «reais») e o estado de hardware (`vcgencmd`) fica «sem hardware» sem Pi.
+Ao adaptar, mantém esta secção: os limites são parte da interface.
