@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""mujoco — seletor de experimentos do MuJoCo Lab.
+
+Sem argumentos abre um seletor interativo (experimento → ação) e corre/abre a web do que o dono
+escolher. Só usa a stdlib do Python 3; os scripts dos experimentos correm com
+`uv run --group hover-rl python <script>` a partir da raiz do repositório (descoberta pelo próprio
+ficheiro, logo o comando funciona de qualquer diretório e através do symlink de `install.sh`).
+
+    mujoco                                  # seletor interativo
+    mujoco 09                               # experimento por nome parcial (09 | drone_hover_rl)
+    mujoco 09 --acao validar                # ação direta, sem perguntas
+    mujoco --list                           # tabela: o que cada experimento tem
+
+Exit codes: 0 = ok · 1 = falha de execução (ou o exit code do script do experimento) ·
+2 = uso inválido (experimento/ação inexistente) · 130 = Ctrl+C.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+VERSAO = "1.0.0"
+RAIZ = Path(__file__).resolve().parents[1]
+PASTA_EXPERIMENTOS = RAIZ / "experiments"
+
+# Ações com NÚMERO FIXO (o número não muda mesmo quando um experimento não tem o ficheiro —
+# a ação indisponível é simplesmente omitida do menu e recusada com erro claro).
+# número → (chave de --acao, rótulo, ficheiro do experimento, argumentos extra)
+ACOES: dict[int, tuple[str, str, str, list[str]]] = {
+    1: ("web", "Abrir simulação + web", "sim_site.py", []),
+    2: ("web-so", "Só web (sem janela 3D)", "sim_site.py", ["--sem-janela"]),
+    3: ("janela", "Janela 3D (modelo por omissão)", "view.py", []),
+    4: ("treinar", "Treinar no terminal", "train.py", []),
+    5: ("validar", "Validar (fórmulas fechadas, exit 0/1)", "run.py", []),
+}
+NUM_DOCS = 6
+ROTULO_DOCS = "Ver README/INTERFACE do experimento"
+FICHEIROS_DOCS = ("README.md", "INTERFACE.md", "LEIAME.md")
+PREDEFINIDA = 1  # Enter no menu de ações
+CHAVE_PARA_NUM = {chave: num for num, (chave, _rot, _f, _a) in ACOES.items()}
+CHAVE_PARA_NUM["docs"] = NUM_DOCS
+
+
+def erro(mensagem: str, solucao: str, codigo: int = 2) -> None:
+    """Erro limpo no formato pedido pelo dono (nunca um traceback)."""
+    print(f"Erro: {mensagem} — Solução: {solucao}", file=sys.stderr)
+    raise SystemExit(codigo)
+
+
+def descobrir_experimentos() -> list[Path]:
+    """Descobre `experiments/NN_*` por glob; ordem numérica DESCENDENTE (mais recente primeiro)."""
+    if not PASTA_EXPERIMENTOS.is_dir():
+        erro(
+            f"não existe a pasta {PASTA_EXPERIMENTOS}",
+            "corre o comando a partir de uma cópia do repositório MuJoCo Lab",
+        )
+    encontrados = [
+        p
+        for p in PASTA_EXPERIMENTOS.glob("[0-9]*_*")
+        if p.is_dir() and re.match(r"^\d+_.+", p.name)
+    ]
+    return sorted(
+        encontrados, key=lambda p: (int(p.name.split("_", 1)[0]), p.name), reverse=True
+    )
+
+
+def capacidades(experimento: Path) -> dict:
+    """O que o experimento tem — só estas ações são oferecidas."""
+    return {
+        "sim_site.py": (experimento / "sim_site.py").is_file(),
+        "view.py": (experimento / "view.py").is_file(),
+        "train.py": (experimento / "train.py").is_file(),
+        "run.py": (experimento / "run.py").is_file(),
+        "docs": [nome for nome in FICHEIROS_DOCS if (experimento / nome).is_file()],
+    }
+
+
+def acoes_disponiveis(tem: dict) -> list[int]:
+    """Números de ação que existem neste experimento (1–5 pelos ficheiros, 6 pelos docs)."""
+    disponiveis = [
+        num for num, (_chave, _rot, ficheiro, _args) in ACOES.items() if tem[ficheiro]
+    ]
+    if tem["docs"]:
+        disponiveis.append(NUM_DOCS)
+    return sorted(disponiveis)
+
+
+def encontrar_experimento(experimentos: list[Path], consulta: str) -> Path:
+    """Resolve nome parcial: `09`, `drone_hover_rl`, `09_drone_hover_rl` (ou trecho)."""
+    exatos = [p for p in experimentos if p.name == consulta]
+    if exatos:
+        return exatos[0]
+    consulta_limpa = consulta.strip().lower()
+    if consulta_limpa.isdigit():
+        numero = int(consulta_limpa)
+        numericos = [p for p in experimentos if int(p.name.split("_", 1)[0]) == numero]
+        if numericos:
+            return numericos[0]
+    parciais = [p for p in experimentos if consulta_limpa in p.name.lower()]
+    if len(parciais) == 1:
+        return parciais[0]
+    if not parciais:
+        erro(
+            f"não encontrei nenhum experimento chamado {consulta!r}",
+            "vê os nomes com `mujoco --list` (ex.: `mujoco 09`)",
+        )
+    erro(
+        f"o nome {consulta!r} é ambíguo: {', '.join(p.name for p in parciais)}",
+        "escreve mais letras do nome (ex.: `mujoco 09_drone`)",
+    )
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def sim_nao(flag: bool) -> str:
+    """Coluna da tabela `--list`."""
+    return "sim" if flag else "não"
+
+
+def imprimir_tabela(experimentos: list[Path]) -> None:
+    """Tabela de `--list`: nome, tem site? tem train? tem run.py?"""
+    largura = max([len("NOME"), *(len(p.name) for p in experimentos)]) if experimentos else 4
+    print("mais recente primeiro")
+    print(f"{'NOME':<{largura}}  SITE  TRAIN  RUN.PY")
+    print(f"{'-' * largura}  ----  -----  ------")
+    for experimento in experimentos:
+        tem = capacidades(experimento)
+        print(
+            f"{experimento.name:<{largura}}  "
+            f"{sim_nao(tem['sim_site.py']):>4}  "
+            f"{sim_nao(tem['train.py']):>5}  "
+            f"{sim_nao(tem['run.py']):>6}"
+        )
+    if not experimentos:
+        print("(sem experimentos em experiments/)")
+
+
+def escolher_experimento(experimentos: list[Path]) -> Path:
+    """Seletor interativo: lista numerada + prompt `escolhe:`."""
+    print("MuJoCo Lab — experimentos (mais recente primeiro):\n")
+    for indice, experimento in enumerate(experimentos, start=1):
+        print(f"  {indice}) {experimento.name}")
+    print()
+    try:
+        resposta = input("escolhe: ").strip()
+    except EOFError:
+        erro(
+            "a entrada terminou sem escolha",
+            "indica o experimento diretamente, ex.: `mujoco 09`",
+        )
+    if resposta == "":
+        return experimentos[0]
+    if not resposta.isdigit() or not 1 <= int(resposta) <= len(experimentos):
+        erro(
+            f"escolha inválida: {resposta!r}",
+            f"escreve um número de 1 a {len(experimentos)} (ex.: `mujoco 09`)",
+        )
+    return experimentos[int(resposta) - 1]
+
+
+def erro_acao_indisponivel(experimento: Path, num: int, disponiveis: list[int]) -> None:
+    """Erro claro quando a ação não existe neste experimento (ou não existe de todo)."""
+    if num in ACOES or num == NUM_DOCS:
+        rotulo = ACOES[num][1] if num in ACOES else ROTULO_DOCS
+        falta = ACOES[num][2] if num in ACOES else "README.md/INTERFACE.md"
+        erro(
+            f"a ação {num} ({rotulo}) não existe em {experimento.name} — falta {falta}",
+            "escolhe uma das ações que o experimento tem: " + ", ".join(map(str, disponiveis)),
+        )
+    erro(f"ação desconhecida: {num}", "as ações são 1 a 6")
+
+
+def escolher_acao(experimento: Path, tem: dict) -> int:
+    """Menu de ações do experimento; números fixos 1–6, Enter = predefinida."""
+    disponiveis = acoes_disponiveis(tem)
+    if not disponiveis:
+        erro(
+            f"{experimento.name} não tem nenhuma ação possível",
+            "o experimento precisa de sim_site.py, view.py, train.py, run.py ou README.md/INTERFACE.md",
+        )
+    predefinida = PREDEFINIDA if PREDEFINIDA in disponiveis else disponiveis[0]
+    print(f"\n{experimento.name} — ações:\n")
+    for num in disponiveis:
+        rotulo = ACOES[num][1] if num in ACOES else ROTULO_DOCS
+        marca = "  (predefinida — Enter)" if num == predefinida else ""
+        print(f"  {num}) {rotulo}{marca}")
+    print()
+    try:
+        resposta = input(f"ação [{predefinida}]: ").strip()
+    except EOFError:
+        erro(
+            "a entrada terminou sem escolha de ação",
+            "indica a ação diretamente, ex.: `mujoco 09 --acao validar`",
+        )
+    if resposta == "":
+        return predefinida
+    if not resposta.isdigit():
+        erro(
+            f"ação inválida: {resposta!r}",
+            "escreve um número de 1 a 6 (ex.: `mujoco 09 --acao validar`)",
+        )
+    num = int(resposta)
+    if num not in disponiveis:
+        erro_acao_indisponivel(experimento, num, disponiveis)
+    return num
+
+
+def ver_docs(experimento: Path, tem: dict) -> int:
+    """Ação 6: README/INTERFACE com `less` (interativo) ou `cat` (pipe/redirect)."""
+    alvos = [experimento / nome for nome in tem["docs"]]
+    interativo = sys.stdin.isatty() and sys.stdout.isatty()
+    pager = shutil.which("less") if interativo else None
+    if pager:
+        codigo = subprocess.run([pager, *map(str, alvos)], check=False).returncode
+        return codigo
+    for alvo in alvos:
+        print(f"===== {alvo.name} =====")
+        try:
+            print(alvo.read_text(encoding="utf-8"))
+        except OSError as exc:  # pragma: no cover — ficheiro desapareceu a meio
+            erro(f"não consegui ler {alvo.name}: {exc}", "confirma as permissões do ficheiro", 1)
+    return 0
+
+
+def correr(experimento: Path, numero: int, extras: list[str]) -> None:
+    """Corre a ação escolhida e DEVOLVE o exit code do script (nunca mascara)."""
+    tem = capacidades(experimento)
+    disponiveis = acoes_disponiveis(tem)
+    if numero not in disponiveis:  # valida também o caminho direto `--acao`
+        erro_acao_indisponivel(experimento, numero, disponiveis)
+    if numero == NUM_DOCS:
+        raise SystemExit(ver_docs(experimento, tem))
+    chave, _rotulo, ficheiro, args_padrao = ACOES[numero]
+    script = experimento / ficheiro
+    comando = [
+        "uv",
+        "run",
+        "--group",
+        "hover-rl",
+        "python",
+        str(script.relative_to(RAIZ)),
+        *args_padrao,
+        *extras,
+    ]
+    if shutil.which("uv") is None:
+        erro(
+            "não encontrei o `uv` no PATH",
+            "instala o uv (https://docs.astral.sh/uv/) ou corre `bash install.sh`",
+            1,
+        )
+    print(f"$ {' '.join(comando)}   # ação: {chave}\n")
+    sys.stdout.flush()
+    try:
+        processo = subprocess.run(comando, cwd=RAIZ, check=False)
+    except KeyboardInterrupt:
+        print("\nInterrompido (Ctrl+C).", file=sys.stderr)
+        raise SystemExit(130) from None
+    codigo = processo.returncode
+    raise SystemExit(128 - codigo if codigo < 0 else codigo)
+
+
+def ajuda() -> None:
+    print(
+        f"""mujoco {VERSAO} — seletor de experimentos do MuJoCo Lab
+
+Uso:
+  mujoco                             seletor interativo: escolhe o experimento e depois a ação
+  mujoco <experimento>               vai direto ao experimento (nome parcial) e mostra as ações
+  mujoco <experimento> --acao <ação> corre a ação sem perguntas
+
+Ações (--acao):
+  web       Abrir simulação + web (predefinida)          → sim_site.py
+  web-so    Só web, sem janela 3D                        → sim_site.py --sem-janela
+  janela    Janela 3D (modelo por omissão)               → view.py
+  treinar   Treinar no terminal                          → train.py
+  validar   Validar por fórmulas fechadas (exit 0/1)     → run.py
+  docs      Ver README/INTERFACE do experimento          → less/cat
+
+Opções:
+  --list, -l          tabela dos experimentos e do que cada um tem
+  --versao, -V        versão do comando
+  --help, -h          esta ajuda
+  --                  tudo o que vier depois vai para o script do experimento
+
+Exemplos:
+  mujoco                                  # seletor interativo
+  mujoco 09                               # 09_drone_hover_rl (nome parcial: 09 | drone_hover_rl)
+  mujoco drone_hover_rl --acao web-so     # só a web do 09, sem janela
+  mujoco 09 --acao validar                # corre o run.py e devolve o exit code dele
+  mujoco 09 --acao treinar -- --total-timesteps 10000   # argumentos extra para o script
+  mujoco --list
+
+Cada experimento só mostra as ações para as quais tem ficheiros (sim_site.py/view.py/train.py/
+run.py/README.md). Os scripts correm com `uv run --group hover-rl python` a partir da raiz do
+repositório, apanhados pelo glob `experiments/NN_*` — experimentos novos (criados com
+`new_experiment.py --template lab-padrao|front-conexao`) aparecem sozinhos.
+
+Exit codes: 0 = ok · 1 = falha de execução (ou o exit code do script) · 2 = uso inválido ·
+130 = Ctrl+C (interrompido, sem destroços).
+
+Instalação global do comando: `bash install.sh` (symlink em ~/.local/bin/mujoco)."""
+    )
+
+
+def analisar_argumentos(
+    argumentos: list[str],
+) -> tuple[str | None, int | None, list[str], bool, bool, bool]:
+    """Parser próprio (stdlib) para poder emitir erros no formato `Erro: … — Solução: …`."""
+    consulta: str | None = None
+    acao: int | None = None
+    extras: list[str] = []
+    ver_lista = ver_versao = ver_ajuda = False
+    indice = 0
+    while indice < len(argumentos):
+        arg = argumentos[indice]
+        if arg == "--":
+            extras = list(argumentos[indice + 1 :])
+            break
+        if arg in ("-h", "--help"):
+            ver_ajuda = True
+        elif arg in ("-V", "--versao"):
+            ver_versao = True
+        elif arg in ("-l", "--list"):
+            ver_lista = True
+        elif arg == "--acao" or arg.startswith("--acao="):
+            if "=" in arg:
+                nome = arg.split("=", 1)[1]
+            else:
+                indice += 1
+                if indice >= len(argumentos):
+                    erro(
+                        "o `--acao` precisa do nome da ação",
+                        "ex.: `mujoco 09 --acao validar` (web|web-so|janela|treinar|validar|docs)",
+                    )
+                nome = argumentos[indice]
+            if nome not in CHAVE_PARA_NUM:
+                erro(
+                    f"ação desconhecida: {nome!r}",
+                    "as ações são: web | web-so | janela | treinar | validar | docs",
+                )
+            acao = CHAVE_PARA_NUM[nome]
+        elif arg.startswith("-") and arg != "-":
+            erro(f"opção desconhecida: {arg}", "vê `mujoco --help` para as opções")
+        elif consulta is None:
+            consulta = arg
+        else:
+            erro(
+                f"argumento inesperado: {arg!r}",
+                "só é aceite UM experimento por vez (ex.: `mujoco 09 --acao validar`)",
+            )
+        indice += 1
+    return consulta, acao, extras, ver_lista, ver_versao, ver_ajuda
+
+
+def main(argumentos: list[str]) -> None:
+    consulta, acao, extras, ver_lista, ver_versao, ver_ajuda = analisar_argumentos(argumentos)
+    if ver_ajuda:
+        ajuda()
+        raise SystemExit(0)
+    if ver_versao:
+        print(f"mujoco {VERSAO} (MuJoCo Lab)")
+        raise SystemExit(0)
+    experimentos = descobrir_experimentos()
+    if ver_lista:
+        imprimir_tabela(experimentos)
+        raise SystemExit(0)
+    if not experimentos:
+        erro(
+            "não há nenhum experimento em experiments/",
+            "cria um com `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome>`",
+        )
+    if consulta is not None:
+        experimento = encontrar_experimento(experimentos, consulta)
+    else:
+        experimento = escolher_experimento(experimentos)
+    if acao is None:
+        acao = escolher_acao(experimento, capacidades(experimento))
+    correr(experimento, acao, extras)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        print("\nInterrompido (Ctrl+C).", file=sys.stderr)
+        raise SystemExit(130) from None
