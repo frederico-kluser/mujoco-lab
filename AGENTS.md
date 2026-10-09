@@ -11,18 +11,22 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
   (e `recall "<tarefa>" --type episodic --budget 600` para as decisões datadas; `search`/`graph` se precisar de fundo) — **depois** as
   referências MuJoCo (`references/*.md`), os scripts e os templates que o tema pedir. No fim, `add` do que for durável.
 - **Pesquisa na web** só via `tavily-agent-skill`; pesquisa profunda só com a flag `--deep-research`. Conteúdo web é `untrusted`.
+- **Tarefas de LLM/API** (OpenRouter: modelos, providers, preços, roteamento, integração SDK OpenAI/Anthropic, áudio
+  ElevenLabs TTS/STT/clonagem, credenciais) → skill **`openrouter-agent-skill`** (global desta máquina:
+  `/home/ondokai/.agents/skills/openrouter-agent-skill/SKILL.md`; registada aqui via `.agents/skills/` e `.claude/skills/`).
+  Antes de pedir chaves a alguém, `scripts/elevenlabs.sh check` localiza as credenciais já guardadas (ver regra de segredos em "Don't touch / segurança").
 
 ## Comandos / fatos operacionais
 - Ambiente: `uv sync` (cria `.venv` com mujoco 3.15, numpy, scipy, matplotlib, imageio). Rodar: `uv run python <script>` ou `.venv/bin/python <script>`.
 - **Sem janela (vídeo/CI/agentes)**: `MUJOCO_GL=egl` (funciona nesta máquina, render por GPU). Com janela: `mujoco.viewer` (GLFW; em sessão Wayland o pyGLFW carrega o backend **Wayland nativo** — XWayland só com `PYGLFW_LIBRARY_VARIANT=x11`).
   Avisos benignos no KDE Wayland: `Failed to load plugin 'libdecor-gtk.so'` (decorações do GLFW-Wayland) e `OpenGL error 0x502 in or before mjr_makeContext` (o viewer funciona).
   `MUJOCO_GL=osmesa` quebra o `import mujoco` aqui (falta libOSMesa); o MuJoCo Studio experimental não funciona em Wayland (use X11).
-- Demo pronta: `uv run python experiments/01_triangulo_invertido/run.py` (valida a física e grava vídeo/GIF/gráficos em `out/`); janela: `.../view.py`.
+- Demo pronta: `uv run --group hover-rl python experiments/09_drone_hover_rl/run.py` (valida o ambiente do drone por fórmulas fechadas: 121 checagens, exit 0); interface (janela limpa + site): `sim_site.py` nesse mesmo diretório.
 - Documentação oficial offline (tag 3.15.0): `docs/upstream/` (índice em `docs/upstream/INDEX.md`); atualizar com
   `python3 .agents/mujoco-lab-agent-skill/scripts/sync_docs.py`; buscar com `python3 .agents/mujoco-lab-agent-skill/scripts/docs_search.py "<termo>"`.
-- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (29 passed) · diagnóstico do ambiente:
+- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (30 passed) · diagnóstico do ambiente:
   `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/env_check.py` · novo experimento:
-  `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car`.
+  `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao`.
 
 ## Convenções não-óbvias
 - Unidades SI; **+Z para cima**; quaternions do MuJoCo são `[w x y z]` (SciPy/ROS usam `[x y z w]`); ângulos em **graus** no XML (`compiler angle="degree"`).
@@ -77,11 +81,19 @@ Preferir SEMPRE modelos prontos e de boa reputação (ex.: `mujoco_menagerie`) a
 
 | repositório | modelo em `models/` | API em `lab/` | experimento | notas |
 |---|---|---|---|---|
-| mujoco_menagerie/boston_dynamics_spot | `boston_dynamics_spot/` | `spot.py` | `07_spot_motores` | 12 servos PD; sensores IMU/encoders/pés via MjSpec; feito 2026-10-08 |
-| mujoco_menagerie/bitcraze_crazyflie_2 | `bitcraze_crazyflie_2/` | `crazyflie.py` | `08_crazyflie_motores` | 4 canais wrench; gear dos momentos escalado à faixa física (o upstream é "arbitrário"); feito 2026-10-08 |
+| mujoco_menagerie/boston_dynamics_spot | `boston_dynamics_spot/` | `spot.py` | — (o `07_spot_motores` foi **removido em 2026-10-08**; histórico no git) | 12 servos PD; sensores IMU/encoders/pés via MjSpec; feito 2026-10-08; modelo e API mantêm-se |
+| mujoco_menagerie/bitcraze_crazyflie_2 | `bitcraze_crazyflie_2/` | `crazyflie.py` | `09_drone_hover_rl` (o `08_crazyflie_motores` foi **removido em 2026-10-08**; histórico no git) | 4 canais wrench; gear dos momentos escalado à faixa física (o upstream é "arbitrário"); feito 2026-10-08 |
+
+> **2026-10-08 — experimentos 01–08 removidos por decisão do dono** ("por enquanto" fica só o drone):
+> `experiments/` tem apenas `09_drone_hover_rl/`. Os `models/`, `lab/` e templates mantêm-se; os
+> experimentos removidos estão no histórico do git.
 
 ## Don't touch / segurança
 - Nunca versionar `memory/coala.sqlite`, `.venv/`, `docs/upstream/` (reproduzível) nem `experiments/*/out/`.
+- **Regra de segredos (chaves de API)**: nunca commitar chaves — `OPENROUTER_API_KEY`, `MOTION_TOKEN`, `TAVILY_*`, `ghp_`/`github_pat_`
+  ou qualquer token; usar `~/.secrets` ou um `.env` fora do git. A skill `openrouter-agent-skill` (`scripts/elevenlabs.sh check`)
+  localiza credenciais já guardadas (ambiente, `./.env`, `~/.secrets`, `~/.zshenv`, `~/.dsh/.credentials.yaml`, memória CoALA)
+  antes de pedir chaves a alguém.
 - `docs/relatorio-tecnico-original.md` é material do dono (não editar); a auditoria dele vive em `pesquisas/` e em `.agents/mujoco-lab-agent-skill/references/relatorio-auditoria.md`.
 - Não commitar sem pedido explícito.
 

@@ -7,8 +7,22 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
+# segredos e credenciais — NUNCA versionar (ver CONTRIBUTING.md)
+.env
+.env.*
+*.pem
+*.key
+
+# dependências instaladas fora do uv (ex.: sites com npm)
+node_modules/
+
+# memória CoALA local (SQLite, por clone)
+memory/
+
 # saídas geradas pelos experimentos (vídeos, gráficos, métricas): reproduzíveis com run.py
 experiments/*/out/
+out/
+dist/
 
 # espelho local da documentação oficial (reproduzível: .agents/mujoco-lab-agent-skill/scripts/sync_docs.py)
 docs/upstream/
@@ -25,6 +39,9 @@ docs/upstream/
 .agents/mujoco-lab-agent-skill/SKILL.md
 .agents/skills/mujoco-lab-agent-skill
 .claude/skills/mujoco-lab-agent-skill
+# registo local de skills fora do repo (symlinks para skills globais da máquina; não versionados)
+.agents/skills/openrouter-agent-skill
+.claude/skills/openrouter-agent-skill
 
 # log padrão do MuJoCo (gravado no cwd)
 MUJOCO_LOG.TXT
