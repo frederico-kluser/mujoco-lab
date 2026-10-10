@@ -5,11 +5,22 @@
  * Prova que (1) uma linha cf2 (sem `planta`, ou `planta: "cf2"`) continua a dar EXATAMENTE a leitura de
  * sempre — 16 obs, 64+64 ativações, ctrl = wrench derivável — e nenhuma chave nova; (2) uma linha real
  * dá as 21 obs do ator, o `ctrl` por rotor e os blocos bateria/motores/potência/aero/estimador; (3) valores
- * ausentes ou inválidos viram `null` (nunca 0 inventado, nunca exceção), inclusive sob lixo aleatório.
+ * ausentes ou inválidos viram `null` (nunca 0 inventado, nunca exceção), inclusive sob lixo aleatório;
+ * (4) a semântica da ação vem do `env_real` (taxas 2/2/1 rad/s, coletivo linear em empuxo até 2× o peso) e
+ * a `verdade`/`fim` da telemetria lêem-se; (5) o PAINEL DE VOO (`src/lib/sensores.ts`) converte a linha em
+ * graus/cm/g, usa o bloco `estimador` (e os canais do ator como recurso) e mede o erro do estimador.
  */
 
 import {
+  doNarizParaArranque,
+  envolverGraus,
+  escalaMapaCm,
+  lerPainelVoo,
+  textoInclinacao,
+} from "../src/lib/sensores.ts"
+import {
   derivarAct,
+  empuxoDoColetivo,
   lerBateria,
   lerHardware,
   lerLinha,
@@ -17,6 +28,7 @@ import {
   lerPotencia,
   lerResumo,
   lerSim,
+  lerVerdade,
   N_OBS,
   N_OBS_REAL,
   plantaEmVigor,
@@ -183,7 +195,16 @@ ok(obsReal[15].flag === true && obsReal[16].flag === true && !obsReal[14].flag, 
 ok(Math.abs(obsReal[3].escala - 9.81) < 1e-12 && obsReal[0].escala === 2 && Math.abs(obsReal[8].escala - Math.PI) < 1e-12, "rótulos reais: escalas ÷2, ÷9,81, ÷π")
 ok(rotulosObs("real", "motores")[17].nome === "a_prev·r1", "rótulos reais (motores): ação anterior = aceleradores")
 ok(rotulosAct("real")[1].nome.includes("taxa p") && rotulosAct("real", "motores")[0].nome.includes("acelerador r1"), "rótulos da ação: ctbr e motores")
-ok(setpointTaxa(0.5, 0) === 1.25 && setpointTaxa(3, 2) === 1.5 && setpointTaxa(-9, 1) === -2.5 && setpointTaxa(null, 0) === null, "setpoint de taxa = clip(a) × TAXA_MAX")
+ok(
+  setpointTaxa(0.5, 0) === 1 && setpointTaxa(3, 2) === 1 && setpointTaxa(-9, 1) === -2 && setpointTaxa(null, 0) === null,
+  "setpoint de taxa = clip(a) × TAXA_MAX do env_real (2, 2, 1 rad/s)"
+)
+ok(setpointTaxa(0.5, 0, [3, 3, 3]) === 1.5, "setpoint de taxa usa a faixa publicada pelo backend quando existe")
+ok(
+  empuxoDoColetivo(-1) === 0 && empuxoDoColetivo(0) === 1 && empuxoDoColetivo(1) === 2 && empuxoDoColetivo(5) === 2 &&
+    empuxoDoColetivo(-0.5) === 0.5 && empuxoDoColetivo(null) === null,
+  "coletivo linear em empuxo: −1 → 0, 0 → pairar (1×), +1 → 2× o peso (com clip)"
+)
 ok(rotuloConsumidor("fc_h7").includes("H7") && rotuloConsumidor("novo_x") === "novo_x", "consumidores: prefixo fc_ e chave nova tal como vem")
 
 // ------------------------------------------------------------- (3) ausente/inválido → null
@@ -208,6 +229,12 @@ ok(
 )
 ok(lerPotencia({ consumidores_5v: "x" })?.consumidores5v.length === 0, "potência sem consumidores ⇒ lista vazia")
 ok(lerHardware(null) === null && lerHardware({ build: "b", kf: "1e-5", dr: true })?.kf === 1e-5, "hardware: null fica null; números em texto são lidos")
+const hwAcao = lerHardware({ build: "b", taxa_max: [2, 2, 1], coletivo_max_peso: 2 })
+ok(
+  hwAcao?.taxaMax?.join() === "2,2,1" && hwAcao.coletivoMaxPeso === 2 &&
+    lerHardware({ build: "b", taxa_max: [2, 0, 1] })?.taxaMax === null && lerHardware({ build: "b" })?.taxaMax === null,
+  "hardware: taxa_max (> 0) e coletivo_max_peso lidos; inválido/ausente ⇒ null"
+)
 
 const sim = lerSim({ planta: "real", linhas: [{ ...baseCf2, planta: "real" }, "lixo", null] })
 ok(sim.planta === "real" && sim.linhas.length === 1, "/api/sim: planta lida e linhas inválidas descartadas")
@@ -215,6 +242,61 @@ ok(lerSim({}).planta === null, "/api/sim sem planta ⇒ null")
 const resumo = lerResumo({ planta: "real", hardware: { build: "endurance_12pol", modo_acao: "ctbr", massa_total_g: 1316, bateria: { s: 4, p: 2 } } })
 ok(resumo.planta === "real" && resumo.hardware?.massaTotalG === 1316 && resumo.hardware.bateria?.s === 4, "/api/state: planta + hardware")
 ok(lerResumo({ planta: "cf2", hardware: null }).hardware === null, "/api/state cf2: hardware null")
+
+// ------------------------------------------------- (4) verdade + fim · (5) painel de voo (sensores.ts)
+
+const RAD = Math.PI / 180
+const linhaVoo = lerLinha({
+  t: 3,
+  passo: 150,
+  planta: "real",
+  // ator: giro/2, acc/g, roll, pitch, ψ/π, h−alvo, vz, vx, vy, x, y, tof, fluxo, a_prev×4
+  obs: [0.1, -0.05, 0, 0.02, -0.01, 0.98, 0.03, -0.02, 0.1, -0.05, 0.1, 0.2, -0.1, 0.03, -0.04, 1, 0, 0, 0, 0, 0],
+  estimador: { roll: 2 * RAD, pitch: -1 * RAD, psi: 10 * RAD, h: 0.95, vz: 0.1, vx: 0.2, vy: -0.1, x: 0.03, y: -0.04 },
+  verdade: {
+    x: 0.06, y: 0.0, alvo_xy: [0.01, -0.01], z: 1.0, alvo_z: 1.0, roll: 1.5 * RAD, pitch: -0.5 * RAD,
+    psi: 9 * RAD, yaw: 12 * RAD, vx: 0.18, vy: -0.12, vz: 0.05, p: 0.2, q: -0.1, r: 0,
+  },
+  fim: "tempo",
+})
+ok(linhaVoo !== null && linhaVoo.fim === "tempo", "fim: «tempo» lido")
+ok(lerLinha({ t: 1, fim: "explodiu" })?.fim === null && lerLinha({ t: 1 })?.fim === null, "fim: valor desconhecido/ausente ⇒ null")
+ok(
+  lerVerdade({ x: 1, alvo_xy: [1] })?.alvoXy === null && lerVerdade({}) === null && lerVerdade(null) === null,
+  "verdade: alvo incompleto ⇒ null; vazia/ausente ⇒ null"
+)
+const pv = lerPainelVoo(linhaVoo)
+const perto = (a: number | null, b: number, eps = 1e-9) => a !== null && Math.abs(a - b) <= eps
+ok(perto(pv.rolamento.estimado, 2) && perto(pv.rolamento.real, 1.5) && perto(pv.arfagem.estimado, -1), "painel: atitude em graus (estimado e real)")
+ok(perto(pv.rumo.estimado, 10) && perto(pv.rumo.real, 9) && perto(pv.rumoAbsoluto, 12), "painel: rumo desde o arranque e rumo absoluto em graus")
+ok(perto(pv.altura.estimado, 0.95) && perto(pv.altura.real, 1) && pv.alvoAltura === 1, "painel: altura ABSOLUTA do estimador vs z real")
+ok(perto(pv.vz.estimado, 10) && perto(pv.vFrente.estimado, 20) && perto(pv.vEsquerda.real, -12), "painel: velocidades em cm/s")
+ok(perto(pv.x.estimado, 3) && perto(pv.y.estimado, -4) && perto(pv.x.real, 6) && perto(pv.y.real, 0), "painel: posição em cm (odometria vs verdade)")
+ok(perto(pv.erroEstimadorXy, 5), "painel: erro do estimador = distância estimado↔real (3-4-5 → 5 cm)")
+ok(perto(pv.alvoXy[0], 1) && perto(pv.alvoXy[1], -1) && perto(pv.distAlvo.real, Math.hypot(5, 1)), "painel: alvo em cm e distância real ao alvo")
+ok(perto(pv.giro[0].estimado, 0.2 / RAD) && perto(pv.giro[0].real, 0.2 / RAD), "painel: giroscópio = obs × 2 rad/s em °/s (e o real)")
+ok(perto(pv.acc[2], 0.98) && perto(pv.accNorma, Math.hypot(0.02, -0.01, 0.98)), "painel: acelerómetro em g (obs = a/g) e a norma")
+ok(pv.tofOk === true && pv.fluxoOk === false && pv.temVerdade, "painel: ToF a ler, fluxo sem leitura, com verdade")
+// recurso: sem bloco `estimador` usam-se os canais do ator (a altura vem relativa ao alvo)
+const semEst = lerPainelVoo(lerLinha({ t: 1, planta: "real", obs: linhaVoo?.obs }))
+ok(
+  perto(semEst.rolamento.estimado, 0.03 / RAD) && perto(semEst.altura.estimado, 0.95) &&
+    perto(semEst.rumo.estimado, 0.1 * 180) && !semEst.temVerdade && semEst.erroEstimadorXy === null,
+  "painel sem `estimador`: canais do ator (altura = obs + alvo, rumo = obs·π) e sem erro do estimador"
+)
+const vazio = lerPainelVoo(null)
+ok(vazio.rolamento.estimado === null && vazio.altura.real === null && vazio.tofOk === null && !vazio.temEstimador, "painel sem linha: tudo «—»")
+ok(lerPainelVoo(lerLinha(baseCf2)).rolamento.estimado === null, "painel no cf2: sem estimador nem verdade ⇒ «—» (não se lê a obs do cf2 como se fosse a real)")
+ok(envolverGraus(190) === -170 && envolverGraus(-180) === 180 && envolverGraus(540) === 180, "ângulos envolvidos para ]−180, 180]")
+ok(escalaMapaCm([3, -4, null]) === 10 && escalaMapaCm([15]) === 20 && escalaMapaCm([40]) === 50 && escalaMapaCm([45]) === 100, "mapa: escala com 20 % de folga")
+const v90 = doNarizParaArranque(10, 0, 90)
+ok(Math.abs(v90[0]) < 1e-9 && Math.abs(v90[1] - 10) < 1e-9, "velocidade do nariz → arranque: 10 cm/s em frente com ψ = 90° vai para a esquerda (+y)")
+ok(
+  textoInclinacao(1.23, "rolamento") === "1,2° à direita" && textoInclinacao(-0.3, "rolamento") === "nivelado" &&
+    textoInclinacao(2, "arfagem") === "2,0° nariz em baixo" && textoInclinacao(-2, "arfagem") === "2,0° nariz em cima" &&
+    textoInclinacao(null, "arfagem") === "—",
+  "texto da inclinação (convenção do simulador: arfagem + = nariz em baixo)"
+)
 
 // lixo aleatório (determinístico): nenhum parser pode rebentar
 let semente = 12345
@@ -224,7 +306,7 @@ const aleatorio = () => {
 }
 const valoresLixo: unknown[] = [null, undefined, 0, -1, 1e308, "", "12", "abc", true, false, [], {}, [1, "x", null], { a: 1 }, NaN]
 const lixo = (): unknown => valoresLixo[Math.floor(aleatorio() * valoresLixo.length)]
-const chaves = ["planta", "obs", "ctrl", "h1", "bateria", "motores", "potencia", "aero", "estimador", "t", "passo"]
+const chaves = ["planta", "obs", "ctrl", "h1", "bateria", "motores", "potencia", "aero", "estimador", "verdade", "fim", "t", "passo"]
 let rebentou = 0
 for (let i = 0; i < 2000; i += 1) {
   const bruto: Record<string, unknown> = { t: aleatorio() > 0.1 ? i : lixo() }
@@ -239,6 +321,9 @@ for (let i = 0; i < 2000; i += 1) {
     }
     lerResumo({ hardware: lixo(), planta: lixo() })
     lerSim({ linhas: [bruto], planta: lixo() })
+    const painel = lerPainelVoo(l)
+    for (const v of [painel.rolamento.estimado, painel.altura.estimado, painel.x.real, painel.erroEstimadorXy, painel.accNorma])
+      if (v !== null && !Number.isFinite(v)) throw new Error("painel com NaN")
   } catch (erro) {
     rebentou += 1
     if (rebentou < 3) console.error(erro)

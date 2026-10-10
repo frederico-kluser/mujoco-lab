@@ -45,7 +45,13 @@ este processo por DOIS FICHEIROS:
     linhas de arranque/reinício (`passo == 0`, `t == 0`) valem `act == ctrl == [0,0,0,0]`, porque o `reset`
     zera o `data.ctrl` e não houve ação nenhuma (não se inventa ali um `ctrl` que o simulador não aplicou).
     Cada linha é escrita com `flush` para o site a ver sem esperar; no fim do episódio escreve-se LOGO uma
-    linha de evento (não se espera pelos 0,1 s).
+    linha de evento (não se espera pelos 0,1 s). `fim` (aditivo) diz PORQUE fechou: "tempo" (os 10 s) ou
+    "queda" (caiu/capotou) — `null` enquanto o episódio corre.
+    PLANTA REAL (`planta: "real"`, aditivos): `obs` = os 21 canais do ATOR; `h1`/`h2` com o tamanho REAL das
+    camadas do ator (128-128); `ctrl` = empuxo de cada rotor; blocos `bateria`, `motores`, `potencia`, `aero`,
+    `estimador` (o que o RPi estima só com os sensores) e `verdade` (o estado EXATO do simulador nos mesmos
+    referenciais do estimador — só para o site comparar; a política nunca o vê): `x`, `y`, `alvo_xy`, `z`,
+    `alvo_z`, `roll`, `pitch`, `psi`, `yaw`, `vx`, `vy`, `vz`, `p`, `q`, `r` (SI).
 
 VENTO DINÂMICO AO VIVO (campo `"dinamico"` do controlo, sem reset nenhum — a política continua a voar):
 `{"dinamico": {"modo": ..., "params": {...}, "ativo": bool, "seq": int}}`, com `modo` num de
@@ -902,6 +908,9 @@ class Sonda:
                              "+ a cabeça de ação) — a telemetria desenha h1/h2 da MLP [16, 64, 64, 4]")
         for i, camada in enumerate(lineares):
             self._handles.append(camada.register_forward_hook(self._hook(i)))
+        # tamanho de cada camada escondida (cf2: 64-64; o ator da planta real é 128-128): os zeros de antes do
+        # 1.º forward já saem com o tamanho certo e a telemetria publica a camada INTEIRA
+        self.dims = tuple(int(getattr(m, "out_features", 64)) for m in lineares[:2])
 
     @staticmethod
     def _lineares(politica) -> list:
@@ -918,10 +927,10 @@ class Sonda:
         return guardar
 
     def escondidas(self) -> tuple[np.ndarray, np.ndarray]:
-        """`(h1, h2)` da última passagem; zeros (16→64) se ainda não houve forward."""
+        """`(h1, h2)` da última passagem; zeros (do tamanho das camadas) se ainda não houve forward."""
         ordem = sorted(self.saidas)
         if len(ordem) < 2:
-            return np.zeros(64), np.zeros(64)
+            return np.zeros(self.dims[0]), np.zeros(self.dims[1])
         return self.saidas[ordem[0]], self.saidas[ordem[1]]
 
     def limpar(self) -> None:
@@ -1006,9 +1015,15 @@ class GestorBateria:
         self.ultimo_ciclo: dict | None = None
 
     def restaurar(self) -> None:
-        """Depois do 1.º reset: repõe a carga/ciclo do pack guardados (se houver) e calibra o SoC estimado."""
+        """Depois do 1.º reset: repõe a carga/ciclo do pack guardados (se houver) e calibra o SoC estimado.
+
+        O monitor de tensão (INA226) é re-arrancado com a tensão do pack REPOSTO: o reset já o tinha
+        inicializado com o pack cheio, e calibrar com essa leitura dava ~100 % estimados a um pack a 75 %
+        (medido em 2026-10-10 no site: «SoC 74,8 % · o RPi estima 99,6 %»)."""
         if self.ciclo:
             self.env._repor_bateria(self.ciclo)
+            pl = self.env.planta
+            pl.monitor.reiniciar(pl.rng, pl.v_bus, pl.i_total, float(self.env.data.time))
         self._calibrar_estimativa()
 
     def _calibrar_estimativa(self) -> None:
@@ -1201,6 +1216,9 @@ class Estado:
     pausado: bool = False
     loop: bool = False               # SEM REINÍCIO por omissão (2026-10-09); `--com-loop`/`loop:true` liga
     vento_modo: str = "nenhum"       # modo dinâmico EM VIGOR (para a telemetria): nenhum/rajadas/...
+    motivo_fim: str | None = None    # porque fechou o episódio: "tempo" (os 10 s) ou "queda" (caiu/capotou)
+    origem: tuple[float, float, float] | None = None   # planta real: (x0, y0, ψ0) do arranque — o referencial
+    #                                  da odometria de bordo (a verdade publica-se nele, para comparar)
     obs: np.ndarray | None = None
     acao: np.ndarray | None = None
     h1: np.ndarray | None = None
@@ -1245,14 +1263,62 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
                 if real else _lista(est.obs, 16)),      # real: SÓ a parte do ator (sensores + estimação)
         "act": _lista(est.acao, 4),
         "ctrl": _lista(env.data.ctrl[:4] if real else env.data.ctrl, 4),   # real: empuxo de cada rotor (N)
-        "h1": _lista(est.h1, 64),
-        "h2": _lista(est.h2, 64),
+        # cf2: as 64+64 do contrato; real: a camada INTEIRA (o ator é 128-128 — cortar a 64 dava zeros)
+        "h1": _lista(est.h1, _tamanho(est.h1) if real else 64),
+        "h2": _lista(est.h2, _tamanho(est.h2) if real else 64),
         "camera": camera_real(cam),                 # 19.ª chave: câmara REAL da janela (null sem viewer)
         "planta": "real" if real else "cf2",        # aditivo: o site escolhe os blocos/rótulos certos
+        "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
     }
     if real:
         linha.update(campos_planta_real(env, gestor))
+        linha["verdade"] = verdade_planta_real(env, est.origem)
     return linha
+
+
+def _tamanho(vetor) -> int:
+    """Nº de elementos de um vetor de ativações (64 sem dados — o tamanho do contrato do cf2)."""
+    return 64 if vetor is None else max(1, min(int(np.asarray(vetor).size), 1024))
+
+
+def _origem(env: DroneRealEnv) -> tuple[float, float, float]:
+    """(x0, y0, ψ0) logo a seguir ao reset: a origem e o rumo do referencial da odometria de bordo."""
+    d = env._derivados()
+    return d["x"], d["y"], float(env.yaw0)
+
+
+def verdade_planta_real(env: DroneRealEnv, origem: tuple[float, float, float] | None) -> dict:
+    """A VERDADE do simulador (só para o ecrã — a política NUNCA a vê), no MESMO referencial do estimador.
+
+    O RPi estima a posição por odometria a partir do ponto e do rumo do arranque (`estimador.py`), a
+    velocidade horizontal no referencial de rumo do corpo e o rumo desde o armar; aqui publica-se a verdade
+    nesses referenciais para o site comparar 'o que o drone acha' com 'o que é': `x`, `y` (m, referencial de
+    arranque) e o `alvo_xy` nele; `z` (m, altura do CM) e `alvo_z`; `roll`, `pitch`, `psi` (= ψ − ψ0) e
+    `yaw` (absoluto, mundo) em rad; `vx`, `vy` (m/s, referencial de rumo) e `vz`; `p`, `q`, `r` (rad/s, corpo).
+    """
+    d = env._derivados()
+    x0, y0, psi0 = origem if origem is not None else (0.0, 0.0, float(env.yaw0))
+    c0, s0 = math.cos(psi0), math.sin(psi0)
+
+    def no_arranque(px: float, py: float) -> tuple[float, float]:
+        dx, dy = px - x0, py - y0
+        return c0 * dx + s0 * dy, -s0 * dx + c0 * dy
+
+    x, y = no_arranque(d["x"], d["y"])
+    ax, ay = no_arranque(float(env.alvo[0]), float(env.alvo[1]))
+    cy, sy = math.cos(d["yaw"]), math.sin(d["yaw"])
+    vx_w, vy_w, vz = (float(v) for v in d["v_vec"])
+    p, q, r = (float(v) for v in d["omega"])
+    valores = {"x": x, "y": y, "alvo_xy": [ax, ay], "z": d["z"], "alvo_z": float(env.alvo_z),
+               "roll": d["phi"], "pitch": d["theta"], "psi": envolve(d["yaw"] - psi0), "yaw": d["yaw"],
+               "vx": cy * vx_w + sy * vy_w, "vy": -sy * vx_w + cy * vy_w, "vz": vz, "p": p, "q": q, "r": r}
+    return {k: ([round(float(v), PRECISAO) for v in val] if isinstance(val, list) else round(float(val), PRECISAO))
+            for k, val in valores.items()}
+
+
+def envolve(angulo: float) -> float:
+    """Ângulo em ]−π, π]."""
+    return math.atan2(math.sin(angulo), math.cos(angulo))
 
 
 def _reiniciar(env: HoverEnv, est: Estado, sonda: Sonda, seed: int, ep: int | None = None,
@@ -1266,10 +1332,12 @@ def _reiniciar(env: HoverEnv, est: Estado, sonda: Sonda, seed: int, ep: int | No
     else:
         est.obs, est.info = env.reset(seed=seed)
     est.acao = np.zeros(4)
-    est.h1, est.h2 = np.zeros(64), np.zeros(64)
+    sonda.limpar()
+    est.h1, est.h2 = sonda.escondidas()              # zeros com o tamanho das camadas (64 no cf2, 128 no real)
     est.retorno = 0.0
     est.fim_episodio = False
-    sonda.limpar()
+    est.motivo_fim = None
+    est.origem = _origem(env) if isinstance(env, DroneRealEnv) else None
     if ep is not None:
         est.ep = ep
 
@@ -1409,6 +1477,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             if not est.fim_episodio:                     # 1.ª vez que se vê o fim DESTE episódio
                 motivo = "caiu/capotou" if terminado else "tempo"
                 est.fim_episodio = True
+                est.motivo_fim = "queda" if terminado else "tempo"
                 est.completos += 1
                 fim = f"ep {est.ep} terminou ({motivo}, retorno {est.retorno:+.3f})"
                 if args.max_episodios and est.completos >= args.max_episodios:

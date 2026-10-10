@@ -172,9 +172,14 @@ interface PainelRpi5Props {
   rpi5: Rpi5 | null
   /** `false` quando a API está em baixo (os medidores ficam a "—" e diz-se porquê). */
   ligado: boolean
+  /**
+   * Dimensões da rede EM USO («21→128→128→4»), tiradas da telemetria (obs/h1/h2/act da última linha);
+   * sem elas a frase não as afirma (antes estava fixo em 16→64→64→4, errado na planta real).
+   */
+  dimsRede?: string | null
 }
 
-export function PainelRpi5({ rpi5, ligado }: PainelRpi5Props) {
+export function PainelRpi5({ rpi5, ligado, dimsRede = null }: PainelRpi5Props) {
   const espec = rpi5?.specs ?? null
   const infer = rpi5?.inferencia ?? null
   const uso = rpi5?.uso ?? null
@@ -261,7 +266,7 @@ export function PainelRpi5({ rpi5, ligado }: PainelRpi5Props) {
             <p className="text-[0.65rem] leading-tight text-muted-foreground">
               {semBenchmark
                 ? "sem benchmark publicado pelo backend: mostra-se o estado e as características do alvo, sem inventar tempos."
-                : `medições ${rpi5?.tipoFonte === "real" ? "feitas no próprio Pi 5" : "de um proxy x86 calibrado"} — inferência da rede 16→64→64→4.`}
+                : `medições ${rpi5?.tipoFonte === "real" ? "feitas no próprio Pi 5" : "de um proxy x86 calibrado"} — inferência da rede${dimsRede ? ` ${dimsRede}` : " da política"}.`}
             </p>
             {infer?.modeloCoincide === false ? (
               <p

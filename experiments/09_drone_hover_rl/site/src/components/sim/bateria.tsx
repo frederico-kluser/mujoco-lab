@@ -62,7 +62,7 @@ import {
 // ------------------------------------------------------------------------------ alerta · ícone
 
 /** Texto e estilo de cada alerta (tokens do tema; «crítica» é a forma CHEIA, mais forte). */
-const ALERTA: Record<
+export const ALERTA: Record<
   Exclude<AlertaBateria, "nenhum">,
   { rotulo: string; detalhe: string; classe: string; anel: string }
 > = {
@@ -82,7 +82,7 @@ const ALERTA: Record<
 }
 
 /** Alerta ativo (ignora `nenhum` e o desconhecido). */
-function alertaAtivo(
+export function alertaAtivo(
   bateria: BateriaTelemetria | null
 ): Exclude<AlertaBateria, "nenhum"> | null {
   const a = bateria?.alerta ?? null
@@ -90,7 +90,7 @@ function alertaAtivo(
 }
 
 /** Ícone pelo estado: aviso com alerta, senão cheio/médio/baixo pelo SoC real (componente ESTÁTICO). */
-function IconeBateria({
+export function IconeBateria({
   bateria,
   className,
 }: {

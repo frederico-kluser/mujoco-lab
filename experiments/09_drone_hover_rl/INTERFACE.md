@@ -164,6 +164,13 @@ Dois cartões lado a lado (`xl:grid-cols-2`):
 - **Tabela da observação**: 16 linhas na mesma ordem do grupo acima, com o valor **normalizado** (o que a
   rede vê; coluna `obs`) e, ao lado, o valor **cru** na unidade física (coluna `cru` = `obs × escala`),
   mais uma `progress-bar` por linha.
+- **Planta real — «Entradas da rede · 21 canais»** (avaliação de UX de 2026-10-10): cada canal com um
+  **nome simples** («rotação em rolamento (p)», «altura em relação ao alvo»…, o nome de código por baixo),
+  o **valor** numa unidade do dia a dia (°/s, g, °, cm, cm/s, sim/não), o número **na rede** (normalizado,
+  secundário) e uma **barra centrada no zero com a escala física do canal** (±60 °/s, ±0,5 g, ±20°, ±50 cm…;
+  vermelha = fora da faixa) — antes era uma barra relativa ao canal mais ativo, e o acc_z ≈ 1 g achatava
+  todas as outras; a dica de cada linha explica o canal. A ação real mostra o coletivo como empuxo pedido
+  («0,96× o peso») e as taxas em rad/s e °/s com as faixas que o backend publica (`hardware.taxa_max`).
 - **Ação · 4 canais**: o cartão descrito em §3.3 — barra do empuxo (com o traço de hover), 3 barras de
   momento em mN·m e a lista `a bruta (política)` com os 4 valores crus de `act`.
 
@@ -227,19 +234,29 @@ runner mais a prova de concorrência in-process —, **16/16** com `--http` e **
 `--http --navegador`; o mesmo teste aceita `--legado REV` para correr contra o código de uma revisão
 antiga).
 
-**Bloco «Câmara»** (presente nas secções **Operação** e **Tudo**) — move a câmara da **janela 3D** a partir
-do site (é **só apresentação**: nunca toca na física, no episódio nem em nenhum comando de vento/loop). A
-câmara é **TERCEIRA-PESSOA CONTÍNUA** (contrato v2, 2026-10-10): o alvo é **sempre o drone** — o runner
-escreve `viewer.cam.lookat = body(CAM_CORPO).xpos + CAM_OFFSET` **a cada frame** (`seguir_drone`, §4.4) —
-e o site só comanda **ângulo + distância**:
+**Bloco «Câmara da janela 3D»** (secções **Operação** e **Tudo**; v3 de 2026-10-10, avaliação de UX em
+`out/ux/`) — move a câmara da **janela 3D** a partir do site (é **só apresentação**: nunca toca na física,
+no episódio nem em nenhum comando de vento/loop). A câmara é **TERCEIRA-PESSOA CONTÍNUA** (contrato v2):
+o alvo é **sempre o drone** — o runner escreve `viewer.cam.lookat = body(CAM_CORPO).xpos + CAM_OFFSET`
+**a cada frame** (`seguir_drone`, §4.4) — e o site escolhe **de onde** se olha:
 
 | elemento | detalhe |
 |---|---|
-| **pad (círculo com glifo de drone + esfera arrastável)** | horizontal = **azimute** (0–360°; arrastar à direita aumenta — a câmara orbita de +x para +y, anti-horário visto de cima; passar nas bordas faz wrap 360↔0), vertical = **elevação** (−90…90°; **arrastar para cima põe a câmara mais alta** porque a `elevacao` fica mais negativa — `pos_z = alvo_z − d·sin(elev)`, §4.4; os limites travam a esfera) |
-| **slider Distância** (0,1–10 m) | o zoom (`viewer.cam.distance`); o contrato aceita `distancia` até 20 m |
-| **REPOR VISTA** | envia os valores de `camera_padrao` (`GET /api/state`) **como um comando normal** — não há mecanismo extra no backend |
-| estado **otimista** no arrasto | o pad/slider respondem à mão imediatamente (sem esperar pelo polling); envio com **throttle ~150 ms** com **coalescência** (só o último estado arrastado segue para a rede) + commit imediato ao largar; os valores enviados são sempre os **do gesto** (a telemetria nunca os sobrescreve durante um arrasto nem com envio pendente); sem viewer (`camera_atual: null`) o controlo fica **desativado** com «—» |
-| envio | `POST /api/camera {azimute, elevacao, distancia}` (qualquer **subconjunto**; **sem `alvo`** — o alvo é sempre o drone — e **sem `seq`**: o **servidor** incrementa-o a cada pedido; a resposta traz o bloco com o `seq` que ficou em vigor) |
+| **leitura** «onde · altura · distância» | em português, relativa ao NARIZ do drone: «atrás, à direita · 35° por cima · 1,95 m» |
+| **vista de cima** | o drone de cima com o **nariz para cima** (frente/trás/esquerda/direita do drone, pelo rumo real `verdade.yaw`) e o ícone da câmara **onde ela está**, com o cone de visão a apontar ao drone; arrastar/clicar põe a câmara noutro ponto da volta (azimute: a câmara fica em −(cos a, sin a) do drone, `pos = alvo − d·f`); ↺/↻ = ±15° |
+| **vista de lado** | o drone de perfil e a câmara num arco: arrastar sobe/desce (ângulo acima do horizonte = −elevação, de −30° a 89°); o **chão à escala** (altura do drone ÷ distância) e o ícone a vermelho com aviso se a câmara ficar abaixo do chão; ▲/▼ = ±10° |
+| **zoom** | slider **logarítmico** com −/+ (×1,25) e a **roda do rato** sobre as vistas; limites por planta: drone real 0,6–15 m, Crazyflie 0,1–5 m (o contrato aceita até 20 m) |
+| **vistas rápidas** | Atrás (perseguição) · Frente · Esquerda · Direita · De cima · À altura — relativas ao rumo real do drone, mantêm o zoom; **Repor vista** = enviar o `camera_padrao` como um comando normal |
+| **teclado** | com o foco numa vista: ← → orbitam, ↑ ↓ sobem/descem, + − zoom, Home repõe; as teclas 1–5 das secções continuam a funcionar (as vistas têm `data-atalhos-livres`) |
+| estado | selo «sincronizada / a enviar / a aplicar / aplicada / falhou / sem janela 3D»; durante um gesto o widget é otimista e a telemetria nunca o sobrescreve; fora dele segue a câmara REAL (inclusive o rato da janela); sem viewer (`camera_atual: null`) o bloco diz porquê e desativa-se |
+| envio | `POST /api/camera {azimute, elevacao, distancia}` — o site manda SEMPRE os **3 valores** do estado mostrado (ao vivo durante o gesto, 1 comando a cada ~150 ms com coalescência, + o final ao largar; vistas rápidas e Repor enviam já). O contrato continua a aceitar **subconjuntos** (sem `alvo`, sem `seq` — o servidor incrementa-o) e completa os campos em falta com o bloco em vigor ou, sem bloco, com o `camera_padrao` **do modelo em uso** |
+| detalhes técnicos | recolhidos: azimute/elevação/distância exatos, alvo e posição da câmara, a convenção do MuJoCo e o envio |
+
+Correções de 2026-10-10 (medidas no ecrã real, Xvfb + Chrome headless): (1) um comando só com ângulos era
+completado no servidor com a distância do **Crazyflie (0,27 m)** no 1.º comando da sessão e a câmara do
+drone real saltava para dentro dele — agora o site manda o corpo completo e o servidor completa com o
+`camera_padrao` do modelo em uso; (2) um zoom feito com o rato na janela deixou de ser desfeito pelo
+comando seguinte do site (o corpo completo leva a distância REAL mostrada).
 
 O runner aplica cada bloco `camera` ao `viewer.cam` **UMA VEZ por mudança de assinatura (`seq`+valores)**:
 reescrever o ficheiro com o mesmo bloco (ex.: uma mudança de vento) **não** re-aplica a câmara — por isso
@@ -546,8 +563,16 @@ só o comando de bateria a muda:
 | `potencia` | ledger em W: `motores`, `eletronica`, `bec_perdas`, `total`, `consumidores_5v` {rpi5, fc, sensores…} |
 | `aero` | `kappa_t[4]` (solo × inflow × VRS), `altura_rotores[4]` (m; 50 = sem chão no raio) |
 | `estimador` | o que o RPi estima SÓ com os sensores: `roll`, `pitch`, `psi`, `h`, `vz`, `vx`, `vy`, `x`, `y` |
+| `verdade` | o estado EXATO do simulador nos MESMOS referenciais do estimador (só para o site comparar — a política nunca o vê): `x`, `y` (m, referencial de arranque = o da odometria) e `alvo_xy`, `z` e `alvo_z`, `roll`, `pitch`, `psi` (= ψ − ψ₀), `yaw` (absoluto, rad — o das vistas rápidas da câmara), `vx`, `vy` (m/s, referencial do nariz), `vz`, `p`, `q`, `r` |
+| `fim` | porque fechou o episódio: `"tempo"` (os 10 s) ou `"queda"` (caiu/capotou); `null` a correr — o selo do site só fica vermelho na queda |
+| `h1`, `h2` | as ativações do ATOR com o tamanho REAL das camadas (128 + 128; antes o runner cortava a 64 e publicava zeros, e o bloco «Rede» ficava vazio) |
 
-O site mostra estes dados nos blocos **Bateria** (SoC real e estimado, V/célula, I, W, autonomia, SoH, ciclos,
+Na secção **Operação** (e **Tudo**) estes dados aparecem como cockpit: o **Painel de voo** (horizonte
+artificial, rumo, fita de altura com o alvo, mapa de posição visto de cima com a posição ESTIMADA — ponto
+cheio — e a REAL — contorno — ligadas pelo **erro do estimador** em cm, giroscópio em °/s e acelerómetro em
+g com barras centradas, estado do ToF e do fluxo ótico; tudo em `site/src/lib/sensores.ts`) e o resumo
+**«Bateria e motores»** (SoC real e estimado, autonomia, V e V/célula, corrente, potência, rotação média, uso
+do teto de empuxo, estado dos ESC e o alerta). O site mostra ainda estes dados nos blocos **Bateria** (SoC real e estimado, V/célula, I, W, autonomia, SoH, ciclos,
 temperatura, R₀, curva de descarga, alerta de tensão baixa/crítica, selo REFORMAR e os botões RECARREGAR / PACK
 NOVO), **Motores e potência** (rpm/duty/empuxo/corrente por rotor com o sentido de rotação, teto ω_max/T_max que
 decai com a tensão, ledger de potência e κ_T) e **Hardware (peças reais)** da secção Bordo (e em Tudo), e um
@@ -569,7 +594,13 @@ política (p50 6,9 µs, `modelo_coincide: true`); telemetria com `obs` de 21, `c
 (numa amostra: posição estimada a ~7 cm do alvo, rolamento estimado de 6°, 164,6 W com o vento a soprar); `POST /api/bateria`
 `recarregar` → 200 (ciclo fechado com o desgaste, `n_recargas` 1) e ação inválida → 400; `GET /` serve o site.
 
-Verificação do front da planta real: `npm run typecheck` e `npm run build` limpos, `npm run test:camera`
-(20/20 + 42/42) e **`npm run test:planta` (49/49 — parser das linhas reais, rótulos dos 21 canais, blocos e
-indicador, comandos de bateria)**. O `npm run lint` acusa 13 erros que já existiam antes (componentes `motion-ui`,
-`camera.tsx` e o `Date.now()` do `cabecalho.tsx`) — nenhum nos ficheiros da planta real.
+Verificação do front (2026-10-10, depois da avaliação de UX): `npm run typecheck` e `npm run build` limpos,
+`npm run test:camera` (**20/20 + 67/67** — a geometria das vistas de cima/de lado provada contra
+`pos = alvo − d·f` do MuJoCo, as vistas rápidas para vários rumos, o zoom logarítmico, o corpo completo dos
+comandos e a máquina de gestos DEF-1/DEF-2) e **`npm run test:planta` (72/72** — parser das linhas reais,
+rótulos e escalas dos 21 canais, `verdade`/`fim`, taxas 2/2/1 rad/s e coletivo linear em empuxo, o painel de
+voo em graus/cm/g com o erro do estimador, e 2000 linhas de lixo sem exceções nem NaN). O pytest da skill
+compara as constantes do site com as do `env_real.py`. O `npm run lint` acusa só 5 erros + 2 avisos, todos nos
+componentes do catálogo `motion-ui` (código instalado, não editado); os de `camera.tsx` e do `cabecalho.tsx`
+foram corrigidos. Prova visual: capturas antes/depois em `out/ux/` (Chrome headless + a janela 3D real num
+Xvfb), com a avaliação `avaliacao_antes.json` / `avaliacao_depois.json`.

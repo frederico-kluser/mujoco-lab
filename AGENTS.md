@@ -24,7 +24,7 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
 - Demo pronta: `uv run --group hover-rl python experiments/09_drone_hover_rl/run.py` (valida por fórmulas fechadas o cf2 — 146 checagens — e a PLANTA REAL do drone do dono — 96 checagens do `valida_real.py`; exit 0); interface (janela limpa + site): `sim_site.py` nesse mesmo diretório (arranca **SEM REINÍCIO** — `loop: false`, e o arranque corrige o ficheiro de controlo; `--com-loop` liga o CONTÍNUO).
 - Documentação oficial offline (tag 3.15.0): `docs/upstream/` (índice em `docs/upstream/INDEX.md`); atualizar com
   `python3 .agents/mujoco-lab-agent-skill/scripts/sync_docs.py`; buscar com `python3 .agents/mujoco-lab-agent-skill/scripts/docs_search.py "<termo>"`.
-- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (36 passed) · diagnóstico do ambiente:
+- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (37 passed) · diagnóstico do ambiente:
   `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/env_check.py` · novo experimento:
   `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao`.
 

@@ -6,6 +6,7 @@
  * próprios números de engagement (`eventsBaseline`/`tickIntervalMs`) e não aceita telemetria.
  */
 
+import { useEffect, useState } from "react"
 import { motion } from "motion/react"
 
 import { AnimatedNumber } from "@/components/motion-ui/animated-number"
@@ -22,31 +23,51 @@ import {
   fmtSinal,
   nomeModeloLegivel,
   type EstadoEpisodio,
+  type MotivoFim,
 } from "@/lib/sim"
 import type { Ligacao } from "@/hooks/use-sim"
 
 interface SeloEstadoProps {
   estado: EstadoEpisodio
   aCorrer: boolean
+  /** Porque fechou o episódio (`fim` da telemetria): só a QUEDA é alarme; o fim por tempo é normal. */
+  fim?: MotivoFim | null
 }
 
-function SeloEstado({ estado, aCorrer }: SeloEstadoProps) {
+/**
+ * Selo do episódio em linguagem simples. Avaliação de UX de 2026-10-10: «episodio_terminado» a vermelho
+ * aparecia ao fim de 10 s com o drone a pairar normalmente (sem reinício, a física continua) — agora o
+ * fim por TEMPO é neutro («episódio concluído · continua a voar») e só a QUEDA fica vermelha. Sem o motivo
+ * (runner antigo) fica neutro: não se dá um alarme que a telemetria não sustenta.
+ */
+function SeloEstado({ estado, aCorrer, fim = null }: SeloEstadoProps) {
   const ui = useMotionUITransition("ui")
   const terminado = estado === "episodio_terminado"
+  const queda = terminado && fim === "queda"
+  const texto = !terminado
+    ? "a voar · episódio a correr"
+    : queda
+      ? "caiu ou capotou — REINICIAR para voltar a voar"
+      : "episódio concluído · a física continua"
   return (
     <motion.span
       layout
       transition={{ ...ui }}
       data-testid="selo-estado"
+      data-estado={estado}
+      data-fim={fim ?? ""}
+      title={`estado do runner: ${estado}${fim ? ` (fim por ${fim})` : ""}`}
       className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
-        terminado
+        queda
           ? "bg-destructive/10 text-destructive"
-          : "bg-primary/10 text-primary"
+          : terminado
+            ? "bg-muted text-foreground"
+            : "bg-primary/10 text-primary"
       }`}
     >
       <motion.span
         aria-hidden="true"
-        className={`size-2 rounded-full ${terminado ? "bg-destructive" : "bg-primary"}`}
+        className={`size-2 rounded-full ${queda ? "bg-destructive" : terminado ? "bg-muted-foreground" : "bg-primary"}`}
         animate={terminado || !aCorrer ? { opacity: 1 } : { opacity: [1, 0.25, 1] }}
         transition={
           terminado || !aCorrer
@@ -54,7 +75,7 @@ function SeloEstado({ estado, aCorrer }: SeloEstadoProps) {
             : { duration: 1.6, repeat: Infinity, ease: "easeInOut" }
         }
       />
-      {terminado ? "episodio_terminado" : "a correr"}
+      {texto}
     </motion.span>
   )
 }
@@ -69,6 +90,8 @@ interface CabecalhoProps {
   atualizadoEm: number | null
   /** Subtítulo alternativo (planta real: build, obs do ator, ação ctbr); sem ele fica o do Crazyflie 2. */
   subtitulo?: string
+  /** Motivo do fim do episódio (`fim` da última linha). */
+  fim?: MotivoFim | null
 }
 
 function Contador({
@@ -113,13 +136,20 @@ export function Cabecalho({
   ligacao,
   atualizadoEm,
   subtitulo,
+  fim = null,
 }: CabecalhoProps) {
   // `modelo` já vem do `modelo_nome` do /api/state (pasta/ficheiro.zip); o caminho ABSOLUTO nunca entra
   // no DOM — este é um rótulo de painel, não um explorador de ficheiros, e a página pode ser partilhada.
   const modeloLegivel = nomeModeloLegivel(modelo)
   const ligado = ligacao === "ligado"
+  // «última há X s»: o relógio anda num efeito (1 Hz) — ler `Date.now()` durante o render é impuro
+  const [agora, setAgora] = useState<number | null>(null)
+  useEffect(() => {
+    const id = window.setInterval(() => setAgora(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
   const idade =
-    atualizadoEm === null ? null : Math.max(0, (Date.now() - atualizadoEm) / 1000)
+    atualizadoEm === null || agora === null ? null : Math.max(0, (agora - atualizadoEm) / 1000)
 
   return (
     <Card className="gap-3 px-4" data-testid="cabecalho">
@@ -134,7 +164,7 @@ export function Cabecalho({
           </StaggerRevealItem>
         </StaggerReveal>
         <div className="flex flex-wrap items-center gap-2">
-          <SeloEstado estado={estado} aCorrer={ligado} />
+          <SeloEstado estado={estado} aCorrer={ligado} fim={fim} />
           <span
             data-testid="selo-ligacao"
             className={`inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[0.7rem] ${

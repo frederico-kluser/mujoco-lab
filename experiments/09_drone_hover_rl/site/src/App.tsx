@@ -1,6 +1,7 @@
 /**
  * SITE do experimento 09 (drone a pairar com política RL) — organizado em SECÇÕES selecionáveis:
- * **Operação** (vigiar o voo) · **Rede** (política, obs, ações) · **Vento** (constante + dinâmico) ·
+ * **Operação** (vigiar o voo: valores atuais, Painel de voo e resumo de bordo do drone real, Câmara e
+ * curvas) · **Rede** (política, entradas, ações) · **Vento** (constante + dinâmico) ·
  * **Bordo** (RPi 5 e, só na planta REAL, Bateria · Motores e potência · Hardware) · **Tudo** (layout
  * completo). O dono escolhe o que ver em vez de ver tudo ao
  * mesmo tempo; a escolha fica guardada (`localStorage`) e há atalhos 1–5.
@@ -42,6 +43,8 @@ import { PilhaAvisos, useAvisos } from "@/components/sim/avisos"
 import { IndicadorBateria, PainelBateria } from "@/components/sim/bateria"
 import { PainelHardware } from "@/components/sim/hardware"
 import { PainelMotores } from "@/components/sim/motores"
+import { PainelVoo } from "@/components/sim/painel-voo"
+import { ResumoBordo } from "@/components/sim/resumo-bordo"
 import { PainelRpi5 } from "@/components/sim/rpi5"
 import { Rede } from "@/components/sim/rede"
 import { Skeleton, SkeletonReveal } from "@/components/motion-ui/skeleton"
@@ -57,6 +60,7 @@ import {
 } from "@/lib/paragem"
 import {
   ALVO_Z,
+  GRAUS_POR_RAD,
   MODOS_CONTINUOS,
   fmt,
   fmtGraus,
@@ -122,6 +126,14 @@ export function App() {
   const sim = useSim()
   const { toasts, conteudo, notificar, fechar } = useAvisos()
   const { seccao, escolher } = useSecao()
+  // Trocar de secção começa no TOPO do conteúdo: sem isto a nova secção abria a meio, com o scroll que a
+  // anterior tinha (ex.: sair da Câmara em «Operação» e abrir «Bordo» mostrava o RPi 5 e não a Bateria).
+  const seccaoAnterior = useRef(seccao)
+  useEffect(() => {
+    if (seccaoAnterior.current === seccao) return
+    seccaoAnterior.current = seccao
+    window.scrollTo({ top: 0 })
+  }, [seccao])
   const [faseVento, setFaseVento] = useState<FaseVento>("pronto")
   const [faseDinamico, setFaseDinamico] = useState<FaseVento>("pronto")
   const [dinamicoEmCurso, setDinamicoEmCurso] = useState<AlvoDinamico | null>(
@@ -381,6 +393,22 @@ export function App() {
   const planta = plantaEmVigor(sim.ultima, sim.planta)
   const real = planta === "real"
   const hardware = sim.resumo?.hardware ?? null
+  const ultima = sim.ultima
+  // Rumo ABSOLUTO do drone (graus) para a câmara: a verdade do simulador no drone real; no cf2 o alvo de
+  // rumo é 0, logo o erro de rumo É o rumo. Sem linha → `null` (a câmara desenha relativa ao rumo 0).
+  const rumoGraus =
+    ultima === null
+      ? null
+      : real
+        ? ultima.verdade?.yaw == null
+          ? null
+          : ultima.verdade.yaw * GRAUS_POR_RAD
+        : ultima.yaw_err * GRAUS_POR_RAD
+  // Dimensões da rede em uso (para o painel do RPi 5): as da última linha, só quando há ativações.
+  const dimsRede =
+    ultima === null || ultima.h1.length === 0
+      ? null
+      : `${ultima.obs.length}→${ultima.h1.length}→${ultima.h2.length}→${ultima.act.length}`
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -427,6 +455,7 @@ export function App() {
             loop={loop}
             ligacao={sim.ligacao}
             erro={sim.erro}
+            fim={ultima?.fim ?? null}
             indicador={
               real ? (
                 <IndicadorBateria bateria={sim.ultima?.bateria ?? null} />
@@ -436,7 +465,7 @@ export function App() {
         </div>
       </header>
 
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-4 py-5">
+      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-4 pt-5 pb-24">
         {vazio ? (
           <p
             className="rounded-xl bg-muted/50 px-4 py-3 text-xs text-muted-foreground"
@@ -448,8 +477,8 @@ export function App() {
         ) : null}
 
         <SkeletonReveal loading={semDados} skeleton={<Esqueleto />}>
-          {/* SECÇÃO «OPERAÇÃO» — vigiar o voo: selo de estado + modelo, valores atuais, curvas e a
-              câmara da janela 3D (bloco «Câmara»: também visível na secção «Tudo»). */}
+          {/* SECÇÃO «OPERAÇÃO» — o cockpit: estado + modelo, valores atuais, o Painel de voo e o resumo de
+              bordo (só no drone real), a câmara da janela 3D e as curvas (também na secção «Tudo»). */}
           <BlocoSecao id="operacao" visivel={ver("operacao")}>
             <Cabecalho
               estado={sim.estado}
@@ -460,16 +489,37 @@ export function App() {
               ligacao={sim.ligacao}
               atualizadoEm={sim.atualizadoEm}
               subtitulo={real ? subtituloReal(hardware) : undefined}
+              fim={ultima?.fim ?? null}
             />
-            <ValoresAtuais linha={sim.ultima} />
+            <ValoresAtuais linha={ultima} />
+            {real ? <PainelVoo linha={ultima} /> : null}
+            <div
+              className={
+                real
+                  ? "grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+                  : "flex flex-col gap-4"
+              }
+            >
+              <ControlosCamera
+                camera={sim.camera}
+                cameraPadrao={sim.cameraPadrao}
+                ligado={sim.ligacao === "ligado"}
+                planta={planta}
+                rumoGraus={rumoGraus}
+                alturaDrone={ultima?.z ?? null}
+                onEnviar={enviarCamera}
+                onAviso={notificar}
+              />
+              {real ? (
+                <ResumoBordo
+                  bateria={ultima?.bateria ?? null}
+                  motores={ultima?.motores ?? null}
+                  potencia={ultima?.potencia ?? null}
+                  onVerDetalhe={() => escolher("bordo")}
+                />
+              ) : null}
+            </div>
             <Curvas linhas={sim.linhas} zAlvo={ALVO_Z} grande />
-            <ControlosCamera
-              camera={sim.camera}
-              cameraPadrao={sim.cameraPadrao}
-              ligado={sim.ligacao === "ligado"}
-              onEnviar={enviarCamera}
-              onAviso={notificar}
-            />
           </BlocoSecao>
 
           <div
@@ -527,7 +577,11 @@ export function App() {
                     <PainelHardware hardware={hardware} />
                   </>
                 ) : null}
-                <PainelRpi5 rpi5={sim.rpi5} ligado={sim.ligacao === "ligado"} />
+                <PainelRpi5
+                  rpi5={sim.rpi5}
+                  ligado={sim.ligacao === "ligado"}
+                  dimsRede={dimsRede}
+                />
               </BlocoSecao>
             </main>
 
@@ -557,9 +611,8 @@ export function App() {
                   onApplySuprimido={applySuprimido}
                 />
                 <p className="px-1 text-[0.65rem] text-muted-foreground">
-                  polling GET /api/sim a 2,9 Hz · {fmt(sim.linhas.length, 0)}{" "}
-                  linhas no histórico local · ações: POST /api/vento ·
-                  /api/vento-dinamico · /api/reiniciar · /api/loop
+                  o site lê a simulação ~3 vezes por segundo ·{" "}
+                  {fmt(sim.linhas.length, 0)} pontos no histórico deste episódio
                 </p>
               </BlocoSecao>
             </aside>

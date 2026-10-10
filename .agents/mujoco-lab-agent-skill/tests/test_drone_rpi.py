@@ -106,3 +106,27 @@ def test_aero_caminho_rapido_igual_ao_vetorizado(dr):
         assert np.allclose(det["solo"], g, rtol=1e-12, atol=1e-12)
         assert np.allclose(kq, kqi, rtol=1e-12, atol=1e-12)
         assert np.allclose(kt, g * kti * kv, rtol=1e-12, atol=1e-12)
+
+
+def test_site_usa_as_constantes_do_ambiente_real():
+    """O site (`site/src/lib/sim.ts`, `sensores.ts`) mostra os setpoints de taxa, converte o giroscópio e conta
+    os canais com as MESMAS constantes do `env_real.py` — lidas do código-fonte (sem importar gym/torch).
+    Regressão de 2026-10-10: o site mostrava ±2,5/2,5/1,5 rad/s com o ambiente a usar 2/2/1."""
+    import re
+
+    exp = ROOT / "experiments" / "09_drone_hover_rl"
+    env = (exp / "env_real.py").read_text(encoding="utf-8")
+    sim = (exp / "site" / "src" / "lib" / "sim.ts").read_text(encoding="utf-8")
+    sensores = (exp / "site" / "src" / "lib" / "sensores.ts").read_text(encoding="utf-8")
+
+    def numeros(texto: str) -> list[float]:
+        return [float(x) for x in texto.split(",")]
+
+    taxa_env = numeros(re.search(r"^TAXA_MAX = np\.array\(\[([^\]]+)\]\)", env, re.M).group(1))
+    taxa_site = numeros(re.search(r"TAXA_MAX_CTBR: readonly \[number, number, number\] = \[([^\]]+)\]",
+                                  sim).group(1))
+    assert taxa_site == taxa_env
+    assert float(re.search(r"export const ESCALA_GIRO_OBS = ([0-9.]+)", sensores).group(1)) == \
+        float(re.search(r"^ESCALA_GIRO = ([0-9.]+)", env, re.M).group(1))
+    assert int(re.search(r"export const N_OBS_REAL = (\d+)", sim).group(1)) == \
+        int(re.search(r"^OBS_ATOR_DIM = (\d+)", env, re.M).group(1))

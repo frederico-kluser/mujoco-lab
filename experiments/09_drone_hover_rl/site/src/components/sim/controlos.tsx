@@ -1074,7 +1074,7 @@ export function ControlosEpisodio({
   return (
     <div
       data-testid="controlos-episodio"
-      className={compacto ? "flex items-center gap-3" : "flex flex-col gap-2"}
+      className={compacto ? "flex flex-wrap items-center gap-x-3 gap-y-2" : "flex flex-col gap-2"}
     >
       <div className="relative">
         {semReinicio ? (
@@ -1120,7 +1120,7 @@ export function ControlosEpisodio({
             : "mt-2 flex items-center justify-between gap-3"
         }
       >
-        <div className="flex flex-col">
+        <div className={compacto ? "hidden flex-col sm:flex" : "flex flex-col"}>
           <span className="text-xs font-medium">CONTINUIDADE</span>
           {compacto ? null : (
             <span className="text-[0.65rem] text-muted-foreground">
@@ -1135,10 +1135,16 @@ export function ControlosEpisodio({
           ariaLabel="continuidade dos episódios (contínuo ou sem reinício)"
           className="shrink-0"
         >
-          <SegmentedToggleOption value="sem_reinicio">
+          <SegmentedToggleOption
+            value="sem_reinicio"
+            className={compacto ? "px-3! py-1.5! text-xs! sm:px-4! sm:py-2! sm:text-sm!" : undefined}
+          >
             SEM REINÍCIO
           </SegmentedToggleOption>
-          <SegmentedToggleOption value="continuo">
+          <SegmentedToggleOption
+            value="continuo"
+            className={compacto ? "px-3! py-1.5! text-xs! sm:px-4! sm:py-2! sm:text-sm!" : undefined}
+          >
             CONTÍNUO
           </SegmentedToggleOption>
         </SegmentedToggle>

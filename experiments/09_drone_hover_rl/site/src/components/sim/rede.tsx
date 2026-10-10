@@ -144,7 +144,7 @@ export function Rede({ linha, estadoCorrendo }: RedeProps) {
         </CardTitle>
         <p className="text-[0.7rem] text-muted-foreground">
           {comAtivacoes
-            ? "primary = ativação positiva · destructive = negativa (tokens shadcn, sem hex)"
+            ? "cada quadrado é um neurónio: escuro = ativação positiva · vermelho = negativa · mais forte = maior em relação ao máximo da camada"
             : "o stream ainda não traz h1/h2 — as ativações aparecem quando o backend as publicar"}
         </p>
       </CardHeader>

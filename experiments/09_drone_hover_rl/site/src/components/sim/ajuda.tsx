@@ -69,12 +69,12 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "Operação (tecla 1)",
         texto:
-          "vigiar o voo e enquadrar a cena: cabeçalho (selo de estado, contadores, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel), as 4 curvas grandes (z, yaw_err, retorno, vento_vel) e o bloco «Câmara» (pad de órbita + distância da janela 3D).",
+          "o cockpit: cabeçalho (estado, contadores, modelo), valores atuais (altura, distância ao alvo, erro de rumo, vento), no drone real o «Painel de voo» (inclinação, rumo, altura, posição estimada vs real, giroscópio, acelerómetro, sensores) e o resumo «Bateria e motores», o bloco «Câmara» (vistas de cima e de lado, zoom, vistas rápidas) e as 4 curvas.",
       },
       {
         rotulo: "Rede (tecla 2)",
         texto:
-          "ver a política a decidir: rede 16→64→64→4 com ativações ao vivo, observação de 16 canais e ação de 4 canais.",
+          "ver a política a decidir: a rede com as ativações ao vivo (Crazyflie 16→64→64→4; drone real 21→128→128→4), as entradas da rede (no drone real com nomes simples e unidades do dia a dia) e a ação de 4 canais.",
       },
       {
         rotulo: "Vento (tecla 3)",
@@ -84,7 +84,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "Bordo (tecla 4)",
         texto:
-          "acompanhar o computador de bordo: painel do Raspberry Pi 5 (p50/p99 vs budget, semáforo, specs).",
+          "acompanhar o computador de bordo: painel do Raspberry Pi 5 (p50/p99 vs budget, semáforo, specs) e, no drone real, Bateria (curva de descarga, SoH, RECARREGAR/PACK NOVO), Motores e potência e Hardware.",
       },
       {
         rotulo: "Tudo (tecla 5)",
@@ -126,7 +126,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "selo de estado",
         texto:
-          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando o episódio fechou (z fora dos limites, passo máximo, etc.) — com o loop desligado isso NÃO quer dizer que a física parou: o backend continua a integrar no estado em que ficou (o `passo` e o `t` da telemetria continuam a crescer e o `retorno` fica no valor do fim). No modo contínuo o backend arranca logo o episódio seguinte; o site nunca reinicia sozinho — só o REINICIAR com hold faz POST /api/reiniciar.",
+          "«a voar · episódio a correr» (ponto a pulsar) enquanto o episódio decorre; «episódio concluído · a física continua» (neutro) quando o episódio fechou por TEMPO — com o loop desligado o drone continua a voar com a política e o `passo`/`t` continuam a crescer; «caiu ou capotou» (vermelho) só quando o fim foi uma QUEDA (campo `fim` da telemetria). No modo contínuo o backend arranca logo o episódio seguinte; o site nunca reinicia sozinho — só o REINICIAR com hold faz POST /api/reiniciar.",
       },
       {
         rotulo: "selo de ligação",
@@ -156,24 +156,29 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
     onde: "secção «Operação» (e «Tudo»), 4 gráficos",
     itens: [
       {
-        rotulo: "z(t)",
+        rotulo: "altura",
         texto:
-          "Altitude do drone ao longo do episódio, com a linha fina no alvo de 1,0 m. Abaixo do gráfico: mínimo, máximo e nº de pontos guardados.",
+          "Altitude do drone (z, a verdade do simulador) ao longo do episódio, com a linha fina no alvo de 1,0 m. Abaixo do gráfico: mínimo, máximo e nº de pontos guardados.",
       },
       {
-        rotulo: "yaw_err(t)",
+        rotulo: "erro de rumo",
         texto:
-          "Erro de guinada (rad) face ao alvo 0: diz se o drone está a rodar sobre si mesmo, o que acontece com vento lateral.",
+          "Quanto o nariz rodou face ao rumo do arranque (yaw_err), em GRAUS, com alvo 0°: diz se o drone está a rodar sobre si mesmo, o que acontece com vento lateral.",
       },
       {
-        rotulo: "retorno(t)",
+        rotulo: "retorno",
         texto:
           "Retorno acumulado (a mesma soma do cabeçalho) em forma de curva: sobe enquanto a política se porta bem.",
       },
       {
-        rotulo: "vento_vel(t)",
+        rotulo: "vento",
         texto:
-          "Norma do vento aplicado em cada passo, em m/s. Com rajadas ou turbulência ligadas é aqui que se vê a dinâmica a mexer o vento.",
+          "Norma do vento aplicado em cada passo, em m/s (vento_vel). Com rajadas ou turbulência ligadas é aqui que se vê a dinâmica a mexer o vento.",
+      },
+      {
+        rotulo: "valores atuais (cartões grandes)",
+        texto:
+          "Altura (m), distância ao alvo na horizontal (cm), erro de rumo (graus) e vento (m/s) do último passo — a verdade do simulador; o que o drone ACHA está no Painel de voo.",
       },
       {
         rotulo: "mín · máx · pts",
@@ -185,32 +190,98 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   {
     id: "camera",
     titulo: "Câmara da janela 3D",
-    onde: "secção «Operação» (e «Tudo»), bloco «Câmara»",
+    onde: "secção «Operação» (e «Tudo»), bloco «Câmara da janela 3D»",
     itens: [
       {
         rotulo: "o que é",
         texto:
-          "Widget de TERCEIRA-PESSOA da câmara da janela MuJoCo: um CÍRCULO com o drone ao centro e uma ESFERA arrastável (horizontal = azimute, vertical = elevação), um slider de DISTÂNCIA (0,1–10 m) e o REPOR VISTA. A câmara orbita sempre o drone — o backend segue o alvo (drone+offset) e aqui só se comanda ângulo + distância (POST /api/camera).",
+          "Comanda a câmara da janela MuJoCo como a terceira pessoa de um jogo: o alvo é SEMPRE o drone (o backend segue-o a cada frame) e aqui escolhes de ONDE olhas. A linha «onde · altura · distância» diz em português onde a câmara está (ex.: «atrás, à direita · 35° por cima · 2,0 m»).",
       },
       {
-        rotulo: "o pad (a esfera)",
+        rotulo: "vista de cima",
         texto:
-          "Arrastar para a direita AUMENTA o azimute (a câmara orbita de +x para +y, anti-horário visto de cima; azimute 0° = câmara olha para +x) e passar nas bordas laterais faz WRAP 360↔0. Arrastar para CIMA põe a câmara MAIS ALTA: a elevação fica mais negativa (a convenção do MuJoCo, onde elevação negativa vê de cima) e os limites ±90° travam a esfera nas bordas superior/inferior.",
+          "O drone visto de cima com o NARIZ PARA CIMA (frente/trás/esquerda/direita são as do drone) e o ícone da câmara ONDE ela está, com o cone de visão a apontar ao drone. Arrasta o ícone (ou clica noutro ponto do círculo) para rodar a câmara à volta do drone. ↺/↻ = ±15°.",
       },
       {
-        rotulo: "distância e REPOR VISTA",
+        rotulo: "vista de lado",
         texto:
-          "O slider de distância (0,1–10 m) faz zoom mantendo o alvo. REPOR VISTA reenvia os valores por omissão (camera_padrao: azimute, elevação, distância). Não há presets: o pad substitui-os.",
+          "O drone de perfil e a câmara num arco à volta dele: arrasta para cima/baixo para mudar a altura da câmara (de 30° por baixo a quase a pique). O chão está desenhado À ESCALA (altura do drone ÷ distância): se a câmara ficar abaixo dele o ícone fica vermelho e aparece um aviso. ▲/▼ = ±10°.",
+      },
+      {
+        rotulo: "zoom",
+        texto:
+          "Slider LOGARÍTMICO (o detalhe perto do drone ganha trilho) com −/+ (×1,25) e a roda do rato por cima das vistas. Limites por planta: drone real 0,6–15 m (com 650 mm de frame, mais perto ficava dentro das hélices); Crazyflie 0,1–5 m.",
+      },
+      {
+        rotulo: "vistas rápidas · repor vista",
+        texto:
+          "Um clique: Atrás (perseguição, a olhar para onde o nariz aponta), Frente, Esquerda, Direita, De cima (a pique, nariz para cima na imagem) e À altura (3/4 à frente, à altura do drone). São relativas ao rumo REAL do drone e mantêm o teu zoom. «Repor vista» volta à vista com que a janela abriu (camera_padrao).",
+      },
+      {
+        rotulo: "teclado",
+        texto:
+          "Com o foco numa das vistas: ← → orbitam ±15°, ↑ ↓ sobem/descem ±10°, + e − aproximam/afastam, Home repõe a vista. As teclas 1–5 das secções não atuam com o foco numa vista.",
       },
       {
         rotulo: "estado e honestidade",
         texto:
-          "Fora de arrasto a esfera segue a CÂMARA REAL (inclusive quando a mexes com o rato da própria janela); durante o arrasto o estado é otimista e a telemetria nunca o sobrescreve. Comandos ao vivo ENQUANTO se arrasta (throttle de 150 ms com coalescência — 1 comando por mudança final de valor) + commit final ao largar: os valores enviados são SEMPRE os finais do gesto. Sem dados (sem janela) o bloco mostra «—» e desativa-se.",
+          "O selo do bloco diz se a câmara está sincronizada com a janela, a enviar, a aplicar ou se falhou. Fora de um gesto o widget segue a CÂMARA REAL (inclusive quando a mexes com o rato da própria janela); durante o gesto a telemetria nunca o sobrescreve e os valores enviados são sempre os finais do gesto. Sem janela 3D (--sem-janela) o bloco diz porquê e desativa-se.",
       },
       {
-        rotulo: "a fórmula",
+        rotulo: "detalhes técnicos",
         texto:
-          "pos = alvo − d·f(azim,elev), com f = [cos e·cos a, cos e·sin a, sin e] (direção de visão unitária do MuJoCo). O alvo é o drone+offset que o backend segue e o runner aplica cada comando ao viewer.cam uma vez por mudança — o rato da janela continua livre entre comandos.",
+          "Recolhidos no fim do bloco: azimute/elevação/distância exatos, alvo e posição da câmara, a convenção do MuJoCo (pos = alvo − d·f, f = [cos e·cos a, cos e·sin a, sin e]; elevação negativa = por cima) e o envio (POST /api/camera, 1 comando a cada 150 ms durante o gesto + o final).",
+      },
+    ],
+  },
+  {
+    id: "painel-voo",
+    titulo: "Painel de voo (drone real)",
+    onde: "secção «Operação» (e «Tudo»), por baixo dos valores atuais",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "estimado vs real",
+        texto:
+          "Ponto/ponteiro CHEIO = o que o drone ESTIMA a bordo, só com os sensores (é isto que a política vê); CONTORNO/tracejado = a verdade do simulador, só para comparar. A diferença é o erro do estimador.",
+      },
+      {
+        rotulo: "inclinação (horizonte artificial)",
+        texto:
+          "Rolamento e arfagem estimados, em graus e por extenso («1,2° à direita», «0,4° nariz em baixo»). Convenção do simulador (x frente, y esquerda, z cima): arfagem positiva = nariz em BAIXO.",
+      },
+      {
+        rotulo: "rumo",
+        texto:
+          "Quanto o nariz rodou desde o arranque. Sem bússola, o estimado integra o giroscópio e deriva devagar.",
+      },
+      {
+        rotulo: "altura",
+        texto:
+          "Fita de 0 a 2 m com o alvo (tracejado): triângulo cheio = altura estimada (ToF + acelerómetro), contorno = real; por baixo a velocidade vertical em cm/s e se o sensor ToF está a ler.",
+      },
+      {
+        rotulo: "posição (mapa visto de cima)",
+        texto:
+          "Desde o arranque, frente para cima (como a vista de cima da câmara): cruz = alvo, anéis a 5 e 10 cm, ponto cheio = posição que o RPi estima pela odometria do fluxo ótico, círculo = real, seta = velocidade estimada (1 s). O «erro do estimador» em cm é a distância entre os dois — é ele que limita a precisão em xy (a política segura a estimativa a 1–5 cm).",
+      },
+      {
+        rotulo: "giroscópio · acelerómetro · sensores",
+        texto:
+          "Barras centradas no zero com escala física fixa (±60 °/s; ±0,5 g e 1 ± 1 g na vertical — a pairar o acelerómetro mede ≈ 1 g para cima); o círculo é o valor real. Os selos dizem se o ToF e o fluxo ótico estão a ler.",
+      },
+    ],
+  },
+  {
+    id: "resumo-bordo",
+    titulo: "Bateria e motores (resumo)",
+    onde: "secção «Operação» (e «Tudo»), ao lado da Câmara",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "o que mostra",
+        texto:
+          "Carga real (e a que o RPi estima), autonomia até à reserva de pouso, tensão (e por célula), corrente, potência (motores + bordo), rotação média dos motores, quanto do teto de empuxo está a ser usado e o estado dos ESC — com o alerta de tensão em destaque. O botão leva ao detalhe completo na secção «Bordo».",
       },
     ],
   },
@@ -220,9 +291,9 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
     onde: "secção «Rede» (e «Tudo»), coluna principal",
     itens: [
       {
-        rotulo: "16 → 64 → 64 → 4",
+        rotulo: "entradas → escondidas → saídas",
         texto:
-          "A rede: 16 entradas (observação), duas camadas escondidas de 64 e 4 saídas (ação). As grelhas mostram as ATIVAÇÕES de cada camada neste instante.",
+          "A rede da política: Crazyflie 16 → 64 → 64 → 4; drone real 21 → 128 → 128 → 4 (só o ATOR — o crítico do treino não vai para o drone). As grelhas mostram as ATIVAÇÕES de cada camada neste instante.",
       },
       {
         rotulo: "cor = |a| / máx da camada",
@@ -238,7 +309,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
   },
   {
     id: "obs",
-    titulo: "Observação · 16 canais",
+    titulo: "Observação · 16 canais (Crazyflie 2)",
     onde: "secção «Rede» (e «Tudo»), sob a rede",
     itens: [
       {
@@ -455,14 +526,14 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
           "Com a planta REAL (o drone do dono: peças reais, bateria, motores BLDC, sensores com erro) a política só vê o que existe a bordo. O subtítulo do cabeçalho diz o build; a rede e as tabelas mudam de rótulos sozinhas (com o Crazyflie fica tudo como antes).",
       },
       {
-        rotulo: "observação · 21 canais",
+        rotulo: "entradas da rede · 21 canais",
         texto:
-          "giro medido p,q,r (÷2 rad/s) · acelerómetro medido x,y,z (÷9,81) · roll e pitch estimados (rad) · rumo Δψ desde o armar (÷π) · altura estimada − alvo (m) · v_z estimada · v_x, v_y no corpo pelo fluxo ótico (m/s) · odometria x̂, ŷ (m) · ToF e fluxo válidos (sim/não) · ação anterior (coletivo, p, q, r).",
+          "Cada canal com um nome simples, o valor numa unidade do dia a dia (°/s, g, °, cm, cm/s, sim/não), o número normalizado que entra na rede e uma barra CENTRADA no zero com a escala física do canal (vermelha = fora da faixa): rotação medida (giroscópio), aceleração medida (g), inclinação e rumo estimados, altura em relação ao alvo e velocidade vertical, velocidade pelo fluxo ótico, posição pela odometria, ToF/fluxo válidos e a última ação. Passa o rato numa linha para a explicação.",
       },
       {
         rotulo: "ação ctbr · ctrl por rotor",
         texto:
-          "a₀ = coletivo de acelerador (0 = pairagem) e a₁..₃ = taxas p, q, r (até ±2,5/2,5/1,5 rad/s) que o FC dedicado fecha a 500 Hz; a coluna «pedido» mostra o setpoint de taxa. O ctrl publicado é o EMPUXO de cada rotor (N), com a barra face ao teto atual e o traço da pairagem (m·g/4).",
+          "a₀ = coletivo LINEAR EM EMPUXO (−1 = sem empuxo, 0 = pairar, +1 = 2× o peso; a tensão medida da bateria é compensada) e a₁..₃ = taxas p, q, r até ±2/2/1 rad/s (±115/115/57 °/s, os valores do env_real publicados pelo backend) que o FC dedicado fecha a 500 Hz; a coluna «pedido» mostra o empuxo pedido (× o peso) e os setpoints de taxa. O ctrl publicado é o EMPUXO de cada rotor (N), com a barra face ao teto atual e o traço da pairagem (m·g/4).",
       },
       {
         rotulo: "selo de bateria na barra fixa",
@@ -583,7 +654,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "faixa de estado do episódio",
         texto:
-          "Em «contínuo» diz «episódio a correr · modo contínuo» e, na transição, «episódio N terminado · o backend arranca já o seguinte» numa linha NEUTRA (sem pedir nada). Em «sem reinício» diz «episódio N terminado · sem reinício: a física continua no estado em que ficou (REINICIAR = episódio novo)» — também NEUTRA, porque nada é exigido: o `passo`/`t` continuam a subir na telemetria. O que exige ação — API em baixo — fica sempre vermelho, em qualquer secção.",
+          "Em «contínuo» diz «episódio a correr · modo contínuo» e, na transição, «episódio N terminado · o backend arranca já o seguinte» numa linha NEUTRA (sem pedir nada). Em «sem reinício» diz «episódio N concluído · sem reinício: o drone continua a voar com a política (REINICIAR = episódio novo)» — também NEUTRA, porque nada é exigido: o `passo`/`t` continuam a subir na telemetria; se o fim foi uma queda, a frase di-lo. O que exige ação — API em baixo — fica sempre vermelho, em qualquer secção.",
       },
       {
         rotulo: "aviso de episódio novo",
@@ -603,7 +674,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "como os dados chegam",
         texto:
-          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST. Não há websockets nem recarregamento da página — e com uma secção escondida os updates CONTINUAM (o seletor só esconde a renderização); ao voltares, os valores estão frescos.",
+          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST (vento, vento dinâmico, parar, reiniciar, loop, câmara e bateria). Não há websockets nem recarregamento da página — e com uma secção escondida os updates CONTINUAM (o seletor só esconde a renderização); ao voltares, os valores estão frescos.",
       },
     ],
   },

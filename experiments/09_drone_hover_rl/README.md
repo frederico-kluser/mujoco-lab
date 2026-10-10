@@ -491,6 +491,18 @@ A janela mostra SÓ o 3D e a **câmara** é comandada pelo site (bloco «Câmara
 como o vento, é **só apresentação**: nunca toca na física, no episódio nem em nenhum comando. Em v2 a
 câmara é **terceira-pessoa de jogo**: o alvo segue SEMPRE o drone e o site só comanda ângulo + distância.
 
+**Widget v3 (2026-10-10, avaliação de UX em `out/ux/`)** — o contrato abaixo não mudou; mudou o comando: em
+vez do pad v2 (círculo com uma esfera de mapeamento linear, que não ficava onde a câmara está), duas vistas
+geométricas — **de cima** (nariz do drone para cima, ícone da câmara onde ela está, arrastar = orbitar) e
+**de lado** (arco à volta do drone com o chão à escala, arrastar = subir/descer) —, zoom **logarítmico** com
+limites por planta (drone real 0,6–15 m), roda do rato, setas/+/−/Home, **vistas rápidas** relativas ao nariz
+(Atrás, Frente, Esquerda, Direita, De cima, À altura) e a leitura «atrás, à direita · 35° por cima · 1,95 m».
+Duas correções medidas no ecrã real: o 1.º comando só com ângulos punha a câmara do drone real a **0,27 m**
+(o servidor completava a distância com a do Crazyflie — agora usa o `camera_padrao` do modelo em uso) e um
+zoom feito com o rato na janela era desfeito pelo comando seguinte do site (agora o site manda sempre os 3
+valores do estado mostrado, que fora de um gesto é a câmara real). Geometria provada contra o MuJoCo em
+`site/testes/camera-gestos.mts` (67/67).
+
 - **Contrato:** bloco `"camera"` do `out/controle_vento.json` = `{"azimute","elevacao","distancia",
   "seq"}` — **SEM `alvo`** (faixas: azimute finito normalizado mod 360, elevacao [−90,90]°, distancia
   ]0,20] m; `seq` incrementado a CADA comando pelo servidor, como o `dinamico.seq`) +
@@ -777,6 +789,11 @@ o `deploy.py` regista o `/proc/loadavg` antes/depois em todos os relatórios exa
 - Sem magnetómetro o rumo absoluto não é observável: a recompensa usa o rumo relativo ao do arranque.
 - A autonomia de 99 min é de pairagem pura em ar parado; o caso real publicado mais próximo voou ~30 % abaixo
   da tabela — espere ~80–90 min.
+- **O rumo real deriva com o bias do giroscópio** (medido no site com o painel de voo, 2026-10-10): a política
+  segura o rumo ESTIMADO (giroscópio integrado, sem bússola) e o rumo VERDADEIRO afasta-se a ~0,35 °/s — +30°
+  de erro do estimador ao fim de 80 s (bias residual sorteado ≈ 1,9σ dos 0,2 °/s do BMI088 no catálogo). Em
+  voos longos o drone roda devagar sobre si mesmo; a cura é física: calibrar o bias do giroscópio em repouso
+  antes de descolar e/ou um magnetómetro no build.
 - **O xy (~6 cm nominal, ~9 cm sob DR) é limitado pelo estimador de bordo**, não pela política: ela segura a posição
   ESTIMADA a 1–5,5 cm, e a odometria por fluxo ótico deriva 2–11 cm da verdade em 10 s (medido; ver os
   resultados acima). Melhorar o estimador (Kalman fluxo + acelerómetro, escala do fluxo calibrada) ou dar-lhe uma

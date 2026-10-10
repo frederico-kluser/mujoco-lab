@@ -1,40 +1,44 @@
 /**
- * WIDGET «CÂMARA» (vista 3.ª pessoa) — mapeamento do PAD (esfera ↔ ângulos) e MÁQUINA DE GESTOS
- * (comandos ao vivo durante o arrasto + commit final, sem perder gestos). Sem DOM nem React: o
- * `camera.tsx` é só a camada de apresentação sobre esta máquina, e os testes
- * (`testes/camera-gestos.mts`) exercitam ESTE código de produção.
+ * WIDGET «CÂMARA» (vista 3.ª pessoa, v3 de 2026-10-10) — a GEOMETRIA das duas vistas do bloco, as VISTAS
+ * RÁPIDAS e a MÁQUINA DE GESTOS (comandos ao vivo durante o arrasto + commit final, sem perder gestos).
+ * Sem DOM nem React: o `camera.tsx` é só a camada de apresentação e os testes (`testes/camera-gestos.mts`)
+ * exercitam ESTE código de produção.
  *
- * PAD (especificação do dono, 2026-10-09): um CÍRCULO com o glifo do DRONE ao centro e UMA ESFERA
- * arrastável — horizontal = azimute, vertical = elevação — mais um SLIDER de distância (0,1–10 m)
- * e o botão REPOR VISTA (envia o `camera_padrao`). Sem presets: o pad substitui-os.
+ * Porquê v3: o pad v2 (círculo com uma esfera, horizontal = azimute e vertical = elevação, linear) pedia
+ * para ler a legenda — a esfera não ficava onde a câmara está (azimute 90° punha-a em cima de um braço).
+ * Agora há duas vistas GEOMÉTRICAS, como num programa 3D:
  *
- * MAPEAMENTO esfera ↔ ângulos (coordenadas normalizadas `u` horizontal [direita +] e `w` vertical
- * [cima +], ambas em [−1,1]):
- *  · `u = azimute/180 − 1` — u=−1 ↔ azimute 0°, u=0 ↔ 180°, u→+1 ↔ 360° ≡ 0°: passar nas bordas
- *    laterais faz WRAP 360↔0 (a esfera sai por um lado e entra pelo outro);
- *  · `w = −elevacao/90` — a esfera em cima (w=+1) = elevação −90° = CÂMARA POR CIMA do alvo, a
- *    esfera em baixo (w=−1) = +90° = câmara por baixo. Arrastar para CIMA põe a câmara MAIS ALTA
- *    porque a elevação fica mais NEGATIVA: `pos = alvo − d·f`, `f = [cos e·cos a, cos e·sin a, sin e]`
- *    ⇒ `pos_z = alvo_z − d·sin(elev)` — quanto mais negativa a elevação, maior o `pos_z`. Os limites
- *    ±90 TRAVAM a esfera nas bordas superior/inferior (a elevação não passa de ±90).
- *  · desenho da esfera: `(u,w)` com o raio limitado a 1 (a esfera fica sempre dentro do círculo).
+ *  · VISTA DE CIMA — o chão visto de cima, com a FRENTE do arranque (+x) para CIMA e a ESQUERDA (+y) para
+ *    a esquerda (os eixos do drone e do estimador). O ícone da câmara está ONDE a câmara está à volta do
+ *    drone; arrastar (ou clicar) noutro sítio põe-na lá — é o azimute. Com `pos = alvo − d·f(az, el)` a
+ *    câmara fica na direção −(cos a, sin a) do drone ⇒ no ecrã (sx para a direita, sy para baixo):
+ *    `sx = sin a`, `sy = cos a` (azimute 0° = câmara ATRÁS de um drone de rumo 0, a olhar para +x).
+ *  · VISTA DE LADO — o plano vertical que contém o drone e a câmara: o ícone sobe/desce num arco à volta
+ *    do drone; o ângulo acima do horizonte é `h = −elevação` (convenção MuJoCo: elevação NEGATIVA = câmara
+ *    por cima). Faixa da UI: h ∈ [−30°, 89°] (por baixo do chão não se vê nada; −90 exato é singular).
+ *  · DISTÂNCIA em escala LOGARÍTMICA (o detalhe perto do drone ganha trilho) com limites por planta: um
+ *    drone de 650 mm não cabe a 0,1 m (a câmara ficava dentro das hélices).
+ *  · VISTAS RÁPIDAS relativas ao RUMO do drone (atrás, frente, esquerda, direita, de cima, à altura) e
+ *    PASSOS finos (setas: ±15° de órbita, ±10° de altura; ± de zoom ×1,25).
  *
- * MÁQUINA DE GESTOS — os 2 defeitos medidos do bloco anterior (sliders) entram aqui como requisito:
+ * MÁQUINA DE GESTOS — os 2 defeitos medidos do bloco v1 (sliders) continuam a ser requisito:
  *  · **DEF-1 (gestos perdidos)**: a telemetria (~350 ms) substituía os valores do gesto entre o
- *    `pointerup` e o envio agendado (150 ms) e o POST levava valores velhos. Agora os valores
- *    enviados são SEMPRE os do gesto: cada edição escreve um SNAPSHOT do corpo por enviar (fixado
- *    no fim do gesto e refrescado em cada envio a partir do estado do gesto) e a telemetria NUNCA
- *    escreve nos valores mostrados durante o arrasto nem enquanto houver envio pendente (snapshot
- *    por disparar ou envio por confirmar). O `terminarGesto` faz o COMMIT FINAL imediato.
+ *    `pointerup` e o envio agendado (150 ms) e o POST levava valores velhos. Os valores enviados são
+ *    SEMPRE os do gesto: cada edição escreve um SNAPSHOT do corpo por enviar (fixado no fim do gesto e
+ *    refrescado em cada envio a partir do estado do gesto) e a telemetria NUNCA escreve nos valores
+ *    mostrados durante o arrasto nem enquanto houver envio pendente. O `terminarGesto` faz o COMMIT FINAL.
  *  · **DEF-2 (estados honestos)**: `camera`/`camera_atual` a passar a `null` (janela fechada) mostra
- *    SEMPRE «—» e desativa o controlo — nunca se retém o valor antigo. O snapshot pendente
- *    sobrevive ao `null` (o envio leva sempre os valores finais do gesto).
+ *    SEMPRE «—» e desativa o controlo — nunca se retém o valor antigo.
  *
- * Resposta ao vivo: comandos ENQUANTO se arrasta (throttle com disparo agendado a
- * `ATRASO_ENVIO_CAMERA_MS` ≈ 150 ms, coalescência — os eventos entre disparos caem num só comando
- * com o valor que estiver a ser mostrado) + commit final ao largar. 1 comando por mudança final de
- * valor (um snapshot idêntico ao último corpo enviado não gera comando novo; o REPOR VISTA envia
- * sempre).
+ * Resposta ao vivo: throttle com disparo agendado a `ATRASO_ENVIO_CAMERA_MS` ≈ 150 ms (coalescência — os
+ * eventos entre disparos caem num só comando com o valor mostrado) + commit final ao largar; 1 comando por
+ * mudança final de valor. As vistas rápidas e o REPOR VISTA enviam SEMPRE (comando explícito).
+ *
+ * Cada comando leva os TRÊS valores (azimute, elevação, distância) do estado mostrado — que fora de um gesto
+ * é a câmara REAL. Medido em 2026-10-10: um comando só com ângulos era completado no servidor com a
+ * distância do Crazyflie (0,27 m) no 1.º comando da sessão, e a câmara saltava para dentro do drone real; e
+ * um zoom feito com o rato na janela era desfeito pelo comando seguinte do site. Com o corpo completo nem
+ * uma coisa nem outra acontece (o contrato continua a aceitar subconjuntos).
  */
 
 import {
@@ -57,68 +61,211 @@ export type FaseEnvio = "repouso" | "a_enviar" | "enviado" | "confirmado" | "err
 /** Campos comandáveis do widget (o corpo v2 é um subconjunto de `{azimute, elevacao, distancia}`). */
 export type CampoCamera = "azimute" | "elevacao" | "distancia"
 
-// ------------------------------------------------------------------------------ pad ↔ ângulos
-
-/** Posição NORMALIZADA da esfera no pad: `u` horizontal (direita +), `w` vertical (cima +). */
-export interface Esfera {
-  u: number
-  w: number
-}
-
-/** `clamp` a um intervalo (a elevação trava em ±90 e a esfera nas bordas do pad). */
+/** `clamp` a um intervalo. */
 export function limitar(valor: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, valor))
 }
 
+const RAD = Math.PI / 180
+
+/** Ângulo em graus para ]−180, 180]. */
+function envolver(graus: number): number {
+  const r = normalizarAzimute(graus + 180) - 180
+  return r === -180 ? 180 : r
+}
+
+// ------------------------------------------------------------------------------ vista de cima
+
 /**
- * ÂNGULOS → posição da esfera (estados honestos: a posição é SEMPRE função dos ângulos atuais —
- * inclusive quando a câmara é mexida pelo rato da janela fora de arrasto).
+ * Onde DESENHAR a câmara na vista de cima (vetor unitário no ecrã: `sx` para a direita, `sy` para baixo),
+ * com a frente (+x) para cima e a esquerda (+y) para a esquerda. A câmara fica em −(cos a, sin a) do
+ * drone (`pos = alvo − d·f`); mundo (wx, wy) → ecrã (−wy, −wx) ⇒ `(sin a, cos a)`.
  */
-export function esferaDeAngulos(azimute: number, elevacao: number): Esfera {
-  return {
-    u: normalizarAzimute(azimute) / 180 - 1,
-    w: -limitar(elevacao, -90, 90) / 90,
-  }
+export function pontoTopoDeAzimute(azimute: number): { sx: number; sy: number } {
+  const a = normalizarAzimute(azimute) * RAD
+  return { sx: Math.sin(a), sy: Math.cos(a) }
 }
 
 /**
- * Posição da esfera → ÂNGULOS (inverso do anterior): o azimute dá WRAP 360↔0 nas bordas laterais
- * (`u=+1` ≡ `u=−1` ≡ azimute 0°) e a elevação TRAVA em ±90 nas bordas superior/inferior.
+ * Azimute de um ponto da vista de cima (relativo ao drone, em px — qualquer escala): é o inverso exato de
+ * `pontoTopoDeAzimute`. `null` muito perto do centro (a direção não está definida).
  */
-export function angulosDeEsfera(
-  u: number,
-  w: number
+export function azimuteDePontoTopo(sx: number, sy: number, minimo = 1e-6): number | null {
+  if (Math.hypot(sx, sy) < minimo) return null
+  return normalizarAzimute(Math.atan2(sx, sy) / RAD)
+}
+
+/**
+ * Rotação (graus, sentido do SVG = horário) do glifo do drone desenhado de nariz para CIMA, para o nariz
+ * apontar para o rumo `rumoGraus` na vista de cima: nariz no mundo (cos ψ, sin ψ) → ecrã (−sin ψ, −cos ψ)
+ * ⇒ rodar `−ψ`.
+ */
+export function rotacaoGlifoTopo(rumoGraus: number): number {
+  return -rumoGraus
+}
+
+// ------------------------------------------------------------------------------ vista de lado
+
+/** Faixa do ângulo acima do horizonte na UI (graus): de 30° por baixo a quase a pique (89°). */
+export const ALTURA_ANGULAR_UI = [-30, 89] as const
+
+/** Ângulo da câmara ACIMA do horizonte (graus) a partir da elevação MuJoCo (negativa = por cima). */
+export function alturaDeElevacao(elevacao: number): number {
+  return -elevacao
+}
+
+/** Elevação MuJoCo a partir do ângulo acima do horizonte (inverso de `alturaDeElevacao`), na faixa da UI. */
+export function elevacaoDeAltura(altura: number): number {
+  return -limitar(altura, ALTURA_ANGULAR_UI[0], ALTURA_ANGULAR_UI[1])
+}
+
+/**
+ * Onde DESENHAR a câmara na vista de lado (unitário; `sx` para a direita, `sy` para baixo), com a câmara do
+ * lado ESQUERDO do drone a olhar para a direita: `(−cos h, −sin h)`.
+ */
+export function pontoLadoDeElevacao(elevacao: number): { sx: number; sy: number } {
+  const h = alturaDeElevacao(elevacao) * RAD
+  return { sx: -Math.cos(h), sy: -Math.sin(h) }
+}
+
+/**
+ * Elevação a partir de um ponto da vista de lado (relativo ao drone, px): o ângulo acima do horizonte do
+ * ponto visto do lado esquerdo, limitado à faixa da UI — passar para o outro lado do drone trava no topo
+ * (ou no fundo). `null` muito perto do centro.
+ */
+export function elevacaoDePontoLado(sx: number, sy: number, minimo = 1e-6): number | null {
+  if (Math.hypot(sx, sy) < minimo) return null
+  const h = Math.atan2(-sy, -sx) / RAD // ]−180, 180]: 0 = à esquerda, 90 = por cima
+  const travado = h > 90 ? ALTURA_ANGULAR_UI[1] : h < -90 ? ALTURA_ANGULAR_UI[0] : h
+  return elevacaoDeAltura(travado)
+}
+
+// ------------------------------------------------------------------------------ distância (log)
+
+/** Limites de distância da UI por planta (m): o drone real tem 650 mm de frame e hélices de 15″. */
+export function limitesDistancia(planta: "real" | "cf2" | null): readonly [number, number] {
+  return planta === "real" ? [0.6, 15] : [0.1, 5]
+}
+
+/** Fração do trilho (0–1, LOGARÍTMICA) → distância (m). */
+export function distanciaDeFracao(fracao: number, limites: readonly [number, number]): number {
+  const [a, b] = limites
+  return a * Math.pow(b / a, limitar(fracao, 0, 1))
+}
+
+/** Distância (m) → fração do trilho (0–1, logarítmica), travada aos limites. */
+export function fracaoDeDistancia(distancia: number, limites: readonly [number, number]): number {
+  const [a, b] = limites
+  if (!(distancia > 0)) return 0
+  return limitar(Math.log(distancia / a) / Math.log(b / a), 0, 1)
+}
+
+/** Fator de zoom de um passo (botões −/+ e teclas): ×1,25 por passo. */
+export const PASSO_ZOOM = 1.25
+
+/** Distância depois de `passos` de zoom (+ = aproximar), travada aos limites. */
+export function aplicarZoom(
+  distancia: number,
+  passos: number,
+  limites: readonly [number, number]
+): number {
+  return limitar(distancia / Math.pow(PASSO_ZOOM, passos), limites[0], limites[1])
+}
+
+// ------------------------------------------------------------------------------ passos e vistas rápidas
+
+/** Passos finos: órbita ±15°, altura ±10°. */
+export const PASSO_ORBITA = 15
+export const PASSO_ALTURA = 10
+
+/** Ângulos depois de um passo de órbita (+ = a câmara roda no sentido anti-horário visto de cima). */
+export function orbitar(
+  azimute: number,
+  elevacao: number,
+  passosOrbita: number,
+  passosAltura: number
 ): { azimute: number; elevacao: number } {
   return {
-    azimute: normalizarAzimute((u + 1) * 180),
-    elevacao: limitar(-w * 90, -90, 90),
+    azimute: normalizarAzimute(azimute + passosOrbita * PASSO_ORBITA),
+    elevacao: elevacaoDeAltura(alturaDeElevacao(elevacao) + passosAltura * PASSO_ALTURA),
   }
 }
 
-/**
- * Posição de DESENHO da esfera dentro do círculo: `(u,w)` com o raio limitado a 1. As posições dos
- * cantos do pad (|u| e |w| grandes) projetam-se na borda do círculo; nos eixos o mapeamento é exato.
- */
-export function esferaDesenho(u: number, w: number): Esfera {
-  const raio = Math.hypot(u, w)
-  return raio > 1 ? { u: u / raio, w: w / raio } : { u, w }
-}
+export type VistaRapida = "atras" | "frente" | "esquerda" | "direita" | "cima" | "altura"
+
+/** As vistas rápidas, pela ordem dos botões (rótulo curto + o que faz). */
+export const VISTAS_RAPIDAS: readonly { id: VistaRapida; rotulo: string; dica: string }[] = [
+  { id: "atras", rotulo: "Atrás", dica: "atrás do drone, a olhar para onde o nariz aponta (perseguição)" },
+  { id: "frente", rotulo: "Frente", dica: "à frente do drone, a olhar para o nariz" },
+  { id: "esquerda", rotulo: "Esquerda", dica: "do lado esquerdo do drone" },
+  { id: "direita", rotulo: "Direita", dica: "do lado direito do drone" },
+  { id: "cima", rotulo: "De cima", dica: "a pique, com o nariz para cima na imagem" },
+  { id: "altura", rotulo: "À altura", dica: "3/4 à frente, à altura do drone (vista de cinema)" },
+]
 
 /**
- * ARRASTO relativo da esfera (Δu, Δw em unidades do pad) sobre um estado de ângulos — os deltas
- * acumulam-se a partir do INÍCIO do gesto (sem deriva de passos intermédios). Arrastar para a
- * direita AUMENTA o azimute (a câmara orbita de +x para +y, anti-horário visto de cima); arrastar
- * para CIMA DIMINUI a elevação (mais negativa ⇒ câmara mais alta, ver o cabeçalho do módulo).
+ * Ângulos de uma vista rápida para um drone de rumo `rumoGraus` (absoluto, mundo). A câmara olha na
+ * direção do azimute e fica do lado OPOSTO: «atrás» = azimute igual ao rumo; «direita» = olha para a
+ * esquerda do drone (rumo + 90°) ⇒ está do lado direito. A distância não muda (o zoom é do dono).
  */
-export function aplicarArrasto(
-  estado: { azimute: number; elevacao: number },
-  du: number,
-  dw: number
+export function anguloVistaRapida(
+  vista: VistaRapida,
+  rumoGraus: number
 ): { azimute: number; elevacao: number } {
-  return {
-    azimute: normalizarAzimute(estado.azimute + du * 180),
-    elevacao: limitar(estado.elevacao - dw * 90, -90, 90),
+  const ang = (deltaAzimute: number, elevacao: number) => ({
+    azimute: normalizarAzimute(rumoGraus + deltaAzimute),
+    elevacao,
+  })
+  switch (vista) {
+    case "atras":
+      return ang(0, -20)
+    case "frente":
+      return ang(180, -15)
+    case "esquerda":
+      return ang(-90, -15)
+    case "direita":
+      return ang(90, -15)
+    case "cima":
+      return ang(0, -89)
+    case "altura":
+      return ang(150, -3)
   }
+}
+
+/**
+ * Onde está a câmara em relação ao drone, em português simples: «atrás, à direita · 45° por cima».
+ * `rel` = azimute − rumo: 0 = atrás, ±180 = à frente, +90 = à direita (olha para a esquerda do drone).
+ */
+export function descreverCamera(
+  azimute: number,
+  elevacao: number,
+  rumoGraus: number
+): { lado: string; altura: string } {
+  const rel = envolver(azimute - rumoGraus)
+  const a = Math.abs(rel)
+  const lado =
+    a <= 22.5
+      ? "atrás"
+      : a > 157.5
+        ? "à frente"
+        : a <= 67.5
+          ? `atrás, ${rel > 0 ? "à direita" : "à esquerda"}`
+          : a <= 112.5
+            ? rel > 0
+              ? "à direita"
+              : "à esquerda"
+            : `à frente, ${rel > 0 ? "à direita" : "à esquerda"}`
+  const h = alturaDeElevacao(elevacao)
+  const g = `${Math.round(Math.abs(h))}°`
+  const altura =
+    h >= 75
+      ? `quase a pique (${g} por cima)`
+      : h >= 10
+        ? `${g} por cima`
+        : h > -10
+          ? "à altura do drone"
+          : `${g} por baixo`
+  return { lado, altura }
 }
 
 // ------------------------------------------------------------------------------ máquina de gestos
@@ -130,6 +277,11 @@ function copia(v: CameraEstado): CameraEstado {
     distancia: v.distancia,
     alvo: v.alvo === null ? null : [v.alvo[0], v.alvo[1], v.alvo[2]],
   }
+}
+
+/** O corpo COMPLETO do comando a partir de um estado mostrado (os 3 valores; nunca o `alvo`). */
+function corpoCompleto(v: CameraEstado): CorpoCamera {
+  return { azimute: v.azimute, elevacao: v.elevacao, distancia: v.distancia }
 }
 
 function mesmoCorpo(a: CorpoCamera | null, b: CorpoCamera | null): boolean {
@@ -154,6 +306,8 @@ export interface MaquinaCameraOpcoes {
   confirmacaoMs?: number
   /** Relógio (ms) — injetável para os testes. */
   relogio?: () => number
+  /** Faixa da distância na UI (m); por omissão 0,1–10 (o widget passa a da planta: `limitesDistancia`). */
+  limitesDistancia?: () => readonly [number, number]
   /** Agendador do throttle — injetável para os testes; devolve um handle para `cancelar`. */
   agendar?: (tarefa: () => void, ms: number) => unknown
   cancelar?: (handle: unknown) => void
@@ -191,7 +345,7 @@ export class MaquinaCamera {
   private _motivo: string | null = null
 
   constructor(opcoes: MaquinaCameraOpcoes) {
-    this.opcoes = opcoes
+    this.opcoes = { ...opcoes }
     this.atrasoMs = opcoes.atrasoMs ?? ATRASO_ENVIO_CAMERA_MS
     this.confirmacaoMs = opcoes.confirmacaoMs ?? CONFIRMACAO_CAMERA_MS
     this.relogio = opcoes.relogio ?? (() => Date.now())
@@ -206,6 +360,16 @@ export class MaquinaCamera {
 
   get valores(): CameraEstado | null {
     return this._valores
+  }
+
+  /**
+   * Troca as ligações ao exterior (envio, aviso, «há ligação?», limites do zoom) — o componente chama isto
+   * num efeito sempre que as props mudam; o estado do gesto (snapshot, confirmação) não se perde.
+   */
+  religar(
+    ligacoes: Partial<Pick<MaquinaCameraOpcoes, "enviar" | "aoAvisar" | "ligado" | "limitesDistancia">>
+  ): void {
+    Object.assign(this.opcoes, ligacoes)
   }
   get semDados(): boolean {
     return this._valores === null
@@ -235,7 +399,7 @@ export class MaquinaCamera {
     if (this._snapshot !== null) this._enviarAgora()
   }
 
-  /** Passo do arrasto do pad: ângulos novos (já convertidos do gesto pelo `aplicarArrasto`). */
+  /** Passo de um gesto nas vistas (ou de um passo fino): ângulos novos, já convertidos pela geometria. */
   editarAngulos(azimute: number, elevacao: number): void {
     const base = this._valores
     if (base === null) return
@@ -247,17 +411,18 @@ export class MaquinaCamera {
     }
     if (novos.azimute === base.azimute && novos.elevacao === base.elevacao) return
     this._mostrar(novos)
-    this._registar({ azimute: novos.azimute, elevacao: novos.elevacao })
+    this._registar(corpoCompleto(novos))
   }
 
-  /** Passo do slider de distância (0,1–10 m na UI; a faixa do contrato é ]0,20]). */
+  /** Passo do slider/roda/botões de distância (faixa da UI da planta; a do contrato é ]0,20]). */
   editarDistancia(distancia: number): void {
     const base = this._valores
     if (base === null) return
-    const novos = { ...copia(base), distancia: limitar(distancia, 0.1, 10) }
+    const [min, max] = this.opcoes.limitesDistancia?.() ?? [0.1, 10]
+    const novos = { ...copia(base), distancia: limitar(distancia, min, max) }
     if (novos.distancia === base.distancia) return
     this._mostrar(novos)
-    this._registar({ distancia: novos.distancia })
+    this._registar(corpoCompleto(novos))
   }
 
   /**
@@ -273,6 +438,25 @@ export class MaquinaCamera {
     }
     this._mostrar(copia(cameraPadrao))
     this._snapshot = corpo
+    this._enviarAgora(true)
+  }
+
+  /**
+   * Comando EXPLÍCITO (vistas rápidas): mostra e envia JÁ a pose pedida (o que o `corpo` não traz — em
+   * regra a distância — fica como está) — como o REPOR VISTA, não passa pela coalescência (o dono pediu
+   * esta vista; um clique repetido volta a mandá-la).
+   */
+  irPara(corpo: CorpoCamera): void {
+    const base = this._valores
+    if (base === null) return
+    const novos: CameraEstado = {
+      azimute: normalizarAzimute(corpo.azimute ?? base.azimute),
+      elevacao: limitar(corpo.elevacao ?? base.elevacao, -90, 90),
+      distancia: corpo.distancia ?? base.distancia,
+      alvo: base.alvo === null ? null : [base.alvo[0], base.alvo[1], base.alvo[2]],
+    }
+    this._mostrar(novos)
+    this._snapshot = corpoCompleto(novos)
     this._enviarAgora(true)
   }
 

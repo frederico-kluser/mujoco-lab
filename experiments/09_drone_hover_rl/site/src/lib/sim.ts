@@ -66,6 +66,21 @@ export interface LinhaSim {
   aero: AeroTelemetria | null
   /** Planta real: estimativas de BORDO (`estimador`); `null` no cf2. */
   estimador: EstimadorTelemetria | null
+  /**
+   * Planta real: a VERDADE do simulador nos referenciais do estimador (`verdade`) — só para o ecrã comparar
+   * «o que o drone acha» com «o que é»; a política nunca a vê. `null` no cf2 ou num runner antigo.
+   */
+  verdade: VerdadeTelemetria | null
+  /** Porque fechou o episódio (`fim`): `tempo` (os 10 s) ou `queda`; `null` a correr ou sem a chave. */
+  fim: MotivoFim | null
+}
+
+/** Motivo do fim do episódio publicado pelo runner (`fim`). */
+export type MotivoFim = "tempo" | "queda"
+
+/** `"tempo"`/`"queda"`, ou `null` (a correr, runner antigo ou outro valor — nunca se adivinha). */
+export function lerFim(bruto: unknown): MotivoFim | null {
+  return bruto === "tempo" || bruto === "queda" ? bruto : null
 }
 
 export interface VentoEstado {
@@ -254,6 +269,8 @@ export function lerLinha(bruto: unknown): LinhaSim | null {
     potencia: lerPotencia(o.potencia),
     aero: lerAero(o.aero),
     estimador: lerEstimador(o.estimador),
+    verdade: lerVerdade(o.verdade),
+    fim: lerFim(o.fim),
   }
 }
 
@@ -759,7 +776,7 @@ export function assinaturaCamera(cam: CorpoCamera): string {
 
 /**
  * TIPO da procedência dos números (cor do selo). O TEXTO mostrado é sempre o que o backend mandar
- * (o `sim_site.py` escreve «proxy x86 calibrado (1 core do A76; nao e o RPi)»): aqui só se classifica
+ * (o `sim_site.py` escreve «proxy x86 calibrado (1 núcleo do A76; não é o RPi)»): aqui só se classifica
  * pelo prefixo, para o painel poder pintar o selo sem reescrever a frase do backend.
  */
 export type TipoFonteRpi5 = "real" | "proxy" | "sem_benchmark" | "outro"
@@ -1048,6 +1065,15 @@ export interface RotuloObs {
   escalaTexto: string
   /** Canal binário (0/1, planta real: ToF/fluxo válidos) — a coluna «cru» diz sim/não. */
   flag?: boolean
+  /** Nome em linguagem simples (planta real) — o `nome` de código fica ao lado, pequeno. */
+  titulo?: string
+  /** O que o canal é, numa frase (dica da tabela). */
+  ajuda?: string
+  /**
+   * Leitura AMIGÁVEL (planta real): `valor físico × fator` na `unidade` (°, °/s, cm, cm/s, g…), com
+   * `casas` decimais; `faixa` = meia-largura típica para a barra centrada no zero (fora dela a barra satura).
+   */
+  amigavel?: { unidade: string; fator: number; casas: number; faixa: number }
 }
 
 /** Os 16 canais da observação, na ordem de `HoverEnv.observacao()`. */
@@ -1214,11 +1240,21 @@ export function corTextoAtivacao(valor: number, maximo: number): string {
 /** Nº de canais da observação do ATOR na planta real (`env_real.OBS_ATOR_DIM`). */
 export const N_OBS_REAL = 21
 
-/** Setpoints de taxa máximos do modo ctbr (`env_real.TAXA_MAX`, rad/s): p, q, r. */
-export const TAXA_MAX_CTBR: readonly [number, number, number] = [2.5, 2.5, 1.5]
+/**
+ * Setpoints de taxa máximos do modo ctbr (`env_real.TAXA_MAX`, rad/s): p, q, r. É o RECURSO quando o
+ * `/api/state` não publica `hardware.taxa_max` (o backend lê-o do próprio `env_real`); o pytest da skill
+ * compara este valor com o do ambiente, para o painel nunca voltar a mostrar setpoints errados.
+ */
+export const TAXA_MAX_CTBR: readonly [number, number, number] = [2, 2, 1]
+
+/** Coletivo +1 = 2× o peso por omissão (o `DroneRealEnv` é linear em empuxo: u = u_pair·√(1+a₀)). */
+export const COLETIVO_MAX_PESO = 2
 
 /** Gravidade da normalização do acelerómetro (`env.gravidade` = |opt.gravity_z| = 9,81 m/s²). */
 export const GRAVIDADE = 9.81
+
+/** rad → graus. */
+export const GRAUS_POR_RAD = 180 / Math.PI
 
 /** Altura de rotor que o backend usa para «sem chão no raio» (`ALTURA_SEM_SOLO` = 50 m). */
 export const ALTURA_SEM_SOLO_M = 50
@@ -1529,6 +1565,58 @@ export function lerEstimador(bruto: unknown): EstimadorTelemetria | null {
   }
 }
 
+/**
+ * VERDADE do simulador (`verdade`, planta real) nos MESMOS referenciais do estimador de bordo: posição no
+ * referencial de ARRANQUE (origem e rumo do armar — o da odometria), velocidade horizontal no referencial
+ * de RUMO do corpo, rumo desde o armar. SI: m, rad, m/s, rad/s. Só para o ecrã — a política nunca a vê.
+ */
+export interface VerdadeTelemetria {
+  x: number | null
+  y: number | null
+  /** O alvo de posição nesse referencial (m); `null` se não vier. */
+  alvoXy: [number, number] | null
+  /** Altura do CM (m) e o alvo de altura (m). */
+  z: number | null
+  alvoZ: number | null
+  roll: number | null
+  pitch: number | null
+  /** Rumo desde o armar (ψ − ψ₀, rad) — comparável com o `estimador.psi`. */
+  psi: number | null
+  /** Rumo ABSOLUTO no mundo (rad) — o das vistas rápidas da câmara («atrás do drone»…). */
+  yaw: number | null
+  vx: number | null
+  vy: number | null
+  vz: number | null
+  p: number | null
+  q: number | null
+  r: number | null
+}
+
+export function lerVerdade(bruto: unknown): VerdadeTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  const alvo = Array.isArray(o.alvo_xy) ? o.alvo_xy : []
+  const ax = numero(alvo[0])
+  const ay = numero(alvo[1])
+  return {
+    x: numero(o.x),
+    y: numero(o.y),
+    alvoXy: ax === null || ay === null ? null : [ax, ay],
+    z: numero(o.z),
+    alvoZ: numero(o.alvo_z),
+    roll: numero(o.roll),
+    pitch: numero(o.pitch),
+    psi: numero(o.psi),
+    yaw: numero(o.yaw),
+    vx: numero(o.vx),
+    vy: numero(o.vy),
+    vz: numero(o.vz),
+    p: numero(o.p),
+    q: numero(o.q),
+    r: numero(o.r),
+  }
+}
+
 // ------------------------------------------------------------------------------------ hardware
 
 /** Pack do build (`hardware.bateria` do `/api/state`). */
@@ -1567,6 +1655,10 @@ export interface Hardware {
   origemKfKq: string | null
   /** Domain randomization ligada no treino da política. */
   dr: boolean | null
+  /** Setpoints de taxa máximos do ctbr (`env_real.TAXA_MAX`, rad/s: p, q, r); `null` = não veio. */
+  taxaMax: [number, number, number] | null
+  /** Coletivo +1 = este múltiplo do PESO (ctbr linear em empuxo: −1 → 0, 0 → pairar, +1 → 2× o peso). */
+  coletivoMaxPeso: number | null
 }
 
 function lerHardwareBateria(bruto: unknown): HardwareBateria | null {
@@ -1608,34 +1700,82 @@ export function lerHardware(bruto: unknown): Hardware | null {
     kq: numero(o.kq),
     origemKfKq: texto(o.origem_kf_kq),
     dr: booleano(o.dr),
+    taxaMax: lerVetor3Positivo(o.taxa_max),
+    coletivoMaxPeso: numero(o.coletivo_max_peso),
   }
+}
+
+/** `[a,b,c]` finito e > 0 (faixas de taxa), ou `null`. */
+function lerVetor3Positivo(bruto: unknown): [number, number, number] | null {
+  const v = lerVetor3(bruto)
+  return v !== null && v.every((x) => x > 0) ? v : null
 }
 
 // ------------------------------------------------------------------- rótulos da planta real
 
 /** Os 21 canais da observação do ATOR na planta real, na ordem de `DroneRealEnv.observacao()`. */
 export const ROTULOS_OBS_REAL: RotuloObs[] = [
-  { indice: 0, grupo: "giro", nome: "giro_p", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
-  { indice: 1, grupo: "giro", nome: "giro_q", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
-  { indice: 2, grupo: "giro", nome: "giro_r", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
-  { indice: 3, grupo: "acc", nome: "acc_x", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
-  { indice: 4, grupo: "acc", nome: "acc_y", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
-  { indice: 5, grupo: "acc", nome: "acc_z", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
-  { indice: 6, grupo: "atitude", nome: "roll_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad" },
-  { indice: 7, grupo: "atitude", nome: "pitch_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad" },
-  { indice: 8, grupo: "rumo", nome: "Δψ/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π" },
-  { indice: 9, grupo: "vertical", nome: "h_est − alvo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 10, grupo: "vertical", nome: "vz_est", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 11, grupo: "fluxo", nome: "vx_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 12, grupo: "fluxo", nome: "vy_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
-  { indice: 13, grupo: "odometria", nome: "x_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 14, grupo: "odometria", nome: "y_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
-  { indice: 15, grupo: "validade", nome: "tof_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true },
-  { indice: 16, grupo: "validade", nome: "fluxo_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true },
-  { indice: 17, grupo: "a_prev", nome: "a_prev·coletivo", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 18, grupo: "a_prev", nome: "a_prev·p", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 19, grupo: "a_prev", nome: "a_prev·q", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
-  { indice: 20, grupo: "a_prev", nome: "a_prev·r", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+  { indice: 0, grupo: "giro", nome: "giro_p", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s",
+    titulo: "rotação em rolamento (p)", ajuda: "giroscópio: quão depressa o drone roda à volta do eixo frente-trás",
+    amigavel: { unidade: "°/s", fator: GRAUS_POR_RAD, casas: 1, faixa: 60 } },
+  { indice: 1, grupo: "giro", nome: "giro_q", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s",
+    titulo: "rotação em arfagem (q)", ajuda: "giroscópio: quão depressa o drone roda à volta do eixo esquerda-direita",
+    amigavel: { unidade: "°/s", fator: GRAUS_POR_RAD, casas: 1, faixa: 60 } },
+  { indice: 2, grupo: "giro", nome: "giro_r", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s",
+    titulo: "rotação em guinada (r)", ajuda: "giroscópio: quão depressa o drone roda sobre si mesmo (vertical)",
+    amigavel: { unidade: "°/s", fator: GRAUS_POR_RAD, casas: 1, faixa: 60 } },
+  { indice: 3, grupo: "acc", nome: "acc_x", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²",
+    titulo: "aceleração frente-trás", ajuda: "acelerómetro (força específica) ao longo do eixo da frente, em g",
+    amigavel: { unidade: "g", fator: 1 / GRAVIDADE, casas: 2, faixa: 0.5 } },
+  { indice: 4, grupo: "acc", nome: "acc_y", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²",
+    titulo: "aceleração esquerda-direita", ajuda: "acelerómetro ao longo do eixo da esquerda, em g",
+    amigavel: { unidade: "g", fator: 1 / GRAVIDADE, casas: 2, faixa: 0.5 } },
+  { indice: 5, grupo: "acc", nome: "acc_z", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²",
+    titulo: "aceleração vertical", ajuda: "acelerómetro no eixo vertical do corpo: ≈ 1 g a pairar (o empuxo segura o peso)",
+    amigavel: { unidade: "g", fator: 1 / GRAVIDADE, casas: 2, faixa: 2 } },
+  { indice: 6, grupo: "atitude", nome: "roll_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad",
+    titulo: "inclinação lateral (rolamento)", ajuda: "estimada a bordo (filtro complementar giro + acelerómetro); + = inclinado para a direita (asa direita em baixo)",
+    amigavel: { unidade: "°", fator: GRAUS_POR_RAD, casas: 1, faixa: 20 } },
+  { indice: 7, grupo: "atitude", nome: "pitch_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad",
+    titulo: "inclinação frente-trás (arfagem)", ajuda: "estimada a bordo; + = nariz para BAIXO (eixos do simulador: x frente, y esquerda, z cima)",
+    amigavel: { unidade: "°", fator: GRAUS_POR_RAD, casas: 1, faixa: 20 } },
+  { indice: 8, grupo: "rumo", nome: "Δψ/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π",
+    titulo: "rumo desde o arranque", ajuda: "quanto o nariz rodou desde que armou (giroscópio integrado; sem bússola, deriva devagar)",
+    amigavel: { unidade: "°", fator: GRAUS_POR_RAD, casas: 1, faixa: 45 } },
+  { indice: 9, grupo: "vertical", nome: "h_est − alvo", unidade: "m", escala: 1, escalaTexto: "÷1 m",
+    titulo: "altura em relação ao alvo", ajuda: "altura estimada (sensor ToF + acelerómetro) menos o alvo de 1 m; − = abaixo",
+    amigavel: { unidade: "cm", fator: 100, casas: 1, faixa: 50 } },
+  { indice: 10, grupo: "vertical", nome: "vz_est", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s",
+    titulo: "velocidade vertical", ajuda: "estimada a bordo; + = a subir",
+    amigavel: { unidade: "cm/s", fator: 100, casas: 1, faixa: 100 } },
+  { indice: 11, grupo: "fluxo", nome: "vx_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s",
+    titulo: "velocidade para a frente", ajuda: "do fluxo ótico (câmara a olhar para o chão) + giroscópio, no referencial do nariz",
+    amigavel: { unidade: "cm/s", fator: 100, casas: 1, faixa: 100 } },
+  { indice: 12, grupo: "fluxo", nome: "vy_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s",
+    titulo: "velocidade para a esquerda", ajuda: "do fluxo ótico, no referencial do nariz; + = para a esquerda",
+    amigavel: { unidade: "cm/s", fator: 100, casas: 1, faixa: 100 } },
+  { indice: 13, grupo: "odometria", nome: "x_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m",
+    titulo: "posição estimada (frente)", ajuda: "odometria: soma das velocidades do fluxo desde o arranque — deriva com o tempo",
+    amigavel: { unidade: "cm", fator: 100, casas: 1, faixa: 50 } },
+  { indice: 14, grupo: "odometria", nome: "y_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m",
+    titulo: "posição estimada (esquerda)", ajuda: "odometria desde o arranque; + = para a esquerda",
+    amigavel: { unidade: "cm", fator: 100, casas: 1, faixa: 50 } },
+  { indice: 15, grupo: "validade", nome: "tof_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true,
+    titulo: "sensor de altura (ToF) válido", ajuda: "o VL53L1X vê o chão dentro do alcance; sem ele a altura só vem do acelerómetro" },
+  { indice: 16, grupo: "validade", nome: "fluxo_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true,
+    titulo: "fluxo ótico válido", ajuda: "o PMW3901 tem textura/altura para medir; sem ele a velocidade horizontal decai para 0" },
+  { indice: 17, grupo: "a_prev", nome: "a_prev·coletivo", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1",
+    titulo: "última ação · coletivo", ajuda: "o que a política pediu no passo anterior: −1 = sem empuxo, 0 = pairar, +1 = 2× o peso",
+    amigavel: { unidade: "", fator: 1, casas: 2, faixa: 1 } },
+  { indice: 18, grupo: "a_prev", nome: "a_prev·p", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1",
+    titulo: "última ação · taxa de rolamento", ajuda: "pedido ao controlador de voo, em fração do máximo",
+    amigavel: { unidade: "", fator: 1, casas: 2, faixa: 1 } },
+  { indice: 19, grupo: "a_prev", nome: "a_prev·q", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1",
+    titulo: "última ação · taxa de arfagem", ajuda: "pedido ao controlador de voo, em fração do máximo",
+    amigavel: { unidade: "", fator: 1, casas: 2, faixa: 1 } },
+  { indice: 20, grupo: "a_prev", nome: "a_prev·r", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1",
+    titulo: "última ação · taxa de guinada", ajuda: "pedido ao controlador de voo, em fração do máximo",
+    amigavel: { unidade: "", fator: 1, casas: 2, faixa: 1 } },
 ]
 
 /** Modo da ação na planta real: `ctbr` (por omissão do `env_real`) ou `motores` (4 aceleradores). */
@@ -1655,7 +1795,14 @@ export function rotulosObs(
   if (modoAcaoReal(modoAcao) === "ctbr") return ROTULOS_OBS_REAL
   // modo `motores`: a ação anterior são os 4 aceleradores, não coletivo + taxas
   return ROTULOS_OBS_REAL.map((r) =>
-    r.grupo === "a_prev" ? { ...r, nome: `a_prev·r${r.indice - 16}` } : r
+    r.grupo === "a_prev"
+      ? {
+          ...r,
+          nome: `a_prev·r${r.indice - 16}`,
+          titulo: `última ação · acelerador do motor ${r.indice - 16}`,
+          ajuda: "acelerador pedido no passo anterior: −1 = 0 %, 0 = pairar, +1 = máximo",
+        }
+      : r
   )
 }
 
@@ -1698,9 +1845,26 @@ export function rotulosAct(
  * Setpoint de taxa (rad/s) que a ação ctbr pede ao FC: `clip(a, −1, 1) × TAXA_MAX` (o `env_real`
  * corta a ação a [−1, 1] antes de a aplicar). `eixo` 0 = p, 1 = q, 2 = r.
  */
-export function setpointTaxa(a: number | null | undefined, eixo: 0 | 1 | 2): number | null {
+export function setpointTaxa(
+  a: number | null | undefined,
+  eixo: 0 | 1 | 2,
+  taxaMax: readonly [number, number, number] | null = null
+): number | null {
   if (a === null || a === undefined || !Number.isFinite(a)) return null
-  return Math.max(-1, Math.min(1, a)) * TAXA_MAX_CTBR[eixo]
+  return Math.max(-1, Math.min(1, a)) * (taxaMax ?? TAXA_MAX_CTBR)[eixo]
+}
+
+/**
+ * Empuxo pedido pelo COLETIVO como fração do PESO: o `DroneRealEnv` comanda u = u_pair(V)·√(1+a₀), linear
+ * em empuxo — a₀ = −1 → 0, 0 → pairar (1× o peso), +1 → 2× o peso (`coletivoMaxPeso`).
+ */
+export function empuxoDoColetivo(
+  a0: number | null | undefined,
+  maxPeso: number | null = null
+): number | null {
+  if (a0 === null || a0 === undefined || !Number.isFinite(a0)) return null
+  const m = maxPeso ?? COLETIVO_MAX_PESO
+  return Math.max(0, 1 + Math.max(-1, Math.min(1, a0)) * (m - 1))
 }
 
 /**

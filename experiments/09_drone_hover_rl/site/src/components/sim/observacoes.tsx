@@ -8,12 +8,19 @@
  * PLANTA REAL (`planta: "real"`): a observação é a do ATOR (21 canais do `env_real.py`: giro e
  * acelerómetro medidos, estimador de bordo, validade dos sensores e ação anterior), a ação é ctbr
  * (coletivo + taxas p, q, r) e o `ctrl` é o EMPUXO de cada rotor — nada se deriva do `HoverEnv`.
+ * Desde a avaliação de UX de 2026-10-10 a tabela real mostra cada canal com um NOME SIMPLES, o valor numa
+ * unidade amigável (°, °/s, cm, cm/s, g, sim/não) e uma barra CENTRADA no zero com a escala física do
+ * canal (antes: nomes de código, rad e m/s², e uma barra relativa ao canal mais ativo — o acc_z ≈ 1 g
+ * achatava todas as outras); o valor normalizado que a rede recebe fica numa coluna secundária. As taxas e
+ * a semântica do coletivo vêm do `hardware` do `/api/state` (o backend lê-as do próprio `env_real`).
  */
 
 import { ProgressBar } from "@/components/motion-ui/progress-bar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
+  COLETIVO_MAX_PESO,
   derivarAct,
+  empuxoDoColetivo,
   FISICA_PADRAO,
   fmt,
   fmtSinal,
@@ -26,6 +33,7 @@ import {
   setpointTaxa,
   TAXA_MAX_CTBR,
   type Hardware,
+  type RotuloObs,
   type LinhaSim,
   type Planta,
   type ResumoEstado,
@@ -56,9 +64,117 @@ interface TabelaObsProps {
   modoAcao?: string | null
 }
 
+/** Barra centrada no zero (fração em [−1, 1] da faixa física do canal). */
+function BarraCentro({ fracao, saturada }: { fracao: number | null; saturada: boolean }) {
+  const f = fracao === null ? 0 : Math.max(-1, Math.min(1, fracao))
+  return (
+    <span className="relative block h-1.5 w-16 rounded-full bg-muted" aria-hidden="true">
+      <span className="absolute top-[-2px] left-1/2 h-2.5 w-px bg-foreground/40" />
+      <span
+        className={`absolute top-0 h-1.5 rounded-full ${saturada ? "bg-destructive/80" : "bg-foreground/70"}`}
+        style={{ left: `${50 + Math.min(0, f) * 50}%`, width: `${Math.abs(f) * 50}%` }}
+      />
+    </span>
+  )
+}
+
+/** Valor amigável de um canal real (ou «sim/não» nas flags); `null` sem dados. */
+function valorAmigavel(rotulo: RotuloObs, valor: number | undefined): string {
+  if (typeof valor !== "number") return "—"
+  if (rotulo.flag) return valor >= 0.5 ? "sim" : "não"
+  const a = rotulo.amigavel
+  if (a === undefined) return `${fmtSinal(valor * rotulo.escala, 3)} ${rotulo.unidade}`
+  return `${fmtSinal(valor * rotulo.escala * a.fator, a.casas)}${a.unidade ? ` ${a.unidade}` : ""}`
+}
+
+/**
+ * Tabela da PLANTA REAL: nome simples + valor amigável + barra centrada com a escala física do canal; o
+ * nome de código e o valor normalizado (o que entra na rede) ficam em segundo plano.
+ */
+function TabelaObsReal({ linha, rotulos }: { linha: LinhaSim | null; rotulos: RotuloObs[] }) {
+  const obs = linha?.obs ?? []
+  return (
+    <Card data-testid="tabela-obs" data-planta="real">
+      <CardHeader className="gap-0.5">
+        <CardTitle className="flex items-baseline justify-between gap-2 text-sm font-medium">
+          <span>{`Entradas da rede · ${rotulos.length} canais`}</span>
+          <span className="font-mono text-[0.7rem] text-muted-foreground">
+            passo {linha ? fmt(linha.passo, 0) : "—"}
+          </span>
+        </CardTitle>
+        <p className="text-[0.7rem] text-muted-foreground">
+          o que a política recebe a cada decisão: só o que existe a bordo (giroscópio e acelerómetro
+          medidos, o que o RPi estima com eles + ToF + fluxo ótico, e a última ação) — nada de posição ou
+          atitude exatas. «valor» está em unidades do dia a dia; «na rede» é o número normalizado que entra
+          na rede; a barra vai de −faixa a +faixa do canal (vermelha = fora da faixa). A leitura em
+          instrumentos está no «Painel de voo» (secção Operação).
+        </p>
+      </CardHeader>
+      <CardContent className="flex flex-col">
+        <div className="grid grid-cols-[1.4rem_minmax(0,1fr)_5.6rem_3.6rem_4.2rem] items-center gap-x-2 border-b border-border pb-1 text-[0.65rem] tracking-wide text-muted-foreground uppercase">
+          <span>#</span>
+          <span>entrada</span>
+          <span className="text-right">valor</span>
+          <span className="text-right">na rede</span>
+          <span className="text-right">faixa</span>
+        </div>
+        {rotulos.map((rotulo) => {
+          const valor = obs[rotulo.indice]
+          const tem = typeof valor === "number"
+          const a = rotulo.amigavel
+          const fisico = tem && a !== undefined ? valor * rotulo.escala * a.fator : null
+          const fracao = fisico === null || a === undefined ? null : fisico / a.faixa
+          const primeiroDoGrupo =
+            rotulo.indice === 0 || rotulos[rotulo.indice - 1].grupo !== rotulo.grupo
+          return (
+            <div key={rotulo.indice}>
+              {primeiroDoGrupo ? (
+                <p className="pt-2 pb-0.5 text-[0.65rem] text-muted-foreground">{GRUPOS[rotulo.grupo]}</p>
+              ) : null}
+              <div
+                className="grid grid-cols-[1.4rem_minmax(0,1fr)_5.6rem_3.6rem_4.2rem] items-center gap-x-2 py-0.5"
+                title={rotulo.ajuda}
+                data-testid={`obs-${rotulo.indice}`}
+              >
+                <span className="font-mono text-[0.65rem] text-muted-foreground">{rotulo.indice}</span>
+                <span className="flex min-w-0 flex-col leading-tight">
+                  <span className="truncate text-xs">{rotulo.titulo ?? rotulo.nome}</span>
+                  <span className="truncate font-mono text-[0.6rem] text-muted-foreground">{rotulo.nome}</span>
+                </span>
+                <span className="text-right font-mono text-xs font-medium whitespace-nowrap tabular-nums">
+                  {rotulo.flag ? (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 font-sans text-[0.65rem] ${
+                        !tem ? "" : valor >= 0.5 ? "bg-primary/10" : "bg-destructive/10 text-destructive"
+                      }`}
+                    >
+                      {valorAmigavel(rotulo, valor)}
+                    </span>
+                  ) : (
+                    valorAmigavel(rotulo, valor)
+                  )}
+                </span>
+                <span className="text-right font-mono text-[0.65rem] text-muted-foreground tabular-nums">
+                  {tem ? fmtSinal(valor, 3) : "—"}
+                </span>
+                <span className="flex justify-end" title={a ? `faixa da barra: ±${fmt(a.faixa, a.faixa < 1 ? 1 : 0)} ${a.unidade}` : undefined}>
+                  {rotulo.flag ? null : (
+                    <BarraCentro fracao={fracao} saturada={fracao !== null && Math.abs(fracao) > 1} />
+                  )}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function TabelaObs({ linha, planta = null, modoAcao = null }: TabelaObsProps) {
   const plantaLinha = linha?.planta ?? planta
   const real = plantaLinha === "real"
+  if (real) return <TabelaObsReal linha={linha} rotulos={rotulosObs(plantaLinha, modoAcao)} />
   const rotulos = rotulosObs(plantaLinha, modoAcao)
   const obs = linha?.obs ?? []
   // barra RELATIVA: |obs| sobre o máximo do passo (com valores típicos ±0,05 uma barra absoluta
@@ -165,6 +281,8 @@ function fracaoBarra(valor: number | null | undefined, maximo: number | null): n
 function PainelActReal({ linha, hardware }: PainelActRealProps) {
   const modo = modoAcaoReal(hardware?.modoAcao)
   const rotulos = rotulosAct("real", modo)
+  const taxaMax = hardware?.taxaMax ?? TAXA_MAX_CTBR
+  const maxPeso = hardware?.coletivoMaxPeso ?? COLETIVO_MAX_PESO
   const act = linha?.act ?? []
   const ctrl = linha?.ctrl ?? null
   const tMax = linha?.motores?.tMaxN ?? null
@@ -185,7 +303,7 @@ function PainelActReal({ linha, hardware }: PainelActRealProps) {
         </CardTitle>
         <p className="text-[0.7rem] text-muted-foreground">
           {modo === "ctbr"
-            ? `política em [-1, 1] → ctbr: a₀ = coletivo de acelerador (0 = pairagem, −1 = 0 %, +1 = 100 %) e a₁..₃ = taxas p, q, r até ±${fmt(TAXA_MAX_CTBR[0], 1)}/${fmt(TAXA_MAX_CTBR[1], 1)}/${fmt(TAXA_MAX_CTBR[2], 1)} rad/s, que o FC dedicado fecha a 500 Hz; o ctrl é o EMPUXO de cada rotor (N)`
+            ? `política em [-1, 1] → ctbr: a₀ = coletivo LINEAR EM EMPUXO (−1 = sem empuxo, 0 = pairar, +1 = ${fmt(maxPeso, 0)}× o peso, com a tensão medida da bateria compensada) e a₁..₃ = taxas p, q, r até ±${fmt(taxaMax[0], 1)}/${fmt(taxaMax[1], 1)}/${fmt(taxaMax[2], 1)} rad/s (${fmt((taxaMax[0] * 180) / Math.PI, 0)}/${fmt((taxaMax[1] * 180) / Math.PI, 0)}/${fmt((taxaMax[2] * 180) / Math.PI, 0)} °/s), que o FC dedicado fecha a 500 Hz; o ctrl é o EMPUXO de cada rotor (N)`
             : "política em [-1, 1] → 4 aceleradores (um por rotor, sem FC; 0 = pairagem, −1 = 0 %, +1 = 100 %); o ctrl é o EMPUXO de cada rotor (N)"}
         </p>
       </CardHeader>
@@ -222,7 +340,7 @@ function PainelActReal({ linha, hardware }: PainelActRealProps) {
           </p>
         </div>
 
-        <div className="grid grid-cols-[1.6rem_minmax(0,1fr)_4.6rem_6rem] items-center gap-x-2 border-t border-border pt-2 text-[0.65rem] tracking-wide text-muted-foreground uppercase">
+        <div className="grid grid-cols-[1.6rem_minmax(0,1fr)_4.6rem_8.6rem] items-center gap-x-2 border-t border-border pt-2 text-[0.65rem] tracking-wide text-muted-foreground uppercase">
           <span>#</span>
           <span>a bruta (política)</span>
           <span className="text-right">valor</span>
@@ -233,12 +351,14 @@ function PainelActReal({ linha, hardware }: PainelActRealProps) {
           const tem = typeof a === "number"
           const taxa =
             modo === "ctbr" && rotulo.indice > 0
-              ? setpointTaxa(tem ? a : null, (rotulo.indice - 1) as 0 | 1 | 2)
+              ? setpointTaxa(tem ? a : null, (rotulo.indice - 1) as 0 | 1 | 2, taxaMax)
               : null
+          const empuxo =
+            modo === "ctbr" && rotulo.indice === 0 ? empuxoDoColetivo(tem ? a : null, maxPeso) : null
           return (
             <div
               key={rotulo.indice}
-              className="grid grid-cols-[1.6rem_minmax(0,1fr)_4.6rem_6rem] items-center gap-x-2"
+              className="grid grid-cols-[1.6rem_minmax(0,1fr)_4.6rem_8.6rem] items-center gap-x-2"
             >
               <span className="font-mono text-[0.7rem] text-muted-foreground">{rotulo.indice}</span>
               <span className="truncate font-mono text-xs" title={rotulo.canal}>
@@ -250,16 +370,20 @@ function PainelActReal({ linha, hardware }: PainelActRealProps) {
               <span
                 className="text-right font-mono text-[0.7rem] whitespace-nowrap text-muted-foreground tabular-nums"
                 title={
-                  taxa === null
-                    ? undefined
-                    : "setpoint de taxa = clip(a, −1, 1) × TAXA_MAX (env_real.py)"
+                  taxa !== null
+                    ? "setpoint de taxa = clip(a, −1, 1) × TAXA_MAX (env_real.py)"
+                    : empuxo !== null
+                      ? "empuxo total pedido = (1 + a₀) × peso (coletivo linear em empuxo, env_real.py)"
+                      : undefined
                 }
               >
                 {taxa !== null
-                  ? `${fmtSinal(taxa, 2)} rad/s`
-                  : rotulo.indice === 0 && modo === "ctbr"
-                    ? "coletivo"
-                    : "acelerador"}
+                  ? `${fmtSinal(taxa, 2)} rad/s · ${fmtSinal((taxa * 180) / Math.PI, 0)}°/s`
+                  : empuxo !== null
+                    ? `${fmt(empuxo, 2)}× o peso`
+                    : rotulo.indice === 0 && modo === "ctbr"
+                      ? "coletivo"
+                      : "acelerador"}
               </span>
             </div>
           )

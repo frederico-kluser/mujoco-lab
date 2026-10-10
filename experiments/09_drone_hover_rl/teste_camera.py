@@ -156,6 +156,17 @@ PORTA_HTTP = 8561         # §3: porta do servidor de teste (a do laboratório p
 TOL_CAM = 1e-9            # colagem exacta do seguimento (mesma expressão aritmética nos dois lados)
 TOL_REPOUSO = 2e-3        # comparações cruzadas em repouso (telemetria arredondada a 6 casas + folga)
 LIMIAR_MOV = 0.25         # m — deslocamento mínimo do drone para a janela de movimento ser prova de movimento
+# Contrato da linha de telemetria: as 19 chaves do contrato v2, por esta ordem (`camera` é a 19.ª), e depois só
+# chaves ADITIVAS — `planta` e `fim` (2026-10-10) e, na planta real, os blocos de bordo e a `verdade`.
+CHAVES_CONTRATO = ("t", "estado", "loop", "ep", "passo", "retorno", "z", "dist_xy", "yaw_err", "vento_vel",
+                   "vento_azim", "vento_vec", "vento_modo", "obs", "act", "ctrl", "h1", "h2", "camera")
+CHAVES_ADITIVAS = {"planta", "fim", "bateria", "motores", "potencia", "aero", "estimador", "verdade"}
+
+
+def _chaves_ok(linha: dict) -> bool:
+    """As 19 chaves do contrato por ordem (`camera` = 19.ª) + só chaves aditivas conhecidas depois dela."""
+    chaves = list(linha)
+    return tuple(chaves[:19]) == CHAVES_CONTRATO and set(chaves[19:]) <= CHAVES_ADITIVAS
 PANO_S = 5.0              # limite da espera do «PAN sobreposto» (a kHz basta ms; curto para morrer rápido)
 
 
@@ -784,15 +795,15 @@ def roteiro_com_viewer(ciclo: Ciclo, c: Checagens) -> None:
     esperado = _pos_drone(ciclo.env.data)
     ultima = linhas[-1] if linhas else {}
     camera = ultima.get("camera")
-    chave_ok = bool(linhas) and all(len(l) == 19 and list(l)[-1] == "camera" for l in linhas)
+    chave_ok = bool(linhas) and all(_chaves_ok(l) for l in linhas)
     bloco_ok = (isinstance(camera, dict)
                 and set(camera) == {"azimute", "elevacao", "distancia", "alvo"}
                 and isinstance(camera["alvo"], list) and len(camera["alvo"]) == 3)
     alvo_ok = (bloco_ok and _perto(camera["alvo"], esperado, TOL_REPOUSO)
                and _perto(camera["alvo"], _lookat_de(cam), TOL_REPOUSO)
                and _perto(camera, _valores3_de(cam), TOL_REPOUSO))
-    c.ok("[§2] TELEMETRIA em repouso: 19 chaves, `camera` por ultima = {azimute, elevacao, distancia, "
-         "alvo} com alvo = lookat REAL = drone+offset (sem viewer seria null)",
+    c.ok("[§2] TELEMETRIA em repouso: as 19 chaves do contrato (`camera` = 19.ª, depois só aditivas) e `camera` "
+         "= {azimute, elevacao, distancia, alvo} com alvo = lookat REAL = drone+offset (sem viewer seria null)",
          chave_ok and bloco_ok and alvo_ok,
          f"{len(linhas)} linhas · camera={camera} · esperado alvo={esperado}")
 
@@ -896,7 +907,7 @@ def roteiro_sem_viewer(ciclo: Ciclo, c: Checagens) -> None:
     linhas = ciclo.linhas()
     c.ok("[§2] (d) SEM viewer: o bloco de camera e ignorado sem erro e a telemetria publica "
          "`camera: null` (nada se inventa)",
-         len(linhas) >= 2 and all(l.get("camera") is None and len(l) == 19 for l in linhas)
+         len(linhas) >= 2 and all(l.get("camera") is None and _chaves_ok(l) for l in linhas)
          and ciclo.controlo.n_cameras == 0,
          f"{len(linhas)} linhas com camera null · aplicacoes de camara={ciclo.controlo.n_cameras}")
 
@@ -1108,20 +1119,24 @@ def checa_http(pasta: Path, modelo: Path) -> Checagens:
 
         estado = s.get("/api/state")
         sim = s.get("/api/sim")
-        padrao_igual = (estado.get("camera_padrao") == sim_site.CAM_PADRAO == sim.get("camera_padrao")
-                        and set(sim_site.CAM_PADRAO) == {"azimute", "elevacao", "distancia"})
-        c.ok("[§3] (e) `camera_padrao` == CAM_PADRAO (SEM alvo) publicado em GET /api/state e GET /api/sim",
-             padrao_igual, f"state={estado.get('camera_padrao')}")
+        # a câmara de arranque do MODELO EM USO: `CAM_PADRAO` (cf2) ou a do modelo gerado das peças (real)
+        esperado = sim_site.camera_padrao_para(sim_site.hardware_do_modelo(modelo))
+        padrao_igual = (estado.get("camera_padrao") == esperado == sim.get("camera_padrao")
+                        and set(esperado) == {"azimute", "elevacao", "distancia"})
+        c.ok("[§3] (e) `camera_padrao` == a câmara de arranque do modelo em uso (CAM_PADRAO no cf2; a do modelo "
+             "gerado no drone real), SEM alvo, em GET /api/state e GET /api/sim",
+             padrao_igual, f"state={estado.get('camera_padrao')} · esperado={esperado}")
         c.ok("[§3] (e) `camera_atual` e honesto: null sem viewer na telemetria (nunca um valor inventado)",
              estado.get("camera_atual") is None and sim.get("camera_atual") is None,
              f"state.camera_atual={estado.get('camera_atual')!r} · sim.camera_atual={sim.get('camera_atual')!r}")
 
         fim = s.esperar(lambda e: e["passo"] > 20)
         linhas = sim_site.ultimas_linhas(s.telemetria, 200)
-        c.ok("[§3] (e) a telemetria do runner real tem 19 chaves com `camera` por ultima (null sem viewer)",
+        c.ok("[§3] (e) a telemetria do runner real tem as 19 chaves do contrato (`camera` = 19.ª, null sem "
+             "viewer; depois só aditivas)",
              fim is not None and len(linhas) >= 5
-             and all(len(l) == 19 and list(l)[-1] == "camera" and l.get("camera") is None for l in linhas),
-             f"{len(linhas)} linhas · ultimas chaves={list(linhas[-1])[-2:] if linhas else None}")
+             and all(_chaves_ok(l) and l.get("camera") is None for l in linhas),
+             f"{len(linhas)} linhas · chaves depois da camera={list(linhas[-1])[19:] if linhas else None}")
 
         s.post("/api/loop", {"ativo": False})
         padrao = s.get("/api/state")["camera_padrao"]

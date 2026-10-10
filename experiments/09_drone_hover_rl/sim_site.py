@@ -486,6 +486,15 @@ def mesma_coisa(a, b) -> bool:
     return resolver(a) == resolver(b)
 
 
+def _medido(valor, casas: int, divisor: float = 1.0) -> float | None:
+    """Número medido > 0 arredondado (÷ `divisor`), ou `None` quando não houve medição (0/ausente/inválido)."""
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return None
+    return round(v / divisor, casas) if math.isfinite(v) and v > 0 else None
+
+
 def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dict:
     """Painel RPi 5: specs fixas + inferência medida (benchmark) + uso calculado AO VIVO.
 
@@ -522,9 +531,10 @@ def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dic
         "p50_us": round(p50, 3), "p99_us": round(float(b.get("p99_us") or 0.0), 3),
         "max_us": round(float(b.get("max_us") or 0.0), 3),
         "modelo_kb": round(float(onnx.get("bytes") or 0) / 1024.0, 2),   # ONNX fp32 (o que corre no RPi)
-        "int8_fator": round(float(int8.get("fator_p50") or 0.0), 4),     # p50 fp32 / p50 int8 (medido)
-        "int8_kb": round(float((int8.get("info") or {}).get("bytes") or 0) / 1024.0, 2),
-        "int8_reducao_tamanho": round(float((int8.get("info") or {}).get("reducao_tamanho") or 0.0), 4),
+        # int8 só se foi MEDIDO (`deploy.py --int8`); sem medição é `None` e o painel mostra «—», não «×0,00»
+        "int8_fator": _medido(int8.get("fator_p50"), 4),                 # p50 fp32 / p50 int8 (medido)
+        "int8_kb": _medido((int8.get("info") or {}).get("bytes"), 2, 1024.0),
+        "int8_reducao_tamanho": _medido((int8.get("info") or {}).get("reducao_tamanho"), 4),
         "inferencias_s": round(float(b.get("inferencias_s") or 0.0), 1),
         "threads": b.get("threads"), "n": b.get("n"), "cabe_50hz": b.get("cabe_50hz"),
         "modelo": (bench.get("modelo") or {}).get("caminho"),
@@ -537,7 +547,7 @@ def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dic
     if modelo_em_uso is not None and modelo_bench:
         inferencia["modelo_coincide"] = mesma_coisa(modelo_bench, modelo_em_uso)
     return {"specs": dict(RPI5_SPECS), "inferencia": inferencia, "uso": uso,
-            "fonte": "proxy x86 calibrado (1 core do A76; nao e o RPi)", "benchmark": inferencia["json"]}
+            "fonte": "proxy x86 calibrado (1 núcleo do A76; não é o RPi)", "benchmark": inferencia["json"]}
 
 
 # ---------------------------------------------------------------------------------------------- validação
@@ -949,7 +959,7 @@ class Handler(BaseHTTPRequestHandler):
         with trava_controlo():
             atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
             try:
-                novo = validar_camera(dados, atual)
+                novo = validar_camera(dados, atual, camera_padrao_para(self.servidor.hardware))
             except ValueError as erro:
                 self._erro(400, str(erro))
                 return
@@ -1160,7 +1170,7 @@ def validar_vento_dinamico(dados, atual: dict) -> dict:
     return novo
 
 
-def validar_camera(dados, atual: dict) -> dict:
+def validar_camera(dados, atual: dict, padrao: dict | None = None) -> dict:
     """`POST /api/camera` → controlo novo, com o bloco `camera` validado (ValueError → 400).
 
     CONTRATO v2 (câmara TERCEIRA-PESSOA): o corpo é o objeto `camera` do ORBITAR/zoom e NÃO tem `alvo` —
@@ -1169,7 +1179,9 @@ def validar_camera(dados, atual: dict) -> dict:
     já apareceu no front; os dois juntos → 400, é ambíguo) e `seq`, que é do SERVIDOR: incrementado a CADA
     pedido (como o `dinamico.seq`; é o que faz o runner re-aplicar valores iguais) e, quando vem no corpo,
     IGNORADO (o site pode reenviar um bloco lido tal e qual). Qualquer subconjunto é aceito: o que **não
-    vem** mantém o valor do bloco em vigor (ou `CAM_PADRAO` se ainda não há bloco). Recusas com 400 e
+    vem** mantém o valor do bloco em vigor (ou, sem bloco, o `padrao` = a câmara de arranque DO MODELO EM USO
+    — `camera_padrao_para`; sem ele, o `CAM_PADRAO` do cf2: medido em 2026-10-10, completar o 1.º comando
+    do drone real com a distância do Crazyflie, 0,27 m, punha a câmara dentro do drone). Recusas com 400 e
     mensagem clara: campo **PRESENTE com valor `null`** (`null` não é «ausente» — só a AUSÊNCIA completa
     do bloco em vigor), **chave desconhecida** (incluindo o `alvo` do contrato v1: campo desconhecido é
     erro, nunca silêncio) e valores fora das faixas — `azimute` finito (normalizado mod 360), `elevacao`
@@ -1207,7 +1219,7 @@ def validar_camera(dados, atual: dict) -> dict:
         novos[campo] = valor % AZIM_MAX if normalizar else valor
     anterior = atual.get("camera") if isinstance(atual.get("camera"), dict) else {}
     try:
-        base = {**CAM_PADRAO,
+        base = {**(padrao if padrao is not None else CAM_PADRAO),
                 **{campo: anterior[campo] for campo in ("azimute", "elevacao", "distancia")
                    if campo in anterior}}
         bloco = {"azimute": float(base["azimute"]), "elevacao": float(base["elevacao"]),
@@ -1352,7 +1364,18 @@ def resumo_hardware(hardware: dict | None) -> dict | None:
             "omega_max_rpm": d.get("omega_max_cheia_rpm"), "p_pairagem_w": ph.get("p_total"),
             "g_por_w": ph.get("g_por_w"), "autonomia_min": d.get("autonomia_min"),
             "kf": d.get("kf"), "kq": d.get("kq"), "origem_kf_kq": d.get("origem_kf_kq"),
-            "dr": hardware.get("domain_randomization") is not None}
+            "dr": hardware.get("domain_randomization") is not None,
+            # a semântica da AÇÃO com que a política voa (o site mostra os setpoints com ESTES valores)
+            "taxa_max": _taxa_max_ctbr(), "coletivo_max_peso": 2.0}
+
+
+def _taxa_max_ctbr() -> list[float] | None:
+    """Setpoints de taxa máximos do modo ctbr (`env_real.TAXA_MAX`, rad/s) — a mesma fonte do ambiente."""
+    try:
+        from env_real import TAXA_MAX
+    except Exception:  # noqa: BLE001 — o resumo é acessório: sem o env (cf2/teste) fica `None` e o site usa o seu
+        return None
+    return [round(float(v), 6) for v in TAXA_MAX]
 
 
 def modelo_por_omissao() -> tuple[Path, str]:

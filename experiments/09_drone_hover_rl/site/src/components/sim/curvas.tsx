@@ -1,5 +1,7 @@
 /**
- * Curvas ao vivo (z, yaw_err, retorno e vento_vel) — `Sparkline` do Motion UI + `AnimatedNumber`.
+ * Curvas ao vivo (altura, erro de rumo, retorno e vento) — `Sparkline` do Motion UI + `AnimatedNumber`.
+ * Desde a avaliação de UX de 2026-10-10 os títulos dizem o que medem em português (o nome do campo da
+ * telemetria fica na nota) e o rumo aparece em GRAUS (a telemetria continua em rad: é só ecrã).
  *
  * A linha do ALVO é a `grid` do próprio `Sparkline`: a posição vertical sai da MESMA matemática de
  * `buildSparkPath` (`range = max(1, max−min)`), replicada em `yDoValor` para o traço cair exactamente
@@ -9,7 +11,10 @@
 import { AnimatedNumber } from "@/components/motion-ui/animated-number"
 import { Sparkline } from "@/components/motion-ui/sparkline"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { fmt, fmtInteiro, type LinhaSim } from "@/lib/sim"
+import { fmt, fmtInteiro, GRAUS_POR_RAD, type LinhaSim } from "@/lib/sim"
+
+/** rad → graus (só ecrã). */
+const GRAUS = GRAUS_POR_RAD
 
 const LARGURA = 320
 const ALTURA = 72
@@ -35,6 +40,8 @@ export function yDoValor(
 }
 
 interface CurvaProps {
+  /** Identificador estável (testes de DOM: `curva-<id>`). */
+  id: string
   titulo: string
   nota?: string
   historico: number[]
@@ -50,6 +57,7 @@ interface CurvaProps {
 }
 
 function Curva({
+  id,
   titulo,
   nota,
   historico,
@@ -68,7 +76,7 @@ function Curva({
   const maximo = historico.length > 0 ? Math.max(...historico) : null
 
   return (
-    <Card size="sm" className="gap-2" data-testid={`curva-${titulo}`}>
+    <Card size="sm" className="gap-2" data-testid={`curva-${id}`}>
       <CardHeader className="gap-0.5">
         <CardTitle className="flex items-baseline justify-between gap-2 text-xs font-medium">
           <span>{titulo}</span>
@@ -117,7 +125,7 @@ interface CurvasProps {
 
 export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
   const z = linhas.map((l) => l.z)
-  const yawErr = linhas.map((l) => l.yaw_err)
+  const yawErr = linhas.map((l) => l.yaw_err * GRAUS)
   const retorno = linhas.map((l) => l.retorno)
   const vento = linhas.map((l) => l.vento_vel)
   const ultima = linhas.length > 0 ? linhas[linhas.length - 1] : null
@@ -126,8 +134,9 @@ export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
   return (
     <section aria-label="Curvas ao vivo" className="grid gap-3 sm:grid-cols-2">
       <Curva
-        titulo="z(t)"
-        nota={`altitude · linha fina = alvo ${fmt(zAlvo, 1)} m`}
+        id="z"
+        titulo="altura"
+        nota={`z(t) · linha fina = alvo ${fmt(zAlvo, 1)} m`}
         historico={z}
         valorAtual={ultima?.z ?? 0}
         unidade="m"
@@ -138,18 +147,20 @@ export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
         grande={grande}
       />
       <Curva
-        titulo="yaw_err(t)"
-        nota="erro de guinada (rad) · alvo 0"
+        id="yaw-err"
+        titulo="erro de rumo"
+        nota="yaw_err(t) em graus · alvo 0°"
         historico={yawErr}
-        valorAtual={ultima?.yaw_err ?? 0}
-        unidade="rad"
-        casas={3}
+        valorAtual={(ultima?.yaw_err ?? 0) * GRAUS}
+        unidade="°"
+        casas={1}
         tickKey={tickKey}
         grande={grande}
       />
       <Curva
-        titulo="retorno(t)"
-        nota="retorno acumulado do episódio"
+        id="retorno"
+        titulo="retorno"
+        nota="recompensa acumulada do episódio"
         historico={retorno}
         valorAtual={ultima?.retorno ?? 0}
         unidade=""
@@ -158,8 +169,9 @@ export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
         grande={grande}
       />
       <Curva
-        titulo="vento_vel(t)"
-        nota="velocidade do vento aplicado (m/s)"
+        id="vento"
+        titulo="vento"
+        nota="vento_vel(t) · velocidade do vento aplicado"
         historico={vento}
         valorAtual={ultima?.vento_vel ?? 0}
         unidade="m/s"
@@ -216,8 +228,9 @@ interface ValoresAtuaisProps {
 }
 
 /**
- * Valores ATUAIS do voo (z · dist_xy · yaw_err · vento_vel) em números grandes — o essencial para
- * vigiar o drone em operação sem procurar nas curvas (a mesma telemetria, sem contas novas).
+ * Valores ATUAIS do voo (altura · distância ao alvo · erro de rumo · vento) em números grandes — o
+ * essencial para vigiar o drone em operação sem procurar nas curvas. São os valores REAIS do simulador
+ * (o que o drone acha está no Painel de voo); só a unidade de ecrã muda (cm e graus).
  */
 export function ValoresAtuais({ linha }: ValoresAtuaisProps) {
   return (
@@ -228,32 +241,32 @@ export function ValoresAtuais({ linha }: ValoresAtuaisProps) {
     >
       <ValorAtual
         id="z"
-        rotulo="z"
-        descricao="altitude atual"
+        rotulo="altura"
+        descricao="z do drone · alvo 1,0 m"
         valor={linha?.z ?? 0}
         unidade="m"
         casas={3}
       />
       <ValorAtual
         id="dist-xy"
-        rotulo="dist_xy"
-        descricao="distância horizontal ao alvo"
-        valor={linha?.dist_xy ?? 0}
-        unidade="m"
-        casas={3}
+        rotulo="distância ao alvo"
+        descricao="dist_xy · na horizontal"
+        valor={(linha?.dist_xy ?? 0) * 100}
+        unidade="cm"
+        casas={1}
       />
       <ValorAtual
         id="yaw-err"
-        rotulo="yaw_err"
-        descricao="erro de guinada"
-        valor={linha?.yaw_err ?? 0}
-        unidade="rad"
-        casas={3}
+        rotulo="erro de rumo"
+        descricao="yaw_err · nariz vs. o do arranque"
+        valor={(linha?.yaw_err ?? 0) * GRAUS}
+        unidade="°"
+        casas={1}
       />
       <ValorAtual
         id="vento-vel"
-        rotulo="vento_vel"
-        descricao="vento aplicado agora"
+        rotulo="vento"
+        descricao="vento_vel · aplicado agora"
         valor={linha?.vento_vel ?? 0}
         unidade="m/s"
         casas={2}

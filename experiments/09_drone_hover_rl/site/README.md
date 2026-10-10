@@ -29,16 +29,18 @@ fica visível de cada vez** e a escolha é **persistente** — guardada em `loca
 
 | secção | tecla | para que serve |
 |---|---|---|
-| **Operação** | `1` | vigiar o voo: cabeçalho (selo de estado, contadores, modelo), **valores atuais** (z, dist_xy, yaw_err, vento_vel) e as 4 curvas **grandes** (z, yaw_err, retorno, vento_vel) |
-| **Rede** | `2` | a política a decidir: rede 16→64→64→4 com ativações ao vivo, observação (16 canais) e ação (4 canais) |
+| **Operação** | `1` | o cockpit: cabeçalho (estado em linguagem simples, contadores, modelo), **valores atuais** (altura, distância ao alvo, erro de rumo, vento), no drone real o **Painel de voo** (instrumentos com estimado vs real) e o resumo **Bateria e motores**, o bloco **Câmara da janela 3D** e as 4 curvas |
+| **Rede** | `2` | a política a decidir: rede com ativações ao vivo (cf2 16→64→64→4; real 21→128→128→4), entradas da rede (no real com nomes simples e unidades do dia a dia) e ação (4 canais) |
 | **Vento** | `3` | comandar o vento: sliders constantes, rosa dos ventos, APLICAR/PARAR e vento dinâmico (rajadas, rajadas aleatórias, Dryden, frente) |
-| **Bordo** | `4` | computador de bordo: painel do Raspberry Pi 5 |
+| **Bordo** | `4` | computador de bordo: painel do Raspberry Pi 5 e, no drone real, Bateria, Motores e potência e Hardware |
 | **Tudo** | `5` | layout completo: todas as secções, com a coluna de controlos à direita (como antes do seletor) |
 
 - **atalhos 1–5** (documentados no «?» e visíveis nas abas): saltam de secção; as setas do teclado
   percorrem as abas; os atalhos **não atuam** enquanto se escreve num campo (input/textarea/select ou
   conteúdo editável) nem com o rato/foco sobre um slider (alvo, foco real ou `pointerover` dentro de
-  `[role="slider"], [data-slider], [data-slot="slider"], [aria-valuenow]`).
+  `[role="slider"], [data-slider], [data-slot="slider"], [aria-valuenow]`) — exceto nas vistas da Câmara
+  (`data-atalhos-livres`: são sliders para leitores de ecrã mas não usam dígitos). Trocar de secção volta
+  ao topo da página.
 - **o que nunca se esconde**: a faixa de **estado crítico** (API em baixo — o único estado com
   `role="alert"`; o fim do episódio sem reinício é uma linha NEUTRA, porque a física continua; com a API
   em baixo o alerta de ligação tem prioridade porque o estado do episódio já
@@ -120,8 +122,8 @@ nesses dois campos.
   abaixo de **100 µs** mostra µs com 1 casa («4,6 µs», «6,8 µs») — a 2 casas em ms sairia «0,00 ms» e o
   valor medido desaparecia; a partir daí mostra ms com 2 casas («0,16 ms», «2,50 ms»), comparável com o
   orçamento de 20 ms que está ao lado.
-- **procedência honesta**: o TEXTO da `fonte` é o que o backend manda (ex.: «proxy x86 calibrado (1 core
-  do A76; nao e o RPi)»), só a cor é classificada por prefixo; sem `inferencia.p50_us` o painel diz «sem
+- **procedência honesta**: o TEXTO da `fonte` é o que o backend manda (ex.: «proxy x86 calibrado (1 núcleo
+  do A76; não é o RPi)»), só a cor é classificada por prefixo; sem `inferencia.p50_us` o painel diz «sem
   benchmark publicado pelo backend» e **não inventa tempos** (medidores a «—»).
 - se o benchmark for de **outro** `.zip` (`inferencia.modelo_coincide === false`), avisa-se que os tempos
   são de outra política.
@@ -142,21 +144,24 @@ e o componente só a percorre: acrescentar uma explicação é acrescentar um ob
 src/
   main.tsx                    MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider
   App.tsx                     barra fixa (seletor · REINICIAR/CONTINUIDADE · estado crítico), `loop` lido da API, aviso de episódio novo + as secções (operacao/rede/vento/bordo/tudo) · ajuda · toasts
-  lib/sim.ts                  tipos do contrato, normalização defensiva, rótulos das 16 obs/4 ações
+  lib/sim.ts                  tipos do contrato, normalização defensiva, rótulos das 16 obs/4 ações (cf2) e dos 21 canais reais (nome simples, unidade amigável, faixa), `verdade`/`fim`, taxas e coletivo do ctbr
+  lib/sensores.ts             PAINEL DE VOO da planta real: linha → graus/cm/cm/s/g, estimado (bloco `estimador`) vs real (`verdade`), erro do estimador
   lib/api.ts                  fetch dos 5 endpoints (erros legíveis; `?api=` para testes)
   hooks/use-sim.ts            polling, fusão do histórico, estado de ligação, ações (POST)
   components/sim/seccoes.tsx      seletor de secções (smooth-tabs), persistência (localStorage), atalhos 1–5, faixa de estado, BlocoSecao
   components/sim/cabecalho.tsx    estado do episódio, contadores, modelo, ligação
-  components/sim/curvas.tsx       valores atuais (z, dist_xy, yaw_err, vento_vel) + z(t) com a linha do alvo 1,0 · yaw_err · retorno · vento_vel
-  components/sim/rede.tsx         ativações 16→64→64→4 (SVG, cor por |a|)
+  components/sim/curvas.tsx       valores atuais (altura, distância ao alvo em cm, erro de rumo em graus, vento) + curvas altura · erro de rumo · retorno · vento
+  components/sim/rede.tsx         ativações (cf2 16→64→64→4; real 21→128→128→4 — dimensões pelos dados) (SVG, cor por |a|)
+  components/sim/painel-voo.tsx   PAINEL DE VOO (planta real): horizonte artificial, rumo, fita de altura, mapa de posição estimada vs real, giroscópio, acelerómetro, sensores
+  components/sim/resumo-bordo.tsx resumo «Bateria e motores» na secção Operação (SoC real/estimado, autonomia, V, I, P, rpm, uso do empuxo)
   components/sim/rpi5.tsx         painel do alvo: imagem, specs, medidores e semáforo
   components/sim/rosa-ventos.tsx  bússola viva: seta do vetor em vigor, seleção, N/E/S/O, rajada
   components/sim/ajuda.tsx        botão «?» + SECOES_AJUDA (o que é cada elemento)
-  components/sim/observacoes.tsx  tabela das 16 obs (obs/cru/barra) + ação (empuxo em N e momentos)
+  components/sim/observacoes.tsx  tabela das 16 obs (obs/cru/barra) + ação (empuxo em N e momentos); na planta real «Entradas da rede» (nome simples, valor amigável, na rede, barra centrada) + ação ctbr (× o peso, rad/s e °/s)
   components/sim/controlos.tsx    ControlosVento (sliders + APLICAR/PARAR + dinâmico) · ControlosEpisodio (REINICIAR hold · continuidade, barra fixa)
-  components/sim/camera.tsx       widget «Câmara» (vista 3.ª pessoa): pad (círculo + drone + esfera) + slider de distância + REPOR VISTA
-  lib/camera-gestos.ts            mapeamento esfera↔ângulos + máquina de gestos (snapshot DEF-1, «—» DEF-2, throttle 150 ms)
-  testes/                         camera-roundtrip.mts + camera-gestos.mts (`npm run test:camera`)
+  components/sim/camera.tsx       widget «Câmara da janela 3D» v3: vista de cima (órbita) + vista de lado (altura, chão à escala) + zoom log + vistas rápidas + REPOR VISTA
+  lib/camera-gestos.ts            geometria das vistas, vistas rápidas, descrição em português + máquina de gestos (snapshot DEF-1, «—» DEF-2, throttle 150 ms, corpo completo)
+  testes/                         camera-roundtrip.mts + camera-gestos.mts (`npm run test:camera`) · planta-real.mts (`npm run test:planta`, inclui o painel de voo)
   components/sim/avisos.tsx       toasts das ações (toast-stack)
   assets/rpi5.webp            imagem do alvo (ilustração de referência; CC BY-SA 3.0)
   components/motion-ui/**     componentes do registry @motion (source do CLI — não editar)
@@ -231,73 +236,63 @@ Passo 4 da cascata (código novo), com justificação de uma linha cada:
   `eventsBaseline`/`tickIntervalMs` — não dá para lhe passar telemetria real. Ficou a dependência que
   ele trouxe, `animated-number`, e o padrão de painel; os valores no ecrã são do MuJoCo.
 
-## Widget da câmara — pad de terceira-pessoa (bloco «Câmara», Operação e Tudo)
+## Widget da câmara — v3 com vistas de cima e de lado (bloco «Câmara da janela 3D», Operação e Tudo)
 
-O controlo de câmara do dono (2026-10-09): um **CÍRCULO** com um glifo de **DRONE** ao centro e uma
-**ESFERA arrastável** (horizontal = azimute, vertical = elevação), um **SLIDER de DISTÂNCIA**
-(0,1–10 m) e o botão **REPOR VISTA**. Sem presets — o pad substitui-os. O efeito é de jogo de
-terceira-pessoa: a câmara **orbita sempre o drone** (o backend faz o seguimento do alvo =
-drone+offset; o front só comanda ângulo + distância). Implementação: `src/components/sim/camera.tsx`
-(apresentação) + `src/lib/camera-gestos.ts` (mapeamento e máquina de gestos), contrato v2 em
+**Porquê v3 (avaliação de UX de 2026-10-10, `../out/ux/`):** o pad v2 (círculo com o drone ao centro e uma
+esfera de mapeamento LINEAR — horizontal = azimute, vertical = elevação) sugeria «pôr a câmara à volta do
+drone» mas a esfera não ficava onde a câmara está (azimute 90° punha-a em cima de um braço), as diagonais nem
+eram alcançáveis e era preciso ler a legenda. O v3 é geométrico, como num programa 3D, e o efeito continua a
+ser de jogo de terceira-pessoa: a câmara **segue sempre o drone** (o backend faz o seguimento do alvo =
+drone+offset) e o site escolhe **de onde** se olha. Implementação: `src/components/sim/camera.tsx`
+(apresentação) + `src/lib/camera-gestos.ts` (geometria, vistas rápidas e máquina de gestos), contrato v2 em
 `src/lib/sim.ts` (`CameraEstado`, `CorpoCamera`, `lerCamera`, `cameraReflete`).
 
-**Mapeamento esfera ↔ ângulos** (coordenadas normalizadas `u` horizontal [direita +] e `w` vertical
-[cima +]):
-
-| gesto | efeito | fórmula |
+| elemento | o que faz | geometria |
 |---|---|---|
-| horizontal | azimute (0–360°, wrap 360↔0 passando nas bordas laterais: a esfera sai por um lado e entra pelo outro) | `u = azimute/180 − 1` · arrastar para a direita AUMENTA o azimute (a câmara orbita de +x para +y, anti-horário visto de cima) |
-| vertical | elevação (−90…90°, a esfera TRAVA nas bordas superior/inferior) | `w = −elevacao/90` · **arrastar para CIMA põe a câmara MAIS ALTA**: a elevação fica mais **negativa** |
-| slider | distância (zoom) | 0,1–10 m |
-| REPOR VISTA | envia o `camera_padrao` `{azimute, elevacao, distancia}` | comando explícito, sempre enviado |
+| **leitura** | «onde · altura · distância» em português, relativa ao NARIZ do drone | `descreverCamera` (rel = azimute − rumo: 0 = atrás, ±180 = à frente, +90 = à direita) |
+| **vista de cima** | o drone com o NARIZ PARA CIMA e o ícone da câmara ONDE ela está (cone de visão a apontar ao drone); arrastar/clicar = orbitar; ↺/↻ = ±15° | a câmara fica em −(cos a, sin a) do drone (`pos = alvo − d·f`); ecrã: `sx = sin(a − rumo)`, `sy = cos(a − rumo)`; o rumo é o real (`verdade.yaw`) |
+| **vista de lado** | a câmara num arco à volta do drone; arrastar = subir/descer; ▲/▼ = ±10°; o chão à escala (altura ÷ distância) e aviso a vermelho abaixo do chão | ângulo acima do horizonte `h = −elevação` (MuJoCo: elevação negativa = por cima), faixa da UI −30…89° |
+| **zoom** | slider LOGARÍTMICO, −/+ (×1,25) e roda do rato sobre as vistas | `d = d_min·(d_max/d_min)^f`; limites por planta: real 0,6–15 m, cf2 0,1–5 m |
+| **vistas rápidas** | Atrás (perseguição) · Frente · Esquerda · Direita · De cima · À altura; mantêm o zoom | `anguloVistaRapida(vista, rumo)` |
+| **Repor vista** | envia o `camera_padrao` | comando explícito, sempre enviado |
+| **teclado** | foco numa vista: ← → orbitar, ↑ ↓ subir/descer, + − zoom, Home repor; 1–5 continuam a mudar de secção (`data-atalhos-livres`) | — |
 
-**Sinal da elevação (a parte contra-intuitiva):** na convenção do MuJoCo a elevação **negativa** vê
-de cima (`pos = alvo − d·f`, `f = [cos e·cos a, cos e·sin a, sin e]` ⇒ `pos_z = alvo_z − d·sin(elev)`).
-Por isso arrastar a esfera para cima diminui a elevação (mais negativa) e **sobe** a câmara; os
-extremos: `−90°` = câmara por cima do alvo (`pos_z = alvo_z + d`), `+90°` = por baixo. A fórmula está
-verificada contra o MuJoCo 3.15 (`MjvScene.camera[0/1]`, erro ≤ 2,3e-8 no `forward` — tabela
-`GROUND_TRUTH` em `testes/camera-roundtrip.mts`).
+**Sinal da elevação (a parte contra-intuitiva):** na convenção do MuJoCo a elevação **negativa** vê de cima
+(`pos = alvo − d·f`, `f = [cos e·cos a, cos e·sin a, sin e]` ⇒ `pos_z = alvo_z − d·sin(elev)`); a vista de
+lado mostra o ÂNGULO ACIMA DO HORIZONTE (= −elevação), por isso arrastar para cima sobe a câmara. A fórmula
+está verificada contra o MuJoCo 3.15 (`MjvScene.camera[0/1]`, erro ≤ 2,3e-8 no `forward` — `GROUND_TRUTH` em
+`testes/camera-roundtrip.mts`).
 
-**Comandos e gestos** (`lib/camera-gestos.ts`): comandos ao vivo ENQUANTO se arrasta — throttle de
-**150 ms** com coalescência (os eventos entre disparos caem num só comando = **1 comando por mudança
-final de valor**) — mais um **commit final imediato ao largar**. O corpo de `POST /api/camera` é
-sempre o subconjunto do gesto: o pad manda `{azimute, elevacao}`, o slider manda `{distancia}`, o
-REPOR VISTA manda `{azimute, elevacao, distancia}` (nunca `alvo` nem `seq`).
+**Comandos e gestos** (`lib/camera-gestos.ts`): comandos ao vivo ENQUANTO se arrasta — throttle de **150 ms**
+com coalescência (1 comando por mudança final de valor) — mais um **commit final imediato ao largar**. O corpo
+de `POST /api/camera` leva SEMPRE os **3 valores** do estado mostrado (que fora de um gesto é a câmara real),
+nunca `alvo` nem `seq`. Medido em 2026-10-10 no ecrã real: com corpos parciais o 1.º comando só com ângulos era
+completado no servidor com a distância do Crazyflie (0,27 m — a câmara do drone real saltava para dentro dele;
+o servidor passou a usar o `camera_padrao` do modelo em uso) e um zoom feito com o rato na janela era desfeito
+pelo comando seguinte do site.
 
-**Estados honestos — os 2 defeitos medidos do bloco anterior (sliders) estão corrigidos:**
+**Estados honestos — os 2 defeitos medidos do bloco v1 (sliders) continuam corrigidos:**
 
-- **DEF-1 (gestos perdidos, grave):** a telemetria (poll de 350 ms) substituía os valores do gesto
-  entre o `pointerup` e o envio agendado (150 ms) e o POST levava valores velhos (~43 % dos gestos).
-  Agora os valores enviados são **sempre os do gesto**: cada edição fixa um *snapshot* do corpo por
-  enviar (fixado no fim do gesto e refrescado em cada envio a partir do estado do gesto) e a
-  **telemetria nunca sobrescreve valores durante o arrasto nem enquanto há envio pendente** (snapshot
-  por disparar ou envio por confirmar — a confirmação fecha-se por igualdade com a câmara real ou por
+- **DEF-1 (gestos perdidos):** a telemetria (poll de 350 ms) substituía os valores do gesto entre o
+  `pointerup` e o envio agendado e o POST levava valores velhos. Os valores enviados são **sempre os do
+  gesto** (snapshot fixado no fim do gesto e em cada envio) e a **telemetria nunca sobrescreve valores durante
+  o arrasto nem enquanto há envio pendente** (a confirmação fecha-se por igualdade com a câmara real ou por
   expiração a 1500 ms).
-- **DEF-2 (estados honestos):** `camera`/`camera_atual` a passar a `null` (janela fechada) mostra
-  **«—» SEMPRE** e desativa o controlo (pad, slider e REPOR VISTA) — nunca se retém o valor antigo;
-  `null`→valor→`null` termina em «—».
+- **DEF-2 (estados honestos):** `camera`/`camera_atual` a passar a `null` (janela fechada) mostra «—»,
+  explica porquê e desativa o bloco — nunca se retém o valor antigo.
 
-Fora de arrasto a esfera segue a **câmara real** (inclusive quando a mexes com o rato da própria
-janela 3D); durante o arrasto o estado é otimista. A posição da esfera é **sempre** função dos ângulos
-atuais (o desenho limita o raio a 1 para a esfera ficar dentro do círculo).
+**Testes** (`npm run test:camera`): `testes/camera-roundtrip.mts` (20 — round-trip pos↔alvo, ground truth do
+MuJoCo 3.15, contrato v2) + `testes/camera-gestos.mts` (**67** — a vista de cima posta à prova contra
+`posicaoCamera` para 55 poses (erro 2e-16) e a de lado (1e-14), idas e voltas, travões da UI, zoom
+logarítmico e limites, passos, as vistas rápidas para 4 rumos — «Atrás» fica mesmo atrás do nariz, etc. —,
+a descrição em português, DEF-1/DEF-2, REPOR VISTA, coalescência, o corpo completo e o zoom do rato
+preservado), sem dependências (Node ≥ 22.6, type-stripping).
 
-**Testes** (`npm run test:camera`): `testes/camera-roundtrip.mts` (round-trip pos↔alvo ≤ 1e-9,
-ground truth do MuJoCo 3.15, contrato v2 da leitura/comando) + `testes/camera-gestos.mts`
-(mapeamento esfera↔ângulos: wrap 360↔0, limites ±90 e o sinal da elevação provado com a fórmula;
-DEF-1 com telemetria viva — incl. câmara externa a meio do arrasto, com a janela de confirmação
-expirada (regressão M5); DEF-2; REPOR VISTA; coalescência) — 62 verificações, sem dependências
-(Node ≥ 22.6, type-stripping). **Não-tautologia:** 8 mutações do código de produção (sinal da
-elevação, wrap, guarda DEF-1, guarda do arrasto na `receberCamera` (M5), «—» DEF-2, snapshot vs
-mostrado, `cameraReflete`) aplicadas a uma cópia staged em `$TMPDIR` — todas mortas (os testes
-falham com cada mutação).
-
-**Prova DOM/CDP** (Chrome headless + stub do contrato v2 em `$TMPDIR`, porta 8551, servindo o
-`dist/` real; arrastos REAIS via `Input.dispatchMouseEvent`): arrastar a esfera manda
-`POST /api/camera` com o azimute/elevação certos (wrap 360↔0 e limites ±90 incluídos), o slider manda
-`{distancia}`, o REPOR VISTA manda o `camera_padrao`, sem dados mostra «—» e desativa-se, a esfera
-acompanha a telemetria fora de arrasto, um gesto sob telemetria viva envia os valores do gesto
-(DEF-1) e os restantes blocos/atalhos seguem como antes (vento, loop, operações, atalhos 1–5,
-persistência da secção, barra crítica) — 37/37 verificações.
+**Prova no ecrã real (2026-10-10):** `sim_site.py` com a janela 3D do MuJoCo num Xvfb e o site num Chrome
+headless (CDP, arrastos REAIS com `Input.dispatchMouseEvent`): arrastar na vista de cima levou a câmara para
+«à esquerda» e na vista de lado para «à altura do drone» com a distância intacta (1,95 m); «Atrás» + roda do
+rato deram «atrás · 20° por cima · 1,25 m»; «Repor vista» voltou a (90°, −45°, 1,95 m); o selo passou a
+«aplicada na janela 3D» em todos. Capturas antes/depois em `../out/ux/`.
 
 ## Testar contra um backend falso
 
