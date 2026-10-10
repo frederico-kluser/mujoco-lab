@@ -1,5 +1,6 @@
 /**
- * Rede neural 16 → 64 → 64 → 4 ao vivo.
+ * Rede neural 16 → 64 → 64 → 4 ao vivo (cf2). Na planta real as dimensões saem dos dados: 21 obs do
+ * ator e as camadas escondidas com o tamanho que o runner publicar.
  *
  * CASCATA, PASSO 4 (código novo, justificado): o catálogo não tem visualizador de ativações —
  * `sparkline`/`progress-bar` são séries e barras, não grelhas por camada com cor por |a|. Fica um SVG
@@ -98,10 +99,15 @@ export function Rede({ linha, estadoCorrendo }: RedeProps) {
   const { motionMode } = useMotionUITheme()
   const comAtivacoes = temAtivacoes(linha)
 
+  // Dimensões pelos DADOS: cf2 = 16 → 64 → 64 → 4 (o parser fixa-as); planta real = 21 obs do ator e as
+  // camadas com o tamanho que o runner publicar (o ator real pode ser 128-128).
+  const nObs = linha?.obs.length ?? N_OBS
+  const nH1 = linha?.h1.length ?? N_H1
+  const nH2 = linha?.h2.length ?? N_H2
   const camadas: Camada[] = [
-    { chave: "obs", rotulo: "obs", dimensao: N_OBS, valores: linha?.obs ?? [], colunas: 2 },
-    { chave: "h1", rotulo: "h1", dimensao: N_H1, valores: linha?.h1 ?? [], colunas: 8 },
-    { chave: "h2", rotulo: "h2", dimensao: N_H2, valores: linha?.h2 ?? [], colunas: 8 },
+    { chave: "obs", rotulo: "obs", dimensao: nObs, valores: linha?.obs ?? [], colunas: 2 },
+    { chave: "h1", rotulo: "h1", dimensao: nH1, valores: linha?.h1 ?? [], colunas: 8 },
+    { chave: "h2", rotulo: "h2", dimensao: nH2, valores: linha?.h2 ?? [], colunas: 8 },
     { chave: "act", rotulo: "act", dimensao: N_ACT, valores: linha?.act ?? [], colunas: 1 },
   ]
 
@@ -133,7 +139,7 @@ export function Rede({ linha, estadoCorrendo }: RedeProps) {
         <CardTitle className="flex flex-wrap items-baseline justify-between gap-2 text-sm font-medium">
           <span>Rede da política · ativações ao vivo</span>
           <span className="font-mono text-[0.7rem] text-muted-foreground">
-            16 → 64 → 64 → 4 · cor = |a| / máx da camada
+            {`${nObs} → ${nH1} → ${nH2} → ${N_ACT} · cor = |a| / máx da camada`}
           </span>
         </CardTitle>
         <p className="text-[0.7rem] text-muted-foreground">
@@ -152,7 +158,7 @@ export function Rede({ linha, estadoCorrendo }: RedeProps) {
             viewBox={`0 0 ${larguraTotal} ${alturaTotal}`}
             className="max-h-[300px] w-full min-w-[340px]"
             role="img"
-            aria-label="Ativações da rede por camada: 16 observações, 64, 64 e 4 ações"
+            aria-label={`Ativações da rede por camada: ${nObs} observações, ${nH1}, ${nH2} e ${N_ACT} ações`}
             data-testid="svg-rede"
           >
             <text x={6} y={11} className="fill-muted-foreground" style={{ fontSize: 9 }}>

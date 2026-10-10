@@ -7,6 +7,18 @@
 
 export type EstadoEpisodio = "a_correr" | "episodio_terminado"
 
+/**
+ * Que PLANTA física o runner está a simular: o Crazyflie histórico (`cf2`, 16 obs, ctrl = wrench) ou o
+ * drone REAL do dono (`real`, 21 obs do ator, ação ctbr, ctrl = empuxo por rotor, bateria/motores).
+ * Chave aditiva (`planta`) das linhas de telemetria, do `/api/sim` e do `/api/state`; ausente = cf2.
+ */
+export type Planta = "real" | "cf2"
+
+/** `"real"`/`"cf2"`, ou `null` quando não vem (ou vem outra coisa) — nunca se adivinha a planta. */
+export function lerPlanta(bruto: unknown): Planta | null {
+  return bruto === "real" || bruto === "cf2" ? bruto : null
+}
+
 /** Nº de entradas/saídas da política e das camadas escondidas (16 → 64 → 64 → 4). */
 export const N_OBS = 16
 export const N_ACT = 4
@@ -37,6 +49,23 @@ export interface LinhaSim {
   h2: number[]
   /** Comando físico opcional `[empuxo N, mx, my, mz]` (se o backend o enviar). */
   ctrl: number[] | null
+  /** CâMARA real da janela nesta linha (`camera`), ou `null` se não vier. */
+  camera: CameraEstado | null
+  /**
+   * Planta que produziu esta linha (`planta`); `null` = a linha não o diz (runner antigo ⇒ cf2). Na
+   * planta real `obs` tem 21 canais (ator) e `ctrl` é o EMPUXO de cada rotor (N), não o wrench do cf2.
+   */
+  planta: Planta | null
+  /** Planta real: pack de bateria (`bateria`); `null` no cf2 ou quando não vem. */
+  bateria: BateriaTelemetria | null
+  /** Planta real: os 4 motores + teto de rotação/empuxo (`motores`); `null` no cf2. */
+  motores: MotoresTelemetria | null
+  /** Planta real: ledger de potência (`potencia`); `null` no cf2. */
+  potencia: PotenciaTelemetria | null
+  /** Planta real: fatores aerodinâmicos por rotor (`aero`); `null` no cf2. */
+  aero: AeroTelemetria | null
+  /** Planta real: estimativas de BORDO (`estimador`); `null` no cf2. */
+  estimador: EstimadorTelemetria | null
 }
 
 export interface VentoEstado {
@@ -59,11 +88,25 @@ export interface RespostaSim {
   ventoDinamico: VentoDinamico
   /**
    * Modo de continuidade do BACKEND: `true` = reinicia sozinho ao terminar o episódio (por omissão no
-   * `sim_site.py` novo), `false` = para no fim à espera de REINICIAR; `null` = esta resposta não o diz.
+   * `sim_site.py`), `false` = sem reinício (a física CONTINUA no estado em que ficou — não congela — e só
+   * um REINICIAR recomeça); `null` = esta resposta não o diz.
    */
   loop: boolean | null
   /** Painel do Raspberry Pi 5; `null` quando o backend ainda não publica `rpi5`. */
   rpi5: Rpi5 | null
+  /** CâMARA real da telemetria (`camera`); `null` sem janela/sem chave. */
+  camera: CameraEstado | null
+  /** CâMARA real tal como `camera_atual` a anuncia; `null` se não vier. */
+  cameraAtual: CameraEstado | null
+  /** Valores por omissão da câmara (`camera_padrao`) — o que o REPOR VISTA envia. */
+  cameraPadrao: CameraEstado | null
+  /**
+   * A resposta trouxe ALGUMA informação de câmara (`camera`/`camera_atual`/`camera_padrao`, mesmo
+   * que `null`)? `false` = backend que ainda não publica a câmara (aí retém-se o que já se sabia).
+   */
+  cameraPublicada: boolean
+  /** Planta anunciada pelo servidor (`planta`); `null` se a resposta não a trouxer. */
+  planta: Planta | null
   linhas: LinhaSim[]
 }
 
@@ -81,6 +124,18 @@ export interface ResumoEstado {
   rpi5: Rpi5 | null
   /** Continuidade do backend como o `/api/state` a anuncia (`null` se não vier). */
   loop: boolean | null
+  /** CâMARA real da telemetria (`camera`); `null` se não vier. */
+  camera: CameraEstado | null
+  /** CâMARA real (`camera_atual`); `null` se não vier. */
+  cameraAtual: CameraEstado | null
+  /** Valores por omissão da câmara (`camera_padrao`); `null` se não vier. */
+  cameraPadrao: CameraEstado | null
+  /** Houve informação de câmara na resposta (mesmo que `null`)? Ver `RespostaSim.cameraPublicada`. */
+  cameraPublicada: boolean
+  /** Planta anunciada pelo `/api/state` (`planta`); `null` se não vier. */
+  planta: Planta | null
+  /** Peças reais do modelo em uso (`hardware`, só na planta real); `null` se não vier. */
+  hardware: Hardware | null
 }
 
 /** `true`/`false` quando o valor é mesmo booleano; `null` para tudo o resto (nunca se inventa). */
@@ -150,6 +205,19 @@ function lerVetor3(bruto: unknown): [number, number, number] | null {
   return x === null || y === null || z === null ? null : [x, y, z]
 }
 
+/** Teto de neurónios por camada aceite na planta real (defesa contra uma lista absurda no JSON). */
+const MAX_NEURONIOS = 1024
+
+/**
+ * Lista numérica com o tamanho que VIER (planta real: a rede do ator pode ter 128 neurónios por camada),
+ * ou `n` zeros quando não vem lista — o mesmo «sem dados» que o `vetor()` dá no cf2.
+ */
+function vetorLivre(bruto: unknown, n: number): number[] {
+  return Array.isArray(bruto) && bruto.length > 0
+    ? vetor(bruto, Math.min(bruto.length, MAX_NEURONIOS))
+    : vetor(bruto, n)
+}
+
 /** Uma linha do stream → `LinhaSim`, ou `null` se nem `t` nem `passo` forem numéricos. */
 export function lerLinha(bruto: unknown): LinhaSim | null {
   const o = objeto(bruto)
@@ -157,6 +225,10 @@ export function lerLinha(bruto: unknown): LinhaSim | null {
   const passo = numero(o.passo)
   if (t === null && passo === null) return null
   const ctrl = Array.isArray(o.ctrl) ? vetor(o.ctrl, 4) : null
+  const planta = lerPlanta(o.planta)
+  // cf2 (ou planta ausente): EXATAMENTE o parser de sempre (16 obs, 64+64 ativações). Planta real: 21 obs
+  // do ator e as ativações com o tamanho publicado (o ator real pode ser 128-128).
+  const real = planta === "real"
   return {
     t: t ?? 0,
     estado: estado(o.estado),
@@ -170,11 +242,18 @@ export function lerLinha(bruto: unknown): LinhaSim | null {
     vento_azim: numero(o.vento_azim) ?? 0,
     vento_vec: lerVetor3(o.vento_vec),
     vento_modo: lerModo(o.vento_modo),
-    obs: vetor(o.obs, N_OBS),
+    obs: vetor(o.obs, real ? N_OBS_REAL : N_OBS),
     act: vetor(o.act, N_ACT),
-    h1: vetor(o.h1, N_H1),
-    h2: vetor(o.h2, N_H2),
+    h1: real ? vetorLivre(o.h1, N_H1) : vetor(o.h1, N_H1),
+    h2: real ? vetorLivre(o.h2, N_H2) : vetor(o.h2, N_H2),
     ctrl,
+    camera: lerCamera(o.camera),
+    planta,
+    bateria: lerBateria(o.bateria),
+    motores: lerMotores(o.motores),
+    potencia: lerPotencia(o.potencia),
+    aero: lerAero(o.aero),
+    estimador: lerEstimador(o.estimador),
   }
 }
 
@@ -200,6 +279,12 @@ export function lerSim(bruto: unknown): RespostaSim {
     ventoDinamico: lerVentoDinamico(o.vento_dinamico),
     loop: booleano(o.loop),
     rpi5: lerRpi5(o.rpi5),
+    camera: lerCamera(o.camera),
+    cameraAtual: lerCamera(o.camera_atual),
+    cameraPadrao: lerCamera(o.camera_padrao),
+    cameraPublicada:
+      "camera" in o || "camera_atual" in o || "camera_padrao" in o,
+    planta: lerPlanta(o.planta),
     linhas,
   }
 }
@@ -248,6 +333,13 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     ventoDinamico: lerVentoDinamico(primeiro("vento_dinamico")),
     rpi5: lerRpi5(primeiro("rpi5")),
     loop: booleano(primeiro("loop")),
+    camera: lerCamera(primeiro("camera")),
+    cameraAtual: lerCamera(primeiro("camera_atual")),
+    cameraPadrao: lerCamera(primeiro("camera_padrao")),
+    cameraPublicada:
+      ["camera", "camera_atual", "camera_padrao"].some((c) => c in o || c in aninhado),
+    planta: lerPlanta(primeiro("planta")),
+    hardware: lerHardware(primeiro("hardware")),
   }
 }
 
@@ -319,27 +411,34 @@ export function ventoCartesiano(vento: CorpoVento): [number, number, number] {
 /**
  * Modos do vento dinâmico (ronda 10) aceites por `POST /api/vento-dinamico`.
  *
- * `nenhum` desliga; `rajadas`/`dryden` são CONTÍNUOS (ficam ligados até se desligar);
+ * `nenhum` desliga; `rajadas`/`aleatoria`/`dryden` são CONTÍNUOS (ficam ligados até se desligar);
  * `frente` é um degrau imediato que substitui o vento base; `rajada_agora` é uma rajada única.
  */
 export type ModoVentoDinamico =
-  "nenhum" | "rajadas" | "frente" | "dryden" | "rajada_agora"
+  "nenhum" | "rajadas" | "aleatoria" | "frente" | "dryden" | "rajada_agora"
 
-/** Defaults REAIS do ambiente (`env.valida_vento_dinamico`) — nunca inventados aqui. */
+/**
+ * Defaults REAIS do ambiente (`env.valida_vento_dinamico`) — nunca inventados aqui.
+ *
+ * `aleatoria` só usa `p` e `duracao` (o `u_max` não limita a amostragem: a força sai de U[0, 5] m/s e a
+ * elevação de ±90°); os restantes parâmetros são aceites pelo backend mas ignorados nesse modo.
+ */
 export const PARAMS_DINAMICOS_PADRAO = {
   rajadas: { p: 0.02, duracao: 10, u_max: 3 },
+  aleatoria: { p: 0.02, duracao: 10 },
   dryden: { sigma: 0.5, L: 10, v_min: 1 },
   rajada_agora: { duracao: 25 },
 } as const
 
 /** Modos contínuos mostrados no seletor (os instantâneos têm botão próprio). */
-export const MODOS_CONTINUOS = ["nenhum", "rajadas", "dryden"] as const
+export const MODOS_CONTINUOS = ["nenhum", "rajadas", "aleatoria", "dryden"] as const
 export type ModoContinuo = (typeof MODOS_CONTINUOS)[number]
 
 /** Rótulos curtos dos modos (PT-PT) para selos e toasts. */
 export const ROTULO_MODO: Record<ModoVentoDinamico, string> = {
   nenhum: "sem dinâmica",
   rajadas: "rajadas contínuas",
+  aleatoria: "rajadas aleatórias",
   frente: "frente (degrau)",
   dryden: "turbulência Dryden",
   rajada_agora: "rajada única",
@@ -432,6 +531,228 @@ export function pontoCardeal(azimute: number): string {
   const setores = ["E", "NE", "N", "NO", "O", "SO", "S", "SE"]
   const indice = Math.round((((azimute % 360) + 360) % 360) / 45) % 8
   return setores[indice]
+}
+
+// --------------------------------------------------------------------------------------- câmara
+
+/**
+ * CÂMARA da janela 3D, na parametrização abstrata do MuJoCo (`mjvCamera`): ponto de olhar (`alvo`),
+ * `distancia` até ele e os ângulos `azimute`/`elevacao` (GRAUS, a convenção do `viewer.cam`).
+ *
+ * Este é o objeto que o backend publica (`camera` = câmara REAL na telemetria, `camera_atual` no
+ * `/api/sim` e `/api/state`; `camera_padrao` = `{azimute, elevacao, distancia}`, sem `alvo`).
+ * `POST /api/camera` recebe um SUBCONJUNTO de `{azimute, elevacao, distancia}` (contrato v2) — sem
+ * `alvo` (o alvo é do backend: drone+offset) nem `seq` (o servidor incrementa-o).
+ */
+export interface CameraEstado {
+  /** Azimute em graus, normalizado para [0,360) na leitura (contrato: finito, mod 360). */
+  azimute: number
+  /** Elevação em graus [−90,90] — CONVENÇÃO MuJoCo: NEGATIVO vê de cima (câmara acima do alvo). */
+  elevacao: number
+  /** Distância da câmara ao alvo, em m (contrato: ]0,20]; UI 0,1–10). */
+  distancia: number
+  /**
+   * Ponto de olhar `[x,y,z]` no mundo (m) — a câmara REAL publica-o (`alvo` = drone+offset, o
+   * ponto onde a câmara olha); `camera_padrao` (contrato v2) NÃO o traz ⇒ `null`. Nunca se inventa
+   * um alvo: sem ele não há posição derivada e o ecrã mostra «—» na parte do alvo.
+   */
+  alvo: [number, number, number] | null
+}
+
+/**
+ * Corpo de `POST /api/camera` (CONTRATO v2) — um SUBCONJUNTO de `{azimute, elevacao, distancia}`:
+ * envia-se só o que o gesto manda mudar (o pad manda ângulos, o slider manda distância, o REPOR
+ * VISTA manda o `camera_padrao` inteiro). **SEM** `alvo` (o alvo é do backend: drone+offset, que
+ * ele segue) e **SEM** `seq` (o servidor incrementa-o); `null` e campos desconhecidos são
+ * recusados com 400.
+ */
+export interface CorpoCamera {
+  azimute?: number
+  elevacao?: number
+  distancia?: number
+}
+
+/**
+ * Faixas da UI (pad + slider do widget «Câmara») e do CONTRATO (validação do servidor no ficheiro
+ * de controlo). A UI nunca manda fora das suas faixas; o contrato aceita mais (`distancia` até 20 m).
+ */
+export const CAMERA_UI_LIMITES = {
+  azimute: [0, 360] as const,
+  elevacao: [-90, 90] as const,
+  distancia: [0.1, 10] as const,
+}
+
+/** Faixas do CONTRATO de câmara (o backend recusa fora disto com 400). */
+export const CAMERA_CONTRATO_LIMITES = {
+  elevacao: [-90, 90] as const,
+  /** `]0,20]` — o 0 é excluído (uma distância nula não é uma câmara). */
+  distancia: [0, 20] as const,
+}
+
+/** Azimute → [0,360) (contrato: «normalizar mod 360»). */
+export function normalizarAzimute(graus: number): number {
+  if (!Number.isFinite(graus)) return 0
+  return ((graus % 360) + 360) % 360
+}
+
+/**
+ * Direção de visão UNITÁRIA `f(azimute, elevacao)` na convenção do MuJoCo.
+ *
+ * Verificado empiricamente contra o MuJoCo 3.15 (`MjvScene.camera[0].forward` após `mjv_updateScene`;
+ * erro ≤ 3e-8, que é o `float` do `mjvGLCamera`):
+ *
+ * ```
+ * f = [cos(elev)·cos(azim), cos(elev)·sin(azim), sin(elev)]     (azim e elev em RADIANOS)
+ * ```
+ *
+ * · `azimute` 0° ⇒ a câmara olha para **+x** (sita-se do lado −x); 90° ⇒ olha para +y;
+ * · `elevacao` **negativa** ⇒ a câmara fica ACIMA do alvo e olha para baixo (convenção MuJoCo:
+ *   `mjvCamera.elevation = -90` vê de cima, `+90` de baixo) — o inverso do vento do painel.
+ */
+export function direcaoVisao(
+  azimute: number,
+  elevacao: number
+): [number, number, number] {
+  const a = (normalizarAzimute(azimute) * Math.PI) / 180
+  const e = (elevacao * Math.PI) / 180
+  const horizontal = Math.cos(e)
+  return [horizontal * Math.cos(a), horizontal * Math.sin(a), Math.sin(e)]
+}
+
+/**
+ * POSIÇÃO da câmara no mundo: `pos = alvo − d·f(azim,elev)` (a câmara olha DE `pos` PARA o alvo).
+ *
+ * É a pose da câmara abstrata do MuJoCo. (O `MjvScene.camera[0].pos` medido difere desta por um
+ * desvio lateral constante de 0,034 m: o `mjv_updateScene` constrói um par pseudo-estreoscópico
+ * `camera[0]`/`camera[1]` a ±0,034·(up×f) — a média dos dois é EXATAMENTE `alvo − d·f`.)
+ */
+export function posicaoCamera(
+  azimute: number,
+  elevacao: number,
+  distancia: number,
+  alvo: readonly number[]
+): [number, number, number] {
+  const f = direcaoVisao(azimute, elevacao)
+  return [
+    (alvo[0] ?? 0) - distancia * f[0],
+    (alvo[1] ?? 0) - distancia * f[1],
+    (alvo[2] ?? 0) - distancia * f[2],
+  ]
+}
+
+/** ALVO a partir da posição da câmara: `alvo = pos + d·f(azim,elev)` (inverso exato de `posicaoCamera`). */
+export function alvoCamera(
+  azimute: number,
+  elevacao: number,
+  distancia: number,
+  pos: readonly number[]
+): [number, number, number] {
+  const f = direcaoVisao(azimute, elevacao)
+  return [
+    (pos[0] ?? 0) + distancia * f[0],
+    (pos[1] ?? 0) + distancia * f[1],
+    (pos[2] ?? 0) + distancia * f[2],
+  ]
+}
+
+/**
+ * Qualquer objeto `camera` do backend → `CameraEstado`, ou `null` se vier incompleto/não finito
+ * (nunca se inventa uma câmara: sem dados o ecrã mostra «—»). O azimute normaliza-se mod 360.
+ * O `alvo` é OPCIONAL (contrato v2: `camera_padrao` não o traz) → `null` quando ausente.
+ */
+export function lerCamera(bruto: unknown): CameraEstado | null {
+  const o = objeto(bruto)
+  const azimute = numero(o.azimute)
+  const elevacao = numero(o.elevacao)
+  const distancia = numero(o.distancia)
+  const alvo = lerVetor3(o.alvo)
+  if (
+    azimute === null ||
+    elevacao === null ||
+    distancia === null ||
+    distancia <= 0
+  )
+    return null
+  return {
+    azimute: normalizarAzimute(azimute),
+    elevacao,
+    distancia,
+    alvo,
+  }
+}
+
+/** Duas câmaras «a dizer o mesmo»? (azimute circular; ε por omissão 1e-6) */
+export function cameraIgual(
+  a: CameraEstado,
+  b: CameraEstado,
+  eps = 1e-6
+): boolean {
+  const d = Math.abs(normalizarAzimute(a.azimute - b.azimute))
+  const az = Math.min(d, 360 - d)
+  const alvoIgual =
+    (a.alvo === null && b.alvo === null) ||
+    (a.alvo !== null &&
+      b.alvo !== null &&
+      a.alvo.every((v, i) => Math.abs(v - b.alvo![i]) <= eps))
+  return (
+    az <= eps &&
+    Math.abs(a.elevacao - b.elevacao) <= eps &&
+    Math.abs(a.distancia - b.distancia) <= eps &&
+    alvoIgual
+  )
+}
+
+/**
+ * A câmara REAL `cam` reflete o comando `corpo`? (confirmação do envio: compara SÓ os campos que o
+ * comando levava — o corpo v2 é um subconjunto — com o azimute circular).
+ */
+export function cameraReflete(
+  cam: CameraEstado,
+  corpo: CorpoCamera,
+  eps = 1e-6
+): boolean {
+  if (corpo.azimute !== undefined) {
+    const d = Math.abs(normalizarAzimute(cam.azimute - corpo.azimute))
+    if (Math.min(d, 360 - d) > eps) return false
+  }
+  if (corpo.elevacao !== undefined && Math.abs(cam.elevacao - corpo.elevacao) > eps)
+    return false
+  if (corpo.distancia !== undefined && Math.abs(cam.distancia - corpo.distancia) > eps)
+    return false
+  return true
+}
+
+/**
+ * Fusão HONESTA da câmara real entre respostas (estados honestos, DEF-2): sem dados ⇒ `null` (o
+ * painel mostra «—»), NUNCA uma câmara inventada nem a retenção de valores que a API já desmentiu.
+ *
+ * · `null` explícito de `camera_atual`/`camera` PROPAGA-se (ex.: a janela do viewer fechou a meio
+ *   da sessão — `null`→valor→`null` termina em «—», e não num valor antigo);
+ * · o valor anterior retém-se SÓ quando a resposta não publica câmara nenhuma (`publicada: false`,
+ *   backend antigo/mock) — enquanto há dados eles mandam, quando deixam de haver mostra-se «—»;
+ * · `atual ?? telemetria` é o reforço do contrato: `camera_atual` é a fonte principal e a `camera`
+ *   da telemetria entra enquanto houver dados numa delas.
+ */
+export function fundirCamera(
+  anterior: CameraEstado | null,
+  atual: CameraEstado | null,
+  telemetria: CameraEstado | null,
+  publicada: boolean
+): CameraEstado | null {
+  if (!publicada) return anterior
+  return atual ?? telemetria ?? null
+}
+
+/**
+ * Assinatura estável de um comando de câmara (dedupe de envios: um corpo v2 é um subconjunto de
+ * `{azimute, elevacao, distancia}`; o azimute normaliza-se para 360 ≡ 0).
+ */
+export function assinaturaCamera(cam: CorpoCamera): string {
+  return JSON.stringify([
+    cam.azimute === undefined ? null : normalizarAzimute(cam.azimute),
+    cam.elevacao ?? null,
+    cam.distancia ?? null,
+  ])
 }
 
 // ------------------------------------------------------------------------------ Raspberry Pi 5
@@ -670,12 +991,16 @@ export interface DerivadosAct {
 /**
  * Ação normalizada → comando físico. Reproduz `HoverEnv.acao_para_ctrl` (env.py):
  * metade inferior 0…mg, metade superior mg…thrust_max; momentos = `tau_escala · momento_max · a`.
+ *
+ * SÓ cf2: na planta real o `ctrl` é o empuxo de CADA ROTOR e a ação é ctbr — derivar daqui um
+ * empuxo/momentos do `HoverEnv` seria inventar um comando que a física não usou (devolve `null`).
  */
 export function derivarAct(
   linha: LinhaSim | null,
   constantes = FISICA_PADRAO
 ): DerivadosAct | null {
   if (!linha) return null
+  if (linha.planta === "real") return null
   const a = linha.act
   if (linha.ctrl) {
     return {
@@ -697,14 +1022,32 @@ export function derivarAct(
 
 // --------------------------------------------------------------------------------------- rótulos
 
+/** Grupos da observação: os 5 do cf2 (`env.py`) + os da planta real (`env_real.py`, ator). */
+export type GrupoObs =
+  | "dp"
+  | "rpy"
+  | "v"
+  | "ω"
+  | "a_prev"
+  | "giro"
+  | "acc"
+  | "atitude"
+  | "rumo"
+  | "vertical"
+  | "fluxo"
+  | "odometria"
+  | "validade"
+
 export interface RotuloObs {
   indice: number
-  grupo: "dp" | "rpy" | "v" | "ω" | "a_prev"
+  grupo: GrupoObs
   nome: string
   unidade: string
   /** Escala fixa da normalização (env.py) — a coluna "cru" = obs × escala. */
   escala: number
   escalaTexto: string
+  /** Canal binário (0/1, planta real: ToF/fluxo válidos) — a coluna «cru» diz sim/não. */
+  flag?: boolean
 }
 
 /** Os 16 canais da observação, na ordem de `HoverEnv.observacao()`. */
@@ -859,4 +1202,530 @@ export function corAtivacao(valor: number, maximo: number): string {
 export function corTextoAtivacao(valor: number, maximo: number): string {
   const forca = maximo > 0 ? Math.min(1, Math.abs(valor) / maximo) : 0
   return forca > 0.55 ? "var(--background)" : "var(--muted-foreground)"
+}
+
+// ================================================================================== planta REAL
+//
+// O drone do dono (`env_real.py` + `lab/drone_rpi`): bateria, motores, ledger de potência, aero e o
+// estimador de bordo chegam em chaves ADITIVAS de cada linha (`planta: "real"`); as peças vêm do
+// `hardware` do `/api/state`. Tudo opcional: o que faltar (ou vier inválido) fica `null` e o ecrã
+// mostra «—» — nada é inventado, nada rebenta. Com `planta` cf2/ausente estas chaves não existem.
+
+/** Nº de canais da observação do ATOR na planta real (`env_real.OBS_ATOR_DIM`). */
+export const N_OBS_REAL = 21
+
+/** Setpoints de taxa máximos do modo ctbr (`env_real.TAXA_MAX`, rad/s): p, q, r. */
+export const TAXA_MAX_CTBR: readonly [number, number, number] = [2.5, 2.5, 1.5]
+
+/** Gravidade da normalização do acelerómetro (`env.gravidade` = |opt.gravity_z| = 9,81 m/s²). */
+export const GRAVIDADE = 9.81
+
+/** Altura de rotor que o backend usa para «sem chão no raio» (`ALTURA_SEM_SOLO` = 50 m). */
+export const ALTURA_SEM_SOLO_M = 50
+
+/** Objeto com pelo menos uma chave, ou `null` (lista, `null`, `{}` ou outro tipo = sem dados). */
+function objetoComDados(bruto: unknown): Record<string, unknown> | null {
+  if (typeof bruto !== "object" || bruto === null || Array.isArray(bruto))
+    return null
+  const o = bruto as Record<string, unknown>
+  return Object.keys(o).length > 0 ? o : null
+}
+
+/** `n` leituras numéricas (uma por rotor); o que faltar/for inválido fica `null` — nunca um 0 fingido. */
+function vetorOuNulos(bruto: unknown, n: number): (number | null)[] {
+  const lista = Array.isArray(bruto) ? bruto : []
+  return Array.from({ length: n }, (_, i) => numero(lista[i]))
+}
+
+// ------------------------------------------------------------------------------------ bateria
+
+/** Alerta do pack: `nenhum` (`""`), abaixo da tensão de POUSO da química, ou abaixo do CORTE. */
+export type AlertaBateria = "nenhum" | "tensao_baixa" | "critica"
+
+/** Resumo do último ciclo FECHADO pelo `POST /api/bateria` (`ultimo_ciclo`). */
+export interface UltimoCicloBateria {
+  /** `recarregar` (fechou o ciclo com desgaste) ou `nova` (pack novo) — texto do backend. */
+  acao: string | null
+  /** Profundidade de descarga do ciclo (0–1). */
+  dod: number | null
+  ah: number | null
+  wh: number | null
+  /** C-rate médio do ciclo. */
+  cMedio: number | null
+  tMedioC: number | null
+  iPico: number | null
+  vMin: number | null
+  duracaoS: number | null
+  /** SoH DEPOIS de aplicado o desgaste do ciclo (0–1). */
+  soh: number | null
+}
+
+/** Pack de bateria da planta real (`bateria` de cada linha) — frações em 0–1, SI no resto. */
+export interface BateriaTelemetria {
+  /** SoC REAL do modelo (0–1). */
+  soc: number | null
+  /** SoC que o RPi estima: OCV em repouso no arranque + Coulomb com a corrente MEDIDA (0–1). */
+  socEstimado: number | null
+  /** Tensão terminal do pack (V) e por célula (V). */
+  v: number | null
+  vCelula: number | null
+  /** Corrente (A) e potência (W) reais do pack. */
+  i: number | null
+  p: number | null
+  tempC: number | null
+  /** Estado de saúde (capacidade atual / nominal, 0–1). */
+  soh: number | null
+  ciclosEq: number | null
+  nRecargas: number | null
+  r0Mohm: number | null
+  /** Consumo desde a última recarga (o ciclo em curso). */
+  ahVoo: number | null
+  whVoo: number | null
+  alerta: AlertaBateria | null
+  /** SoH ≤ 80 % (fim de vida, convenção da indústria). */
+  reformar: boolean | null
+  /** Minutos até à reserva de pouso com a corrente média; `null` = sem corrente média (motores parados). */
+  autonomiaMin: number | null
+  s: number | null
+  pParalelo: number | null
+  quimica: string | null
+  capacidadeAh: number | null
+  packId: string | null
+  vPousoCelula: number | null
+  vCorteCelula: number | null
+  /** Leituras do monitor de bateria (o que o RPi vê): tensão e corrente medidas, corrente média. */
+  vMedida: number | null
+  iMedida: number | null
+  iMedia: number | null
+  ultimoCiclo: UltimoCicloBateria | null
+}
+
+function lerAlerta(bruto: unknown): AlertaBateria | null {
+  if (bruto === "") return "nenhum"
+  return bruto === "tensao_baixa" || bruto === "critica" ? bruto : null
+}
+
+function lerUltimoCiclo(bruto: unknown): UltimoCicloBateria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    acao: texto(o.acao),
+    dod: numero(o.dod),
+    ah: numero(o.ah),
+    wh: numero(o.wh),
+    cMedio: numero(o.c_medio),
+    tMedioC: numero(o.t_medio_c),
+    iPico: numero(o.i_pico),
+    vMin: numero(o.v_min),
+    duracaoS: numero(o.duracao_s),
+    soh: numero(o.soh),
+  }
+}
+
+/** `bateria` de uma linha → leitura tolerante; `null` quando a chave não vem (cf2) ou vem vazia. */
+export function lerBateria(bruto: unknown): BateriaTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    soc: numero(o.soc),
+    socEstimado: numero(o.soc_estimado),
+    v: numero(o.v),
+    vCelula: numero(o.v_celula),
+    i: numero(o.i),
+    p: numero(o.p),
+    tempC: numero(o.temp_c),
+    soh: numero(o.soh),
+    ciclosEq: numero(o.ciclos_eq),
+    nRecargas: numero(o.n_recargas),
+    r0Mohm: numero(o.r0_mohm),
+    ahVoo: numero(o.ah_voo),
+    whVoo: numero(o.wh_voo),
+    alerta: lerAlerta(o.alerta),
+    reformar: booleano(o.reformar),
+    autonomiaMin: numero(o.autonomia_min),
+    s: numero(o.s),
+    pParalelo: numero(o.p_paralelo),
+    quimica: texto(o.quimica),
+    capacidadeAh: numero(o.capacidade_ah),
+    packId: texto(o.pack_id),
+    vPousoCelula: numero(o.v_pouso_celula),
+    vCorteCelula: numero(o.v_corte_celula),
+    vMedida: numero(o.v_medida),
+    iMedida: numero(o.i_medida),
+    iMedia: numero(o.i_media),
+    ultimoCiclo: lerUltimoCiclo(o.ultimo_ciclo),
+  }
+}
+
+/** Química do pack em texto curto (`li-ion` → «Li-ion», `lipo` → «LiPo»; outra → tal como vem). */
+export function rotuloQuimica(quimica: string | null): string | null {
+  if (quimica === null) return null
+  const q = quimica.toLowerCase()
+  if (q === "li-ion" || q === "liion") return "Li-ion"
+  if (q === "lipo") return "LiPo"
+  return quimica
+}
+
+// ------------------------------------------------------------------------------------ motores
+
+/** Os 4 motores da planta real (`motores`), na ordem r1..r4. */
+export interface MotoresTelemetria {
+  rpm: (number | null)[]
+  /** Ciclo útil do ESC (0–1). */
+  duty: (number | null)[]
+  /** Empuxo de cada rotor (N) — o mesmo valor do `ctrl` da linha. */
+  empuxoN: (number | null)[]
+  /** Corrente de fase de cada motor (A). */
+  iFase: (number | null)[]
+  /** Teto de rotação com a tensão ATUAL (rpm). */
+  omegaMaxRpm: number | null
+  /** Empuxo máximo POR ROTOR com a tensão atual (N). */
+  tMaxN: number | null
+  /** T_max atual / T_max com a bateria cheia (0–1): o «limite de rotação» que decai com a descarga. */
+  tMaxFrac: number | null
+  armado: boolean | null
+  brownout: boolean | null
+}
+
+export function lerMotores(bruto: unknown): MotoresTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    rpm: vetorOuNulos(o.rpm, 4),
+    duty: vetorOuNulos(o.duty, 4),
+    empuxoN: vetorOuNulos(o.empuxo_n, 4),
+    iFase: vetorOuNulos(o.i_fase, 4),
+    omegaMaxRpm: numero(o.omega_max_rpm),
+    tMaxN: numero(o.t_max_n),
+    tMaxFrac: numero(o.t_max_frac),
+    armado: booleano(o.armado),
+    brownout: booleano(o.brownout),
+  }
+}
+
+/** Um rotor da planta real: nome, posição no frame em X e sentido de rotação VISTO DE CIMA. */
+export interface RotorReal {
+  indice: number
+  nome: string
+  posicao: string
+  sentido: "CW" | "CCW"
+}
+
+/**
+ * Os 4 rotores (`componentes.Hardware.pos_rotores` + `GIRO`): frame em X, frente = +x, esquerda = +y.
+ * Diagonais com o mesmo sentido — r1 (frente-esq) e r2 (trás-dir) CW; r3 (trás-esq) e r4 (frente-dir) CCW.
+ */
+export const ROTORES_REAIS: readonly RotorReal[] = [
+  { indice: 0, nome: "r1", posicao: "frente-esq", sentido: "CW" },
+  { indice: 1, nome: "r2", posicao: "trás-dir", sentido: "CW" },
+  { indice: 2, nome: "r3", posicao: "trás-esq", sentido: "CCW" },
+  { indice: 3, nome: "r4", posicao: "frente-dir", sentido: "CCW" },
+]
+
+/** Ordem de desenho em VISTA DE CIMA com a frente para cima: frente-esq, frente-dir, trás-esq, trás-dir. */
+export const ROTORES_VISTA_DE_CIMA: readonly number[] = [0, 3, 2, 1]
+
+// ------------------------------------------------------------------------------------ potência
+
+export interface ConsumidorPotencia {
+  /** Chave do backend (`rpi5`, `fc_f7`, `sensor_imu`, …). */
+  id: string
+  w: number
+}
+
+/** Ledger de potência do passo (W): total = motores + eletrónica; eletrónica = Σ 5 V + perdas do BEC. */
+export interface PotenciaTelemetria {
+  motores: number | null
+  eletronica: number | null
+  becPerdas: number | null
+  total: number | null
+  /** Consumidores do barramento de 5 V, pela ordem do backend (só os valores finitos). */
+  consumidores5v: ConsumidorPotencia[]
+}
+
+export function lerPotencia(bruto: unknown): PotenciaTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  const consumidores5v: ConsumidorPotencia[] = []
+  for (const [id, valor] of Object.entries(objeto(o.consumidores_5v))) {
+    const w = numero(valor)
+    if (w !== null) consumidores5v.push({ id, w })
+  }
+  return {
+    motores: numero(o.motores),
+    eletronica: numero(o.eletronica),
+    becPerdas: numero(o.bec_perdas),
+    total: numero(o.total),
+    consumidores5v,
+  }
+}
+
+const ROTULO_CONSUMIDOR: Record<string, string> = {
+  rpi5: "Raspberry Pi 5",
+  cablagem: "HAT de energia/cablagem",
+  sensor_imu: "IMU (giro + acc)",
+  sensor_tof: "ToF (altura)",
+  sensor_fluxo: "fluxo ótico",
+  sensor_monitor: "monitor de bateria",
+}
+
+/**
+ * Nome legível de um consumidor de 5 V (a chave do backend fica visível ao lado, em mono). O catálogo de
+ * peças muda (`fc_f7`, `fc_h7`, …): as famílias conhecidas reconhecem-se pelo prefixo e uma chave nova
+ * aparece tal como vem — nunca se esconde um consumidor por não ter rótulo.
+ */
+export function rotuloConsumidor(id: string): string {
+  const conhecido = ROTULO_CONSUMIDOR[id]
+  if (conhecido !== undefined) return conhecido
+  if (id.startsWith("fc_")) return `controlador de voo (${id.slice(3).toUpperCase()})`
+  if (id.startsWith("sensor_")) return `sensor ${id.slice(7)}`
+  return id
+}
+
+// ------------------------------------------------------------------------------- aero · estimador
+
+/** Fatores aerodinâmicos por rotor: κ_T = efeito de solo × inflow × VRS (1 = ar livre). */
+export interface AeroTelemetria {
+  kappaT: (number | null)[]
+  /** Altura de cada rotor ao chão (m); `ALTURA_SEM_SOLO_M` = sem chão no raio. */
+  alturaRotores: (number | null)[]
+}
+
+export function lerAero(bruto: unknown): AeroTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    kappaT: vetorOuNulos(o.kappa_t, 4),
+    alturaRotores: vetorOuNulos(o.altura_rotores, 4),
+  }
+}
+
+/** Estimativas de BORDO (o que o RPi sabe): atitude e rumo (rad), altura (m), velocidades (m/s), odometria (m). */
+export interface EstimadorTelemetria {
+  roll: number | null
+  pitch: number | null
+  psi: number | null
+  h: number | null
+  vz: number | null
+  vx: number | null
+  vy: number | null
+  x: number | null
+  y: number | null
+}
+
+export function lerEstimador(bruto: unknown): EstimadorTelemetria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    roll: numero(o.roll),
+    pitch: numero(o.pitch),
+    psi: numero(o.psi),
+    h: numero(o.h),
+    vz: numero(o.vz),
+    vx: numero(o.vx),
+    vy: numero(o.vy),
+    x: numero(o.x),
+    y: numero(o.y),
+  }
+}
+
+// ------------------------------------------------------------------------------------ hardware
+
+/** Pack do build (`hardware.bateria` do `/api/state`). */
+export interface HardwareBateria {
+  id: string | null
+  quimica: string | null
+  s: number | null
+  p: number | null
+  ah: number | null
+  wh: number | null
+  massaG: number | null
+  whKg: number | null
+  r0Mohm: number | null
+}
+
+/** Peças reais do modelo em uso (`hardware` do `/api/state`, lido do `hardware.json` do modelo). */
+export interface Hardware {
+  build: string | null
+  /** `ctbr` (FC dedicado fecha a malha de taxa) ou `motores` (4 aceleradores). */
+  modoAcao: string | null
+  motor: string | null
+  helice: string | null
+  celula: string | null
+  frame: string | null
+  esc: string | null
+  bateria: HardwareBateria | null
+  massaTotalG: number | null
+  /** Relação empuxo/peso com a bateria cheia. */
+  tW: number | null
+  omegaMaxRpm: number | null
+  pPairagemW: number | null
+  gPorW: number | null
+  autonomiaMin: number | null
+  kf: number | null
+  kq: number | null
+  origemKfKq: string | null
+  /** Domain randomization ligada no treino da política. */
+  dr: boolean | null
+}
+
+function lerHardwareBateria(bruto: unknown): HardwareBateria | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    id: texto(o.id),
+    quimica: texto(o.quimica),
+    s: numero(o.s),
+    p: numero(o.p),
+    ah: numero(o.ah),
+    wh: numero(o.wh),
+    massaG: numero(o.massa_g),
+    whKg: numero(o.wh_kg),
+    r0Mohm: numero(o.r0_mohm),
+  }
+}
+
+/** `hardware` do `/api/state` → peças; `null` no cf2 (o servidor manda `null`) ou sem a chave. */
+export function lerHardware(bruto: unknown): Hardware | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return {
+    build: texto(o.build),
+    modoAcao: texto(o.modo_acao),
+    motor: texto(o.motor),
+    helice: texto(o.helice),
+    celula: texto(o.celula),
+    frame: texto(o.frame),
+    esc: texto(o.esc),
+    bateria: lerHardwareBateria(o.bateria),
+    massaTotalG: numero(o.massa_total_g),
+    tW: numero(o.t_w),
+    omegaMaxRpm: numero(o.omega_max_rpm),
+    pPairagemW: numero(o.p_pairagem_w),
+    gPorW: numero(o.g_por_w),
+    autonomiaMin: numero(o.autonomia_min),
+    kf: numero(o.kf),
+    kq: numero(o.kq),
+    origemKfKq: texto(o.origem_kf_kq),
+    dr: booleano(o.dr),
+  }
+}
+
+// ------------------------------------------------------------------- rótulos da planta real
+
+/** Os 21 canais da observação do ATOR na planta real, na ordem de `DroneRealEnv.observacao()`. */
+export const ROTULOS_OBS_REAL: RotuloObs[] = [
+  { indice: 0, grupo: "giro", nome: "giro_p", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
+  { indice: 1, grupo: "giro", nome: "giro_q", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
+  { indice: 2, grupo: "giro", nome: "giro_r", unidade: "rad/s", escala: 2, escalaTexto: "÷2 rad/s" },
+  { indice: 3, grupo: "acc", nome: "acc_x", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
+  { indice: 4, grupo: "acc", nome: "acc_y", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
+  { indice: 5, grupo: "acc", nome: "acc_z", unidade: "m/s²", escala: GRAVIDADE, escalaTexto: "÷9,81 m/s²" },
+  { indice: 6, grupo: "atitude", nome: "roll_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad" },
+  { indice: 7, grupo: "atitude", nome: "pitch_est", unidade: "rad", escala: 1, escalaTexto: "1:1 rad" },
+  { indice: 8, grupo: "rumo", nome: "Δψ/π", unidade: "rad", escala: Math.PI, escalaTexto: "÷π" },
+  { indice: 9, grupo: "vertical", nome: "h_est − alvo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
+  { indice: 10, grupo: "vertical", nome: "vz_est", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
+  { indice: 11, grupo: "fluxo", nome: "vx_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
+  { indice: 12, grupo: "fluxo", nome: "vy_fluxo", unidade: "m/s", escala: 1, escalaTexto: "÷1 m/s" },
+  { indice: 13, grupo: "odometria", nome: "x_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
+  { indice: 14, grupo: "odometria", nome: "y_odo", unidade: "m", escala: 1, escalaTexto: "÷1 m" },
+  { indice: 15, grupo: "validade", nome: "tof_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true },
+  { indice: 16, grupo: "validade", nome: "fluxo_ok", unidade: "0/1", escala: 1, escalaTexto: "0/1", flag: true },
+  { indice: 17, grupo: "a_prev", nome: "a_prev·coletivo", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+  { indice: 18, grupo: "a_prev", nome: "a_prev·p", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+  { indice: 19, grupo: "a_prev", nome: "a_prev·q", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+  { indice: 20, grupo: "a_prev", nome: "a_prev·r", unidade: "[-1,1]", escala: 1, escalaTexto: "1:1" },
+]
+
+/** Modo da ação na planta real: `ctbr` (por omissão do `env_real`) ou `motores` (4 aceleradores). */
+export type ModoAcaoReal = "ctbr" | "motores"
+
+/** `hardware.modo_acao` → modo; sem informação vale o padrão do `env_real` (`ctbr`). */
+export function modoAcaoReal(bruto: string | null | undefined): ModoAcaoReal {
+  return bruto === "motores" ? "motores" : "ctbr"
+}
+
+/** Rótulos da observação CERTOS para a planta (cf2: os 16 de sempre; real: os 21 do ator). */
+export function rotulosObs(
+  planta: Planta | null,
+  modoAcao?: string | null
+): RotuloObs[] {
+  if (planta !== "real") return ROTULOS_OBS
+  if (modoAcaoReal(modoAcao) === "ctbr") return ROTULOS_OBS_REAL
+  // modo `motores`: a ação anterior são os 4 aceleradores, não coletivo + taxas
+  return ROTULOS_OBS_REAL.map((r) =>
+    r.grupo === "a_prev" ? { ...r, nome: `a_prev·r${r.indice - 16}` } : r
+  )
+}
+
+/** Um canal da ação (o mesmo formato dos `ROTULOS_ACT` do cf2). */
+export interface RotuloAct {
+  indice: number
+  nome: string
+  canal: string
+  unidade: string
+}
+
+/** Ação ctbr da planta real: coletivo de acelerador + taxas do corpo (o FC fecha a malha de taxa). */
+export const ROTULOS_ACT_CTBR: readonly RotuloAct[] = [
+  { indice: 0, nome: "a₀ · coletivo", canal: "acelerador", unidade: "[-1,1]" },
+  { indice: 1, nome: "a₁ · taxa p", canal: "roll rate", unidade: "rad/s" },
+  { indice: 2, nome: "a₂ · taxa q", canal: "pitch rate", unidade: "rad/s" },
+  { indice: 3, nome: "a₃ · taxa r", canal: "yaw rate", unidade: "rad/s" },
+]
+
+/** Ação `motores` da planta real: um acelerador por rotor (sem FC). */
+export const ROTULOS_ACT_MOTORES: readonly RotuloAct[] = [
+  { indice: 0, nome: "a₀ · acelerador r1", canal: "motor 1", unidade: "[-1,1]" },
+  { indice: 1, nome: "a₁ · acelerador r2", canal: "motor 2", unidade: "[-1,1]" },
+  { indice: 2, nome: "a₂ · acelerador r3", canal: "motor 3", unidade: "[-1,1]" },
+  { indice: 3, nome: "a₃ · acelerador r4", canal: "motor 4", unidade: "[-1,1]" },
+]
+
+/** Rótulos da ação CERTOS para a planta (cf2: empuxo + momentos; real: ctbr ou motores). */
+export function rotulosAct(
+  planta: Planta | null,
+  modoAcao?: string | null
+): readonly RotuloAct[] {
+  if (planta !== "real") return ROTULOS_ACT
+  return modoAcaoReal(modoAcao) === "motores"
+    ? ROTULOS_ACT_MOTORES
+    : ROTULOS_ACT_CTBR
+}
+
+/**
+ * Setpoint de taxa (rad/s) que a ação ctbr pede ao FC: `clip(a, −1, 1) × TAXA_MAX` (o `env_real`
+ * corta a ação a [−1, 1] antes de a aplicar). `eixo` 0 = p, 1 = q, 2 = r.
+ */
+export function setpointTaxa(a: number | null | undefined, eixo: 0 | 1 | 2): number | null {
+  if (a === null || a === undefined || !Number.isFinite(a)) return null
+  return Math.max(-1, Math.min(1, a)) * TAXA_MAX_CTBR[eixo]
+}
+
+/**
+ * Planta EM VIGOR: a da última linha da telemetria (é o que a física está mesmo a correr), senão a que
+ * a API anunciar; `null` = ninguém diz (o site comporta-se como cf2).
+ */
+export function plantaEmVigor(
+  linha: LinhaSim | null,
+  ...anunciadas: (Planta | null | undefined)[]
+): Planta | null {
+  if (linha?.planta) return linha.planta
+  for (const p of anunciadas) if (p) return p
+  return null
+}
+
+/** Notação científica pt-PT curta (`1,234e-5`); não finito → "—". */
+export function fmtExp(valor: number | null | undefined, casas = 3): string {
+  if (valor === null || valor === undefined || !Number.isFinite(valor))
+    return "—"
+  return valor.toExponential(casas).replace(".", ",")
+}
+
+/** Fração 0–1 → percentagem com casas fixas («99,29 %»); `null` → "—". */
+export function fmtPct(fracao: number | null | undefined, casas = 1): string {
+  if (fracao === null || fracao === undefined || !Number.isFinite(fracao))
+    return "—"
+  return `${fmt(fracao * 100, casas)} %`
 }

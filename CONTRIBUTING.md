@@ -16,7 +16,7 @@ matplotlib, imageio).
 
 ```bash
 uv run pytest .agents/mujoco-lab-agent-skill/tests -q        # 30 testes da skill/conhecimento
-uv run --group hover-rl python experiments/09_drone_hover_rl/run.py   # 121/121 checagens, exit 0
+uv run --group hover-rl python experiments/09_drone_hover_rl/run.py   # 146/146 checagens, exit 0
 uv run ruff check .                                          # lint
 ```
 
@@ -59,7 +59,7 @@ Quem clona sem memória tem todo o conhecimento verificado em
 ## Pull Requests
 
 - Descrever **o que muda** e **como foi validado** (comandos e resultados, ex.:
-  `pytest … 30 passed`, `run.py … 121/121, exit 0`).
+  `pytest … 30 passed`, `run.py … 146/146, exit 0`).
 - Mudanças de física devem trazer os valores medidos vs teoria (tabela no README do
   experimento) e registo na memória CoALA.
 - PRs pequenos e focados; `main` não recebe commits diretos — ramo efémero → PR.

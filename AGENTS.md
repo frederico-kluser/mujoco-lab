@@ -21,10 +21,10 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
 - **Sem janela (vídeo/CI/agentes)**: `MUJOCO_GL=egl` (funciona nesta máquina, render por GPU). Com janela: `mujoco.viewer` (GLFW; em sessão Wayland o pyGLFW carrega o backend **Wayland nativo** — XWayland só com `PYGLFW_LIBRARY_VARIANT=x11`).
   Avisos benignos no KDE Wayland: `Failed to load plugin 'libdecor-gtk.so'` (decorações do GLFW-Wayland) e `OpenGL error 0x502 in or before mjr_makeContext` (o viewer funciona).
   `MUJOCO_GL=osmesa` quebra o `import mujoco` aqui (falta libOSMesa); o MuJoCo Studio experimental não funciona em Wayland (use X11).
-- Demo pronta: `uv run --group hover-rl python experiments/09_drone_hover_rl/run.py` (valida o ambiente do drone por fórmulas fechadas: 121 checagens, exit 0); interface (janela limpa + site): `sim_site.py` nesse mesmo diretório.
+- Demo pronta: `uv run --group hover-rl python experiments/09_drone_hover_rl/run.py` (valida por fórmulas fechadas o cf2 — 146 checagens — e a PLANTA REAL do drone do dono — 96 checagens do `valida_real.py`; exit 0); interface (janela limpa + site): `sim_site.py` nesse mesmo diretório (arranca **SEM REINÍCIO** — `loop: false`, e o arranque corrige o ficheiro de controlo; `--com-loop` liga o CONTÍNUO).
 - Documentação oficial offline (tag 3.15.0): `docs/upstream/` (índice em `docs/upstream/INDEX.md`); atualizar com
   `python3 .agents/mujoco-lab-agent-skill/scripts/sync_docs.py`; buscar com `python3 .agents/mujoco-lab-agent-skill/scripts/docs_search.py "<termo>"`.
-- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (30 passed) · diagnóstico do ambiente:
+- **Testes da skill/conhecimento**: `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (36 passed) · diagnóstico do ambiente:
   `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/env_check.py` · novo experimento:
   `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao`.
 
@@ -83,10 +83,13 @@ Preferir SEMPRE modelos prontos e de boa reputação (ex.: `mujoco_menagerie`) a
 |---|---|---|---|---|
 | mujoco_menagerie/boston_dynamics_spot | `boston_dynamics_spot/` | `spot.py` | — (o `07_spot_motores` foi **removido em 2026-10-08**; histórico no git) | 12 servos PD; sensores IMU/encoders/pés via MjSpec; feito 2026-10-08; modelo e API mantêm-se |
 | mujoco_menagerie/bitcraze_crazyflie_2 | `bitcraze_crazyflie_2/` | `crazyflie.py` | `09_drone_hover_rl` (o `08_crazyflie_motores` foi **removido em 2026-10-08**; histórico no git) | 4 canais wrench; gear dos momentos escalado à faixa física (o upstream é "arbitrário"); feito 2026-10-08 |
+| — (hardware do dono, criado de raiz) | `drone_rpi/` (catálogo `componentes.json` + `builds.json`; `drone_rpi.xml` GERADO) | `drone_rpi/` (pacote: `componentes`, `modelo`, `propulsao`, `bateria`, `aero`, `sensores`, `planta`) | `09_drone_hover_rl` (planta real: `env_real.py`, `fc.py`, `estimador.py`, `politica.py`, `hardware.py`, `valida_real.py`) | **o drone que o dono vai construir, com PEÇAS REAIS trocáveis** (`hardware.py usar <build>`; peças também na CoALA `drone/peca/*`, `drone/build-ativo`): build ativo `endurance_15pol_p50b` = T-Motor MN4004 KV300 + P15×5, 6S2P Molicel P50B, RPi 5 + FC H7, BMI088/VL53L1X/PMW3901/INA226 → 1664 g, 133 W, T/W 3,4, **99 min de pairagem no modelo** (~80–90 reais). Motor elétrico + curva do ESC calibrados nas tabelas T-Motor (+7,5 % de realismo), bateria Thevenin com SoC/desgaste, aerodinâmica (solo, inflow, VRS, arrasto de rotor, download), sensores com erro, FC de taxa, observação SÓ de sensores (21) com crítico assimétrico, DR; política treinada (local, `out/` não versionado) `out/real_endurance15_rajadas/final.zip`: 100 % de sobrevivência em 9 condições (SoC, vento até 3 m/s + rajadas, DR), \|Δz\| ~1 cm, xy ~6 cm limitado pelo ESTIMADOR de bordo, ONNX (1, 21) p99 7,4 µs; `plano-drone-real.md` §0 = estado; feito 2026-10-09/10 |
 
-> **2026-10-08 — experimentos 01–08 removidos por decisão do dono** ("por enquanto" fica só o drone):
-> `experiments/` tem apenas `09_drone_hover_rl/`. Os `models/`, `lab/` e templates mantêm-se; os
-> experimentos removidos estão no histórico do git.
+> **2026-10-08 — experimentos 01–08 removidos por decisão do dono** ("por enquanto" fica só o drone);
+> **2026-10-09 — a `10_drone_rpi` também foi apagada** (o dono quer tudo incrementado no
+> `09_drone_hover_rl`): `experiments/` tem apenas `09_drone_hover_rl/`. O plano de realismo do drone do
+> dono vive em `plano-drone-real.md` (raiz) e está **IMPLEMENTADO desde 2026-10-10** (secção 0 do plano). Os
+> `models/`, `lab/` e templates mantêm-se; os experimentos removidos estão no histórico do git.
 
 ## Don't touch / segurança
 - Nunca versionar `memory/coala.sqlite`, `.venv/`, `docs/upstream/` (reproduzível) nem `experiments/*/out/`.

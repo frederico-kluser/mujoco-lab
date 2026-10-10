@@ -22,14 +22,135 @@ treino. Resumo em [Vento e orientação fixa](#vento-e-orientação-fixa-v2b) e
 - `env.py` — o **ambiente** (contrato que as outras peças importam).
 - `train.py` · `view.py` · `dashboard.py` · `net_probe.py` · `deploy.py` — treino, visualização, UI, sonda
   da rede e deploy.
-- `run.py` — validação do ambiente por **fórmulas fechadas**, 121/121 checagens, exit 0/1.
+- `run.py` — validação do ambiente por **fórmulas fechadas**, 146/146 checagens, exit 0/1.
+- `helices_render.py` — prova **visual** (offscreen/EGL) da animação das hélices: 2 imagens em `out/`.
+
+## Planta REAL — o drone do dono, com peças reais (2026-10-10)
+
+O `plano-drone-real.md` (raiz) está implementado: além do Crazyflie histórico (`env.py`, intocado), o v09 tem
+o **drone que o dono vai construir**, gerado das **peças reais** do catálogo `models/drone_rpi/` e com a
+política a ver **só o que o hardware mede**. Peças trocáveis sem código (`hardware.py`), os dados das peças
+gravados ao lado de cada política (`hardware.json`), e tudo validado por fórmulas fechadas.
+
+```bash
+uv run python experiments/09_drone_hover_rl/hardware.py comparar            # builds com peças reais
+uv run python experiments/09_drone_hover_rl/hardware.py usar <build>        # trocar motores/bateria/hélices
+uv run --group hover-rl python experiments/09_drone_hover_rl/valida_real.py # 96 checagens (também no run.py)
+uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --planta real --n-envs 12 \
+    --timesteps 6000000 --out-dir experiments/09_drone_hover_rl/out/real_<nome>   # PPO, DR, crítico assimétrico
+uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py   # escolhe a política out/real_* sozinho
+uv run --group hover-rl python experiments/09_drone_hover_rl/deploy.py --model experiments/09_drone_hover_rl/out/real_<nome>/best_model.zip
+```
+
+**Build ativo** `endurance_15pol_p50b`: T-Motor MN4004 KV300 + P15×5 CF, 6S2P Molicel P50B (216 Wh), ESC T-Motor
+AIR 40A, frame DIY 650 mm, RPi 5 + FC H7, BMI088 + VL53L1X + PMW3901 + INA226 → **1664 g · 133 W em pairagem
+(12,5 g/W) · T/W 3,4 · 99 min de pairagem no modelo** (~80–90 min reais esperados). Detalhe, alternativas e
+fontes: `models/drone_rpi/README.md`.
+
+| Peça do simulador | Ficheiro | O que faz (tudo pelo `mj_step` a 500 Hz) |
+|---|---|---|
+| Catálogo → física | `lab/drone_rpi/componentes.py`, `modelo.py` | massa/inércia das peças (MJCF gerado por MjSpec, CM na origem), kf/kq da tabela do fabricante (+7,5 % de realismo), curva do ESC, ω_max(V), pairagem, autonomia |
+| Motores + ESC | `lab/drone_rpi/propulsao.py` | modelo elétrico DC (I = (d·V − K_e·ω)/R, Q₀(ω), J·ω̇), travagem ativa, DShot11; empuxo e reação por rotor |
+| Bateria | `lab/drone_rpi/bateria.py` | Thevenin 1-RC, SoC por Coulomb, R₀(T, SoC, SoH), térmica, desgaste persistente (SoH/ciclos/“reformar”) |
+| Ar | `lab/drone_rpi/aero.py` | efeito de solo (Sanchez-Cuevas), inflow BEMT (ajustado à APC 15×5.5MR), VRS, arrasto de rotor, download do frame, giroscópico — tudo desligável (`FlagsAero.base()` = bit-idêntico a T = kf·ω²) |
+| Sensores | `lab/drone_rpi/sensores.py` | IMU (bias/deriva/ruído/escala/saturação/LSB/atraso/vibração), ToF ao chão, fluxo ótico (com a parte rotacional), barómetro, monitor V/I |
+| Passo de física | `lab/drone_rpi/planta.py` | `mj_step1` → cinemática dos rotores (raio ao solo, ar relativo) → κ_T/κ_Q → **Newton bateria↔ESC** → rotores → forças → `mj_step2` → bateria → sensores |
+| FC dedicado | `fc.py` | malha de taxa a 500 Hz (PID com ganhos calculados da planta, D na medida, PT1), mistura X, airmode, idle |
+| Estimador de bordo | `estimador.py` | o que o RPi 5 calcula SÓ com sensores: atitude (complementar), rumo, altura/v_z (ToF + acc), v_xy (fluxo), odometria |
+| Ambiente | `env_real.py` | `DroneRealEnv` (herda o vento base/dinâmico do `HoverEnv`), DR por episódio, pack que persiste em `options={"manter_bateria": True}` |
+| Política | `politica.py` | ator-crítico ASSIMÉTRICO: o ator só vê `obs[:21]`; o crítico vê também o privilegiado |
+
+**Contrato do `DroneRealEnv`.** Ação `Box(-1,1,(4,))` em `ctbr` (padrão): coletivo LINEAR EM EMPUXO à volta da
+pairagem (u = u_pair(V)·√(1+a₀): −1 → 0, 0 → pairagem, +1 → 2× o peso) + taxas p, q, r até ±[2; 2; 1] rad/s, com o
+atraso de comando do RPi (8 ms, FIFO por passo de física); `motores` = 4 aceleradores (RPi sozinho). O u_pair é
+calculado à tensão MEDIDA da bateria (INA226) — a compensação de tensão do Betaflight (`vbat_sag_compensation`):
+a política não vê a bateria, mas o seu "0" é pairar a qualquer SoC (medido: voa igual a 100/50/25 % de SoC).
+Observação (42,) = **ator (21)**: giro/2, acc/9,81, roll̂, pitcĥ, Δψ̂/π, ĥ − alvo, v̂_z, v̂_x, v̂_y, x̂, ŷ,
+ToF válido, fluxo válido, ação anterior — **sem nenhum dado privilegiado** — + **crítico (21)**: p − p_alvo,
+v, (roll, pitch, yaw_err)/π, ω, ω_rotor/ω_max, SoC, V/V_nom, vento. **Recompensa v3-real** (xyz privilegiado é
+permitido): r = 1 − 0,35·tanh(‖xy‖) − 0,35·tanh(|Δz|/0,5) − 0,1·tanh(|ψ−ψ₀|/0,5) − 0,1·tanh(‖v‖) −
+0,05·tanh(‖ω‖/2) − 0,05·min(‖Δa‖, 1) + 0,5·bónus − 50·𝟙[terminou] — limitada, com estar vivo SEMPRE ≥ 0: a v2b do
+cf2 (penalidades ilimitadas, −100 no fim) ensinou a política real a "cair cedo" quando derivava (1.º treino:
+z médio a 0,56 m aos 0,8 M passos); com a v3-real a mesma configuração paira a 1 m. DR por episódio: massa ±5 %, inércia ±10 %,
+CM ±4 mm, kf ±8 % (+±2 % por motor), kq ±10 %, J −20/+25 %, R −10/+15 %, KV ±3 %, I₀ ±20 %, η, SoC₀ 30–100 %,
+SoH 80–100 %, R da bateria ×0,8–1,3, 5–35 °C, atraso 0–12 ms, ruído dos sensores ×0,5–2, arrasto de rotor
+0,20–0,45 s⁻¹, efeito de solo ×0,7–1,3, VRS ×0,5–1,5.
+
+**Validação** (`valida_real.py`, chamado pelo `run.py`): 96/96 — catálogo (massa = Σ peças em todos os builds,
+modelo vs tabela do fabricante: rpm ≤ 1 %, corrente ≤ 5 % no build ativo), motor (regime = quadrática exata,
+balanço de potência, τ = 57,4 ms medido vs 57,6 ms linearizado, travagem ativa 159 ms vs roda livre 2,4 s,
+DShot, atraso de 4 passos), bateria (Coulomb e RC exatos, OCV, ×2,25 de R a 0 °C, sag ×1,5 no fim de vida,
+desgaste por ciclo, persistência, ledger e Newton exatos), ar (+20 % de empuxo a 0,5·D e +5 % a 1,75·D,
+a = −d·v, BEMT vs APC ±0,011, VRS 25 % a v_h = 3,8 m/s, base bit-idêntica), sensores (σ do giro 0,00263 vs
+0,00260, atraso, ToF = h/cos θ, fluxo e a sua inversão), contrato (ator invariante a xy; recompensa não;
+`check_env`), FC (mistura desacoplada, t90 = 206 ms ≈ 3,6·τ) e autonomia (analítica 99,0 min vs bancada
+97,4 min; meta de 60 min cumprida).
+
+**Treino da política do drone real (2026-10-10).** PPO + crítico assimétrico, MLP 128×128 tanh, 16 ambientes com
+DR, currículo de vento 0→1→2→3 m/s (avança quando ≥ 50 % dos passos têm xy E z dentro de 5 cm), recompensa
+v3-real: `out/real_endurance15/` (1,5 M passos, ~23 min a ~1100 passos/s) e *fine-tune* com rajadas dinâmicas
+sobre o vento base até 3 m/s em `out/real_endurance15_rajadas/` (`--retomar`, +1 M passos). Curva do treino
+principal (avaliação determinística em ar parado, bateria cheia, 10 episódios):
+
+| passos | retorno (máx. ≈ 750) | z médio | ‖xy‖ médio | xy+z ≤ 5 cm | vento de treino |
+|---|---|---|---|---|---|
+| 64 k | 311 | 0,89 m | 0,89 m | 0 % | 0 |
+| 256 k | 451 | 0,97 m | 0,12 m | 11 % | 0 |
+| 448 k | 595 | 0,96 m | 0,037 m | 71 % | 0 → 1 m/s |
+| 576 k | 607 | 0,96 m | 0,029 m | 86 % | 1 → 2 m/s |
+| 704 k | 645 | 0,97 m | 0,029 m | 83 % | 2 → 3 m/s |
+| 1,0–1,5 M | 560–650 | 0,96–0,98 m | 0,03–0,06 m | 33–91 % | 3 m/s |
+
+**Política final** = o *fine-tune* `out/real_endurance15_rajadas/final.zip` (2,51 M passos) — a que o site carrega
+por omissão e a que o `deploy.py` exportou. Grelha de condições (`avaliar_real.py`, 5 episódios por condição com as
+MESMAS seeds 5000–5004, 2.ª metade de cada episódio de 10 s — já depois de descolar; vento com uma direção diferente
+por episódio):
+
+| condição | vivo | \|Δz\| | ‖xy‖ | ≤ 5 cm | ≤ 10 cm | \|ψ − ψ₀\| | potência | autonomia mostrada |
+|---|---|---|---|---|---|---|---|---|
+| nominal, bateria cheia, ar parado | 100 % | 1,1 cm | 6,6 cm | 32 % | 83 % | 0,027 rad | 130,1 W | 103 min |
+| SoC 50 % / SoC 25 % (tensão baixa) | 100 % | 1,1 cm | 6,6 cm | 32 / 33 % | 84 % | 0,027 rad | 130,1 W | 41 / 14,5 min |
+| vento 2 m/s | 100 % | 1,2 cm | 6,1 cm | 37 % | 89 % | 0,026 rad | 131,7 W | 102 min |
+| vento 3 m/s | 100 % | 1,3 cm | 6,0 cm | 40 % | 86 % | 0,027 rad | 134,0 W | 100 min |
+| vento 3 m/s + rajadas (até +3 m/s) | 100 % | 1,3 cm | 6,3 cm | 35 % | 92 % | 0,030 rad | 134,2 W | 100 min |
+| frente de vento 3 m/s aos 5 s | 100 % | 1,8 cm | 7,0 cm | 18 % | 93 % | 0,027 rad | 134,3 W | 100 min |
+| DR (peças/bateria/sensores sorteados) | 100 % | 1,8 cm | 9,2 cm | 40 % | 52 % | 0,029 rad | 129,4 W | 70 min (SoC₀ 30–100 %) |
+| DR + vento 2 m/s | 100 % | 1,9 cm | 9,1 cm | 40 % | 50 % | 0,030 rad | 131,0 W | 69 min |
+
+Comparação na MESMA grelha (\|Δz\| nominal / sob DR; ‖xy‖ nominal / sob DR): checkpoint de 1,5 M 1,9 / 3,7 cm e
+6,6 / 9,6 cm · `best_model` do *fine-tune* 1,4 / 3,1 cm e 6,3 / 9,5 cm · **`final` 1,1 / 1,8 cm e 6,6 / 9,2 cm**. O
+*fine-tune* com rajadas melhorou sobretudo a altura (metade do erro sob DR); em xy as três empatam — com só 3
+episódios o checkpoint de 1,5 M parecia melhor (4,9 cm, 100 % ≤ 10 cm): era amostragem de seeds.
+
+**O ‖xy‖ é limitado pelo ESTIMADOR de bordo, não pela política** (medido episódio a episódio, mesmas seeds): a
+política segura a posição que o RPi ESTIMA (fluxo ótico + odometria) a 1–5,5 cm do alvo, mas essa estimativa está
+2–11 cm ao lado da verdade (deriva da odometria por fluxo; maior com o ruído dos sensores ×1,4–2 do DR) — o erro
+verdadeiro é quase todo erro do estimador. Por isso o DR é bimodal: 2 de 5 episódios seguram < 5 cm e 3 de 5 ficam
+com um desvio de 11–16 cm em que a estimativa está a 1–5,5 cm do alvo (os 40 % ≤ 5 cm e 52 % ≤ 10 cm). Para
+melhorar o xy no drone real o caminho é o estimador (fusão fluxo + acelerómetro num Kalman, calibração da escala do
+fluxo, ou uma referência absoluta — marcador visual, UWB, RTK), não mais treino.
+
+A potência em pairagem medida no voo (130 W) bate com o modelo do catálogo (133 W, fora do efeito de solo: a 1 m
+os rotores estão a z/D ≈ 2,7 e o efeito de solo dá +2,3 % de empuxo, ≈ −3 % de potência à mesma tração) e a
+autonomia mostrada pelo site é a que o pack daria a essa potência, com 10 % de reserva no Li-ion. Na pairagem nominal as médias da política ficam dentro de [−1, 1]
+(coletivo −0,026 ± 0,076, taxas ≈ 0); só a descolagem satura o coletivo (+1 = 2× o peso) durante ~1 s — no site,
+com o pack cheio, o pico foi 66,5 A (74 % dos 90 A do 6S2P P50B; 16,6 A por ESC de 40 A) e a tensão mínima
+21,9 V (3,65 V/célula).
+
+**Deploy da política final** (`deploy.py --model out/real_endurance15_rajadas/final.zip`): ONNX de entrada (1, 21)
+→ saída (1, 4) — só o ATOR, o crítico privilegiado não vai para o RPi —, 94,6 kB, opset 17; max\|Δ\| 4,8·10⁻⁶ face
+ao PyTorch (limiar 10⁻⁵; em estados fora da distribuição as médias chegam a \|μ\| ≈ 10 e o arredondamento
+float32 cresce com elas — o clip a [−1, 1] fica no env/RPi); p50 6,9 µs · p99 7,4 µs num core (proxy do A76) e
+4 IAs em paralelo a 50 Hz sem perdas (p99 agregado 422 µs). `policy.onnx` e `deploy_report.json` ficam ao lado do
+modelo — o painel RPi 5 do site lê esse relatório (e diz que o modelo medido é o que está a correr).
+<!-- resultados-finais -->
 
 ## Como correr
 
 ```bash
 uv sync --group hover-rl                                   # stable-baselines3 + torch (CPU) + onnx/onnxruntime + rich/plotext
 
-# 1) validar o ambiente (não treina nada): 121 checagens, exit 0
+# 1) validar o ambiente (não treina nada): 146 checagens, exit 0
 uv run --group hover-rl python experiments/09_drone_hover_rl/run.py
 
 # 2) treinar (headless, ~11,5 min por seed nesta máquina, n_envs 4)
@@ -68,7 +189,10 @@ uv run --group hover-rl python experiments/09_drone_hover_rl/view.py \
     --model experiments/09_drone_hover_rl/out/vento_r9_polir_vento3/final.zip --vento-inicial 2,90
 
 # 3c) PADRÃO do laboratório (CoALA `padrao-simulacao-clean-site`): janela CLEAN + site com TODAS as
-#     métricas e controlos, num só comando; sem auto-loop (o episódio espera pelo REINICIAR do site)
+#     métricas e controlos, num só comando; o LOOP arranca DESLIGADO («SEM REINÍCIO», padrão desde
+#     2026-10-09): no fim do episódio a física continua no estado em que ficou — só o REINICIAR do site
+#     recomeça. `--com-loop` liga o CONTÍNUO (auto-reset no fim do episódio) já no arranque
+#     (ver §«Continuidade do episódio»)
 uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py --sem-browser
 #     sem --model, usa a política da última validação com sucesso (hoje o campeão r10 — ver §Resultados)
 
@@ -105,6 +229,8 @@ Flags principais (todas as peças têm `--help`):
 | `view.py` | viewer passivo + HUD ASCII de 8 linhas, 3 figuras (`launch_passive`, 50 Hz), vento ao vivo por ficheiro | treinar |
 | `dashboard.py` | UI web local: botão treinar/parar, curvas, rede ao vivo, **painel de vento**, cauda do stdout | treinar no processo do servidor |
 | `net_probe.py` | sonda da rede em JSONL (hooks nos `nn.Linear`) + vento ao vivo | render, rede, viewer |
+| `sim_view.py` | runner da **janela limpa** + telemetria JSONL: lê vento/`reiniciar`/`loop` do ficheiro de controlo; CONTÍNUO reinicia no fim do episódio e SEM REINÍCIO deixa a física continuar (só o REINICIAR recomeça) | treinar, HUD, abrir browser |
+| `sim_site.py` | **um comando**: arranca o `sim_view.py` + servidor local que serve o site (`site/dist/`) e a API (`/api/sim`, `/api/vento`, `/api/vento-dinamico`, `/api/reiniciar`, `/api/loop`) | treinar, mexer na física |
 | `deploy.py` | ONNX → validação → benchmark → int8 → multi-IA → relatório JSON | tocar nas outras peças |
 | `run.py` | validação por fórmulas fechadas + robustez (exit 0/1) | treinar |
 
@@ -193,7 +319,7 @@ Magnitudes de referência para o Crazyflie 2 (m = 27 g, W = 0,265 N): a 3 m/s o 
 ≈10 % do peso; a 5 m/s ≈29 %; o CF2 real começa a perder posição por volta de **3 m/s**. O envelope
 validado desta política é **≤3 m/s sustentado** (ver resultados).
 
-### Vento dinâmico (r10) — rajadas · frente · turbulência
+### Vento dinâmico (r10) — rajadas · rajadas aleatórias · frente · turbulência
 
 O vento por episódio (`vento`/`vento_aleatorio`) só muda **entre** episódios. A ronda 10 acrescentou
 `vento_dinamico=dict`, que faz o vento mudar **dentro** do episódio, a cada passo de decisão (50 Hz),
@@ -204,17 +330,49 @@ sempre pelo mesmo mecanismo físico (`opt.wind`). A config é validada por `env.
 | modo | chaves (default) | o que faz a cada passo de decisão |
 |---|---|---|
 | `rajadas` | `p` 0,02 · `duracao` 10 passos (0,2 s) · `u_max` 3,0 m/s | com probabilidade `p` sorteia uma rajada (norma U[0, `u_max`], azimute novo, elevação ±20°) que **soma** ao vento base durante `duracao` passos; uma rajada em curso não é interrompida por outra |
+| `aleatoria` | `p` 0,02 · `duracao` 10 passos (0,2 s) | rajadas com o mesmo `p`/`duracao`/envelope de `rajadas`, mas cada uma re-sorteia **direção E força dentro das faixas disponíveis por inteiro**: norma U[0, 5] m/s, azimute U[0, 360°) e elevação U[−90°, +90°] (o `VENTO_ELEV_MAX` = 20° **não** se aplica aqui). Aplicação por **mistura vectorial** com o vento base, `w(k) = base + sin(π·k/(N+1))·(rajada − base)`: **no pico do envelope o vento É o vector sorteado** e nas pontas fica junto do base (entrada/saída suave), com `‖w‖ ≤ max(‖base‖, 5) m/s` — uma soma, com base forte, daria direções dominadas pelo base e normas até 10 m/s. Cada rajada tem o seu próprio vector — nada vaza para a seguinte. `u_max`/`sigma`/`L`/`v_min` são aceites (e validados, se vierem) mas **ignorados**: a amplitude não segue o teto do currículo (só `u_max = 0` continua a deixar o modo inerte, como em todos os modos) |
 | `frente` | `t_s` 2,0 s · `u_max` 3,0 m/s | no instante `t_s` chega uma **frente** — norma U[0,5 m/s, `u_max`], azimute novo — que **substitui** o vento base até ao fim do episódio (degrau dentro do passo, sem transiente artificial; `t_s = 0` = frente logo no 1.º passo e `t_s` tem de cair dentro do episódio) |
 | `dryden` | `sigma` 0,5 · `L` 10,0 · `u_max` 3,0 m/s | **turbulência** OU de 1.ª ordem (filtro de Dryden discreto por passo): o vento passeia em torno do base, saturado em ±`u_max` |
 
 `u_max` é o teto do **modo** (o teto do vento por episódio continua a ser o do currículo/`--vento-max`), e
-**`u_max = 0` é inerte**: sem rajadas, sem frente e sem turbulência — e, importante, **não consome
-`np_random`**, logo um estágio sem vento é indistinguível do contrato v2b (era a guarda que faltava aos
-modos não-`rajadas`). O `info["vento_atual"]` passou a reportar o vetor **em vigor** (base + dinâmica).
-Estes modos são do **treino/avaliação**: no site os sliders aplicam vento **constante em tempo real**
-(`INTERFACE.md` §3.5).
+**`u_max = 0` é inerte em todos os modos**: sem rajadas, sem frente e sem turbulência — e, importante,
+**não consome `np_random`**, logo um estágio sem vento é indistinguível do contrato v2b (era a guarda que
+faltava aos modos não-`rajadas`). O `info["vento_atual"]` passou a reportar o vetor **em vigor**
+(base + dinâmica).
+Estes modos são do **treino/avaliação** e do **vento ao vivo** do site (a caixa «vento dinâmico» tem o
+seletor PARADO/RAJADAS/**ALEATÓRIA**/DRYDEN, que escreve o modo sem reiniciar o episódio); os sliders
+aplicam sempre vento **constante em tempo real** (`INTERFACE.md` §3.5).
 
-### Vento pela interface (dashboard + viewer + sonda)
+### PARAR — nenhuma rajada sobrevive ao clique (2026-10-09)
+
+O dono relatou «podemos mandar rajadas mas na hora de parar só paramos a última». Mecanismo **medido**
+(não suposto): só existe **um** slot de rajada dirigida (`Controlo.rajada` — cada `RAJADA AGORA` substitui a
+anterior, logo nunca houve rajadas simultâneas nesse slot); o que continuava a atuar depois do PARAR eram
+(i) as rajadas dos **modos contínuos** (`rajadas`/`aleatoria`/`dryden`, geradas pelo próprio env) e (ii) a
+rajada one-shot a meio do envelope — porque o botão **PARAR VENTO** escrevia só `POST /api/vento {vel: 0}`
+(o vento *constante*) e **não tocava no bloco `dinamico`**: o runner continuava a escrever o envelope em
+`model.opt.wind` e a telemetria continuava a mostrar `vento_modo = rajadas|rajada_agora|…`. Havia ainda
+dois resíduos: o `definir_vento_dinamico(None)` do env não limpava `_rajada_k/_rajada_n/_rajada_vec/_turb/
+_frente_vec`, e o restauro do vento base usava o registo **anterior** do controlo (um PARAR que também mexe
+no vento — o do PARAR VENTO — escrevia a base velha em `opt.wind`).
+
+Correção: `Controlo._para_dinamica` (caminho único do PARAR DINÂMICO **e** do PARAR VENTO) corta o slot da
+rajada, reescreve em `opt.wind` o vento base do controlo **em vigor** e desliga o modo do env;
+`env.definir_vento_dinamico(None)` passa a limpar o estado do modo e a escrever sempre o vento base; a troca
+de modo larga a rajada por `cancelar_rajada` (com restauro) e o `_aplica` fixa o registo em vigor **antes**
+do bloco dinâmico; e o novo **`POST /api/parar`** faz o PARAR VENTO numa só escrita atómica (vento base a 0
+**+** dinâmica desligada), usado pelo botão do site.
+
+Prova repetível (`teste_parar_vento.py`): **15/15 verificações** sem flags — todos os cenários/ciclos do
+PARAR (one-shot e modos contínuos, com o PARAR a chegar no início/meio/fim do ciclo da rajada) no ciclo
+REAL do `sim_view.correr`, mais a prova de concorrência in-process —; **16/16** com `--http` (ponta a ponta
+pelo servidor real + ~100 pares de POSTs concorrentes) e **18/18** com `--http --navegador` (front real num
+Chrome headless, janelas 0/50/100/300/600/1000 ms × 3 caminhos de paragem + controlo, e os cenários
+multi-cliente). Com as fontes de antes (`--legado REV`, ou `--fontes DIR`) só passavam **3** verificações,
+com as falhas exatamente nos cenários do PARAR VENTO (vento a oscilar 1,8–5,0 m/s com
+`vento_modo` ainda `rajada_agora`/`rajadas`/`dryden`) e nos resíduos do env.
+
+
 
 O ficheiro `experiments/09_drone_hover_rl/out/controle_vento.json`
 (`{"vel", "azimute", "elevacao", "ativo", "t"}`) é o contrato comum:
@@ -230,6 +388,26 @@ O ficheiro `experiments/09_drone_hover_rl/out/controle_vento.json`
 
 `--fator-tempo` na sonda: `0` = sem travão (≈28–30× o tempo real, medido), `1` = tempo real (a "rede ao
 vivo" deixa de ser um borrão), `2` = 2× — a UI usa 1×.
+
+### Continuidade do episódio — LOOP, REINICIAR e o ficheiro de controlo (ronda 11)
+
+O `sim_view.py` (runner da janela limpa) e o `sim_site.py` (site + API) partilham o ficheiro
+`out/controle_vento.json`. Desde a ronda 11 o campo `loop` é **sticky e autoritativo**, e desde
+2026-10-09 o **padrão é SEM REINÍCIO (`false`)** — o arranque corrige o ficheiro e, depois dele, só o
+`POST /api/loop` muda o modo:
+
+| situação | o que acontece |
+|---|---|
+| `loop: false` ou nada (PADRÃO desde 2026-10-09) − **SEM REINÍCIO** | **nunca reinicia sozinha e nunca congela**: no fim do episódio a física **continua** a integrar (`mj_step` a 50 Hz) no estado em que ficou — se caiu, fica onde a física o deixou; se pairava, continua a pairar — com a telemetria a ~10 Hz, `passo`/`t` a crescer para lá dos 500/10 s e `retorno` congelado no valor com que o episódio fechou. **Só o REINICIAR recomeça** |
+| `loop: true` / `--com-loop` − **CONTÍNUO** | no fim do episódio (`terminated`/`truncated`, 500 passos = 10 s) o runner faz `env.reset()` e **arranca já o episódio seguinte** (ep+1, passo 0); a transição é discreta e o vento/modo dinâmico atravessam-na |
+| REINICIAR (site, `POST /api/reiniciar`) | incrementa o contador `reiniciar` no ficheiro → `env.reset()` no passo de decisão seguinte. É o **único reset** e vale em qualquer estado (a correr, terminado sem reinício, ou a meio) |
+| LOOP do site (`POST /api/loop`) | única forma de mudar `loop` **depois do arranque** (liga/desliga a quente, sem reiniciar nada por si) |
+| `--com-loop` / `--sem-loop` no arranque | **autoritativos**: o arranque CORRIGE o `loop` do ficheiro — sem flag (ou `--sem-loop`) um `loop: true` velho passa a `false`; com `--com-loop` (alias antigo `--loop`) um `loop: false` velho passa a `true` — preservando vento, dinâmica e o contador `reiniciar`. As duas flags juntas são recusadas (`exit 2`) |
+
+Escritas **parciais** no controlo (ex.: `POST /api/vento`, `/api/vento-dinamico`, que não trazem `loop`
+nem `reiniciar`) fazem merge sobre o que o ficheiro já tem: **não** re-ligam o loop nem mexem no contador
+de reinícios. `--max-segundos` e `--max-episodios` continuam a terminar o processo (são flags explícitas,
+não auto-loop). Contrato e detalhes de UI: `INTERFACE.md` §4.1 e §3.5.
 
 ### Decimação e física
 
@@ -247,6 +425,125 @@ com `z < 5 cm` e `‖v‖ < 1 mm/s` (teto de 1 s). O drone começa o episódio *
 Com vento, o assentamento corre **em ar parado** (`opt.wind = 0`) e o vento do episódio entra **logo
 depois** — decisão de desenho: o estado inicial é sempre uma pose pousada estável, e a política tem de
 **descolar e recuperar** contra o vento que chega (é isso que o treino com DR ensina).
+
+### Hélices — animação VISUAL (2026-10-09, fora do `mj_step`)
+
+As 4 hélices **giram na janela 3D** com a velocidade e o sentido do rotor que está a ser comandado. É
+**só apresentação**: a animação corre no runner (`sim_view.py` chama `cf.Helices.atualizar(...)` antes de
+cada `viewer.sync()`) e escreve apenas `model.geom_pos`/`model.geom_quat` de 4 geoms **visuais**, mais um
+`mj_kinematics` para o renderer ver já este frame. Nada toca em `qpos/qvel/ctrl` nem em `mj_step`.
+
+- **Adaptação em runtime (upstream intacto):** a malha `cf2_0` do menagerie (as 4 hélices **fundidas**
+  numa só) é fatiada por **quadrante do sinal de (x, y)**. O OBJ **não** tem as hélices como ilhas
+  separadas — é um *vertex soup* (medido: 3372 vértices para só **1592 coordenadas únicas**, 3168 faces e
+  **176 ilhas** de aresta, a maior com 130 vértices) —, mas **nenhuma das 3168 faces cruza os eixos
+  x = 0 / y = 0** em coordenadas do ASSET (medido: 0 faces a cruzar), e é só isso que o corte pelo sinal
+  exige: cada quadrante leva exactamente 843 vértices, 792 faces e 44 ilhas, os mesmos do OBJ. Daí saem 4
+  malhas com 4 geoms novos `helice_1..4` (`contype = conaffinity = 0`, `density = 0`, grupo 2, material
+  `propeller_plastic`); o geom original é apagado do spec. `models/bitcraze_crazyflie_2/` fica **intocado**.
+- **Massa e inércia não mudam:** o corpo `cf2` tem `<inertial>` explícito e o compilador tem
+  `inertiafromgeom="false"`, logo os geoms visuais não pesam — `m = 0,027 kg` e `diaginertia =
+  2,3951e-5/2,3951e-5/3,2347e-5` iguais ao upstream, ao bit.
+- **Eixo de rotação medido na própria malha:** as tampas do motor (as únicas faces perfeitamente planas
+  e de secção quadrada, Ø 3,99 mm) dão o eixo; eles ficam a **0,7–1,2 mm** dos `POS_ROTORES` (±32,5 mm)
+  — a malha do menagerie está ligeiramente descentrada da origem do corpo, por isso medir é mais fiel.
+- **Lei de rotação:** `|ω_i| = ESCALA_VISUAL·√t_i` com `t_i` = empuxo de cada rotor (N) recuperado do
+  wrench comandado pelo **mixer inverso** de `comandar_rotores`; o sinal é o de `GIRO` (**+1 = anti-horário
+  visto de cima**), pelo que as **diagonais 1-4 e 2-3 giram no mesmo sentido e as vizinhas no oposto** —
+  coerente com o sinal do momento de guinada do modelo.
+- **ESCALA VISUAL (documentada):** `ESCALA_VISUAL = 2π·3/√T_ROTOR_MAX = **63,72 rad/s·N^(−1/2)**`, isto é
+  **3 rev/s com um rotor no empuxo máximo** (0,0875 N) e ≈ 2,6 rev/s em hover — cerca de **1/100 da
+  rotação real** (hélices CF2 a ~15 000 rpm ≈ 250 rev/s): a rotação verdadeira seria ilegível a 50 Hz
+  (aliasing). A proporcionalidade entre rotores e os sentidos são **exatos**; só a escala é visual.
+- **Motores desligados:** as hélices **abrandam** com 1.ª ordem (`ABRANDAMENTO_S = 0,35 s`) e, abaixo de
+  `LIMIAR_PARAGEM = 0,01 rad/s`, **param exactamente** (ω = 0, ângulo congelado) — sem rodar para sempre.
+- **REINICIAR não parte nada:** o estado da animação é só ângulo/velocidade, os geoms são re-resolvidos
+  por **nome** se o modelo mudar e o `ctrl = 0` do `reset` trava as hélices até um comando novo.
+- **Neutralidade provada (`run.py` §10, 13 checagens novas):** 500 passos de decisão (queda, repouso
+  **com contactos** — até 24 por passo —, um `reset` a meio e comandos aleatórios) dão
+  `qpos/qvel/ctrl/sensordata/energy/contactos` **idênticos ao bit** (max|Δ| = 0) com a animação **ligada**,
+  **desligada** e com o modelo **upstream** do RL. O RL e o deploy não mudam: `cf.carregar()` e
+  `HoverEnv()` continuam sem hélices por omissão (`HoverEnv(helices=True)` é opt-in, usado só pelo runner).
+- **§10 à prova de regressão:** a checagem de rotação compara com um **θ derivado do COMANDO**
+  (`ESCALA_VISUAL·√t_i` + avanço de 1.ª ordem), não com o θ lido do modelo — com θ = 0 ela era **vácia**
+  (`Rz(0) = I` e os vértices em repouso batiam certo) e uma animação parada ou um ângulo errado (×1,5)
+  passavam; se a adaptação faltar, o §10 **interrompe-se com uma FALHA limpa** (exit 1) em vez de rebentar
+  com `ValueError` de broadcast.
+- **Prova visual (2 imagens, offscreen EGL):**
+
+  ```bash
+  MUJOCO_GL=egl uv run --group hover-rl python experiments/09_drone_hover_rl/helices_render.py
+  # → out/helices_1.png (passo 30, t = 0,60 s, θ = [5,415 −5,114 −5,114 5,415] rad)
+  #   out/helices_2.png (passo 37, t = 0,74 s, θ = [7,434 −7,021 −7,021 7,434] rad)
+  #   --sem-helices grava o par de controlo (out/helices_*_sem.png): modelo upstream, hélices paradas
+  ```
+- **Na janela:** `--sem-helices` desliga a animação (mesma física) e é a única forma de a desligar. O site
+  **mostra** as hélices: o `sim_site.py` lança o `sim_view.py` (`comando_do_runner`, `sim_site.py:1117`)
+  **sem** essa flag e é o `sim_view.py` que faz `HoverEnv(helices=not args.sem_helices)`. Quem fica **sem**
+  hélices é o `view.py` (viewer com HUD, `HoverEnv()` em `view.py:994` → `cf.Helices` inerte) e, por
+  omissão, o RL/deploy (`cf.carregar()` e `HoverEnv()`). Para animar também o `view.py`, ele passa a
+  `HoverEnv(helices=True)` e acrescenta `cf.Helices(env.model).atualizar(env.model, env.data, dt)`
+  antes do `sync()` (não foi feito: fora do âmbito desta peça).
+
+### Câmara da janela 3D — TERCEIRA-PESSOA contínua, comandada pelo site (v2, 2026-10-10)
+
+A janela mostra SÓ o 3D e a **câmara** é comandada pelo site (bloco «Câmara», `INTERFACE.md` §3.5) — tal
+como o vento, é **só apresentação**: nunca toca na física, no episódio nem em nenhum comando. Em v2 a
+câmara é **terceira-pessoa de jogo**: o alvo segue SEMPRE o drone e o site só comanda ângulo + distância.
+
+- **Contrato:** bloco `"camera"` do `out/controle_vento.json` = `{"azimute","elevacao","distancia",
+  "seq"}` — **SEM `alvo`** (faixas: azimute finito normalizado mod 360, elevacao [−90,90]°, distancia
+  ]0,20] m; `seq` incrementado a CADA comando pelo servidor, como o `dinamico.seq`) +
+  **`POST /api/camera`** (8.ª rota; corpo = subconjunto de `{azimute, elevacao, distancia}` + alias
+  `distandia`; sem `seq` obrigatório — o `seq` do corpo é **ignorado** e o servidor carimba sempre o
+  seu; merge parcial que nunca toca em
+  `loop`/`reiniciar`/vento) + `camera_padrao`/`camera_atual` em `GET /api/state` e `GET /api/sim`.
+- **Alvo SEMPRE no drone (`seguir_drone`, a cada frame):** `viewer.cam.lookat =
+  body(CAM_CORPO).xpos + CAM_OFFSET` — COLA EXACTA a 1e-9, sem suavização (sem lag). `CAM_CORPO = "cf2"`
+  (corpo do drone por nome) e `CAM_OFFSET = (0, 0, 0)` m (somado elemento a elemento a `xpos`; mudá-lo só
+  muda o ponto olhado — a física nunca é tocada). Prova escrita a escrita no `teste_camera.py` §2.
+- **Aplicação no runner:** os 3 valores de orbitar/zoom aplicam-se UMA VEZ por mudança de assinatura
+  (`seq`+valores) nos atributos do `viewer.cam` — nunca a cada frame e nunca no `lookat`; entre comandos
+  **o rato do viewer continua livre** (ângulos/distância sobrevivem até ao próximo comando) mas o **PAN é
+  sobreposto** pelo seguimento (o alvo não sai do drone); sem viewer (`--sem-janela`) ignora sem erro.
+- **Telemetria:** a 19.ª chave `"camera"` traz a câmara **REAL** (`{azimute, elevacao, distancia, alvo}`
+  com `alvo` = `lookat` real = drone+offset), ou `null` sem viewer — é dela que sai o `camera_atual`
+  (honestidade: sem dados não se inventa).
+- **Default explícito:** `CAM_PADRAO` (constante = os 3 valores de `mjv_defaultFreeCamera(model)` deste
+  modelo, **sem `alvo`**; azimute guardado mod 360, 340 ≡ −20 = a mesma pose) é aplicado no arranque e
+  publicado como `camera_padrao`; **REPOR VISTA** = enviar os valores de `camera_padrao` como um comando
+  normal.
+- **Convenção de sinais** (a peça do front copia-a tal e qual, `INTERFACE.md` §4.4):
+  `pos = alvo − d·f(azim,elev)` · `alvo = pos + d·f` com
+  `f = [cos(elev)·cos(azim), cos(elev)·sin(azim), sin(elev)]` (graus→rad; azim 0° = +x, 90° = +y; elev
+  positivo põe a câmara abaixo do alvo a olhar para cima; em v2 `alvo` = drone+offset). Confirmada
+  empiricamente contra a pose real da câmara (`MjvScene.camera`, média dos 2 olhos estéreo): desvio máximo
+  5,7e-8 m em 6 poses.
+- **Validação exata do `POST /api/camera` (v2):** campo **presente** com valor `null` → **400** (`null`
+  não é «ausente» — só a ausência completa do campo mantém o valor em vigor); **chave desconhecida**
+  (incl. o `alvo` do contrato v1) → **400**; fora de faixa → 400; `distancia`+`distandia` juntos → 400
+  (ambíguo). **Decisão documentada:** `{}` e `{"seq": n}` são **aceites com 200** — o subconjunto vazio é
+  um «toque» que mantém os valores e carimba `seq` novo, e o `seq` do corpo é um aviso do cliente
+  **IGNORADO** (o servidor carimba sempre o seu; deixa reenviar um bloco lido tal e qual). Assimetria
+  intencional: no **ficheiro**, chaves desconhecidas (ex. `alvo` de ficheiros v1) são ignoradas em
+  silêncio pelo runner (ficheiros velhos não rebentam); no **HTTP** rebentam com 400.
+- **Robustez do backend (mini-reparo 2026-10-09, achados de verificação independente)**: o servidor usa
+  `FILA_LIGACOES = 64` (`request_queue_size` do `ThreadingHTTPServer`, não o 5 do stdlib): num burst frio
+  de 40 ligações simultâneas o código de antes deixava POSTs por servir (medido: 26–39 de 40 por ronda,
+  `ConnectionResetError`/sem resposta, as que passavam demoravam segundos) e o de agora serve e aplica
+  120/120 em 3 rondas (0,03 s/ronda), sem resets e sem JSON partido.
+
+Prova repetível (`teste_camera.py`, **50/50** — §1 peças do contrato v2 e convenção de sinais (17) · §2
+ciclo real com viewer falso instrumentado: seguimento provado escrita a escrita com o drone a MOVER-SE
+pela física (REINICIAR + empuxo), rato preservado, PAN sobreposto, telemetria (15) · §3 servidor real na
+porta **8561** (13): **burst frio de 40 ligações × 3 rondas**, 8 rotas, 400s (chaves desconhecidas, `null`,
+faixas, alias) e a decisão `{}`/`seq` · §4 não-tautologia por mutação (5): seguimento removido, posição
+velha, assinatura sem `seq`, validação de desconhecidas removida e validação de `null` removida fazem o
+§1/§2 FALHAR):
+
+```bash
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_camera.py   # 50/50, exit 0
+```
 
 ## Resultados medidos
 
@@ -450,17 +747,45 @@ tornam vantajosa. 212 320 inferências/s num core (fp32).
 
 | prova | comando | resultado |
 |---|---|---|
-| ambiente por fórmulas fechadas | `run.py` | **121/121 [OK]**, 0 falhas · ≈ 4 900–5 450 passos de decisão/s num env, validação completa em ~3–5 s |
+| ambiente por fórmulas fechadas | `run.py` | **146/146 [OK]**, 0 falhas · ≈ 3 300–5 400 passos de decisão/s num env, validação completa em ~5–6 s |
+| animação visual das hélices | `run.py` §10 (13 checagens) + `helices_render.py` | hélices rodam ∝ √t_i com o sentido de `GIRO` e param com os motores desligados; **física idêntica AO BIT** (max\|Δ\| = 0) com a animação ligada/desligada e vs o modelo upstream · 2 imagens EGL em `out/helices_1.png` e `out/helices_2.png` |
 | `HoverEnv` como `gym.Env` | `run.py` §5 | `check_env` do SB3, `reset(seed)` determinístico, `info` e truncagem corretos |
 | robustez do ambiente | `run.py` §7 | não-finitos → `ValueError` (vento/ação/`alvo_z`), `alvo_z ∈ [0,10, 2,90] m`, divergência → `RuntimeError` |
 | critério v2b (vento + orientação) | grelha 0–3 m/s × 4 azimutes × 3 seeds | **16/16 PASS, 0 terminações** — re-medido por um **agente independente** (16/16 e 32/32 na grelha densa própria) |
-| suíte do laboratório | `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` | **29 passed** |
+| câmara v2 (contrato, seguimento, servidor) | `teste_camera.py` | **50/50** — 17 peças do contrato v2 · 15 ciclo real com viewer falso · 13 servidor real · 5 não-tautologia |
+| PARAR (nenhuma rajada sobrevive) | `teste_parar_vento.py` | **15/15** sem flags · **16/16** com `--http` · **18/18** com `--http --navegador` |
+| arranque SEM REINÍCIO (loop/REINICIAR/controlo) | `teste_arranque_loop.py` | **68/68** (65 com `--sem-navegador`, 25 com `--sem-http`) |
+| site — comandos/gestos de câmara | `npm run test:camera` (em `site/`) | **62/62** (20 round-trip + 42 gestos), mais a prova DOM/CDP **37/37** |
+| suíte do laboratório | `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` | **30 passed** |
 | integração das peças (treino/UI/sonda/deploy) | verificação adversarial em 4 peças (v1) + 4 peças (v2) + 3 rondas de reparação | **9 PASS / 1 FAIL** (o FAIL era o `runs()` do `dashboard.py`; reparado e re-verificado) · v2: contratos todos PASS após reparações e re-verificações pontuais |
 
 Condições de medida dos µs: máquina ociosa (`loadavg` 1 min **1,35** antes do benchmark, 1,44 depois);
 o `deploy.py` regista o `/proc/loadavg` antes/depois em todos os relatórios exatamente por isso.
 
 ## Limites e nits conhecidos
+
+**Planta real (2026-10-10)** — o que falta medir ou ainda não cobre:
+
+- **SysID do hardware**: kf/kq/curva do ESC vêm das tabelas T-Motor (+7,5 % de realismo); J do rotor, R efetiva,
+  download e arrasto de rotor são estimados (a DR cobre as faixas). Medir em banco (empuxo, binário, rpm, corrente
+  a 6S) e o pack (capacidade a 1C, DCIR) — nenhuma alegação de baterias passou a verificação adversarial.
+- **Massa do frame DIY** (235 g + 50 g de pernas) é estimada pela densidade do carbono: pesar e corrigir no catálogo.
+- `view.py`, `dashboard.py`, `net_probe.py` e `helices_render.py` continuam a ser ferramentas do **cf2** (16 obs);
+  a planta real usa o site (`sim_site.py`), o `train.py`, o `deploy.py` e o `valida_real.py`.
+- O FC simulado faz a malha de TAXA (modo acro); modos de ângulo/altitude do firmware não são simulados — quem
+  estabiliza atitude e posição é a política (a decisão do dono).
+- Sem magnetómetro o rumo absoluto não é observável: a recompensa usa o rumo relativo ao do arranque.
+- A autonomia de 99 min é de pairagem pura em ar parado; o caso real publicado mais próximo voou ~30 % abaixo
+  da tabela — espere ~80–90 min.
+- **O xy (~6 cm nominal, ~9 cm sob DR) é limitado pelo estimador de bordo**, não pela política: ela segura a posição
+  ESTIMADA a 1–5,5 cm, e a odometria por fluxo ótico deriva 2–11 cm da verdade em 10 s (medido; ver os
+  resultados acima). Melhorar o estimador (Kalman fluxo + acelerómetro, escala do fluxo calibrada) ou dar-lhe uma
+  referência absoluta vale mais do que treinar mais.
+- **O treino corre em PyTorch (Stable-Baselines3)**, a stack do laboratório — não em TensorFlow. Os dados das peças
+  entram no treino pelo ambiente (física gerada do catálogo, DR à volta dos valores das peças, `hardware.json` ao
+  lado de cada política); o que vai para o RPi é um ONNX neutro (onnxruntime). Quem preferir TensorFlow Lite pode
+  converter esse ONNX (ex.: `onnx2tf`) — não testado aqui.
+
 
 - **Limite RPi 5 só na RUN, treino a poder máximo** — decisão do dono: o treino corre com os 32 threads
   disponíveis; o limite de 1 core é imposto **apenas** no *benchmark* (`--threads 1`, proxy do A76) e no
@@ -522,6 +847,10 @@ o `deploy.py` regista o `/proc/loadavg` antes/depois em todos os relatórios exa
    mesma pose pousada com jitter de ±2 cm) para uma medida de robustez estatisticamente mais forte.
 5. **Selecionar o checkpoint por grelha dentro do `train.py`** (hoje o `best_model` é escolhido pelo retorno
    **sem** vento) e automatizar o avaliador da grelha como critério de fim do treino.
+6. **Planta real — do simulador ao drone**: (a) SysID em banco dos motores/hélices/ESC e do pack (corrigir o
+   catálogo com os valores medidos e re-treinar com o mesmo comando); (b) melhorar o estimador de bordo (é ele que
+   limita o xy); (c) medir no RPi 5 real a latência do ator (1, 21) e o jitter do loop a 50 Hz com o FC por UART;
+   (d) voo cativo (preso por um cabo) antes do primeiro voo livre.
 
 ## Fontes citadas (conteúdo web = `untrusted`, só citado)
 

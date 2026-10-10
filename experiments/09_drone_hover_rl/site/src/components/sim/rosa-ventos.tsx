@@ -69,7 +69,9 @@ export function RosaDosVentos({ selecao, vec, modo }: RosaDosVentosProps) {
   const efetivo = direcaoDoVetor(vec ?? [0, 0, 0])
   const ativo = daTelemetria ? efetivo.modulo > 0 : selecao.vel > 0
   const dinamico = modo !== "nenhum"
-  const rajada = dinamico && (modo === "rajada_agora" || modo === "rajadas")
+  const rajada =
+    dinamico &&
+    (modo === "rajada_agora" || modo === "rajadas" || modo === "aleatoria")
 
   return (
     <div className="flex flex-col gap-2" data-testid="rosa-vento">

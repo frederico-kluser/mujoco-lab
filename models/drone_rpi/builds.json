@@ -1,0 +1,406 @@
+{
+  "ativo": "endurance_15pol_p50b",
+  "builds": {
+    "endurance_15pol_p50b": {
+      "descricao": "META 1 h: 15″ (T-Motor MN4004 KV300 + P15x5) em frame DIY de tubo de carbono 650 mm, 6S2P Molicel P50B (Li-ion 21700)",
+      "frame": "diy_tubo_carbono_650",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p15x5",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "endurance_15pol_semisolido": {
+      "descricao": "Igual ao endurance_15pol_p50b com o pack semi-sólido Tattu 6S 12 Ah (800 g, 266 Wh, dados só do fabricante)",
+      "frame": "diy_tubo_carbono_650",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p15x5",
+      "bateria": {
+        "celula": "tattu_semisolido_12ah",
+        "s": 6,
+        "p": 1,
+        "massa_extra_g": 0,
+        "dims_mm": [
+          194,
+          71,
+          32
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "endurance_15pol_tarot": {
+      "descricao": "15″ com frame COMERCIAL Tarot 650 Sport (750 g): MN4004 KV300 + P15x5, 6S2P Molicel P50B",
+      "frame": "tarot_650_sport",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p15x5",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "endurance_16pol_m50lt": {
+      "descricao": "16″ (MN4004 KV300 + P16x5.4) no frame DIY 650 mm, 6S2P LG M50LT (célula de energia, ≤7,2 A/célula)",
+      "frame": "diy_tubo_carbono_650",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p16x5_4",
+      "bateria": {
+        "celula": "lg_m50lt",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          43
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "x500_13pol_p45b": {
+      "descricao": "Frame comercial Holybro X500 V2 (610 g) com 13″ (MN4004 KV300 + P13x4.4), 6S2P Molicel P45B",
+      "frame": "holybro_x500_v2",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p13x4_4",
+      "bateria": {
+        "celula": "molicel_p45b",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 45
+    },
+    "compacto_12pol_mn2806": {
+      "descricao": "Compacto: X500 V2 com MN2806 KV400 + P12x4, 6S1P Molicel P50B",
+      "frame": "holybro_x500_v2",
+      "motor": "tmotor_mn2806_kv400",
+      "helice": "tmotor_p12x4",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 1,
+        "massa_extra_g": 30,
+        "dims_mm": [
+          142,
+          44,
+          22
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 25
+    },
+    "lipo_15pol_mn4006_4s": {
+      "descricao": "LiPo de referência: 15″ (MN4006 KV380 + P15x5) no frame DIY, Tattu G-Tech 4S 10000 mAh 25C",
+      "frame": "diy_tubo_carbono_650",
+      "motor": "tmotor_mn4006_kv380",
+      "helice": "tmotor_p15x5",
+      "bateria": {
+        "celula": "tattu_gtech_10ah",
+        "s": 4,
+        "p": 1,
+        "massa_extra_g": 0,
+        "dims_mm": [
+          169,
+          65,
+          39
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 3,
+      "atraso_comando_ms": 8,
+      "v_brownout": 7.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 30
+    },
+    "referencia_5pol": {
+      "descricao": "O quad 5″ de referência do plano (2306 + 5×4.3 + LiPo 4S 1500) — só para comparação",
+      "frame": "ref_5pol",
+      "motor": "ref_2306_2450kv",
+      "helice": "ref_5x4_3",
+      "bateria": {
+        "celula": "lipo_1500_4s_cell",
+        "s": 4,
+        "p": 1,
+        "massa_extra_g": 8
+      },
+      "esc": "esc_4em1_35a",
+      "eletronica": [
+        "rpi5",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "rpi",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 3,
+      "atraso_comando_ms": 8,
+      "v_brownout": 6.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 5,
+      "meta_autonomia_min": 10
+    },
+    "endurance_17pol_4s": {
+      "descricao": "4S: 17″ (MN5006 KV450 + P17x5.8) em frame DIY 750 mm, 4S3P Molicel P50B",
+      "frame": "diy_tubo_carbono_750",
+      "motor": "tmotor_mn5006_kv450",
+      "helice": "tmotor_p17x5_8",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 4,
+        "p": 3,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          66,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 7.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "pesado_18pol_6s3p": {
+      "descricao": "Pesado/carga: 18″ (MN5006 KV300 + P18x6.1) em frame DIY 750 mm, 6S3P Molicel P50B",
+      "frame": "diy_tubo_carbono_750",
+      "motor": "tmotor_mn5006_kv300",
+      "helice": "tmotor_p18x6_1",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 3,
+        "massa_extra_g": 60,
+        "dims_mm": [
+          142,
+          105,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    },
+    "independente_mn4006_mf1302": {
+      "descricao": "Medição INDEPENDENTE: MN4006 KV380 + MF1302 (Tyto) no frame DIY 650 mm, 6S2P Molicel P50B",
+      "frame": "diy_tubo_carbono_650",
+      "motor": "tmotor_mn4006_kv380",
+      "helice": "tmotor_mf1302",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "rpi5",
+        "fc_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "fc",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60
+    }
+  }
+}

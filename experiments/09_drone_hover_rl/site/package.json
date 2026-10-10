@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:camera": "node testes/camera-roundtrip.mts && node testes/camera-gestos.mts",
+    "test:planta": "node testes/planta-real.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

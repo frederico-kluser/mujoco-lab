@@ -34,6 +34,7 @@ import {
 } from "@/components/motion-ui/sheet"
 import { Button } from "@/components/ui/button"
 import { FOCUS_RING } from "@/components/sim/estilo"
+import type { Planta } from "@/lib/sim"
 
 /** Uma entrada da ajuda: o elemento tal como aparece no ecrã + o que ele é. */
 export interface ItemAjuda {
@@ -49,6 +50,8 @@ export interface SeccaoAjuda {
   /** Onde está no ecrã (para o olho o encontrar depressa). */
   onde: string
   itens: ItemAjuda[]
+  /** Só aparece com a PLANTA REAL (os blocos que explica não existem no cf2). */
+  soPlantaReal?: boolean
 }
 
 /** Conteúdo da ajuda, secção a secção (PT-PT, curto). */
@@ -66,7 +69,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "Operação (tecla 1)",
         texto:
-          "vigiar o voo: cabeçalho (selo de estado, contadores, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel) e as 4 curvas grandes (z, yaw_err, retorno, vento_vel).",
+          "vigiar o voo e enquadrar a cena: cabeçalho (selo de estado, contadores, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel), as 4 curvas grandes (z, yaw_err, retorno, vento_vel) e o bloco «Câmara» (pad de órbita + distância da janela 3D).",
       },
       {
         rotulo: "Rede (tecla 2)",
@@ -76,7 +79,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "Vento (tecla 3)",
         texto:
-          "comandar o vento: sliders do vento constante, rosa dos ventos, APLICAR/PARAR e o vento dinâmico (rajadas, Dryden, frente).",
+          "comandar o vento: sliders do vento constante, rosa dos ventos, APLICAR/PARAR e o vento dinâmico (rajadas, aleatórias, Dryden, frente).",
       },
       {
         rotulo: "Bordo (tecla 4)",
@@ -101,7 +104,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "o que nunca se esconde",
         texto:
-          "o estado crítico (API em baixo; episódio terminado SÓ no modo «parar no fim») e os controlos REINICIAR/CONTINUIDADE ficam sempre na barra do topo, em qualquer secção.",
+          "o estado crítico (API em baixo) e os controlos REINICIAR/CONTINUIDADE ficam sempre na barra do topo, em qualquer secção.",
       },
       {
         rotulo: "updates com a secção escondida",
@@ -123,7 +126,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "selo de estado",
         texto:
-          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando acabou (z fora dos limites, passo máximo, etc.). No modo contínuo (por omissão) o backend arranca logo o episódio seguinte; o site nunca reinicia sozinho — só o REINICIAR com hold faz POST /api/reiniciar.",
+          "«a correr» (ponto a pulsar) enquanto o episódio decorre; «episodio_terminado» quando o episódio fechou (z fora dos limites, passo máximo, etc.) — com o loop desligado isso NÃO quer dizer que a física parou: o backend continua a integrar no estado em que ficou (o `passo` e o `t` da telemetria continuam a crescer e o `retorno` fica no valor do fim). No modo contínuo o backend arranca logo o episódio seguinte; o site nunca reinicia sozinho — só o REINICIAR com hold faz POST /api/reiniciar.",
       },
       {
         rotulo: "selo de ligação",
@@ -176,6 +179,38 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
         rotulo: "mín · máx · pts",
         texto:
           "Leituras da janela guardada no browser (600 pontos). O histórico é acumulado por ep:passo e reinicia quando muda o episódio.",
+      },
+    ],
+  },
+  {
+    id: "camera",
+    titulo: "Câmara da janela 3D",
+    onde: "secção «Operação» (e «Tudo»), bloco «Câmara»",
+    itens: [
+      {
+        rotulo: "o que é",
+        texto:
+          "Widget de TERCEIRA-PESSOA da câmara da janela MuJoCo: um CÍRCULO com o drone ao centro e uma ESFERA arrastável (horizontal = azimute, vertical = elevação), um slider de DISTÂNCIA (0,1–10 m) e o REPOR VISTA. A câmara orbita sempre o drone — o backend segue o alvo (drone+offset) e aqui só se comanda ângulo + distância (POST /api/camera).",
+      },
+      {
+        rotulo: "o pad (a esfera)",
+        texto:
+          "Arrastar para a direita AUMENTA o azimute (a câmara orbita de +x para +y, anti-horário visto de cima; azimute 0° = câmara olha para +x) e passar nas bordas laterais faz WRAP 360↔0. Arrastar para CIMA põe a câmara MAIS ALTA: a elevação fica mais negativa (a convenção do MuJoCo, onde elevação negativa vê de cima) e os limites ±90° travam a esfera nas bordas superior/inferior.",
+      },
+      {
+        rotulo: "distância e REPOR VISTA",
+        texto:
+          "O slider de distância (0,1–10 m) faz zoom mantendo o alvo. REPOR VISTA reenvia os valores por omissão (camera_padrao: azimute, elevação, distância). Não há presets: o pad substitui-os.",
+      },
+      {
+        rotulo: "estado e honestidade",
+        texto:
+          "Fora de arrasto a esfera segue a CÂMARA REAL (inclusive quando a mexes com o rato da própria janela); durante o arrasto o estado é otimista e a telemetria nunca o sobrescreve. Comandos ao vivo ENQUANTO se arrasta (throttle de 150 ms com coalescência — 1 comando por mudança final de valor) + commit final ao largar: os valores enviados são SEMPRE os finais do gesto. Sem dados (sem janela) o bloco mostra «—» e desativa-se.",
+      },
+      {
+        rotulo: "a fórmula",
+        texto:
+          "pos = alvo − d·f(azim,elev), com f = [cos e·cos a, cos e·sin a, sin e] (direção de visão unitária do MuJoCo). O alvo é o drone+offset que o backend segue e o runner aplica cada comando ao viewer.cam uma vez por mudança — o rato da janela continua livre entre comandos.",
       },
     ],
   },
@@ -288,13 +323,13 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "PARAR VENTO",
         texto:
-          "Põe a força a 0 m/s mantendo a direção guardada — o vento para imediatamente (POST /api/vento).",
+          "Para TUDO num só pedido (POST /api/parar): põe a força a 0 m/s (mantendo a direção guardada) e desliga o vento dinâmico no mesmo instante — nenhuma rajada (one-shot ou de um modo contínuo) fica a atuar depois do clique e o vento aplicado passa a ser exatamente o vento base comandado, 0 m/s.",
       },
     ],
   },
   {
     id: "dinamico",
-    titulo: "Vento dinâmico (rajadas · turbulência · frente)",
+    titulo: "Vento dinâmico (rajadas · aleatórias · turbulência · frente)",
     onde: "secção «Vento» (e «Tudo»), caixa «vento dinâmico»",
     itens: [
       {
@@ -303,14 +338,14 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
           "O que o servidor está mesmo a fazer: modo, parâmetros e se está ligado. Vem do vento_dinamico do /api/sim e da última linha da telemetria (vento_modo).",
       },
       {
-        rotulo: "PARADO · RAJADAS · DRYDEN",
+        rotulo: "PARADO · RAJADAS · ALEATÓRIA · DRYDEN",
         texto:
-          "Modos contínuos. RAJADAS: com probabilidade p começa uma rajada de rajadas até u_max que SOMA ao vento base durante «duração» passos. DRYDEN: turbulência que passeia em torno do vento base. PARADO desliga tudo.",
+          "Modos contínuos. RAJADAS: com probabilidade p começa uma rajada de rajadas até u_max que SOMA ao vento base durante «duração» passos. ALEATÓRIA: cada rajada sorteia direção E força de novo dentro das faixas disponíveis (0–5 m/s, azimute 0–360°, elevação ±90°), sem teto u_max, e é MISTURADA com o vento base pelo envelope — no pico do envelope o vento é a rajada sorteada e nas pontas fica junto do base (o módulo nunca passa 5 m/s). DRYDEN: turbulência que passeia em torno do vento base. PARADO desliga tudo.",
       },
       {
         rotulo: "p · duração · u_max",
         texto:
-          "Parâmetros das rajadas (valores por omissão do treino: p = 0,02, duração = 10 passos = 0,2 s, u_max = 3,0 m/s). u_max é o teto do modo e u_max = 0 torna-o inerte.",
+          "Parâmetros das rajadas (valores por omissão do treino: p = 0,02, duração = 10 passos = 0,2 s, u_max = 3,0 m/s). u_max é o teto do modo e u_max = 0 torna-o inerte. Em ALEATÓRIA só p e duração contam: o u_max é aceite mas ignorado (a amplitude sai sempre de U[0, 5] m/s).",
       },
       {
         rotulo: "sigma · L · v_min",
@@ -330,7 +365,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "PARAR DINÂMICO",
         texto:
-          'Envia {modo: "nenhum", ativo: false}: desliga o modo dinâmico e deixa só o vento base. Nenhum destes botões reinicia o episódio.',
+          'Envia {modo: "nenhum", ativo: false}: para TUDO o que seja dinâmica — corta a rajada one-shot em curso, desliga o modo contínuo e limpa o estado do modo no simulador (rajada/turbulência/frente) — e deixa o vento no vento base em vigor. Para parar o vento base também, usa o PARAR VENTO. Nenhum destes botões reinicia o episódio.',
       },
     ],
   },
@@ -409,6 +444,128 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
     ],
   },
   {
+    id: "planta-real",
+    titulo: "Planta real · observação e ação",
+    onde: "secções «Operação», «Rede» e barra fixa — só com a planta real",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "o que muda",
+        texto:
+          "Com a planta REAL (o drone do dono: peças reais, bateria, motores BLDC, sensores com erro) a política só vê o que existe a bordo. O subtítulo do cabeçalho diz o build; a rede e as tabelas mudam de rótulos sozinhas (com o Crazyflie fica tudo como antes).",
+      },
+      {
+        rotulo: "observação · 21 canais",
+        texto:
+          "giro medido p,q,r (÷2 rad/s) · acelerómetro medido x,y,z (÷9,81) · roll e pitch estimados (rad) · rumo Δψ desde o armar (÷π) · altura estimada − alvo (m) · v_z estimada · v_x, v_y no corpo pelo fluxo ótico (m/s) · odometria x̂, ŷ (m) · ToF e fluxo válidos (sim/não) · ação anterior (coletivo, p, q, r).",
+      },
+      {
+        rotulo: "ação ctbr · ctrl por rotor",
+        texto:
+          "a₀ = coletivo de acelerador (0 = pairagem) e a₁..₃ = taxas p, q, r (até ±2,5/2,5/1,5 rad/s) que o FC dedicado fecha a 500 Hz; a coluna «pedido» mostra o setpoint de taxa. O ctrl publicado é o EMPUXO de cada rotor (N), com a barra face ao teto atual e o traço da pairagem (m·g/4).",
+      },
+      {
+        rotulo: "selo de bateria na barra fixa",
+        texto:
+          "SoC % do pack em qualquer secção; fica vermelho com TENSÃO BAIXA e cheio com CRÍTICA, e diz REFORMAR quando o SoH chega a 80 %.",
+      },
+    ],
+  },
+  {
+    id: "bateria",
+    titulo: "Bateria (planta real)",
+    onde: "secção «Bordo» (e «Tudo»)",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "SoC real · SoC estimado (RPi)",
+        texto:
+          "O real é o do modelo do pack; o estimado é o que o RPi saberia: OCV em repouso no arranque + contagem de Coulomb com a corrente medida pelo monitor, sobre a capacidade nominal. Não conhece o desgaste, por isso diverge do real quando o pack envelhece. Na barra, o traço é o estimado.",
+      },
+      {
+        rotulo: "curva de descarga",
+        texto:
+          "SoC real (linha) e estimado (tracejado) nas amostras guardadas no browser (até 600, desde o início do episódio). O eixo ajusta-se aos dados com limites redondos escritos ao lado; passa o rato (ou foca e usa as setas) para ler um instante.",
+      },
+      {
+        rotulo: "tensão · corrente · potência · autonomia",
+        texto:
+          "Tensão do pack e por célula (com os limites de pouso e de corte da química), corrente e potência reais (e o que o monitor mede), autonomia restante até à reserva de pouso com a corrente média («—» com os motores parados).",
+      },
+      {
+        rotulo: "SoH · ciclos · R₀ · temperatura",
+        texto:
+          "SoH = capacidade atual / nominal (REFORMAR a 80 %), ciclos equivalentes e recargas, resistência interna efetiva (sobe no frio, no fim da descarga e com o desgaste) e a temperatura do pack.",
+      },
+      {
+        rotulo: "TENSÃO BAIXA · CRÍTICA",
+        texto:
+          "TENSÃO BAIXA = abaixo da tensão de pouso da química (pousar); CRÍTICA = abaixo do corte (brownout iminente) — em vermelho cheio, no bloco e na barra fixa.",
+      },
+      {
+        rotulo: "RECARREGAR · PACK NOVO",
+        texto:
+          "POST /api/bateria. RECARREGAR fecha o ciclo em curso (aplica o desgaste) e põe o pack a 100 %; PACK NOVO (manter 1 s) troca por um pack novo e apaga o histórico de desgaste. O servidor confirma o pedido (seq) e o efeito chega na telemetria — o «último ciclo fechado» mostra o resumo. Nenhum dos dois reinicia o episódio.",
+      },
+    ],
+  },
+  {
+    id: "motores",
+    titulo: "Motores e potência (planta real)",
+    onde: "secção «Bordo» (e «Tudo»)",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "os 4 rotores (vista de cima)",
+        texto:
+          "Frente para cima: r1 frente-esq, r4 frente-dir, r3 trás-esq, r2 trás-dir. Cada um com rpm, duty do ESC, empuxo (N, barra face ao teto atual, traço = pairagem), corrente de fase (A) e o sentido de rotação visto de cima — r1/r2 CW, r3/r4 CCW (diagonais iguais).",
+      },
+      {
+        rotulo: "teto de empuxo vs bateria cheia",
+        texto:
+          "ω_max e T_max por rotor com a tensão ATUAL. O teto de rotação/empuxo decai com a tensão da bateria (ω_max ∝ V, T_max = kf·ω_max²): a barra diz quanto dele resta face à bateria cheia.",
+      },
+      {
+        rotulo: "κ_T · ao chão",
+        texto:
+          "Fator de empuxo de cada rotor = efeito de solo × inflow × VRS (1 = ar livre, > 1 perto do chão) e a altura do rotor ao chão («sem chão» quando não há chão no raio).",
+      },
+      {
+        rotulo: "ledger de potência",
+        texto:
+          "motores + eletrónica = total do pack; a eletrónica são os consumidores de 5 V (RPi 5, FC, sensores…) mais as perdas do BEC.",
+      },
+      {
+        rotulo: "ESC ARMADO · BROWNOUT",
+        texto:
+          "Estado dos ESC; BROWNOUT = a tensão caiu abaixo do limite do BEC/ESC, os motores desligam e o drone cai pela física.",
+      },
+    ],
+  },
+  {
+    id: "hardware",
+    titulo: "Hardware (peças reais)",
+    onde: "secção «Bordo» (e «Tudo»)",
+    soPlantaReal: true,
+    itens: [
+      {
+        rotulo: "build e peças",
+        texto:
+          "O hardware.json do modelo em uso (GET /api/state): build, motor, hélice, célula/pack, frame e ESC — as peças com que a política foi treinada.",
+      },
+      {
+        rotulo: "números do build",
+        texto:
+          "massa total, T/W com a bateria cheia, ω_max, potência e g/W a pairar, autonomia estimada de bancada e o kf/kq (com a origem: tabela do fabricante ou coeficientes da hélice).",
+      },
+      {
+        rotulo: "trocar de peças",
+        texto:
+          "O catálogo está em models/drone_rpi/componentes.json e as montagens em builds.json; troca-se com experiments/09_drone_hover_rl/hardware.py usar <build>. Outro build pede um treino novo.",
+      },
+    ],
+  },
+  {
     id: "episodio",
     titulo: "REINICIAR · CONTINUIDADE · estados e avisos",
     onde: "barra fixa do topo (REINICIAR · CONTINUIDADE) + faixa de estado",
@@ -416,17 +573,17 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "REINICIAR (manter 1 s)",
         texto:
-          "Único controlo que reinicia: está na barra fixa do topo (em qualquer secção); mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. O drone volta a assentar no chão pela física. Está sempre disponível, mas NUNCA é preciso para continuar a trabalhar: no modo contínuo o backend vira o episódio sozinho.",
+          "Único controlo que reinicia: está na barra fixa do topo (em qualquer secção); mantém o botão carregado ~1 s (o preenchimento confirma, para não reiniciar por engano) e envia POST /api/reiniciar. O drone volta a assentar no chão pela física. É o ÚNICO reset que existe — com «sem reinício» a simulação continua sozinha e o REINICIAR só serve para começar outro episódio; com «contínuo» o backend vira o episódio sozinho e ele não é preciso.",
       },
       {
-        rotulo: "CONTINUIDADE · CONTÍNUO / PARAR NO FIM",
+        rotulo: "CONTINUIDADE · CONTÍNUO / SEM REINÍCIO",
         texto:
-          "Está na barra fixa do topo (em qualquer secção) e mostra o que o BACKEND está a fazer (campo `loop` da API), não uma preferência do browser. CONTÍNUO (por omissão) = ao terminar, o backend arranca já o episódio seguinte; PARAR NO FIM = a física para no fim do episódio e só um REINICIAR a retoma. O site limita-se a fazer POST /api/loop.",
+          "Está na barra fixa do topo (em qualquer secção) e mostra o que o BACKEND está a fazer (campo `loop` da API), não uma preferência do browser. CONTÍNUO = ao terminar, o backend reinicia sozinho e arranca já o episódio seguinte; SEM REINÍCIO = no fim do episódio a física CONTINUA no estado em que ficou (se caiu, fica onde a física o deixou; se pairava, continua a pairar) — nunca reinicia sozinha e nunca congela: só um REINICIAR recomeça. O padrão do laboratório é SEM REINÍCIO, e o arranque é autoritativo (corrige o `loop` do ficheiro de controlo; `--com-loop` liga o CONTÍNUO). Depois do arranque, só este toggle o muda. O site limita-se a fazer POST /api/loop.",
       },
       {
         rotulo: "faixa de estado do episódio",
         texto:
-          "Em «contínuo» diz «episódio a correr · modo contínuo» e, na transição, «episódio N terminado · o backend arranca já o seguinte» numa linha NEUTRA (sem pedir nada). Só em «parar no fim» a faixa fica vermelha a pedir REINICIAR e o botão ganha um anel de aviso. O que exige ação — API em baixo — fica sempre vermelho, em qualquer secção.",
+          "Em «contínuo» diz «episódio a correr · modo contínuo» e, na transição, «episódio N terminado · o backend arranca já o seguinte» numa linha NEUTRA (sem pedir nada). Em «sem reinício» diz «episódio N terminado · sem reinício: a física continua no estado em que ficou (REINICIAR = episódio novo)» — também NEUTRA, porque nada é exigido: o `passo`/`t` continuam a subir na telemetria. O que exige ação — API em baixo — fica sempre vermelho, em qualquer secção.",
       },
       {
         rotulo: "aviso de episódio novo",
@@ -458,6 +615,8 @@ export const SECOES_AJUDA_ABERTAS: string[] = SECOES_AJUDA.map((s) => s.id)
 interface AjudaProps {
   /** Id do título (ligado ao `aria-labelledby` do painel). */
   idTitulo?: string
+  /** Planta em vigor: as secções `soPlantaReal` só aparecem com `"real"` (no cf2 a ajuda fica igual). */
+  planta?: Planta | null
 }
 
 /**
@@ -492,8 +651,13 @@ export function ajudaAbertaPorLink(): boolean {
 }
 
 /** Botão «?» + folha de ajuda com todas as secções (abertas por omissão). */
-export function Ajuda({ idTitulo = "ajuda-titulo" }: AjudaProps) {
+export function Ajuda({ idTitulo = "ajuda-titulo", planta = null }: AjudaProps) {
   const [aberta] = useState(ajudaAbertaPorLink)
+  const real = planta === "real"
+  const seccoes = SECOES_AJUDA.filter((s) => !s.soPlantaReal || real)
+  // Abertas = exatamente as secções mostradas (no cf2 é a lista de sempre). O acordeão remonta quando a
+  // planta muda (`key`), para as secções da planta real também nascerem abertas.
+  const abertas = seccoes.map((s) => s.id)
   return (
     <Sheet defaultOpen={aberta}>
       <GatilhoAjuda />
@@ -523,11 +687,12 @@ export function Ajuda({ idTitulo = "ajuda-titulo" }: AjudaProps) {
         </div>
 
         <Accordion
+          key={real ? "real" : "cf2"}
           multiple
-          defaultValue={SECOES_AJUDA_ABERTAS}
+          defaultValue={abertas}
           className="flex flex-col"
         >
-          {SECOES_AJUDA.map((seccao) => (
+          {seccoes.map((seccao) => (
             <AccordionItem
               key={seccao.id}
               value={seccao.id}

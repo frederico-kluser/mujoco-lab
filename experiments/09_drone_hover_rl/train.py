@@ -11,6 +11,8 @@ não abre browser e não precisa de TensorBoard.
     uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --sem-curriculo --vento-max 2
     uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --vento-dinamico rajadas \
         --vento-dinamico-params '{"p": 0.02, "duracao": 10}'      # vento que muda a meio do voo
+    uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --vento-dinamico aleatoria \
+        --vento-dinamico-params '{"p": 0.02, "duracao": 10}'      # rajadas de direção E força ao acaso
     uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --vento-dinamico frente \
         --vento-dinamico-params '{"t_s": 2.0}' --sem-curriculo --vento-max 3
     uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --retomar out/runs/seed2/best_model.zip \
@@ -31,14 +33,22 @@ sem reset, vento 0,00 → 3,03 m/s ao subir o teto para 5, e o vetor amostrado d
 aparecer a meio de um episódio. `--sem-curriculo` desliga tudo isto: teto FIXO `--vento-max` (default
 3,0 m/s; intervalo [0, 10]; é IGNORADO quando o currículo está ligado — nesse caso avisa).
 
-VENTO DINÂMICO (`--vento-dinamico rajadas|frente|dryden` + `--vento-dinamico-params '<json>'`, por omissão
-DESLIGADO → nada muda): o treino anterior só tinha vento CONSTANTE por episódio (o currículo `U ~ U[0, u]`
-reamostrado no reset) — faltava robustez a vento que MUDA a meio do voo (frente/rajada/turbulência). Com a
-flag, só os envs de TREINO recebem `vento_dinamico=<config>` (o `env.HoverEnv` valida a config com
-`valida_vento_dinamico`; modos, fórmulas e defaults completos no docstring do `env.py`):
+VENTO DINÂMICO (`--vento-dinamico rajadas|aleatoria|frente|dryden` + `--vento-dinamico-params '<json>'`, por
+omissão DESLIGADO → nada muda): o treino anterior só tinha vento CONSTANTE por episódio (o currículo
+`U ~ U[0, u]` reamostrado no reset) — faltava robustez a vento que MUDA a meio do voo
+(frente/rajada/turbulência). Com a flag, só os envs de TREINO recebem `vento_dinamico=<config>` (o
+`env.HoverEnv` valida a config com `valida_vento_dinamico`; modos, fórmulas e defaults completos no docstring
+do `env.py`):
   · `rajadas` — a cada passo de decisão, com prob. `p` começa uma rajada `u ~ U[0, u_max]` (azimute aleatório,
     elevação ±20°) com envelope `sin(π·k/(N+1))` durante `duracao` passos, SOMADA ao vento base
     (ex.: `'{"p": 0.02, "duracao": 10}'`);
+  · `aleatoria` — direção E força re-sorteadas a CADA rajada dentro das faixas DISPONÍVEIS POR INTEIRO
+    (`u ~ U[0, 5]` m/s, azimute U[0, 360°) e elevação U[−90°, +90°]), com o mesmo `p`/`duracao` e o mesmo
+    envelope `sin(π·k/(N+1))` de `rajadas`, mas aplicadas como MISTURA vectorial
+    `w(k) = base + sin(π·k/(N+1))·(rajada − base)`: no pico o vento É a rajada sorteada e nas pontas fica
+    junto do vento base (sem saltos; ‖w‖ ≤ max(‖base‖, 5) m/s). Só `p`/`duracao`
+    contam: `u_max`/`sigma`/`L`/`v_min` são aceites e validados mas IGNORADOS (a amplitude não segue o teto do
+    currículo — a não ser `u_max = 0`, que continua a ser modo INERTE, como em todos os modos);
   · `frente` — "wind front": a `t_s` segundos do episódio o vento muda em DEGRAU para `u ~ U[0,5; u_max]`
     (azimute aleatório), substituindo o vento base até ao fim (ex.: `'{"t_s": 2.0}'`) — é a frente de vento
     apanhada em voo, o cenário que o dono pediu ("aguenta uma frente de vento e sobe estabilizado");
@@ -47,7 +57,9 @@ flag, só os envs de TREINO recebem `vento_dinamico=<config>` (o `env.HoverEnv` 
 REGRA DO TETO (uma só, sem ambiguidade): o `u_max` do modo dinâmico é SEMPRE o teto do CURRÍCULO em vigor
 (o teto do estágio atual do `--curriculo-vento`, ou o `--vento-max` fixo com `--sem-curriculo`) e SOBE com o
 estágio, porque é esse o vento que a política está a aprender a aguentar. Por isso `u_max` NÃO se põe no
-`--vento-dinamico-params` (erro de argparse se vier): há uma única fonte de verdade para o teto do vento. Num
+`--vento-dinamico-params` (erro de argparse se vier): há uma única fonte de verdade para o teto do vento —
+EXCEÇÃO: no modo `aleatoria` o `u_max` não limita a amplitude (o teto do modo é sempre 5 m/s), mas o teto do
+currículo continua a valer para o VENTO BASE e o `u_max = 0` continua a deixar o modo inerte. Num
 estágio de teto 0 m/s (o 1.º estágio do currículo padrão) o vento dinâmico fica INERTE (`u_max = 0` = ar
 parado); a frente usa o piso de 0,5 m/s só quando o teto o permite (com teto < 0,5 vale o teto). Para ter
 vento dinâmico desde o 1.º passo de decisão dê um currículo de teto não nulo desde o início:
@@ -162,6 +174,9 @@ from env import (  # ANTES de mujoco/gymnasium: lab.mjkit fixa MUJOCO_GL
     HoverEnv,
     valida_vento_dinamico,
 )
+from env_real import DR as FAIXAS_DR
+from env_real import MODOS_ACAO, OBS_ATOR_DIM, DroneRealEnv
+from politica import PoliticaAssimetrica
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
@@ -291,7 +306,8 @@ class _MarcaVentoMaxExplicito(argparse.Action):
 def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Argumentos da linha de comandos (PT-PT, com os valores medidos/validados por omissão)."""
     p = argparse.ArgumentParser(
-        description="Treino PPO headless do hover do Crazyflie 2 com currículo de vento "
+        description="Treino PPO headless do hover — planta REAL do dono (peças do catálogo, observação só de "
+                    "sensores, crítico assimétrico, DR) ou o Crazyflie 2 histórico — com currículo de vento "
                     "(experiments/09_drone_hover_rl).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -313,16 +329,23 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "IGNORADO se o currículo estiver ligado (aí os tetos vêm do --curriculo-vento)")
     p.add_argument("--sem-curriculo", action="store_true",
                    help="desliga o currículo: os envs ficam com o teto FIXO --vento-max")
-    p.add_argument("--vento-dinamico", choices=("rajadas", "frente", "dryden"), default=None,
+    p.add_argument("--vento-dinamico", choices=("rajadas", "aleatoria", "frente", "dryden"), default=None,
                    help="vento DINÂMICO nos envs de TREINO (o vento base continua a ser o do currículo): "
-                        "`rajadas` = rajadas com envelope sin(π·k/(N+1)); `frente` = degrau de vento a meio do "
-                        "episódio (wind front); `dryden` = turbulência OU de 1.ª ordem. O `u_max` do modo SEGUE "
+                        "`rajadas` = rajadas com envelope sin(π·k/(N+1)) SOMADAS ao vento base; "
+                        "`aleatoria` = mesmo p/duração/envelope, mas com direção E força re-sorteadas a cada "
+                        "rajada em TODA a faixa disponível "
+                        "(U[0,5] m/s, azimute [0,360), elevação ±90°) e aplicadas como MISTURA com o base "
+                        "(no pico o vento é a rajada; aqui o `u_max` do currículo NÃO limita a amplitude); "
+                        "`frente` = degrau de vento a meio do "
+                        "episódio (wind front); `dryden` = turbulência OU de 1.ª ordem. Nos modos em que o "
+                        "`u_max` conta, ele SEGUE "
                         "o teto do currículo (estágio 0 = 0 m/s = modo inerte: para vento dinâmico desde o "
                         "início use `--curriculo-vento 3` ou `--sem-curriculo --vento-max 3`). Por omissão "
                         "desligado (só o vento constante/por episódio de antes)")
     p.add_argument("--vento-dinamico-params", type=_json_dict, default=None, metavar="JSON",
                    help="parâmetros do modo dinâmico em JSON (ex.: '{\"p\": 0.02, \"duracao\": 10}' para "
-                        "rajadas, '{\"t_s\": 2.0}' para a frente, '{\"sigma\": 0.5, \"L\": 10.0}' para dryden). "
+                        "rajadas/aleatoria, '{\"t_s\": 2.0}' para a frente, '{\"sigma\": 0.5, \"L\": 10.0}' "
+                        "para dryden). "
                         "O que faltar usa o default do env.py; `modo` e `u_max` NÃO entram aqui (o modo vem do "
                         "--vento-dinamico e o teto SEGUE o currículo)")
     p.add_argument("--avanco-frac", type=_frac_avanco, default=FRAC_AVANCO,
@@ -331,17 +354,49 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="continua a partir de um best_model.zip/final.zip do SB3 (PPO.load + learn): os "
                         "pesos e o Adam são restaurados, o rollout buffer não; --timesteps passa a ser o "
                         "orçamento ADICIONAL e usa-se um --out-dir NOVO para não escrever por cima")
-    p.add_argument("--log-std-init", type=float, default=-0.5,
-                   help="desvio-padrão inicial do log da ação (σ = exp(valor); o SB3 usa 0,0)")
+    p.add_argument("--log-std-init", type=float, default=None,
+                   help="desvio-padrão inicial do log da ação (σ = exp(valor); o SB3 usa 0,0); por omissão −0,5 "
+                        "no cf2 e −1,0 na planta real (σ ≈ 0,37: menos ruído de exploração num drone de 1,7 kg)")
     p.add_argument("--ent-coef", type=float, default=0.001, help="coeficiente de entropia (evita colapso)")
     p.add_argument("--lr", type=float, default=1e-4, help="learning rate do PPO")
-    p.add_argument("--sucesso", type=float, default=450.0,
-                   help="limiar de retorno médio (StopTrainingOnRewardThreshold); ~500 = hover perfeito")
+    p.add_argument("--sucesso", type=float, default=None,
+                   help="limiar de retorno médio (StopTrainingOnRewardThreshold); por omissão 450 no cf2 (~500 = "
+                        "hover perfeito na v2b) e 700 na planta real (~750 = pairagem perfeita na v3-real)")
     p.add_argument("--eval-freq", type=int, default=5000,
                    help="passos do VEC entre avaliações (n_calls = timesteps/n_envs)")
     p.add_argument("--sem-painel", action="store_true",
                    help="sem rich: só linhas de log (CI/verificadores); o rich nunca é importado")
+    p.add_argument("--planta", choices=("real", "cf2"), default="real",
+                   help="`real` = o drone do dono (peças do catálogo models/drone_rpi, observação SÓ de sensores, "
+                        "crítico assimétrico, domain randomization); `cf2` = o HoverEnv histórico do Crazyflie")
+    p.add_argument("--build", type=str, default=None,
+                   help="build do catálogo (models/drone_rpi/builds.json); por omissão o ATIVO")
+    p.add_argument("--modo-acao", choices=MODOS_ACAO, default="ctbr",
+                   help="planta real: `ctbr` = coletivo + taxas para o FC dedicado; `motores` = 4 aceleradores")
+    p.add_argument("--sem-dr", action="store_true",
+                   help="planta real: desliga a domain randomization dos parâmetros físicos (só vento)")
+    p.add_argument("--net-arch", type=str, default=None,
+                   help="camadas ocultas do ator e do crítico, ex. '128,128' (por omissão: 128,128 na planta "
+                        "real, 64,64 no cf2)")
     args = p.parse_args(argv)
+    if args.sucesso is None:
+        args.sucesso = 700.0 if args.planta == "real" else 450.0
+    if args.log_std_init is None:
+        args.log_std_init = -1.0 if args.planta == "real" else -0.5
+    if args.net_arch is None:
+        args.net_arch = "128,128" if args.planta == "real" else "64,64"
+    try:
+        args.camadas = [int(x) for x in str(args.net_arch).split(",") if x.strip()]
+        if not args.camadas or min(args.camadas) < 1:
+            raise ValueError
+    except ValueError:
+        p.error(f"--net-arch: lista de inteiros ≥ 1 separados por vírgulas (recebido {args.net_arch!r})")
+    if args.planta == "real":
+        try:
+            from lab import drone_rpi as _dr
+            _dr.hardware(args.build)
+        except (KeyError, ValueError) as erro:
+            p.error(f"--build: {erro}")
     args.vento_dinamico_cfg = _resolve_vento_dinamico(p, args)
     return args
 
@@ -358,7 +413,8 @@ def _resolve_vento_dinamico(p: argparse.ArgumentParser, args: argparse.Namespace
     params = args.vento_dinamico_params
     if args.vento_dinamico is None:
         if params is not None:
-            p.error("--vento-dinamico-params só faz sentido com --vento-dinamico rajadas|frente|dryden")
+            p.error("--vento-dinamico-params só faz sentido com --vento-dinamico "
+                    "rajadas|aleatoria|frente|dryden")
         return None
     if params is not None:
         if "modo" in params:
@@ -429,6 +485,8 @@ def config_dinamica(cfg: dict | None, u_teto: float) -> dict | None:
     É a REGRA DO TETO do treino (uma só, ver o docstring do módulo): o modo dinâmico nunca impõe o seu
     próprio teto — usa o do estágio atual do currículo (ou o `--vento-max` fixo do `--sem-curriculo`). Com
     teto 0 m/s (`u_max = 0`) o modo fica inerte: o `env` aceita-o de propósito (estágio 0 = ar parado).
+    EXCEÇÃO: o modo `aleatoria` recebe o `u_max` como todos os outros, mas ignora-o na amostragem (o teto do
+    modo é sempre 5 m/s); o `u_max = 0` continua a deixá-lo inerte, para o estágio 0 seguir a ser ar parado.
     """
     if cfg is None:
         return None
@@ -446,7 +504,8 @@ def aplicar_teto_vento(venv: SubprocVecEnv, u_novo: float, din_cfg: dict | None 
     Com vento dinâmico (`din_cfg`), o teto do modo SEGUE o estágio: `definir_vento_dinamico` recebe a config
     com o `u_max` novo. Como o modo não muda, o env conserva o estado da dinâmica (rajada em curso, frente já
     aplicada, turbulência) e só reamostra a frente se ela ainda não tiver chegado — logo o `u_max` novo vale
-    já a partir do passo de decisão seguinte.
+    já a partir do passo de decisão seguinte. No modo `aleatoria` o `u_max` novo não limita a amplitude (só
+    o teto 0 o torna inerte), mas o vento BASE continua a seguir o teto do currículo.
     """
     venv.env_method("definir_vento_aleatorio", 0.0, float(u_novo))
     if din_cfg is not None:
@@ -481,11 +540,19 @@ def descricao_vento_dinamico(cfg: dict | None, u_teto: float) -> str:
     """
     if cfg is None:
         return ("vento dinâmico · DESLIGADO (só o vento base por episódio, como no treino anterior; "
-                "`--vento-dinamico rajadas|frente|dryden` liga rajadas/frentes/turbulência a meio do voo)")
+                "`--vento-dinamico rajadas|aleatoria|frente|dryden` liga rajadas/frentes/turbulência a meio "
+                "do voo)")
     if cfg["modo"] == "rajadas":
         return (f"vento dinâmico · RAJADAS: p={cfg['p']:g}/passo de decisão, duração {cfg['duracao']} passos, "
                 f"envelope sin(π·k/(N+1)) e amplitude u ~ U[0, {u_teto:g}] m/s (azimute aleatório, elevação "
                 f"±20°) SOMADA ao vento base; u_max SEGUE o teto do currículo ({u_teto:g} m/s)")
+    if cfg["modo"] == "aleatoria":
+        return (f"vento dinâmico · RAJADAS ALEATÓRIAS: p={cfg['p']:g}/passo de decisão, duração "
+                f"{cfg['duracao']} passos e, a CADA rajada, direção E força re-sorteadas dentro das faixas "
+                f"disponíveis (u ~ U[0, 5] m/s, azimute [0, 360), elevação ±90°), aplicadas como MISTURA com "
+                f"o vento base pelo envelope sin(π·k/(N+1)) — no pico o vento é a rajada sorteada e nas "
+                f"pontas fica junto do base; o u_max do currículo ({u_teto:g} m/s) NÃO limita a amplitude "
+                f"(só o teto 0 o torna inerte)")
     if cfg["modo"] == "frente":
         return (f"vento dinâmico · FRENTE: degrau a t_s={cfg['t_s']:g} s do episódio para "
                 f"u ~ U[min(0,5; {u_teto:g}); {u_teto:g}] m/s com azimute aleatório (substitui o vento base "
@@ -497,11 +564,13 @@ def descricao_vento_dinamico(cfg: dict | None, u_teto: float) -> str:
 
 # ----------------------------------------------------------------------------------------------- envs
 def _fabrica_env(semente: int, pasta: str, raiz: str, u_teto: float,
-                 din_cfg: dict | None = None) -> Callable[[], Any]:
+                 din_cfg: dict | None = None, planta: str = "cf2", build: str | None = None,
+                 modo_acao: str = "ctbr", aleatorizar: bool = True) -> Callable[[], Any]:
     """Fábrica picklável (cloudpickle) de UM env com `Monitor`, vento `U ~ U[0, u_teto]` e vento dinâmico.
 
     `din_cfg` é a config JÁ completa (com `u_max` = teto do currículo, via `config_dinamica`) ou `None`
-    (treino sem vento dinâmico — o default, que não toca no caminho do env).
+    (treino sem vento dinâmico — o default, que não toca no caminho do env). `planta="real"` cria o
+    `DroneRealEnv` (peças do build, observação só de sensores, DR física se `aleatorizar`).
     """
 
     def _init():
@@ -509,10 +578,20 @@ def _fabrica_env(semente: int, pasta: str, raiz: str, u_teto: float,
         for caminho in (pasta, raiz):
             if caminho not in sys.path:
                 sys.path.insert(0, caminho)
-        from env import HoverEnv as _HoverEnv  # import DENTRO do subprocesso (mujoco por processo)
+        if planta == "real":
+            from env_real import (
+                DroneRealEnv as _Real,  # import DENTRO do subprocesso (mujoco por processo)
+            )
 
-        ambiente = _HoverEnv(vento_aleatorio=(0.0, float(u_teto)),  # currículo de vento no 1.º estágio
-                             vento_dinamico=din_cfg)                # vento que muda a meio do voo (ou None)
+            ambiente = _Real(build=build, modo_acao=modo_acao, aleatorizar=aleatorizar,
+                             vento_aleatorio=(0.0, float(u_teto)), vento_dinamico=din_cfg)
+        else:
+            from env import (
+                HoverEnv as _HoverEnv,  # import DENTRO do subprocesso (mujoco por processo)
+            )
+
+            ambiente = _HoverEnv(vento_aleatorio=(0.0, float(u_teto)),  # currículo de vento no 1.º estágio
+                                 vento_dinamico=din_cfg)                # vento que muda a meio do voo (ou None)
         ambiente.reset(seed=semente)  # fixa o stream do np_random (jitter do reset) antes do 1.º reset do vec
         return Monitor(ambiente)
 
@@ -520,10 +599,44 @@ def _fabrica_env(semente: int, pasta: str, raiz: str, u_teto: float,
 
 
 def criar_envs_treino(n_envs: int, seed: int, u_teto: float,
-                      din_cfg: dict | None = None) -> SubprocVecEnv:
-    """`n_envs` cópias do HoverEnv (vento até `u_teto` + dinâmico `din_cfg`) em processos separados."""
-    fabricas = [_fabrica_env(seed + i, str(_PASTA), str(_RAIZ), u_teto, din_cfg) for i in range(n_envs)]
+                      din_cfg: dict | None = None, args: argparse.Namespace | None = None) -> SubprocVecEnv:
+    """`n_envs` cópias do env (vento até `u_teto` + dinâmico `din_cfg`) em processos separados."""
+    planta = getattr(args, "planta", "cf2")
+    extra = {} if planta != "real" else {"planta": "real", "build": args.build, "modo_acao": args.modo_acao,
+                                         "aleatorizar": not args.sem_dr}
+    fabricas = [_fabrica_env(seed + i, str(_PASTA), str(_RAIZ), u_teto, din_cfg, **extra) for i in range(n_envs)]
     return SubprocVecEnv(fabricas)
+
+
+def criar_env_avaliacao(args: argparse.Namespace) -> HoverEnv:
+    """Env de AVALIAÇÃO/MÉTRICAS: sem vento e, na planta real, com os parâmetros NOMINAIS (sem DR) e a
+    bateria cheia — a régua tem de ser comparável entre avaliações."""
+    if getattr(args, "planta", "cf2") == "real":
+        return DroneRealEnv(build=args.build, modo_acao=args.modo_acao, aleatorizar=False)
+    return HoverEnv()
+
+
+def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
+    """`hardware.json` ao lado do modelo: o build (peças + config), os derivados e a DR — os dados das peças
+    REAIS com que a política foi treinada (o deploy e o site leem-no; trocar de peças = treinar de novo)."""
+    if getattr(args, "planta", "cf2") != "real":
+        return None
+    from lab import drone_rpi as _dr
+    hw = _dr.hardware(args.build)
+    builds = _dr.carregar_builds()
+    resumo = hw.resumo()
+    resumo["autonomia"].pop("serie", None)
+    dados = {
+        "planta": "real", "build": hw.nome, "config_build": builds["builds"].get(hw.nome, hw.dados),
+        "pecas": {"motor": hw.motor.dados, "helice": hw.helice.dados, "celula": hw.bateria.celula.dados,
+                  "frame": hw.frame.dados, "esc": hw.esc.dados,
+                  "eletronica": [c.dados for c in hw.consumidores], "sensores": hw.sensores},
+        "derivados": resumo, "modo_acao": args.modo_acao, "obs_ator_dim": OBS_ATOR_DIM,
+        "domain_randomization": None if args.sem_dr else FAIXAS_DR,
+    }
+    with (out_dir / "hardware.json").open("w", encoding="utf-8") as fh:
+        json.dump(dados, fh, ensure_ascii=False, indent=2, default=float)
+    return dados
 
 
 def calcular_eval_freq(pedido: int, timesteps: int, n_envs: int) -> int:
@@ -714,6 +827,7 @@ class CallbackRegisto(BaseCallback):
         self._retornos: list[float] = []
         self._metricas: dict[str, float] = {}
         self._ultimo_refresh = 0.0
+        self._p_media = 0.0
 
     def _on_training_start(self) -> None:
         self._t0 = time.perf_counter()
@@ -765,6 +879,8 @@ class CallbackRegisto(BaseCallback):
             "fps": float(passos_run / elapsed) if elapsed > 0 else 0.0,
             "elapsed_s": float(elapsed),
             "seed": self.seed,
+            "planta": "real" if isinstance(self.env_metrica, DroneRealEnv) else "cf2",
+            "p_media_w": float(self._p_media),
         }
         with self.caminho_log.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(linha, ensure_ascii=False) + "\n")
@@ -802,7 +918,7 @@ class CallbackRegisto(BaseCallback):
         guinada — é o critério de avanço do currículo desde a ronda 3 (com yaw a grelha era inatingível:
         uma política que paira bem mede ~0,10 no bónus completo e o DR nunca ligava).
         """
-        zs, dists, yaws, fracoes, totais, xyzs = [], [], [], [], [], []
+        zs, dists, yaws, fracoes, totais, xyzs, potencias = [], [], [], [], [], [], []
         alvo_z = float(getattr(self.env_metrica, "alvo_z", 1.0))
         max_passos = int(getattr(self.env_metrica, "max_passos", 500))
         for _ in range(self.n_episodios):
@@ -821,6 +937,8 @@ class CallbackRegisto(BaseCallback):
                 alvo_ep += int(bool(info["no_alvo"]))
                 total_ep += int(no_xy_z and abs(yaw_err) < BONUS_YAW)
                 xyz_ep += int(no_xy_z)
+                if "p_total" in info:
+                    potencias.append(float(info["p_total"]))
                 passos += 1
                 if terminado or truncado:
                     break
@@ -831,6 +949,7 @@ class CallbackRegisto(BaseCallback):
             fracoes.append(alvo_ep / passos)
             totais.append(total_ep / passos)
             xyzs.append(xyz_ep / passos)
+        self._p_media = float(np.mean(potencias)) if potencias else 0.0
         return (float(np.mean(zs)), float(np.mean(dists)), float(np.mean(yaws)),
                 float(np.mean(fracoes)), float(np.mean(totais)), float(np.mean(xyzs)))
 
@@ -873,7 +992,7 @@ def construir_callbacks(args: argparse.Namespace, out_dir: Path, eval_freq: int,
     # O env de avaliação é semeado UMA vez, a partir da seed do run, e é SEM VENTO: a régua (retorno médio,
     # best_model) tem de ser comparável entre estágios do currículo — se o vento entrasse aqui, o retorno
     # caía sempre que o teto sobe e o critério de avanço ficava confundido com a dificuldade do treino.
-    env_eval = HoverEnv()
+    env_eval = criar_env_avaliacao(args)
     env_eval.reset(seed=args.seed + 1_000)
     eval_cb = EvalCallback(
         Monitor(env_eval),                   # env de avaliação ÚNICO (o EvalCallback embrulha-o em DummyVecEnv)
@@ -947,11 +1066,15 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
         f"clip={CLIP_RANGE:g} · vf={VF_COEF:g} · max_grad_norm={MAX_GRAD_NORM:g}"
     )
     if args.retomar is None:
+        real = getattr(args, "planta", "cf2") == "real"
+        camadas = list(getattr(args, "camadas", [64, 64]))
+        extra_politica = {"n_ator": OBS_ATOR_DIM} if real else {}
         modelo = PPO(
-            "MlpPolicy",
+            PoliticaAssimetrica if real else "MlpPolicy",
             venv,
             policy_kwargs={
-                "net_arch": {"pi": [64, 64], "vf": [64, 64]},
+                **extra_politica,
+                "net_arch": {"pi": camadas, "vf": camadas},
                 "activation_fn": nn.Tanh,
                 "log_std_init": args.log_std_init,   # −0,5: o 0,0 do SB3 explora demasiado na recompensa v2
                 # L2 pelo caminho OFICIAL do SB3 2.9.0: o `optimizer_kwargs` do `policy_kwargs` chega ao
@@ -1026,9 +1149,20 @@ def treinar(args: argparse.Namespace) -> int:
         painel.escrever(f"[retomar] a continuar de {resolver_checkpoint(args.retomar)}")
 
     din_cfg = config_dinamica(args.vento_dinamico_cfg, curriculo.u_vento)   # u_max = teto do estágio em vigor
-    venv = criar_envs_treino(args.n_envs, args.seed, curriculo.u_vento, din_cfg)
-    env_metrica = HoverEnv()
+    venv = criar_envs_treino(args.n_envs, args.seed, curriculo.u_vento, din_cfg, args=args)
+    env_metrica = criar_env_avaliacao(args)
     env_metrica.reset(seed=args.seed + 10_000)  # stream de estados iniciais fixo → métricas comparáveis
+    hw_json = gravar_hardware(args, out_dir)
+    if hw_json is not None:
+        d = hw_json["derivados"]
+        painel.escrever(
+            f"planta REAL · build '{hw_json['build']}' · {d['massa_total_g']:.0f} g · T/W {d['t_w_cheia']:.2f} · "
+            f"pairagem {d['pairagem_v_nominal']['p_total']:.0f} W ({d['pairagem_v_nominal']['g_por_w']:.1f} g/W) · "
+            f"autonomia estimada {d['autonomia_min']:.0f} min · ação {args.modo_acao} · "
+            f"DR {'DESLIGADA' if args.sem_dr else 'ligada'} · ator vê {OBS_ATOR_DIM} entradas reais "
+            f"(crítico assimétrico) · {out_dir / 'hardware.json'}")
+    else:
+        painel.escrever("planta cf2 · HoverEnv histórico do Crazyflie (observação privilegiada, 16 dims)")
     # O SB3 avisa que o env de TREINO (SubprocVecEnv) e o de AVALIAÇÃO (DummyVecEnv de 1 env) são de tipos
     # diferentes. É intencional e inócuo aqui: sem VecNormalize não há estatísticas para sincronizar.
     warnings.filterwarnings("ignore", message="Training and eval env are not of the same type")

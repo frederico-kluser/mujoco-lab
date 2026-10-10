@@ -290,15 +290,20 @@ def ler_benchmark(caminho: Path | None = None) -> dict | None:
 
 
 def mesma_coisa(a, b) -> bool:
-    """Os dois caminhos apontam para o MESMO ficheiro? Relativos são resolvidos contra a pasta do experimento.
+    """Os dois caminhos apontam para o MESMO ficheiro? Relativos são resolvidos contra a pasta do experimento
+    E contra a raiz do repositório (a primeira base em que o ficheiro existe).
 
-    O relatório do `deploy.py` grava o caminho do modelo relativo à pasta onde correu (`out/runs/...zip`), não
-    ao cwd de quem lê a API: sem isto, `modelo_coincide` dizia sempre `false`.
+    O relatório do `deploy.py` grava o caminho do modelo relativo à pasta onde correu (`out/runs/...zip` no
+    experimento, `experiments/<nome>/out/...` na raiz), não ao cwd de quem lê a API: sem isto,
+    `modelo_coincide` dizia `false` para o mesmo modelo.
     """
-    pa, pb = Path(str(a)), Path(str(b))
-    pa = pa if pa.is_absolute() else _AQUI / pa
-    pb = pb if pb.is_absolute() else _AQUI / pb
-    return pa.resolve() == pb.resolve()
+    def resolver(caminho) -> Path:
+        c = Path(str(caminho))
+        if c.is_absolute():
+            return c.resolve()
+        candidatos = [_AQUI / c, _RAIZ / c]
+        return next((x for x in candidatos if x.exists()), candidatos[0]).resolve()
+    return resolver(a) == resolver(b)
 
 
 def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dict:

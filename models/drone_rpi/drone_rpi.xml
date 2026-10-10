@@ -1,0 +1,95 @@
+<!-- GERADO por lab/drone_rpi/modelo.py a partir do build 'endurance_15pol_p50b' (models/drone_rpi/builds.json) — NÃO editar à mão: troque peças no catálogo e regenere com `experiments/09_drone_hover_rl/hardware.py xml`. -->
+<mujoco model="drone_rpi_endurance_15pol_p50b">
+  <compiler angle="radian"/>
+
+  <option density="1.225" viscosity="1.8e-05" integrator="implicitfast"/>
+
+  <size nkey="1"/>
+
+  <statistic extent="1.3"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="2d" colorspace="auto" name="chao" builtin="checker" rgb1="0.25 0.25 0.25" rgb2="0.33 0.33 0.33" width="256" height="256"/>
+    <material name="chao" texture="chao" texrepeat="10 10" reflectance="0.1"/>
+    <material name="frame" rgba="0.13 0.13 0.15 1"/>
+    <material name="motor" rgba="0.72 0.72 0.76 1"/>
+    <material name="esc" rgba="0.18 0.22 0.55 1"/>
+    <material name="bateria" rgba="0.5 0.12 0.1 1"/>
+    <material name="rpi" rgba="0.06 0.45 0.22 1"/>
+    <material name="fc" rgba="0.1 0.1 0.1 1"/>
+    <material name="sensor" rgba="0.85 0.65 0.1 1"/>
+    <material name="perna" rgba="0.25 0.25 0.28 1"/>
+    <material name="helice_cw" rgba="0.1 0.55 0.85 0.35"/>
+    <material name="helice_ccw" rgba="0.9 0.4 0.1 0.35"/>
+  </asset>
+
+  <worldbody>
+    <geom name="chao" size="50 50 0.1" type="plane" friction="0.9" material="chao"/>
+    <light name="sol" pos="0 0 6" type="directional"/>
+    <body name="drone" pos="0 0 0.3">
+      <joint name="livre" type="free"/>
+      <geom name="placa" size="0.104 0.104 0.0015" pos="0 0 0.0120624" type="box" mass="0.109" material="frame"/>
+      <geom name="braco1" size="0.1625 0.012 0.005" pos="0.114905 0.114905 0.0120624" quat="0.92388 0 0 0.382683" type="box" contype="0" conaffinity="0" mass="0.03525" material="frame"/>
+      <geom name="braco2" size="0.1625 0.012 0.005" pos="-0.114905 -0.114905 0.0120624" quat="0.382683 0 0 -0.92388" type="box" contype="0" conaffinity="0" mass="0.03525" material="frame"/>
+      <geom name="braco3" size="0.1625 0.012 0.005" pos="-0.114905 0.114905 0.0120624" quat="0.382683 0 0 0.92388" type="box" contype="0" conaffinity="0" mass="0.03525" material="frame"/>
+      <geom name="braco4" size="0.1625 0.012 0.005" pos="0.114905 -0.114905 0.0120624" quat="0.92388 0 0 -0.382683" type="box" contype="0" conaffinity="0" mass="0.03525" material="frame"/>
+      <geom name="motor1" size="0.022175 0.0095" pos="0.22981 0.22981 0.0265624" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice1" size="0.1905 0.0015" pos="0.22981 0.22981 0.0440624" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
+      <geom name="motor2" size="0.022175 0.0095" pos="-0.22981 -0.22981 0.0265624" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice2" size="0.1905 0.0015" pos="-0.22981 -0.22981 0.0440624" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
+      <geom name="motor3" size="0.022175 0.0095" pos="-0.22981 0.22981 0.0265624" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice3" size="0.1905 0.0015" pos="-0.22981 0.22981 0.0440624" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
+      <geom name="motor4" size="0.022175 0.0095" pos="0.22981 -0.22981 0.0265624" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice4" size="0.1905 0.0015" pos="0.22981 -0.22981 0.0440624" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
+      <geom name="esc1" size="0.016 0.011 0.003" pos="0.103414 0.103414 0.0175624" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc2" size="0.016 0.011 0.003" pos="-0.103414 -0.103414 0.0175624" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc3" size="0.016 0.011 0.003" pos="-0.103414 0.103414 0.0175624" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc4" size="0.016 0.011 0.003" pos="0.103414 -0.103414 0.0175624" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="el_rpi5" size="0.0425 0.028 0.008" pos="0 0 0.0275624" type="box" contype="0" conaffinity="0" mass="0.052" material="rpi"/>
+      <geom name="el_fc_h7" size="0.018 0.018 0.003" pos="0 0 0.0425624" type="box" contype="0" conaffinity="0" mass="0.008" material="fc"/>
+      <geom name="el_cablagem" size="0.03 0.02 0.003" pos="0 0 0.0525624" type="box" contype="0" conaffinity="0" mass="0.03" material="sensor"/>
+      <geom name="bateria" size="0.071 0.035 0.022" pos="0 0 -0.0154376" type="box" mass="0.8706" material="bateria"/>
+      <geom name="sensores_baixo" size="0.012 0.012 0.002" pos="0 0 -0.0394376" type="box" contype="0" conaffinity="0" mass="0.003" material="sensor"/>
+      <geom name="perna1" size="0.006 0.058" pos="0.126395 0.126395 -0.0499376" type="capsule" friction="0.9" mass="0.0125" material="perna"/>
+      <geom name="perna2" size="0.006 0.058" pos="-0.126395 -0.126395 -0.0499376" type="capsule" friction="0.9" mass="0.0125" material="perna"/>
+      <geom name="perna3" size="0.006 0.058" pos="-0.126395 0.126395 -0.0499376" type="capsule" friction="0.9" mass="0.0125" material="perna"/>
+      <geom name="perna4" size="0.006 0.058" pos="0.126395 -0.126395 -0.0499376" type="capsule" friction="0.9" mass="0.0125" material="perna"/>
+      <site name="r1" size="0.01" pos="0.22981 0.22981 0.0440624"/>
+      <site name="r2" size="0.01" pos="-0.22981 -0.22981 0.0440624"/>
+      <site name="r3" size="0.01" pos="-0.22981 0.22981 0.0440624"/>
+      <site name="r4" size="0.01" pos="0.22981 -0.22981 0.0440624"/>
+      <site name="imu" size="0.006" pos="0 0 0.0255624"/>
+      <site name="baixo" size="0.004" pos="0 0 -0.0414376" quat="0 1 0 0"/>
+      <site name="cm" size="0.004"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general name="rotor1" site="r1" ctrllimited="false" gear="0 0 1"/>
+    <general name="rotor2" site="r2" ctrllimited="false" gear="0 0 1"/>
+    <general name="rotor3" site="r3" ctrllimited="false" gear="0 0 1"/>
+    <general name="rotor4" site="r4" ctrllimited="false" gear="0 0 1"/>
+    <general name="reacao1" site="r1" ctrllimited="false" gear="0 0 0 0 0 1"/>
+    <general name="reacao2" site="r2" ctrllimited="false" gear="0 0 0 0 0 1"/>
+    <general name="reacao3" site="r3" ctrllimited="false" gear="0 0 0 0 0 1"/>
+    <general name="reacao4" site="r4" ctrllimited="false" gear="0 0 0 0 0 1"/>
+  </actuator>
+
+  <sensor>
+    <gyro site="imu" name="giro"/>
+    <accelerometer site="imu" name="acc"/>
+    <rangefinder site="baixo" name="tof"/>
+    <velocimeter site="baixo" name="vel_baixo"/>
+    <framepos objtype="site" objname="cm" name="pos"/>
+    <framequat objtype="body" objname="drone" name="quat"/>
+    <framelinvel objtype="site" objname="cm" name="vel"/>
+  </sensor>
+
+  <keyframe>
+    <key name="pousado"/>
+  </keyframe>
+</mujoco>

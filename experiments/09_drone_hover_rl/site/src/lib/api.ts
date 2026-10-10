@@ -10,6 +10,7 @@ import {
   lerResumo,
   lerSim,
   numero,
+  type CorpoCamera,
   type CorpoVento,
   type CorpoVentoDinamico,
   type RespostaSim,
@@ -94,7 +95,7 @@ export async function buscarSim(sinal?: AbortSignal): Promise<RespostaSim> {
   return lerSim(await pedirJson("/api/sim", { signal: sinal }))
 }
 
-/** `GET /api/state` — resumo do servidor (nome do modelo, constantes físicas, quando existirem). */
+/** `GET /api/state` — resumo do servidor (modelo, constantes físicas e, na planta real, o `hardware`). */
 export async function buscarEstado(sinal?: AbortSignal): Promise<ResumoEstado> {
   return lerResumo(await pedirJson("/api/state", { signal: sinal }))
 }
@@ -106,6 +107,23 @@ export async function enviarVento(corpo: CorpoVento): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(corpo),
   })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+}
+
+/**
+ * `POST /api/parar` → 200: **PARAR VENTO** numa só escrita atómica.
+ *
+ * O servidor põe o vento base a 0 **e** desliga o vento dinâmico no mesmo pedido (bloco `dinamico` em
+ * `nenhum`, com `seq` novo). É isto que garante que depois de parar não fica nenhuma rajada ativa nem
+ * pendente: um `POST /api/vento {vel: 0}` sozinho parava só o vento constante e as rajadas do modo
+ * contínuo (ou a rajada one-shot a meio) continuavam a atuar.
+ */
+export async function enviarParar(): Promise<void> {
+  const bruto = await pedirJson("/api/parar", { method: "POST" })
   const o =
     typeof bruto === "object" && bruto !== null
       ? (bruto as Record<string, unknown>)
@@ -134,6 +152,28 @@ export async function enviarVentoDinamico(
   if (o.erro !== undefined) throw new ErroApi(String(o.erro))
 }
 
+/**
+ * `POST /api/camera` (CONTRATO v2) — um SUBCONJUNTO de `{azimute, elevacao, distancia}`: só os
+ * campos que o gesto manda mudar. **SEM** `alvo` (o alvo é do backend: drone+offset, que ele
+ * segue) nem `seq` (o servidor incrementa-o no bloco `camera` do controlo) → 200 ou 400
+ * (`null`, campos desconhecidos ou fora das faixas do contrato).
+ *
+ * O runner aplica o comando ao `viewer.cam` UMA VEZ por mudança de assinatura: o rato da janela 3D
+ * continua livre entre comandos. Nenhum campo do controlo (`loop`, `reiniciar`, vento) é tocado.
+ */
+export async function enviarCamera(corpo: CorpoCamera): Promise<void> {
+  const bruto = await pedirJson("/api/camera", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(corpo),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+}
+
 /** `POST /api/reiniciar` → `{contador: n}` (o backend conta os reinícios). */
 export async function enviarReiniciar(): Promise<number | null> {
   const bruto = await pedirJson("/api/reiniciar", { method: "POST" })
@@ -151,4 +191,43 @@ export async function enviarLoop(ativo: boolean): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ativo }),
   })
+}
+
+/** Comandos de bateria da planta real: fechar o ciclo do pack ou trocar por um pack novo. */
+export type AcaoBateria = "recarregar" | "nova"
+
+/** O que o servidor confirmou (`{"ok": true, "bateria": {"acao", "seq"}}`); `null` no que não vier. */
+export interface RespostaBateria {
+  acao: string | null
+  /** Nº de ordem do comando no ficheiro de controlo (o servidor incrementa-o a cada pedido). */
+  seq: number | null
+}
+
+/**
+ * `POST /api/bateria {"acao": "recarregar" | "nova"}` → 200 `{ok, bateria: {acao, seq}}` ou 400 (a
+ * mensagem chega ao utilizador). `recarregar` fecha o ciclo do pack (aplica o desgaste e volta a 100 %);
+ * `nova` troca por um pack NOVO (SoH 100 %, 0 ciclos). O runner consome o comando no passo de decisão
+ * seguinte — o efeito vê-se na telemetria (`bateria.soc`, `bateria.ultimo_ciclo`), não nesta resposta.
+ */
+export async function enviarBateria(
+  acao: AcaoBateria
+): Promise<RespostaBateria> {
+  const bruto = await pedirJson("/api/bateria", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ acao }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const bateria =
+    typeof o.bateria === "object" && o.bateria !== null
+      ? (o.bateria as Record<string, unknown>)
+      : {}
+  return {
+    acao: typeof bateria.acao === "string" ? bateria.acao : null,
+    seq: numero(bateria.seq),
+  }
 }

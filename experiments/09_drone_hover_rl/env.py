@@ -48,13 +48,27 @@ CONTRATO (as peças train/view/dashboard/deploy/net_probe importam-no)
     o vento base acima continua a ser o piso do episódio e, POR CIMA dele, atua um segundo processo FÍSICO
     escrito no MESMO `model.opt.wind` (nada de `xfrc_applied` nem forças mágicas), a partir do 1.º passo de
     decisão — é o que dá robustez a frentes/rajadas a meio do voo (o treino anterior só tinha vento
-    CONSTANTE por episódio). Três modos:
+    CONSTANTE por episódio). Quatro modos:
       · `{"modo": "rajadas", "p": 0.02, "duracao": 10, "u_max": 3.0}` — GUST: a cada passo de decisão, com
         probabilidade `p`, começa uma rajada `u ~ U[0, u_max]` m/s (azimute ~ U[0, 2π), elevação ~ U[−20°, 20°])
         mantida `duracao` passos com o envelope `sin(π·k/(N+1))` (k = 1…N → sobe 0→u e volta a 0) aplicado à
         VELOCIDADE da rajada e SOMADA ao vento base; entre rajadas fica só o vento base. Uma rajada em curso
         não é interrompida por outra (só se sorteia quando a anterior termina — com `p=1` as rajadas ficam
         encostadas umas às outras);
+      · `{"modo": "aleatoria", "p": 0.02, "duracao": 10}` — RAJADAS ALEATÓRIAS: a mesma mecânica do modo
+        `rajadas` (probabilidade `p` por passo de decisão e `duracao` passos), mas cada rajada é re-sorteada
+        de forma INDEPENDENTE dentro das faixas DISPONÍVEIS POR INTEIRO: `u ~ U[0, 5]` m/s
+        (`ALEATORIA_VEL_MAX`), azimute ~ U[0, 2π) e elevação ~ U[−90°, +90°] — o `VENTO_ELEV_MAX` (20°) do
+        vento aleatório por episódio NÃO limita este modo. A aplicação é uma MISTURA VETORIAL com o MESMO
+        envelope de `rajadas`, `w(k) = base + sin(π·k/(N+1))·(rajada − base)`: no PICO (`k = (N+1)/2`, `N`
+        ímpar) o vento resultante É o vector totalmente aleatório sorteado e nas pontas fica junto do vento
+        base (entrada/saída suave, sem saltos); como é uma interpolação — e não uma soma — a norma resultante
+        nunca passa `max(‖base‖, ‖rajada‖)` (com base ≤ 5 m/s, fica sempre ≤ 5 m/s, e a direção no pico não é
+        dominada pelo base). Só `p` e `duracao` têm semântica: `u_max`, `sigma`, `L` e `v_min` são aceites e
+        VALIDADOS (como nos outros modos, com as mesmas guardas) mas IGNORADOS — a amplitude é sempre
+        `U[0, 5]` m/s, independentemente do `u_max` do currículo. A direção e a força de uma rajada nunca
+        passam para a seguinte: cada rajada sorteia o seu PRÓPRIO vector (e quando não há rajada ativa
+        `opt.wind` volta a ser exatamente o vento base);
       · `{"modo": "frente", "u_max": 3.0, "t_s": 2.0}` — WIND FRONT: no instante `t_s` do episódio o vento
         muda em DEGRAU para `u ~ U[0,5; u_max]` m/s (azimute ~ U[0, 2π), elevação ~ U[−20°, 20°]), que
         SUBSTITUI o vento base até ao fim do episódio (é a frente de vento apanhada em voo). O degrau entra no
@@ -70,10 +84,12 @@ CONTRATO (as peças train/view/dashboard/deploy/net_probe importam-no)
         saturado, para o processo continuar a ser o da fórmula);
     `u_max` é o teto do modo dinâmico (amplitude máxima da rajada/frente ou teto de saturação da turbulência);
     `u_max = 0` é aceite e significa modo INERTE em TODOS os modos: `opt.wind` fica exatamente o vento BASE
-    (a frente não faz degrau nenhum, a turbulência não entra e não se sorteia NADA do `np_random`) — é o que
-    torna o estágio 0 do currículo ar parado a sério e o que mantém um run com `--vento-dinamico` bit-idêntico
-    a um sem ele enquanto o teto for 0. A frente usa o piso de 0,5 m/s SÓ quando o teto o permite (com
-    `0 < u_max < 0,5` a frente vale `u_max`; com `u_max = 0` não há frente).
+    (a frente não faz degrau nenhum, a turbulência não entra, as rajadas não são sorteadas e não se consome
+    NADA do `np_random`) — é o que torna o estágio 0 do currículo ar parado a sério e o que mantém um run com
+    `--vento-dinamico` bit-idêntico a um sem ele enquanto o teto for 0. Com `u_max > 0` o modo `aleatoria`
+    ignora-o (sorteia sempre em `U[0, 5]` m/s e ±90° de elevação); nos restantes modos o `u_max` é o teto. A
+    frente usa o piso de 0,5 m/s SÓ quando o teto o permite (com `0 < u_max < 0,5` a frente vale `u_max`; com
+    `u_max = 0` não há frente).
     A config é validada com `ValueError` claro: `modo` em falta ou desconhecido, chave desconhecida
     (apanha gralhas como `durancao`), `p` fora de [0, 1], `duracao` que não seja inteiro ≥ 1, `t_s < 0`,
     `sigma`/`L`/`v_min` ≤ 0 e `u_max < 0`. `definir_vento_dinamico(config)` troca/reconfigura/desliga o modo
@@ -176,10 +192,13 @@ ALVO_TOL = BONUS_XY       # m     — compatibilidade: o raio "no alvo" das peç
 VENTO_ELEV_MAX = np.radians(20.0)   # rad — elevação máxima do vento aleatório (±20°)
 
 # vento DINÂMICO (frentes/rajadas/turbulência por cima do vento base; ver o docstring do módulo)
-VENTO_DINAMICO_MODOS = ("rajadas", "frente", "dryden")
+VENTO_DINAMICO_MODOS = ("rajadas", "aleatoria", "frente", "dryden")
 VENTO_DINAMICO_CHAVES = frozenset({"modo", "u_max", "p", "duracao", "t_s", "sigma", "L", "v_min"})
 RAJADAS_P_PADRAO = 0.02           # 1/passo de decisão — probabilidade de começar uma rajada
 RAJADAS_DURACAO_PADRAO = 10       # passos de decisão (0,2 s a 50 Hz) — duração da rajada
+ALEATORIA_VEL_MAX = 5.0           # m/s — faixa DISPONÍVEL da velocidade no modo `aleatoria` (U[0, 5]); o
+                                  # `u_max` do modo é aceite mas IGNORADO (só `u_max = 0` = modo inerte)
+ALEATORIA_ELEV_MAX = np.radians(90.0)   # rad — elevação do modo `aleatoria` (±90°, NÃO os ±20° de VENTO_ELEV_MAX)
 FRENTE_T_S_PADRAO = 2.0           # s — instante do episódio em que a frente chega
 FRENTE_U_MIN = 0.5                # m/s — piso da amostra da frente (U[0,5; u_max] quando o teto o permite)
 DRYDEN_SIGMA_PADRAO = 0.5         # m/s — desvio-padrão estacionário da turbulência
@@ -219,6 +238,8 @@ def valida_vento_dinamico(config: dict | None) -> dict | None:
     (que valida os `--vento-dinamico-params` ANTES de criar os envs).
 
     `u_max = 0` é válido e significa modo INERTE (estágio 0 do currículo: ar parado, nada de dinâmica).
+    No modo `aleatoria` só `p`/`duracao` voltam no dict normalizado: `sigma`/`L`/`v_min` (e o `u_max`) são
+    aceites — e validados, se vierem — mas não têm semântica nesse modo.
     """
     if config is None:
         return None
@@ -242,7 +263,7 @@ def valida_vento_dinamico(config: dict | None) -> dict | None:
         raise ValueError(f"`vento_dinamico['u_max']` tem de ser ≥ 0 m/s (recebido {u_max!r}): 0 = modo inerte "
                          "(ar parado, nenhum vento dinâmico entra na física)")
 
-    if modo == "rajadas":
+    if modo in ("rajadas", "aleatoria"):
         p = finito("vento_dinamico['p']", config.get("p", RAJADAS_P_PADRAO))
         if not 0.0 <= p <= 1.0:
             raise ValueError(f"`vento_dinamico['p']` tem de estar em [0, 1] (recebido {p!r}): é a "
@@ -252,6 +273,11 @@ def valida_vento_dinamico(config: dict | None) -> dict | None:
             raise ValueError(f"`vento_dinamico['duracao']` tem de ser um inteiro ≥ 1 passos de decisão "
                              f"(recebido {duracao!r}): 0 não faria rajada nenhuma e um float não teria "
                              "envelope definido")
+        # `aleatoria` partilha as chaves de `rajadas` (só `p`/`duracao` têm semântica). `u_max` já foi
+        # validado acima; `sigma`/`L`/`v_min`, se vierem, são validados com as MESMAS guardas do dryden mas
+        # ficam FORA do dict normalizado — o modo ignora-os na amostragem ("validação mantém-se, semântica não").
+        if modo == "aleatoria" and ({"sigma", "L", "v_min"} & set(config)):
+            _normaliza_turbulencia(config, u_max)
         return {"modo": modo, "u_max": u_max, "p": p, "duracao": int(duracao)}
 
     if modo == "frente":
@@ -261,6 +287,16 @@ def valida_vento_dinamico(config: dict | None) -> dict | None:
                              "episódio em que a frente chega (0 = frente no 1.º passo de decisão)")
         return {"modo": modo, "u_max": u_max, "t_s": t_s}
 
+    return _normaliza_turbulencia(config, u_max)
+
+
+def _normaliza_turbulencia(config: dict, u_max: float) -> dict:
+    """Defaults e guardas de `sigma`/`L`/`v_min` do modo `dryden` (dict normalizado, `modo` incluído).
+
+    É usada pelo modo `dryden` e, SÓ PARA VALIDAR, pelo modo `aleatoria` quando estes parâmetros vêm no
+    pedido: o `aleatoria` não lhes dá semântica, mas um valor impossível enviado pela rede não pode passar
+    em silêncio (as mensagens de erro são exatamente as mesmas).
+    """
     sigma = finito("vento_dinamico['sigma']", config.get("sigma", DRYDEN_SIGMA_PADRAO))
     if sigma <= 0.0:
         raise ValueError(f"`vento_dinamico['sigma']` tem de ser > 0 m/s (recebido {sigma!r}): é o "
@@ -273,7 +309,7 @@ def valida_vento_dinamico(config: dict | None) -> dict | None:
     if v_min <= 0.0:
         raise ValueError(f"`vento_dinamico['v_min']` tem de ser > 0 m/s (recebido {v_min!r}): com vento base "
                          "nulo a escala de tempo L/V seria infinita (α = 1) e a turbulência congelava em zero")
-    return {"modo": modo, "u_max": u_max, "sigma": sigma, "L": L, "v_min": v_min}
+    return {"modo": "dryden", "u_max": u_max, "sigma": sigma, "L": L, "v_min": v_min}
 
 
 def quat_para_matriz(q) -> np.ndarray:
@@ -369,6 +405,7 @@ class HoverEnv(gym.Env):
                  vento: tuple[float, float, float] | None = None,
                  vento_aleatorio: tuple[float, float] | None = None,
                  vento_dinamico: dict | None = None,
+                 helices: bool = False,
                  render_mode: str | None = None):
         """Cria o ambiente (contrato, recompensa v2 e vento no docstring do módulo).
 
@@ -376,10 +413,11 @@ class HoverEnv(gym.Env):
         3 m/s em +x (NÃO é polar: para 3 m/s a 45° use `definir_vento(3, 45)`); `vento_aleatorio=(U_min, U_max)`
         liga o currículo de vento amostrado no reset — são mutuamente exclusivos.
 
-        `vento_dinamico={"modo": "rajadas"|"frente"|"dryden", …}` acrescenta vento DINÂMICO por cima do vento
-        base (rajadas com envelope, frente de vento em degrau ou turbulência OU de Dryden) — os três modos, as
-        fórmulas e os defaults estão no docstring do módulo e a validação é feita por `valida_vento_dinamico`
-        (por omissão `None`: nada muda em relação ao contrato v2b).
+        `vento_dinamico={"modo": "rajadas"|"aleatoria"|"frente"|"dryden", …}` acrescenta vento DINÂMICO por
+        cima do vento base (rajadas com envelope, rajadas aleatórias de direção/força sorteadas a cada rajada,
+        frente de vento em degrau ou turbulência OU de Dryden) — os quatro modos, as fórmulas e os defaults
+        estão no docstring do módulo e a validação é feita por `valida_vento_dinamico` (por omissão `None`:
+        nada muda em relação ao contrato v2b).
 
         Levanta `ValueError` se `decimation` não for um inteiro ≥ 1 (é o nº de passos de física por passo de
         decisão — 0 deixaria `dt_decisao` a zero), se `episodio_s` ≤ 0, se `alvo_z` for não-finito ou estiver
@@ -388,6 +426,11 @@ class HoverEnv(gym.Env):
         `vento` não tiver 3 componentes finitas, se as faixas de vento forem inválidas (não-finitas, negativas
         ou U_min > U_max) ou se a config do vento dinâmico for inválida (ver `valida_vento_dinamico`); com
         `modo="frente"`, se o passo da frente passar de `max_passos` (a frente nunca chegaria a entrar).
+
+        `helices=True` (desligado por omissão) divide a malha das hélices em 4 geoms VISUAIS no modelo
+        (`cf.carregar(helices=True)`) para a animação de apresentação de `cf.Helices` — é só a janela 3D:
+        massa, inércia, contactos e resultados físicos ficam IDÊNTICOS (provado em `run.py` §10). O RL e o
+        deploy usam a predefinição e não mudam.
         """
         super().__init__()
         if isinstance(decimation, bool) or not isinstance(decimation, (int, np.integer)):
@@ -417,7 +460,8 @@ class HoverEnv(gym.Env):
         self.vento_dinamico = valida_vento_dinamico(vento_dinamico)   # dict normalizado (ou None → nada muda)
 
         # modelo do menagerie + sensores da camada lab/ (keyframe `hover`: z=0,1 m e ctrl = peso)
-        self.model, self.data = cf.carregar()
+        self.model, self.data = cf.carregar(helices=helices)
+        self.helices = bool(helices)                          # só apresentação (ver `cf.Helices`)
         self.dt = float(self.model.opt.timestep)              # 0.002 s (500 Hz, RK4)
         self.dt_decisao = self.dt * self.decimation           # 0.02 s (50 Hz)
         self.max_passos = max(1, round(self.episodio_s / self.dt_decisao))
@@ -595,7 +639,8 @@ class HoverEnv(gym.Env):
         O relógio da dinâmica (`_din_passo`) arranca nos passos já decorridos, para o agendamento da frente
         continuar a usar o tempo do EPISÓDIO mesmo quando isto é chamado a meio (troca de modo/`u_max` pelo
         treino). A frente é reamostrada aqui; a turbulência arranca em `x = 0` (cresce até σ ao longo do
-        episódio, na escala L/V — arranque calmo e determinístico) e não há rajada em curso.
+        episódio, na escala L/V — arranque calmo e determinístico) e não há rajada em curso. É também o que
+        o `definir_vento_dinamico(None)` (PARAR) usa, para nada do modo sobreviver ao desligamento.
         """
         self._din_passo = int(self.passos)
         self._rajada_k = 0
@@ -617,6 +662,13 @@ class HoverEnv(gym.Env):
         currículo sobe (`u_max` novo): a rajada em curso, a turbulência e uma frente já chegada continuam, e
         uma frente ainda não chegada é reamostrada com o teto novo. Com `u_max = 0` o modo fica inerte (o
         `opt.wind` volta/fica no vento base, sem degrau nem turbulência e sem consumir o `np_random`).
+
+        `None` (ou `{"modo": "nenhum"}`) é o PARAR: é DEFINITIVO e não deixa nada pendente — a rajada em
+        curso, a turbulência e a frente são esquecidas (`_reinicia_dinamico`) e o `opt.wind` volta a ser
+        EXATAMENTE o vento base em vigor, mesmo que o modo já estivesse desligado (o vento ativo pode ter
+        sido escrito por fora, ex.: a rajada dirigida do runner). Depois de um PARAR não há estado nenhum do
+        vento dinâmico a poder atuar mais tarde — é o que o dono pediu.
+
         Devolve a config NORMALIZADA (ou `None`).
         """
         novo = valida_vento_dinamico(config)
@@ -625,8 +677,8 @@ class HoverEnv(gym.Env):
                       or (novo is not None and antigo is not None and novo["modo"] != antigo["modo"]))
         self.vento_dinamico = novo
         if novo is None:
-            if antigo is not None:
-                self._escreve_vento_vetor(self._base_vento)     # volta ao vento base, sem dinâmica
+            self._reinicia_dinamico()                           # esquece rajada/turbulência/frente em curso
+            self._escreve_vento_vetor(self._base_vento)         # volta ao vento base, sem dinâmica
             return None
         if mudou_modo:
             self._reinicia_dinamico()
@@ -653,6 +705,8 @@ class HoverEnv(gym.Env):
             return
         if cfg["modo"] == "rajadas":
             self._passo_rajada(cfg)
+        elif cfg["modo"] == "aleatoria":
+            self._passo_aleatoria(cfg)
         elif cfg["modo"] == "frente":
             self._escreve_vento_vetor(self._frente_vec if self._din_passo >= self._frente_passo
                                       else self._base_vento)
@@ -674,6 +728,38 @@ class HoverEnv(gym.Env):
             self._rajada_k += 1
             env = float(np.sin(np.pi * self._rajada_k / (self._rajada_n + 1.0)))
             self._escreve_vento_vetor(self._base_vento + self._rajada_vec * env)
+        else:                                                   # entre rajadas: fica o vento base
+            self._escreve_vento_vetor(self._base_vento)
+
+    def _passo_aleatoria(self, cfg: dict) -> None:
+        """RAJADAS ALEATÓRIAS: como `_passo_rajada`, mas cada rajada re-sorteia o vector TODO ao acaso.
+
+        Mesma mecânica do modo `rajadas` (probabilidade `p` por passo de decisão e `duracao` passos), mudando
+        a amostragem — que usa as faixas DISPONÍVEIS POR INTEIRO (`ALEATORIA_VEL_MAX` = 5 m/s, azimute
+        U[0, 2π) e elevação U[±90°]; o `VENTO_ELEV_MAX` de 20° NÃO se aplica aqui) e ignora o `u_max` do
+        modo — e a LEI DE APLICAÇÃO: em vez de somar a rajada ao vento base, faz-se a MISTURA VETORIAL
+        `w(k) = base + sin(π·k/(N+1))·(rajada − base)`, isto é `(1−env)·base + env·rajada`. No PICO do
+        envelope (`k = (N+1)/2` com `N` ímpar) `w ≡ rajada`, o vector totalmente aleatório sorteado; nas
+        pontas (`env = sin(π/(N+1))`) `w` fica a um passo do vento base, logo a entrada/saída é suave e sem
+        saltos; e a norma resultante nunca passa `max(‖base‖, ‖rajada‖) ≤ 5` m/s (somar, com base forte,
+        daria direções dominadas pelo base e normas até 10 m/s — fora das faixas disponíveis). Cada rajada
+        amostra os TRÊS valores de novo, logo a direção/força de uma rajada nunca passa para a seguinte;
+        quando nenhuma está ativa escreve-se exatamente o vento base.
+        """
+        if self._rajada_k >= self._rajada_n:                    # nenhuma rajada ativa → sorteia
+            self._rajada_k = 0
+            self._rajada_n = 0                                  # limpa a duração antiga (senão re-aplicava-a)
+            self._rajada_vec = np.zeros(3)                      # nada da rajada anterior fica guardado
+            if float(self.np_random.random()) < cfg["p"]:
+                u = float(self.np_random.uniform(0.0, ALEATORIA_VEL_MAX))
+                azimute = float(self.np_random.uniform(0.0, 2.0 * np.pi))
+                elevacao = float(self.np_random.uniform(-ALEATORIA_ELEV_MAX, ALEATORIA_ELEV_MAX))
+                self._rajada_vec = _vetor_vento_rad(u, azimute, elevacao)
+                self._rajada_n = int(cfg["duracao"])
+        if self._rajada_k < self._rajada_n:                     # rajada ativa: mistura base→rajada→base
+            self._rajada_k += 1
+            env = float(np.sin(np.pi * self._rajada_k / (self._rajada_n + 1.0)))
+            self._escreve_vento_vetor(self._base_vento + (self._rajada_vec - self._base_vento) * env)
         else:                                                   # entre rajadas: fica o vento base
             self._escreve_vento_vetor(self._base_vento)
 

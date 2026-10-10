@@ -30,11 +30,27 @@ Checagens (critérios no cabeçalho de cada secção):
   7. contagens/contrato do modelo: nu, sensores, dt, decimation, `ctrladr` 1:1 e `cf2.xml` upstream intacto;
   8. vento DINÂMICO (`vento_dinamico=dict|None`) por fórmulas fechadas: validação da config (ValueError para
      modo/chaves/faixas), `rajadas` com o envelope `u·sin(π·k/(N+1))` (medido passo a passo, e rajada nova
-     quando a anterior acaba), `frente` com o degrau no passo `k = floor(t_s/0,02)+1` (base antes, frente
-     constante depois; determinístico dada a seed), `dryden` com o OU `x ← α·x + σ·√(1−α²)·ξ` (α = e^(−Δt·V/L)
-     verificado pelo desvio-padrão dos incrementos, com `V = max(‖base‖, v_min)`) e a saturação em `u_max`;
-     com `u_max = 0` o modo é INERTE nos TRÊS modos (fica só o vento base e nem se consome o `np_random`);
+     quando a anterior acaba), `aleatoria` (direção E força re-sorteadas a CADA rajada em toda a faixa
+     disponível — `u ~ U[0, 5]`, azimute [0, 360), elevação ±90° — com a MISTURA vectorial
+     `w(k) = base + sin(π·k/(N+1))·(rajada − base)`: no pico o vento É a rajada sorteada, nas pontas fica
+     junto do base e ‖w‖ nunca passa max(‖base‖, ‖rajada‖) ≤ 5 m/s; sem vazar de uma rajada para a seguinte e
+     ignorando o `u_max` na amplitude), `frente` com o degrau no passo `k = floor(t_s/0,02)+1` (base
+     antes, frente constante depois; determinístico dada a seed), `dryden` com o OU `x ← α·x + σ·√(1−α²)·ξ`
+     (α = e^(−Δt·V/L) verificado pelo desvio-padrão dos incrementos, com `V = max(‖base‖, v_min)`) e a
+     saturação em `u_max`;
+     com `u_max = 0` o modo é INERTE em TODOS os modos (fica só o vento base e nem se consome o `np_random`);
      com `vento_dinamico=None` (predefinição) NADA muda — é o caminho do contrato v2b.
+  10. PLANTA REAL do dono (`valida_real.py`, plano-drone-real.md §6/§8.5): massa = Σ peças do catálogo, motor
+     BLDC elétrico (regime/balanço/τ/travagem/DShot/atraso/ω_max(V)), bateria (Coulomb, Thevenin RC, OCV,
+     R(T), desgaste, persistência, ledger, Newton), aerodinâmica (solo Sanchez-Cuevas, arrasto de rotor,
+     inflow BEMT, VRS, base bit-idêntica), sensores (ruído, atraso, ToF, fluxo), contrato do ator
+     (invariante a xy), FC (mistura, degrau de taxa) e autonomia (analítica = bancada; meta de 1 h).
+  9. hélices (animação VISUAL, `lab/crazyflie.py`): a malha upstream `cf2_0` é fatiada em runtime nas 4
+     hélices (`helice_1..4`, geoms visuais sem contacto nem massa), os vértices continuam a ser os do OBJ,
+     a rotação segue `Rz(θ_i)` em torno do eixo do motor com `|ω_i| = ESCALA_VISUAL·√t_i` e o sentido de
+     `GIRO`; e a prova de NEUTRALIDADE: 500 passos (queda, repouso com contactos, reset e comandos
+     aleatórios) dão `qpos/qvel/ctrl/sensores/energia/contactos` IDÊNTICOS AO BIT com animação ligada,
+     desligada e com o modelo upstream do RL.
 """
 from __future__ import annotations
 
@@ -48,6 +64,8 @@ sys.path.insert(0, str(_RAIZ))
 from lab import mjkit  # noqa: F401, I001  (MUJOCO_GL=egl antes de `import mujoco`: ordem de imports intencional)
 from lab import crazyflie as cf  # (API do laboratório: sensores e constantes físicas)
 from env import (  # (ambiente em validação)
+    ALEATORIA_ELEV_MAX,
+    ALEATORIA_VEL_MAX,
     ALVO_TOL,
     BONUS_XY,
     BONUS_YAW,
@@ -877,8 +895,11 @@ def gerador_dinamico(e: HoverEnv, passos: int) -> np.ndarray:
 
 def checa_vento_dinamico(v: Validador) -> None:
     print("\n9 · VENTO DINÂMICO (por cima do vento base; fórmulas fechadas, modelo fresco por teste)")
-    print("      rajadas: ‖w(k)‖ = u·sin(π·k/(N+1)) · frente: degrau no passo k = floor(t_s/0,02)+1 · "
-          "dryden: x ← α·x + σ·√(1−α²)·ξ, α = exp(−0,02·V/L), V = max(‖base‖, v_min)")
+    print("      rajadas: ‖w(k)‖ = u·sin(π·k/(N+1)) · aleatoria: idem, com u ~ U[0, 5] e direção re-sorteada\n"
+          "      a CADA rajada (azimute [0, 360), elevação ±90°) e MISTURA vectorial com o base — no pico o\n"
+          "      vento É a rajada, nas pontas fica junto do base · frente: degrau no passo "
+          "k = floor(t_s/0,02)+1 ·\n"
+          "      dryden: x ← α·x + σ·√(1−α²)·ξ, α = exp(−0,02·V/L), V = max(‖base‖, v_min)")
     print("      `vento_dinamico=None` (predefinição) → nada disto é chamado: o caminho é o contrato v2b")
 
     e_padrao = HoverEnv()
@@ -1104,14 +1125,16 @@ def checa_vento_dinamico(v: Validador) -> None:
 
     print("  (g) u_max = 0 = modo INERTE em TODOS os modos (ar parado a sério: só o vento base, sem sortear nada)")
     inerte = {}
-    for modo, extra in (("rajadas", {"p": 1.0, "duracao": 5}), ("frente", {"t_s": 0.0}),
-                        ("dryden", {"sigma": 5.0, "L": 10.0})):
+    for modo, extra in (("rajadas", {"p": 1.0, "duracao": 5}),
+                        ("aleatoria", {"p": 1.0, "duracao": 5}),
+                        ("frente", {"t_s": 0.0}), ("dryden", {"sigma": 5.0, "L": 10.0})):
         e_i = HoverEnv(vento=(1.0, 0.0, 0.0), vento_dinamico={"modo": modo, "u_max": 0.0, **extra})
         e_i.reset(seed=0)
         vetores_i = vento_dinamico_vetores(e_i, 50)
         inerte[modo] = float(np.abs(vetores_i - np.array([1.0, 0.0, 0.0])).max())
-    v.check("u_max = 0 → INERTE nos TRÊS modos: 50 passos de `step` mantêm exatamente o vento base "
-            "(rajadas com p = 1, frente com t_s = 0 e dryden com σ = 5 não entram na física)",
+    v.check("u_max = 0 → INERTE nos QUATRO modos: 50 passos de `step` mantêm exatamente o vento base "
+            "(rajadas e rajadas aleatórias com p = 1, frente com t_s = 0 e dryden com σ = 5 não entram "
+            "na física)",
             all(d == 0.0 for d in inerte.values()),
             " · ".join(f"{m}: |w − base|∞ = {d:.1e} m/s" for m, d in inerte.items()))
 
@@ -1153,6 +1176,522 @@ def checa_vento_dinamico(v: Validador) -> None:
             f"base amostrado = {np.round(base_ra, 6)} m/s (‖{np.linalg.norm(base_ra):.6f}‖) · vector da rajada = "
             f"{np.round(residual[0], 6)} m/s · desvio máx = {np.abs(residual - residual[0]).max():.2e}")
 
+    print("  (h) aleatoria: cada rajada re-sorteia direção E força dentro das faixas disponíveis "
+          "(u ~ U[0, 5] m/s, azimute [0, 360), elevação ±90°) e mistura-as com o vento base pelo envelope")
+    defaults_al = valida_vento_dinamico({"modo": "aleatoria"})
+    extras_al = valida_vento_dinamico({"modo": "aleatoria", "u_max": 0.5, "sigma": 0.5, "L": 10.0, "v_min": 1.0})
+    v.check("aleatoria: defaults iguais aos de `rajadas` (p 0,02 · duracao 10) e os parâmetros SEM semântica "
+            "(u_max/sigma/L/v_min) aceites sem erro — o dict normalizado traz só p/duracao",
+            defaults_al == {"modo": "aleatoria", "u_max": 3.0, "p": 0.02, "duracao": 10}
+            and extras_al == {"modo": "aleatoria", "u_max": 0.5, "p": 0.02, "duracao": 10},
+            f"defaults = {defaults_al} · com u_max/sigma/L/v_min = {extras_al}")
+
+    invalidos_al = [("p > 1", {"modo": "aleatoria", "p": 1.5}), ("p < 0", {"modo": "aleatoria", "p": -0.1}),
+                    ("duracao = 0", {"modo": "aleatoria", "duracao": 0}),
+                    ("duracao float", {"modo": "aleatoria", "duracao": 2.5}),
+                    ("u_max < 0", {"modo": "aleatoria", "u_max": -1.0}),
+                    ("sigma = 0 (ignorado, mas validado)", {"modo": "aleatoria", "sigma": 0.0}),
+                    ("L = 0 (ignorado, mas validado)", {"modo": "aleatoria", "L": 0.0}),
+                    ("v_min = 0 (ignorado, mas validado)", {"modo": "aleatoria", "v_min": 0.0}),
+                    ("modo inválido", {"modo": "aleatorio"}), ("chave gralha", {"modo": "aleatoria", "durancao": 5})]
+    res_inv_al = [(nome, *erro_de(lambda c=c: valida_vento_dinamico(c))) for nome, c in invalidos_al]
+    v.check(f"aleatoria: as {len(invalidos_al)} formas inválidas continuam a dar ValueError (as guardas de "
+            "faixa/tipo são as mesmas dos outros modos, mesmo para os parâmetros que o modo ignora)",
+            all(t == "ValueError" and m for _, t, m in res_inv_al),
+            " · ".join(f"{nome} → {t}" for nome, t, _ in res_inv_al))
+
+    n_amostras_al = 600
+    e_al = HoverEnv(vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 1, "u_max": 0.1})
+    e_al.reset(seed=0)     # duracao = 1 e p = 1 → CADA passo de decisão é uma rajada nova a amplitude cheia
+    amostras_al = gerador_dinamico_vetores(e_al, n_amostras_al)
+    normas_al = np.linalg.norm(amostras_al, axis=1)
+    az_al = np.degrees(np.arctan2(amostras_al[:, 1], amostras_al[:, 0])) % 360.0
+    el_al = np.degrees(np.arcsin(np.clip(amostras_al[:, 2] / np.maximum(normas_al, 1e-15), -1.0, 1.0)))
+    quadrantes_al = [int(((az_al >= q * 90.0) & (az_al < (q + 1) * 90.0)).sum()) for q in range(4)]
+    v.check(f"aleatoria: em {n_amostras_al} rajadas a norma fica em [0, {ALEATORIA_VEL_MAX:g}] m/s e o u_max "
+            "do modo (0,1) NÃO limita a amplitude — a média ≈ 2,5 m/s é a de U[0, 5]",
+            bool(np.all(normas_al >= 0.0) and np.all(normas_al <= ALEATORIA_VEL_MAX + 1e-12))
+            and float(normas_al.max()) > 0.1 and abs(float(normas_al.mean()) - ALEATORIA_VEL_MAX / 2.0) < 0.25,
+            f"‖w‖ ∈ [{normas_al.min():.4f}, {normas_al.max():.4f}] m/s (u_max do modo = 0,1) · média = "
+            f"{normas_al.mean():.4f} m/s (esperado ≈ {ALEATORIA_VEL_MAX / 2.0:g})")
+    v.check("aleatoria: o azimute cobre os 360° (os 4 quadrantes têm amostras) e a elevação usa os ±90° — há "
+            "muitas amostras FORA dos ±20° que limitam o vento aleatório por episódio",
+            all(q > 0 for q in quadrantes_al) and float(az_al.min()) >= 0.0 and float(az_al.max()) < 360.0
+            and float(el_al.min()) >= -np.degrees(ALEATORIA_ELEV_MAX) - 1e-9
+            and float(el_al.max()) <= np.degrees(ALEATORIA_ELEV_MAX) + 1e-9
+            and int((np.abs(el_al) > 20.0).sum()) > n_amostras_al // 4,
+            f"quadrantes (0-90/90-180/180-270/270-360) = {quadrantes_al} · azimute ∈ "
+            f"[{az_al.min():.2f}, {az_al.max():.2f}]° · elevação ∈ [{el_al.min():.2f}, {el_al.max():.2f}]° · "
+            f"{int((np.abs(el_al) > 20.0).sum())}/{n_amostras_al} fora dos ±20°")
+    iguais_al = int(sum(1 for i in range(n_amostras_al - 1)
+                        if bool(np.array_equal(amostras_al[i], amostras_al[i + 1]))))
+    fase_media = float(np.abs(np.cos(np.radians(az_al[1:] - az_al[:-1]))).mean())
+    v.check("aleatoria: rajadas consecutivas são independentes (nenhuma igual à anterior; a fase relativa não "
+            "tem direção preferida: E|cos Δazimute| ≈ 2/π ≈ 0,637), logo nada vaza de uma rajada para a outra",
+            iguais_al == 0 and abs(fase_media - 2.0 / np.pi) < 0.06,
+            f"pares iguais = {iguais_al}/{n_amostras_al - 1} · E|cos Δazimute| medido = {fase_media:.4f} "
+            f"(independentes: 2/π = {2.0 / np.pi:.4f})")
+
+    e_al5 = HoverEnv(vento=(1.0, 0.0, 0.0), vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 5})
+    e_al5.reset(seed=3)
+    base_al5 = np.array([1.0, 0.0, 0.0])
+    registos_al5 = []          # (k, N, vento aplicado, vector da rajada em curso) por passo, SEM física
+    for _ in range(20):
+        e_al5._passo_vento()
+        registos_al5.append((e_al5._rajada_k, e_al5._rajada_n, e_al5.vento_atual.copy(),
+                             e_al5._rajada_vec.copy()))
+    grupos_al5 = []            # rajadas completas (N = 5), agrupadas pelo vector sorteado
+    for registo in registos_al5:
+        if not grupos_al5 or not np.array_equal(grupos_al5[-1][-1][3], registo[3]):
+            grupos_al5.append([])
+        grupos_al5[-1].append(registo)
+    completas_al5 = [g for g in grupos_al5 if len(g) == 5]
+    ok_mistura = all(
+        bool(np.allclose(np.asarray([w for _, _, w, _ in g]),
+                         base_al5 + (g[0][3] - base_al5)
+                         * np.sin(np.pi * np.arange(1, 6) / 6.0)[:, None], atol=1e-12))
+        for g in completas_al5)
+    pico_a, pico_b = completas_al5[0][2], completas_al5[1][2]          # k = 3 → env = sin(π/2) = 1
+    pontas_a = [completas_al5[0][i][2] for i in (0, 4)]                # k = 1 e k = 5 → env = 0,5
+    dist_pico = float(np.linalg.norm(pico_a[2] - base_al5))
+    v.check("aleatoria: `w(k) = base + sin(π·k/(N+1))·(rajada − base)` (MISTURA vectorial, não soma): no pico "
+            "(k = 3) o vento É o vector sorteado e nas pontas (k = 1 e k = 5) fica a meio caminho do vento "
+            "base, sem saltos",
+            len(completas_al5) >= 2 and ok_mistura
+            and float(np.abs(pico_a[2] - completas_al5[0][0][3]).max()) <= 1e-15
+            and all(abs(float(np.linalg.norm(p - base_al5)) - 0.5 * dist_pico) < 1e-12 for p in pontas_a)
+            and 0.0 < dist_pico <= ALEATORIA_VEL_MAX + 1e-12,
+            f"rajadas completas medidas = {len(completas_al5)} · pico = {np.round(pico_a[2], 6)} m/s "
+            f"(== vector sorteado, ‖pico‖ = {float(np.linalg.norm(pico_a[2])):.4f} m/s) · ‖w − base‖ nas "
+            f"pontas = {[round(float(np.linalg.norm(p - base_al5)), 4) for p in pontas_a]} m/s "
+            f"(= 0,5 × ‖pico − base‖ = {0.5 * dist_pico:.4f}) · "
+            f"desvio máx da mistura = "
+            f"{max(float(np.abs(np.asarray([w for _, _, w, _ in g]) - (base_al5 + (g[0][3] - base_al5) * np.sin(np.pi * np.arange(1, 6) / 6.0)[:, None])).max()) for g in completas_al5):.2e}")
+    v.check("aleatoria: a rajada seguinte é um vector NOVO (a direção/força da anterior não passa para a "
+            "seguinte) e nenhum passo da série passa 5 m/s",
+            not bool(np.allclose(pico_a[2], pico_b[2], atol=1e-9))
+            and float(np.linalg.norm(pico_b[2])) <= ALEATORIA_VEL_MAX + 1e-12
+            and float(np.linalg.norm(pico_a[2])) <= ALEATORIA_VEL_MAX + 1e-12
+            and max(float(np.linalg.norm(w)) for _, _, w, _ in registos_al5) <= ALEATORIA_VEL_MAX + 1e-12,
+            f"pico da rajada A = {np.round(pico_a[2], 6)} m/s (‖{np.linalg.norm(pico_a[2]):.4f}‖) · pico da "
+            f"rajada B = {np.round(pico_b[2], 6)} m/s (‖{np.linalg.norm(pico_b[2]):.4f}‖) · máx ‖w‖ nos "
+            f"{len(registos_al5)} passos = {max(float(np.linalg.norm(w)) for _, _, w, _ in registos_al5):.6f} m/s")
+
+    n_picos_al = 80
+    e_albase = HoverEnv(vento=(4.9, 0.0, 0.0), vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 9})
+    e_albase.reset(seed=17)
+    picos_al, normas_albase = [], [float(np.linalg.norm(e_albase.vento_atual))]
+    while len(picos_al) < n_picos_al:
+        e_albase._passo_vento()
+        normas_albase.append(float(np.linalg.norm(e_albase.vento_atual)))
+        if e_albase._rajada_k == (e_albase._rajada_n + 1) // 2:       # k = 5 de N = 9 → env = sin(π/2) = 1
+            picos_al.append((e_albase.vento_atual.copy(), e_albase._rajada_vec.copy()))
+    iguais_ao_sorteado = sum(1 for w, raj in picos_al if float(np.abs(w - raj).max()) <= 1e-15)
+    picos_al = np.asarray([w for w, _ in picos_al])
+    normas_pico = np.linalg.norm(picos_al, axis=1)
+    unitarios = picos_al / np.maximum(normas_pico, 1e-15)[:, None]
+    az_pico = np.degrees(np.arctan2(picos_al[:, 1], picos_al[:, 0])) % 360.0
+    el_pico = np.degrees(np.arcsin(np.clip(picos_al[:, 2] / np.maximum(normas_pico, 1e-15), -1.0, 1.0)))
+    quadrantes_pico = [int(((az_pico >= q * 90.0) & (az_pico < (q + 1) * 90.0)).sum()) for q in range(4)]
+    v.check(f"aleatoria com vento BASE forte (4,9 m/s em +x): em {len(normas_albase)} passos a norma "
+            f"resultante nunca passa {ALEATORIA_VEL_MAX:g} m/s (a mistura fica entre o base e a rajada — "
+            "somando daria até ~10 m/s) e no pico o vento é SEMPRE o vector sorteado, com direção "
+            "independente do base (4 quadrantes)",
+            max(normas_albase) <= ALEATORIA_VEL_MAX + 1e-12 and iguais_ao_sorteado == n_picos_al
+            and all(q > 0 for q in quadrantes_pico) and int((np.abs(el_pico) > 20.0).sum()) > n_picos_al // 4
+            and float(np.linalg.norm(unitarios.mean(axis=0))) < 0.4,
+            f"‖w‖ máx em {len(normas_albase)} passos = {max(normas_albase):.6f} m/s · picos = "
+            f"{n_picos_al} (todos == vector sorteado: {iguais_ao_sorteado}/{n_picos_al}) · ‖w‖ nos picos ∈ "
+            f"[{normas_pico.min():.4f}, {normas_pico.max():.4f}] · quadrantes = {quadrantes_pico} · "
+            f"{int((np.abs(el_pico) > 20.0).sum())}/{n_picos_al} elevações fora dos ±20° · "
+            f"‖média das direções‖ = {float(np.linalg.norm(unitarios.mean(axis=0))):.4f}")
+
+    e_al0 = HoverEnv(vento=(1.0, 0.0, 0.0), vento_dinamico={"modo": "aleatoria", "p": 0.0, "duracao": 5})
+    e_al0.reset(seed=0)
+    v.check("aleatoria: p = 0 → nenhuma rajada em 20 passos (fora de rajadas fica exatamente o vento base)",
+            bool(np.allclose(vento_dinamico_em_passos(e_al0, 20), 1.0, atol=1e-15)),
+            f"‖w‖ = {np.round(vento_dinamico_em_passos(e_al0, 20), 12)} m/s (base 1 m/s)")
+
+    e_ali = HoverEnv(vento=(1.0, 0.0, 0.0), vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 5,
+                                                            "u_max": 0.0})
+    e_ref_al = HoverEnv(vento=(1.0, 0.0, 0.0))         # mesmo estado inicial, SEM vento dinâmico
+    obs_ali, info_ali = e_ali.reset(seed=0)
+    obs_ref_al, _ = e_ref_al.reset(seed=0)
+    for _ in range(30):
+        e_ali.step([0.0, 0.0, 0.0, 0.0])
+        e_ref_al.step([0.0, 0.0, 0.0, 0.0])
+    v.check("aleatoria: u_max = 0 continua a ser modo INERTE (fica só o vento base e nem consome o np_random: "
+            "obs do reset e após 30 passos idênticas às de um env SEM vento dinâmico)",
+            abs(info_ali["vento_atual"] - 1.0) < 1e-15
+            and bool(np.array_equal(obs_ali, obs_ref_al))
+            and bool(np.array_equal(e_ali.observacao(), e_ref_al.observacao()))
+            and bool(np.allclose(e_ali.vento_atual, [1.0, 0.0, 0.0], atol=1e-15)),
+            f"‖w‖ no reset = {info_ali['vento_atual']:.12f} m/s (base 1) · obs do reset == env sem dinâmico: "
+            f"{bool(np.array_equal(obs_ali, obs_ref_al))} · obs após 30 passos == : "
+            f"{bool(np.array_equal(e_ali.observacao(), e_ref_al.observacao()))}")
+
+    e_det1 = HoverEnv(vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 1})
+    e_det2 = HoverEnv(vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 1})
+    e_det3 = HoverEnv(vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 1})
+    e_det1.reset(seed=7)
+    e_det2.reset(seed=7)
+    e_det3.reset(seed=8)
+    seq_det1 = gerador_dinamico_vetores(e_det1, 50)
+    seq_det2 = gerador_dinamico_vetores(e_det2, 50)
+    seq_det3 = gerador_dinamico_vetores(e_det3, 50)
+    v.check("aleatoria: reprodutível pelo `np_random` do env (seed 7 duas vezes → a mesma sequência de "
+            "rajadas; seed 8 → outra)",
+            bool(np.array_equal(seq_det1, seq_det2)) and not bool(np.array_equal(seq_det1, seq_det3)),
+            f"seed 7 = {np.round(seq_det1[0], 6)} … · seed 7 = {np.round(seq_det2[0], 6)} … · "
+            f"seed 8 = {np.round(seq_det3[0], 6)} …")
+
+    e_alp = HoverEnv(vento_dinamico={"modo": "aleatoria", "p": 1.0, "duracao": 50})
+    _, info_alp = e_alp.reset(seed=5)
+    _, _, _, _, info_alp2 = e_alp.step([0.0, 0.0, 0.0, 0.0])
+    v.check("aleatoria: a física corre com o vento escrito SÓ em `model.opt.wind` (nada de `xfrc_applied`) e a "
+            "telemetria reporta a norma em vigor no passo",
+            float(np.abs(e_alp.data.xfrc_applied).max()) == 0.0
+            and abs(info_alp["vento_atual"] - float(np.linalg.norm(e_alp.vento_atual))) < 1e-15
+            and abs(info_alp2["vento_atual"] - float(np.linalg.norm(e_alp.vento_atual))) < 1e-15
+            and 0.0 <= info_alp2["vento_atual"] <= ALEATORIA_VEL_MAX + 1e-12,
+            f"|xfrc_applied|∞ = {float(np.abs(e_alp.data.xfrc_applied).max()):.1e} · info['vento_atual'] = "
+            f"{info_alp2['vento_atual']:.6f} m/s == ‖opt.wind‖ = "
+            f"{float(np.linalg.norm(e_alp.vento_atual)):.6f} m/s · no reset: {info_alp['vento_atual']:.6f} m/s")
+
+# ------------------------------------------------------------------- 10 · hélices (animação VISUAL, fora do mj_step)
+QUADRANTES = ((1, 1), (1, -1), (-1, 1), (-1, -1))    # == POS_ROTORES (FL, FR, RL, RR) == cf.HELICES
+
+
+def _vertices_no_corpo(model: mujoco.MjModel, nome_geom: str) -> np.ndarray:
+    """Vértices da malha do geom `nome_geom` no frame do CORPO: `R(geom_quat)·v_malha + geom_pos`.
+
+    É a cadeia que o renderer usa. O compilador recentra a malha no CM e guarda em `geom_pos`/`geom_quat` os
+    deslocamentos aplicados (`mesh_pos`/`mesh_quat`), pelo que a `θ = 0` isto devolve as coordenadas do ASSET
+    (as do OBJ) — a fatiagem não pode mudar a geometria visível."""
+    gid = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, nome_geom))
+    mid = int(model.geom_dataid[gid])
+    a, n = int(model.mesh_vertadr[mid]), int(model.mesh_vertnum[mid])
+    verts = np.asarray(model.mesh_vert[a:a + n], dtype=float).reshape(-1, 3)
+    return verts @ quat_para_matriz(np.asarray(model.geom_quat[gid])).T + np.asarray(model.geom_pos[gid])
+
+
+def _malha_upstream(model: mujoco.MjModel) -> np.ndarray:
+    """Vértices da malha upstream `cf2_0` (as 4 hélices fundidas) no frame do corpo — a referência da fatiagem."""
+    mid = int(model.mesh(cf.MALHA_HELICES).id)
+    a, n = int(model.mesh_vertadr[mid]), int(model.mesh_vertnum[mid])
+    verts = np.asarray(model.mesh_vert[a:a + n], dtype=float).reshape(-1, 3)
+    return verts @ quat_para_matriz(np.asarray(model.mesh_quat[mid])).T + np.asarray(model.mesh_pos[mid])
+
+
+def _eixo_por_tampas(vertices: np.ndarray) -> np.ndarray:
+    """Eixo do rotor por um critério INDEPENDENTE do `cf.eixo_do_rotor`: grupos de vértices coplanares (mesmo z)
+    com secção quadrada (o diâmetro do motor) — o centro médio dessas tampas é o eixo."""
+    if len(vertices) == 0:                               # malha vazia (adaptação partida): sem eixo, sem crash
+        return np.full(3, np.nan)
+    zs = np.sort(np.unique(np.round(vertices[:, 2], 7)))
+    grupos: list[list[float]] = [[float(zs[0])]]
+    for z in zs[1:]:
+        (grupos[-1] if float(z) - grupos[-1][-1] <= 2e-7 else grupos.append([float(z)]) or grupos[-1]).append(float(z))
+    tampas = []
+    for grupo in grupos:
+        sel = np.isin(np.round(vertices[:, 2], 7), grupo)
+        bloco = vertices[sel]
+        lo, hi = bloco.min(axis=0), bloco.max(axis=0)
+        lado = hi - lo
+        if abs(lado[0] - lado[1]) < 1e-4 and 2e-3 < lado[0] < 6e-3:
+            tampas.append((lo + hi) / 2.0)
+    return np.mean(tampas, axis=0) if tampas else np.full(3, np.nan)
+
+
+def _rollout_helices(e: HoverEnv, acoes, animar: bool, reset_em: int | None = None) -> list[tuple]:
+    """Roda `acoes` (uma por passo de decisão) e devolve o rasto do estado. Com `animar=True` chama a
+    animação a cada passo, exactamente como o runner (`sim_view.py`) faz antes de `viewer.sync()`."""
+    helices = cf.Helices(e.model)
+    rasto = []
+    for k, acao in enumerate(acoes):
+        if reset_em is not None and k == reset_em:
+            e.reset(seed=3)                              # um REINICIAR a meio não pode partir nada
+        e.step(acao)
+        if animar:
+            helices.atualizar(e.model, e.data, e.dt_decisao)
+        n = int(e.data.ncon)
+        rasto.append((e.data.qpos.copy(), e.data.qvel.copy(), e.data.ctrl.copy(), e.data.sensordata.copy(),
+                      e.data.energy.copy(), n, e.data.contact[:n].pos.copy() if n else np.zeros((0, 3))))
+    return rasto
+
+
+def _diferenca_rasto(a: list[tuple], b: list[tuple]) -> float:
+    """Maior |Δ| entre dois rastos de `_rollout_helices` (`inf` se as formas ou os contactos diferirem)."""
+    if len(a) != len(b):
+        return np.inf
+    pior = 0.0
+    for (qa, va, ca, sa, ea, na, pa), (qb, vb, cb, sb, eb, nb, pb) in zip(a, b):
+        if na != nb or pa.shape != pb.shape:
+            return np.inf
+        for x, y in ((qa, qb), (va, vb), (ca, cb), (sa, sb), (ea, eb), (pa, pb)):
+            if x.shape != y.shape:
+                return np.inf
+            if x.size:
+                pior = max(pior, float(np.abs(x - y).max()))
+    return pior
+
+
+def _desvio_vertices(a: np.ndarray, b: np.ndarray) -> float:
+    """Maior |Δ| entre dois conjuntos de vértices comparados como multiconjuntos; `inf` se as formas não
+    baterem. Uma regressão na fatiagem pode deixar as hélices com outro número de vértices: a checagem tem de
+    FALHAR com uma mensagem, nunca rebentar com `ValueError: operands could not be broadcast together`."""
+    if a.shape != b.shape:
+        return np.inf
+    return float(np.abs(np.sort(a, axis=0) - np.sort(b, axis=0)).max())
+
+
+# Referências DOCUMENTADAS da animação (§10), fixas AQUI de propósito: a checagem usava a MESMA constante
+# `cf.ESCALA_VISUAL` que a animação, por isso mutá-la (`×1,3` em `lab/crazyflie.py`) movia os dois lados da
+# comparação e o `run.py` passava (defeito medido, 2026-10-09). Os literais são os do README/INTERFACE:
+#   `ESCALA_VISUAL = 2π·3/√T_ROTOR_MAX = 63,72 rad/s·N^(−1/2)` (3 rev/s por rotor no empuxo máximo,
+#   `T_ROTOR_MAX = EMPUXO_MAX/4 = 0,0875 N`), `ABRANDAMENTO_S = 0,35 s` e `LIMIAR_PARAGEM = 0,01 rad/s`.
+REVOLUCOES_DOCUMENTADAS = 3.0                         # rev/s por rotor no empuxo máximo (documentado)
+EMPUXO_ROTOR_MAX_DOCUMENTADO = 0.35 / 4.0             # N por rotor = EMPUXO_MAX/4 = 0,0875 N (documentado)
+ESCALA_DOCUMENTADA = (2.0 * np.pi * REVOLUCOES_DOCUMENTADAS
+                      / np.sqrt(EMPUXO_ROTOR_MAX_DOCUMENTADO))     # 63,7236… rad/s por √N
+ABRANDAMENTO_DOCUMENTADO = 0.35                       # s: constante de tempo VISUAL (1.ª ordem, sem salto)
+LIMIAR_PARAGEM_DOCUMENTADO = 0.01                     # rad/s: abaixo disto a hélice fica PARADA (ω = 0 exato)
+
+
+def _theta_do_comando(empuxos, passos: int, dt: float) -> np.ndarray:
+    """θ esperado de cada hélice depois de `passos` passos, derivado SÓ do comando e das constantes
+    DOCUMENTADAS da animação (`GIRO`, `ESCALA_DOCUMENTADA`, `ABRANDAMENTO_DOCUMENTADO`,
+    `LIMIAR_PARAGEM_DOCUMENTADO`, a lei `|ω_i| = ESCALA·√t_i` e o avanço de 1.ª ordem
+    `ω += (ω_alvo − ω)·(1 − e^(−dt/τ))`, `θ += ω·dt`).
+
+    É a referência INDEPENDENTE da checagem de rotação. Com o θ lido do próprio modelo (`Helices.angulos`) a
+    checagem era VÁCIA: com a animação desligada à mão não se escreve nada, θ = 0, `Rz(0) = I` e os vértices
+    em repouso batem certo. Com o θ vindo do comando, uma animação parada (θ = 0), um sentido trocado ou um
+    ângulo errado (ex.: ×1,5) falham. E as constantes vêm das **referências DOCUMENTADAS** (os literais
+    abaixo, não `cf.*`): a versão anterior usava a MESMA `cf.ESCALA_VISUAL` que a animação — mutá-la (`×1,3`)
+    movia os dois lados da comparação e o `run.py` continuava a passar (defeito medido, 2026-10-09).
+    """
+    alvo = np.asarray(cf.GIRO, dtype=float) * ESCALA_DOCUMENTADA * np.sqrt(np.asarray(empuxos, dtype=float))
+    w = np.zeros(4)
+    theta = np.zeros(4)
+    for _ in range(int(passos)):
+        w += (alvo - w) * (1.0 - np.exp(-float(dt) / ABRANDAMENTO_DOCUMENTADO))
+        w[np.abs(w) < LIMIAR_PARAGEM_DOCUMENTADO] = 0.0
+        theta += w * float(dt)
+    return theta
+
+
+def _angulos(devolvido, h: cf.Helices) -> np.ndarray:
+    """Ângulos de uma chamada a `Helices.atualizar`: o que ela devolveu ou, se uma regressão deixar de
+    devolver nada, o estado do próprio objecto — a checagem seguinte tem de FALHAR com uma mensagem, não
+    rebentar com `TypeError: unsupported operand type(s) for ...: 'NoneType'`."""
+    return np.asarray(h.angulos if devolvido is None else devolvido, dtype=float)
+
+
+def checa_helices(v: Validador) -> None:
+    print("\n10 · HÉLICES (animação VISUAL fora do mj_step: fatiagem fiel, rotação correta, física IDÊNTICA)")
+    e = HoverEnv()                                       # modelo do RL/deploy (predefinição) — SEM hélices
+    ea = HoverEnv(helices=True)                          # modelo com a adaptação de runtime
+    m0, m1 = e.model, ea.model
+    upstream = mujoco.MjModel.from_xml_path(str(cf.CENA))
+    h = cf.Helices(m1)
+
+    comuns = ("nq", "nv", "nu", "nsensor", "nbody", "njnt", "ntendon", "neq", "nkey", "nM")
+    iguais = all(getattr(m1, campo) == getattr(m0, campo) for campo in comuns)
+    b0, b1 = int(m0.body("cf2").id), int(m1.body("cf2").id)
+    bu = int(upstream.body("cf2").id)
+    corpo_igual = (float(m1.body_mass[b1]) == float(m0.body_mass[b0])
+                   and np.array_equal(m1.body_inertia[b1], m0.body_inertia[b0])
+                   and np.array_equal(m1.body_ipos[b1], m0.body_ipos[b0])
+                   and float(m1.body_mass.sum()) == float(m0.body_mass.sum()))
+    helice_ok = all(mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n) >= 0 for n in cf.HELICES)
+    v.check("adaptação de runtime PRESENTE: `HoverEnv(helices=True)` traz os 4 geoms visuais por NOME "
+            "(`helice_1..4`), animação ATIVA; o modelo do "
+            "RL/deploy (predefinição) não os tem e a animação fica INERTE",
+            helice_ok and h.ativo
+            and not cf.Helices(m0).ativo and h.angulos.shape == (4,)
+            and m1.ngeom == m0.ngeom + 3,                  # −1 malha fundida +4 hélices
+            f"ngeom {m0.ngeom} → {m1.ngeom} (+3) · geoms = {[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n) for n in cf.HELICES]}"
+            f" · Helices(modelo sem hélices).ativo = {cf.Helices(m0).ativo}")
+    if not helice_ok:
+        # PRECONDIÇÃO das restantes checagens: sem os 4 geoms por nome, `_vertices_no_corpo` cai no último geom
+        # do modelo e as contas seguintes comparam formas diferentes (era um traceback de broadcast). Uma
+        # regressão tem de aparecer como FALHA limpa + exit 1: interrompe-se aqui e diz-se porquê.
+        print("    §10 INTERROMPIDA: sem os 4 geoms `helice_1..4` não há fatiagem, eixos, rotação nem "
+              "neutralidade para medir (as restantes checagens das hélices não correm)")
+        return
+
+    v.check("massa/inércia do corpo `cf2` e contagens do modelo IDÊNTICAS com a animação (o `<inertial>` "
+            "explícito + `inertiafromgeom=\"false\"` fazem com que os geoms visuais não pesem)",
+            iguais and corpo_igual
+            and float(m1.body_mass[b1]) == 0.027
+            and np.array_equal(m1.body_inertia[b1], upstream.body_inertia[bu]),
+            f"m = {float(m1.body_mass[b1]):.9f} kg (upstream {float(upstream.body_mass[bu]):.9f}) · "
+            f"diaginertia = {np.round(m1.body_inertia[b1], 9)} · Σ massa = {float(m1.body_mass.sum()):.9f} kg "
+            f"(upstream {float(upstream.body_mass.sum()):.9f}) · "
+            + " · ".join(f"{campo} {getattr(m1, campo)}=={getattr(m0, campo)}" for campo in comuns))
+
+    def impressao_geom(model: mujoco.MjModel):
+        """Impressão digital dos geoms que INTERAGEM (contype|conaffinity ≠ 0): nome da malha + tudo o que
+        entra nos contactos. Tem de ser igual antes/depois da adaptação."""
+        digitos = []
+        for gid in range(model.ngeom):
+            if int(model.geom_contype[gid]) | int(model.geom_conaffinity[gid]) == 0:
+                continue
+            mid = int(model.geom_dataid[gid])
+            digitos.append((mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MESH, mid) if mid >= 0 else str(gid),
+                            tuple(model.geom_pos[gid]), tuple(model.geom_quat[gid]), int(model.geom_contype[gid]),
+                            int(model.geom_conaffinity[gid]), tuple(model.geom_friction[gid]),
+                            tuple(model.geom_solref[gid]), tuple(model.geom_solimp[gid])))
+        return sorted(digitos)
+
+    v.check("geoms das hélices: `contype = conaffinity = 0` e `density = 0` (nenhum contacto possível) e a "
+            "geometria de COLISÃO fica igual à do upstream (a adaptação é invisível para o solver)",
+            all(int(m1.geom_contype[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) == 0
+                and int(m1.geom_conaffinity[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) == 0
+                and int(m1.geom_group[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) == 2
+                for n in cf.HELICES)
+            and impressao_geom(m1) == impressao_geom(m0) == impressao_geom(upstream),
+            f"grupo = {[int(m1.geom_group[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) for n in cf.HELICES]}"
+            f" · contype = {[int(m1.geom_contype[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) for n in cf.HELICES]}"
+            f" · conaffinity = {[int(m1.geom_conaffinity[mujoco.mj_name2id(m1, mujoco.mjtObj.mjOBJ_GEOM, n)]) for n in cf.HELICES]}"
+            f" · geoms de colisão com impressão digital igual: {len(impressao_geom(m1))}")
+
+    malha = _malha_upstream(upstream)
+    quadrantes = [(1 if p[0] > 0 else -1, 1 if p[1] > 0 else -1) for p in malha]
+    por_quadrante = {q: malha[[i for i, k in enumerate(quadrantes) if k == q]] for q in QUADRANTES}
+    n_vertices = [len(_vertices_no_corpo(m1, n)) for n in cf.HELICES]
+    uniao = np.sort(np.concatenate([_vertices_no_corpo(m1, n) for n in cf.HELICES]), axis=0)
+    desvio_uniao = _desvio_vertices(uniao, malha)
+    v.check("fatiagem da malha: 4 hélices de 843 vértices, união == malha upstream (3372) e nenhuma face "
+            "cruza quadrantes (por isso as hélices são separáveis pelo sinal de x,y)",
+            n_vertices == [843] * 4 and desvio_uniao < 1e-6
+            and all(len(por_quadrante[q]) == 843 for q in QUADRANTES),
+            f"vértices por hélice = {n_vertices} · max|Δ união vs upstream| = {desvio_uniao:.2e} m · "
+            f"bbox da malha = "
+            f"{np.round(malha.min(0), 5)}..{np.round(malha.max(0), 5)} (4 grupos ±x±y de 843)")
+
+    dif0 = [_desvio_vertices(_vertices_no_corpo(m1, nome), por_quadrante[q])
+            for nome, q in zip(cf.HELICES, QUADRANTES)]
+    v.check("geometria preservada: a θ=0 os vértices de cada hélice ocupam exactamente o quadrante da malha "
+            "upstream (max|Δ| < 1e-6 m — a precisão float32 das malhas)",
+            max(dif0) < 1e-6, f"max|Δ| por hélice = {[f'{d:.2e}' for d in dif0]} m")
+
+    eixos = [_eixo_por_tampas(_vertices_no_corpo(m1, nome)) for nome in cf.HELICES]
+    desvios = [float(np.linalg.norm(eixos[i][:2] - cf.POS_ROTORES[i])) for i in range(4)]
+    v.check("eixos dos rotores medidos na própria malha (critério independente: tampas planas e quadradas do "
+            "motor) — dentro de 2 mm dos `POS_ROTORES` do lab e iguais aos usados pela animação",
+            max(desvios) < 2e-3 and all(float(np.abs(eixos[i] - h._eixos[i]).max()) < 1e-6 for i in range(4)),
+            f"eixos = {[list(np.round(x[:2], 5)) for x in eixos]} · |eixo − POS_ROTORES| = "
+            f"{[f'{d:.2e}' for d in desvios]} m (a malha do menagerie está ~1 mm descentrada da origem do corpo)")
+
+    # rotação: comando da mixer com empuxos diferentes por rotor → ângulos diferentes. O θ ESPERADO é
+    # derivado do COMANDO (não lido do modelo, o que tornava a checagem vácia com θ = 0) e tem de ser
+    # claramente não nulo.
+    empuxos = np.array([0.05, 0.07, 0.03, 0.09])
+    cf.comandar_rotores(m1, ea.data, empuxos)
+    passos_girando = 500                                 # 10 s = 28× a constante de abrandamento: ω → ESCALA·√t
+    devolvido = None
+    for _ in range(passos_girando):
+        devolvido = h.atualizar(m1, ea.data, ea.dt_decisao)
+    theta_esp = _theta_do_comando(h.empuxos(m1, ea.data), passos_girando, ea.dt_decisao)
+    # `Helices.atualizar` PROMETE devolver os ângulos (o contrato do `lab/crazyflie.py`): um `return None`
+    # deixava o `_angulos` a mascarar a regressão e a checagem passava — aqui o retorno é validado à letra.
+    retorno_ok = (devolvido is not None and np.asarray(devolvido, dtype=float).shape == (4,)
+                  and np.array_equal(np.asarray(devolvido, dtype=float), h.angulos))
+    dif = []
+    for i, (nome, q) in enumerate(zip(cf.HELICES, QUADRANTES)):
+        eixo = h._eixos[i]
+        teta = theta_esp[i]
+        gira = np.array([[np.cos(teta), np.sin(teta), 0.0], [-np.sin(teta), np.cos(teta), 0.0], [0.0, 0.0, 1.0]])
+        esperado = (por_quadrante[q] - eixo) @ gira + eixo      # o mesmo que Rz(θ) em torno do eixo do rotor
+        dif.append(_desvio_vertices(_vertices_no_corpo(m1, nome), esperado))
+    v.check("rotação correta e RETORNO de `Helices.atualizar`: os vértices de cada hélice seguem Rz(θ_i) em "
+            "torno do eixo do rotor, com o θ_i derivado do COMANDO (escala DOCUMENTADA "
+            f"{ESCALA_DOCUMENTADA:.4f} rad/s/√N = 63,72, não de `cf.ESCALA_VISUAL` nem do `Helices.angulos`), "
+            "|θ_i| ≫ 0, e `atualizar` devolve os ângulos (nunca `None`); max|Δ| < 1e-6 m",
+            max(dif) < 1e-6 and float(np.abs(theta_esp).min()) > 1.0
+            and float(np.abs(np.asarray(h.angulos, dtype=float) - theta_esp).max()) < 1e-9 and retorno_ok,
+            f"θ do comando = {np.round(theta_esp, 4)} rad · θ do objecto = {np.round(h.angulos, 4)} rad · "
+            f"min|θ| = {float(np.abs(theta_esp).min()):.3f} rad (≫ 0: θ = 0 não passa) · max|Δ| = "
+            f"{[f'{d:.2e}' for d in dif]} m · retorno = {None if devolvido is None else np.round(np.asarray(devolvido, dtype=float), 4)} (É igual a `Helices.angulos`: {retorno_ok})")
+
+    v.check("mixer inverso: `comandar_rotores(t)` → `Helices.empuxos` devolve exactamente `t` (o empuxo de "
+            "cada rotor é recuperado do wrench, não inventado)",
+            float(np.abs(h.empuxos(m1, ea.data) - empuxos).max()) < 1e-12,
+            f"t = {empuxos} N · recuperado = {np.round(h.empuxos(m1, ea.data), 12)} N · erro = "
+            f"{float(np.abs(h.empuxos(m1, ea.data) - empuxos).max()):.2e} N")
+
+    esperado_w = np.asarray(cf.GIRO) * ESCALA_DOCUMENTADA * np.sqrt(empuxos)
+    sinais = np.sign(h.velocidades)
+    diagonais = bool(sinais[0] == sinais[3] and sinais[1] == sinais[2] and sinais[0] != sinais[1])
+    v.check("velocidade ∝ rotação comandada: |ω_i| = ESCALA_DOCUMENTADA·√t_i (a lei do rotor real, T ∝ ω², "
+            f"com a escala VISUAL documentada = {ESCALA_DOCUMENTADA:.4f} rad/s/√N = 3 rev/s no empuxo máximo) e "
+            "sentido = `GIRO` (as diagonais 1-4 e 2-3 giram no mesmo sentido, as hélices vizinhas no oposto)",
+            float(np.abs(h.velocidades - esperado_w).max()) / float(np.abs(esperado_w).max()) < 1e-9 and diagonais
+            and np.array_equal(np.sign(h.velocidades), np.asarray(cf.GIRO)),
+            f"ω = {np.round(h.velocidades, 6)} rad/s · ESCALA doc·√t = {np.round(esperado_w, 6)} · "
+            f"|ω|/√t = {np.round(np.abs(h.velocidades) / np.sqrt(empuxos), 6)} (documentada = "
+            f"{ESCALA_DOCUMENTADA:.6f} · `cf.ESCALA_VISUAL` = {cf.ESCALA_VISUAL:.6f}) · "
+            f"sinais = {sinais.astype(int)} == GIRO {np.asarray(cf.GIRO).astype(int)}")
+
+    cf.desligar(m1, ea.data)
+    for _ in range(250):                                 # 5 s sem comando (20 × a constante de abrandamento)
+        h.atualizar(m1, ea.data, ea.dt_decisao)
+    parado = np.array_equal(h.velocidades, np.zeros(4))
+    angulos = h.angulos.copy()
+    for _ in range(50):
+        h.atualizar(m1, ea.data, ea.dt_decisao)
+    v.check("motores DESLIGADOS: a hélice abranda (1.ª ordem, `ABRANDAMENTO_S`) e PÁRA — ω = 0 exacto e o "
+            "ângulo fica congelado (nenhum avanço residual)",
+            parado and np.array_equal(angulos, h.angulos),
+            f"ω após 5 s = {h.velocidades} · ângulo congelado em {np.round(h.angulos, 6)} rad após 1 s mais "
+            f"(Δ = {float(np.abs(h.angulos - angulos).max()):.1e} rad)")
+
+    oh = cf.Helices(m1)
+    cf.comandar_rotores(m1, ea.data, empuxos)
+    t0 = np.zeros(4)
+    for _ in range(25):
+        t0 = _angulos(oh.atualizar(m1, ea.data, ea.dt_decisao), oh)
+    ea.reset(seed=0)                                     # REINICIAR: `ctrl = 0` (motores desligados)
+    for _ in range(250):
+        oh.atualizar(m1, ea.data, ea.dt_decisao)
+    parado_reset = np.array_equal(oh.velocidades, np.zeros(4))
+    cf.comandar_rotores(m1, ea.data, empuxos)            # e volta a girar com um comando novo
+    for _ in range(25):
+        oh.atualizar(m1, ea.data, ea.dt_decisao)
+    v.check("um REINICIAR/reset não parte a animação: os geoms continuam a ser resolvidos por nome, o `ctrl = 0` "
+            "do reset trava as hélices e um comando novo volta a pô-las a girar",
+            oh.ativo and parado_reset and float(np.abs(t0).max()) > 1.0
+            and float(np.abs(oh.velocidades).max()) > 1.0 and np.isfinite(oh.angulos).all(),
+            f"antes do reset: |ω|∞ = {float(np.abs(t0).max()):.4f} rad/s · após o reset (ctrl = 0): ω = "
+            f"{oh.velocidades * 0.0} → parado = {parado_reset} · com comando novo: |ω|∞ = "
+            f"{float(np.abs(oh.velocidades).max()):.4f} rad/s")
+
+    # NEUTRALIDADE FÍSICA: o mesmo rollout, passo a passo, com e sem animação (e com o modelo upstream)
+    rng = np.random.default_rng(7)
+    acoes = ([list(rng.uniform(-1.0, 1.0, 4)) for _ in range(200)]      # voo com comandos aleatórios
+             + [[-1.0, 0.0, 0.0, 0.0]] * 150                            # motores desligados: cai e assenta
+             + [list(rng.uniform(-1.0, 1.0, 4)) for _ in range(150)])   # volta a arrancar
+    rasto_com = _rollout_helices(HoverEnv(helices=True), acoes, animar=True, reset_em=250)
+    rasto_sem = _rollout_helices(HoverEnv(helices=True), acoes, animar=False, reset_em=250)
+    rasto_up = _rollout_helices(HoverEnv(), acoes, animar=False, reset_em=250)
+    d1 = _diferenca_rasto(rasto_com, rasto_sem)
+    d2 = _diferenca_rasto(rasto_com, rasto_up)
+    contactos = max(t[5] for t in rasto_com)
+    v.check(f"NEUTRO (animação ligada vs desligada): {len(acoes)} passos de decisão com queda, repouso COM "
+            f"contactos, reset e comandos aleatórios → qpos/qvel/ctrl/sensores/energia/contactos IDÊNTICOS "
+            f"ao BIT (max|Δ| = 0)",
+            d1 == 0.0,
+            f"max|Δ| = {d1:.1e} em qpos/qvel/ctrl/sensordata/energy/contactos (contactos no rollout: até "
+            f"{contactos} por passo) · prova: a animação só escreve `geom_pos/geom_quat` de geoms sem contacto")
+    v.check("NEUTRO (modelo com a adaptação vs modelo UPSTREAM do RL): o mesmo rollout dá exactamente a mesma "
+            "física — os geoms das hélices nem sequer existem no modelo do RL/deploy",
+            d2 == 0.0,
+            f"max|Δ| = {d2:.1e} vs `HoverEnv()` (predefinição; `cf.carregar()` sem `helices`) · massa, inércia, "
+            f"nq/nv/nu e geoms de colisão iguais (checagens acima)")
+
+
 # --------------------------------------------------------------------------------------- main
 def main() -> int:
     print("Validação do HoverEnv v2 (experiments/09_drone_hover_rl/env.py) — fórmulas fechadas, modelo fresco por teste")
@@ -1175,6 +1714,11 @@ def main() -> int:
     checa_robustez(v)
     checa_contrato(v)
     checa_vento_dinamico(v)
+    checa_helices(v)
+    # PLANTA REAL do dono (plano-drone-real.md): catálogo de peças → modelo, motor elétrico, bateria,
+    # aerodinâmica, sensores, contrato de observação real, FC e autonomia — `valida_real.py`
+    from valida_real import checa_planta_real
+    checa_planta_real(v)
     parede = time.perf_counter() - t0
 
     e = HoverEnv()

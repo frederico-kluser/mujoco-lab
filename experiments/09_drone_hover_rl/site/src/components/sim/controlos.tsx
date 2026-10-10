@@ -42,6 +42,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Slider } from "@/components/ui/slider"
 import { useMotionUITransition } from "@/components/motion-ui/ui-theme"
+import {
+  agendarEnvioDinamico,
+  enviosDinamicosBloqueados,
+} from "@/lib/paragem"
 import { RosaDosVentos } from "@/components/sim/rosa-ventos"
 import {
   fmt,
@@ -64,7 +68,12 @@ import { FOCUS_RING } from "@/components/sim/estilo"
 export type FaseVento = "pronto" | "a_enviar" | "ok" | "erro"
 
 /** Qual dos botões dinâmicos está a caminho do servidor (os outros ficam em espera). */
-export type AlvoDinamico = "modo" | "rajada" | "frente" | "parar"
+export type AlvoDinamico =
+  | "modo"
+  | "params"
+  | "rajada"
+  | "frente"
+  | "parar"
 
 /** Estados visíveis dos botões dinâmicos: as 4 fases + `ativo` (o interruptor está ligado no servidor). */
 type EstadoBotao = FaseVento | "ativo"
@@ -84,16 +93,24 @@ const PASSOS_POR_SEGUNDO = 50
 interface LinhaSliderProps {
   id: string
   rotulo: string
-  valor: number
+  /**
+   * `null` = SEM DADOS: o valor mostra «—» e o slider fica desativado (estado honesto — nunca se
+   * finge um número). Os painéis de vento passam sempre números.
+   */
+  valor: number | null
   min: number
   max: number
   passo: number
   sufixo: string
   casas?: number
+  /** Casas decimais dos extremos (min/max) por baixo do trilho; por omissão 0 (como sempre). */
+  casasExtremos?: number
+  /** `data-testid` do contentor da linha (provas de DOM); sem valor não escreve atributo nenhum. */
+  testeId?: string
   onChange: (valor: number) => void
 }
 
-function LinhaSlider({
+export function LinhaSlider({
   id,
   rotulo,
   valor,
@@ -102,17 +119,22 @@ function LinhaSlider({
   passo,
   sufixo,
   casas = 1,
+  casasExtremos = 0,
+  testeId,
   onChange,
 }: LinhaSliderProps) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5" data-testid={testeId}>
       <div className="flex items-baseline justify-between gap-2">
         <label htmlFor={id} className="text-xs font-medium">
           {rotulo}
         </label>
-        <span className="font-mono text-xs tabular-nums">
-          {fmt(valor, casas)}
-          {sufixo}
+        <span
+          className="font-mono text-xs tabular-nums"
+          data-testid={testeId ? `${testeId}-valor` : undefined}
+        >
+          {valor === null ? "—" : fmt(valor, casas)}
+          {valor === null ? "" : sufixo}
         </span>
       </div>
       <Slider
@@ -120,13 +142,14 @@ function LinhaSlider({
         min={min}
         max={max}
         step={passo}
-        value={[valor]}
+        value={[valor ?? min]}
+        disabled={valor === null}
         onValueChange={(v) => onChange(Array.isArray(v) ? (v[0] ?? min) : v)}
         aria-label={rotulo}
       />
       <div className="flex justify-between font-mono text-[0.6rem] text-muted-foreground">
-        <span>{fmt(min, 0)}</span>
-        <span>{fmt(max, 0)}</span>
+        <span>{fmt(min, casasExtremos)}</span>
+        <span>{fmt(max, casasExtremos)}</span>
       </div>
     </div>
   )
@@ -186,6 +209,47 @@ function CampoNumerico({
   )
 }
 
+/** Debounce do live-apply dos params (ms): o servidor só vê a última edição de uma rajada de eventos. */
+const ATRASO_PARAMS_MS = 300
+
+/** Params que o POST leva, por modo contínuo — exatamente o mesmo contrato da troca de modo. */
+function paramsDoModoContinuo(
+  modo: Exclude<ModoContinuo, "nenhum">,
+  v: {
+    p: number
+    duracao: number
+    u_max: number
+    sigma: number
+    L: number
+    v_min: number
+  }
+): Record<string, number> {
+  if (modo === "rajadas")
+    return { p: v.p, duracao: Math.round(v.duracao), u_max: v.u_max }
+  if (modo === "aleatoria") return { p: v.p, duracao: Math.round(v.duracao) }
+  return { sigma: v.sigma, L: v.L, v_min: v.v_min }
+}
+
+/** Assinatura estável de um envio (modo + params) — evita reenviar o que o servidor já tem. */
+function assinaturaParams(
+  modo: ModoContinuo,
+  params: Record<string, number>
+): string {
+  return `${modo} ${JSON.stringify(params)}`
+}
+
+/** Texto curto dos params vivos, para o toast do live-apply. */
+function descreverParams(
+  modo: Exclude<ModoContinuo, "nenhum">,
+  params: Record<string, number>
+): string {
+  if (modo === "rajadas")
+    return `p=${fmt(params.p, 3)}, duração=${params.duracao} passos, u_max=${fmt(params.u_max, 1)} m/s`
+  if (modo === "aleatoria")
+    return `p=${fmt(params.p, 3)}, duração=${params.duracao} passos`
+  return `σ=${fmt(params.sigma, 2)}, L=${fmt(params.L, 1)}, v_min=${fmt(params.v_min, 1)} m/s`
+}
+
 interface DinamicoProps {
   dinamico: VentoDinamico
   /** Modo que a TELEMETRIA reporta na última linha (é o que a física está a fazer). */
@@ -200,11 +264,18 @@ interface DinamicoProps {
     alvo: AlvoDinamico,
     descricao: string
   ) => void
+  /**
+   * Um apply do live-apply foi SUPRIMIDO por estar velho (o servidor já não tinha o modo ativo — paragem de
+   * outro cliente/aba): o utilizador tem de saber que a edição não foi aplicada, e o painel volta a mostrar
+   * o estado do servidor.
+   */
+  onApplySuprimido: (motivo: string, modo: string) => void
 }
 
 /**
- * Sub-painel do vento dinâmico (ronda 10): um modo CONTÍNUO (rajadas ou turbulência Dryden), dois
- * instantâneos (RAJADA AGORA, FRENTE AGORA) e o reset `{"modo":"nenhum","ativo":false}`.
+ * Sub-painel do vento dinâmico (ronda 10): um modo CONTÍNUO (rajadas, rajadas aleatórias ou turbulência
+ * Dryden), dois instantâneos (RAJADA AGORA, FRENTE AGORA) e o reset `{"modo":"nenhum","ativo":false}`.
+ * Com um modo contínuo ativo, editar os params reenvia-os (live-apply com debounce, sem reiniciar nada).
  */
 function Dinamico({
   dinamico,
@@ -214,6 +285,7 @@ function Dinamico({
   emCurso,
   selecao,
   onEnviar,
+  onApplySuprimido,
 }: DinamicoProps) {
   const ui = useMotionUITransition("ui")
   const [p, setP] = useState<number>(PARAMS_DINAMICOS_PADRAO.rajadas.p)
@@ -233,10 +305,18 @@ function Dinamico({
   const [duracaoRajada, setDuracaoRajada] = useState<number>(
     PARAMS_DINAMICOS_PADRAO.rajada_agora.duracao
   )
+  /**
+   * Motivo do último apply SUPRIMIDO por estar velho (outro cliente/aba parou o modo antes de o debounce
+   * disparar). Fica À VISTA no painel: o dono tem de saber que a edição não chegou ao servidor, em vez de
+   * ficar com um campo a mostrar um valor que a física não tem.
+   */
+  const [suprimido, setSuprimido] = useState<string | null>(null)
 
   const modoContinuo: ModoContinuo =
     dinamico.ativo &&
-    (dinamico.modo === "rajadas" || dinamico.modo === "dryden")
+    (dinamico.modo === "rajadas" ||
+      dinamico.modo === "aleatoria" ||
+      dinamico.modo === "dryden")
       ? dinamico.modo
       : "nenhum"
   const rajadaEmCurso = dinamico.ativo && modoTelemetria === "rajada_agora"
@@ -245,10 +325,138 @@ function Dinamico({
   const desativado = !ligado || ocupado
 
   const paramsRajadas = { p, duracao: Math.round(duracaoRajadas), u_max: uMax }
+  // `aleatoria` só leva p e duração: a força sai de U[0, 5] m/s e a direção de [0, 360) × ±90° no env.
+  const paramsAleatoria = { p, duracao: Math.round(duracaoRajadas) }
   const paramsDryden = { sigma, L: comprimento, v_min: vMin }
+
+  /** Assinatura do último envio de params (evita repetir o que já lá está e o eco da telemetria). */
+  const paramsEnviados = useRef<string | null>(null)
+  /** Adoção única dos params que o backend já tem (espelha o `sincronizado` dos sliders base). */
+  const paramsAdotados = useRef(false)
+  const enviarRef = useRef(onEnviar)
+  useEffect(() => {
+    enviarRef.current = onEnviar
+  }, [onEnviar])
+
+  /**
+   * Regista um envio explícito (troca de modo): a partir daí os valores locais são a fonte de verdade —
+   * o live-apply não repete o que acabou de ir e a adoção do eco do backend fica desligada.
+   */
+  const registarEnvio = (
+    modo: Exclude<ModoContinuo, "nenhum">,
+    params: Record<string, number>
+  ) => {
+    paramsEnviados.current = assinaturaParams(modo, params)
+    paramsAdotados.current = true
+  }
+
+  /**
+   * ADOÇÃO (uma vez) dos params vivos do backend: abrir a página com um modo a correr mostra o que a
+   * física está a fazer, em vez de impor os defaults. A assinatura adotada fica registada, por isso a
+   * adoção não dispara nenhum POST. As chaves que o backend não manda caem nos defaults do modo (nunca
+   * nos valores locais) para este efeito não depender do que ele próprio escreve.
+   */
+  useEffect(() => {
+    if (!dinamico.ativo || modoContinuo === "nenhum") return
+    const vivos = dinamico.params
+    if (Object.keys(vivos).length === 0) return
+    // O guarda do `ref` fica imediatamente antes da escrita: é o padrão «semear do backend UMA vez».
+    if (paramsAdotados.current) return
+    paramsAdotados.current = true
+    const v = {
+      p: vivos.p ?? PARAMS_DINAMICOS_PADRAO.rajadas.p,
+      duracao: vivos.duracao ?? PARAMS_DINAMICOS_PADRAO.rajadas.duracao,
+      u_max: vivos.u_max ?? PARAMS_DINAMICOS_PADRAO.rajadas.u_max,
+      sigma: vivos.sigma ?? PARAMS_DINAMICOS_PADRAO.dryden.sigma,
+      L: vivos.L ?? PARAMS_DINAMICOS_PADRAO.dryden.L,
+      v_min: vivos.v_min ?? PARAMS_DINAMICOS_PADRAO.dryden.v_min,
+    }
+    paramsEnviados.current = assinaturaParams(
+      modoContinuo,
+      paramsDoModoContinuo(modoContinuo, v)
+    )
+    setP(v.p)
+    setDuracaoRajadas(v.duracao)
+    setUMax(v.u_max)
+    setSigma(v.sigma)
+    setComprimento(v.L)
+    setVMin(v.v_min)
+  }, [dinamico, modoContinuo])
+
+  /**
+   * LIVE-APPLY dos params do modo CONTÍNUO ativo (rajadas · aleatórias · Dryden): editar um campo
+   * reenvia o modo em vigor com os valores atuais, com debounce — a física acompanha sem cliques. Só
+   * corre com um modo ativo e ligação viva (com PARADO os valores ficam guardados e vão no POST da
+   * troca de modo) e nunca repete a mesma assinatura, para o eco da telemetria não gerar um ciclo.
+   *
+   * O apply agendado passa pelo `agendarEnvioDinamico` (`lib/paragem.ts`): fica registado no módulo das
+   * paragens, guarda a ÉPOCA do agendamento e confere-a ao disparar. Uma paragem LOCAL — PARAR VENTO,
+   * PARAR DINÂMICO ou o toggle PARADO — incrementa a época de forma síncrona no clique, CANCELA este
+   * temporizador e bloqueia o live-apply, logo o modo não pode voltar a ligar-se depois de parar.
+   *
+   * Uma paragem de OUTRO cliente (um `POST /api/parar` cru, o botão de outra aba) não mexe nesta época — é
+   * estado de módulo por *realm*. Para essa, o apply é REVALIDADO contra o servidor ao disparar (leitura
+   * barata de `/api/state`, registada pelo `useSim`): sem o modo ativo lá, o comando é suprimido e o
+   * painel avisa (`onApplySuprimido`) em vez de ressuscitar o modo que outro cliente parou.
+   *
+   * O `clearTimeout` devolvido continua a fazer o seu trabalho quando o modo muda; o módulo cobre a janela
+   * em que o polling ainda não voltou.
+   */
+  useEffect(() => {
+    if (modoContinuo === "nenhum") {
+      paramsEnviados.current = null
+      return
+    }
+    if (!ligado) return
+    // PARADO manda em tudo: com o live-apply bloqueado (houve uma paragem e ainda não veio nenhum comando
+    // novo que ligue um modo contínuo) não se agenda NADA — nem se semeia a linha de base. Sem isto, uma
+    // edição feita enquanto o painel ainda mostra o modo antigo (o poll atrasa ~350 ms) ressuscitava o
+    // modo que já tinha sido parado no servidor.
+    if (enviosDinamicosBloqueados()) return
+    const params = paramsDoModoContinuo(modoContinuo, {
+      p,
+      duracao: duracaoRajadas,
+      u_max: uMax,
+      sigma,
+      L: comprimento,
+      v_min: vMin,
+    })
+    const assinatura = assinaturaParams(modoContinuo, params)
+    // Sem linha de base conhecida (modo ligado por fora do painel) assume-se o que está à vista e não se
+    // escreve nada: o painel só empurra params a partir de uma edição do utilizador.
+    if (paramsEnviados.current === null) {
+      paramsEnviados.current = assinatura
+      return
+    }
+    if (paramsEnviados.current === assinatura) return
+    return agendarEnvioDinamico(
+      () => {
+        paramsEnviados.current = assinatura
+        setSuprimido(null) // o apply saiu: o aviso de «não aplicado» já não se aplica
+        enviarRef.current(
+          { modo: modoContinuo, ativo: true, params },
+          "params",
+          `${ROTULO_MODO[modoContinuo]} em curso: parâmetros aplicados (${descreverParams(modoContinuo, params)})`
+        )
+      },
+      ATRASO_PARAMS_MS,
+      // REVALIDAÇÃO multi-cliente: ao disparar, o front confirma no servidor que este modo ainda está
+      // ativo. Se OUTRO cliente (ou outra aba) parou o vento entretanto, o apply é suprimido em vez de
+      // ressuscitar o modo — e o aviso fica no painel E no `onApplySuprimido` (nada de um painel a mostrar
+      // um valor que o servidor não tem).
+      {
+        modo: modoContinuo,
+        aoSuprimir: (motivo) => {
+          setSuprimido(motivo)
+          onApplySuprimido(motivo, modoContinuo)
+        },
+      }
+    )
+  }, [modoContinuo, ligado, p, duracaoRajadas, uMax, sigma, comprimento, vMin, onApplySuprimido])
 
   const trocarModo = (alvo: ModoContinuo) => {
     if (alvo === modoContinuo) return
+    setSuprimido(null) // um comando novo do utilizador limpa o aviso do apply que ficou velho
     if (alvo === "nenhum") {
       onEnviar(
         { modo: "nenhum", ativo: false },
@@ -263,6 +471,16 @@ function Dinamico({
         "modo",
         `rajadas contínuas ligadas (p=${fmt(p, 3)}, duração=${Math.round(duracaoRajadas)} passos, u_max=${fmt(uMax, 1)} m/s)`
       )
+      registarEnvio("rajadas", paramsRajadas)
+      return
+    }
+    if (alvo === "aleatoria") {
+      onEnviar(
+        { modo: "aleatoria", ativo: true, params: paramsAleatoria },
+        "modo",
+        `rajadas aleatórias ligadas (p=${fmt(p, 3)}, duração=${Math.round(duracaoRajadas)} passos; direção e força sorteadas a cada rajada: 0–5 m/s, 0–360°, ±90°, misturadas com o vento base pelo envelope)`
+      )
+      registarEnvio("aleatoria", paramsAleatoria)
       return
     }
     onEnviar(
@@ -270,6 +488,7 @@ function Dinamico({
       "modo",
       `turbulência Dryden ligada (σ=${fmt(sigma, 2)}, L=${fmt(comprimento, 1)}, v_min=${fmt(vMin, 1)} m/s)`
     )
+    registarEnvio("dryden", paramsDryden)
   }
 
   return (
@@ -324,8 +543,30 @@ function Dinamico({
       >
         <SegmentedToggleOption value="nenhum">PARADO</SegmentedToggleOption>
         <SegmentedToggleOption value="rajadas">RAJADAS</SegmentedToggleOption>
+        <SegmentedToggleOption value="aleatoria">ALEATÓRIA</SegmentedToggleOption>
         <SegmentedToggleOption value="dryden">DRYDEN</SegmentedToggleOption>
       </SegmentedToggle>
+
+      <p className="text-[0.6rem] text-muted-foreground">
+        com um modo ativo, editar um campo aplica-o automaticamente (≈300
+        ms) — sem reiniciar o episódio; com PARADO os valores ficam guardados
+        para a próxima ativação
+      </p>
+
+      {/*
+        ESTADO HONESTO do apply: a edição foi suprimida por estar velha (o servidor já não tinha este modo
+        ativo — paragem de outro cliente/aba). Sem isto o painel ficava com um campo a mostrar um valor que
+        a física não tem, sem dizer nada.
+      */}
+      {suprimido !== null ? (
+        <p
+          data-testid="apply-suprimido"
+          role="status"
+          className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-[0.65rem] text-destructive"
+        >
+          edição não aplicada — {suprimido}
+        </p>
+      ) : null}
 
       <AnimatePresence initial={false} mode="wait">
         {modoContinuo === "rajadas" ? (
@@ -368,6 +609,43 @@ function Dinamico({
               sufixo="m/s"
               onChange={setUMax}
             />
+          </motion.div>
+        ) : modoContinuo === "aleatoria" ? (
+          <motion.div
+            key="aleatoria"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ ...ui }}
+            className="flex flex-wrap gap-3"
+            data-testid="params-aleatoria"
+          >
+            <CampoNumerico
+              id="aleatoria-p"
+              rotulo="p (probabilidade)"
+              valor={p}
+              min={0}
+              max={1}
+              passo={0.005}
+              onChange={setP}
+            />
+            <CampoNumerico
+              id="aleatoria-duracao"
+              rotulo="duração"
+              valor={duracaoRajadas}
+              min={1}
+              max={200}
+              passo={1}
+              sufixo="passos"
+              dica={`${fmt(duracaoRajadas / PASSOS_POR_SEGUNDO, 2)} s @ 50 Hz`}
+              onChange={setDuracaoRajadas}
+            />
+            <p className="w-full text-[0.6rem] text-muted-foreground">
+              cada rajada sorteia a direção e a força de novo: 0–5 m/s ·
+              0–360° · ±90° — no pico do envelope o vento é a rajada sorteada e
+              nas pontas fica junto do vento base (nunca passa 5 m/s); o u_max
+              não limita este modo
+            </p>
           </motion.div>
         ) : modoContinuo === "dryden" ? (
           <motion.div
@@ -419,8 +697,11 @@ function Dinamico({
             className="text-[0.65rem] text-muted-foreground"
           >
             RAJADAS = rajadas que <span className="text-foreground">somam</span>{" "}
-            ao vento base · DRYDEN = turbulência que passeia em torno dele. Os
-            params ficam editáveis no modo escolhido.
+            ao vento base · ALEATÓRIA = direção e força sorteadas de novo a
+            cada rajada (0–5 m/s, 0–360°, ±90°) e misturadas com o vento base
+            pelo envelope (no pico o vento é a rajada sorteada) · DRYDEN =
+            turbulência que passeia em torno dele. Os params ficam editáveis no
+            modo escolhido.
           </motion.p>
         )}
       </AnimatePresence>
@@ -583,6 +864,8 @@ interface ControlosVentoProps {
     alvo: AlvoDinamico,
     descricao: string
   ) => void
+  /** Apply do live-apply suprimido por estar velho (paragem de outro cliente/aba): avisa o utilizador. */
+  onApplySuprimido: (motivo: string, modo: string) => void
 }
 
 export function ControlosVento({
@@ -599,6 +882,7 @@ export function ControlosVento({
   onAplicarVento,
   onPararVento,
   onVentoDinamico,
+  onApplySuprimido,
 }: ControlosVentoProps) {
   const [forca, setForca] = useState(0)
   const [azimute, setAzimute] = useState(0)
@@ -615,14 +899,15 @@ export function ControlosVento({
     setElevacao(vento.elevacao)
   }, [ligado, vento])
 
-  // «Terminado» só com o backend a NÃO ser contínuo: com `loop` o episódio seguinte arranca sozinho e o
-  // cartão não deve piscar a vermelho a pedir um REINICIAR que não é preciso.
-  const terminado = estado === "episodio_terminado" && !loop
+  // «Sem reinício» = o backend está com o loop desligado e o episódio fechou: a física CONTINUA no estado
+  // em que ficou (não há nada de errado nem nada a exigir) — o cartão só leva uma marca discreta, sem
+  // alarme vermelho. Com `loop` ligado o episódio seguinte arranca sozinho e não há marca nenhuma.
+  const semReinicio = estado === "episodio_terminado" && !loop
   const selecao: CorpoVento = { vel: forca, azimute, elevacao }
 
   return (
     <Card
-      className={`gap-4 ${terminado ? "ring-2 ring-destructive/40" : ""}`}
+      className={`gap-4 ${semReinicio ? "ring-1 ring-border" : ""}`}
       data-testid="painel-controlos"
     >
       <CardHeader className="gap-1">
@@ -721,6 +1006,7 @@ export function ControlosVento({
               className="h-10 rounded-full px-5"
               onClick={onPararVento}
               disabled={!ligado}
+              title="põe o vento a 0 m/s e desliga o vento dinâmico (rajadas, rajada agora, frente e turbulência) no mesmo pedido"
               data-testid="botao-parar-vento"
             >
               <CircleStop className="size-4" aria-hidden="true" />
@@ -737,6 +1023,7 @@ export function ControlosVento({
           emCurso={emCurso}
           selecao={selecao}
           onEnviar={onVentoDinamico}
+          onApplySuprimido={onApplySuprimido}
         />
 
         <p className="px-1 text-[0.65rem] text-muted-foreground">
@@ -780,8 +1067,9 @@ export function ControlosEpisodio({
 }: ControlosEpisodioProps) {
   /** Muda a cada REINICIAR confirmado: remonta o botão de catálogo (ver comentário no `key`). */
   const [geracao, setGeracao] = useState(0)
-  /** Terminado E sem continuidade — só aqui o REINICIAR é mesmo preciso (anel + aviso). */
-  const terminado = estado === "episodio_terminado" && !loop
+  /** Episódio fechado E sem reinício automático: a física CONTINUA (não congela) e nada é exigido — o
+   *  REINICIAR é a única forma de começar outro episódio, mas não é uma emergência. */
+  const semReinicio = estado === "episodio_terminado" && !loop
 
   return (
     <div
@@ -789,16 +1077,10 @@ export function ControlosEpisodio({
       className={compacto ? "flex items-center gap-3" : "flex flex-col gap-2"}
     >
       <div className="relative">
-        {terminado ? (
-          <motion.span
+        {semReinicio ? (
+          <span
             aria-hidden="true"
-            className="pointer-events-none absolute -inset-1 rounded-full ring-2 ring-destructive"
-            animate={{ opacity: [0.15, 0.7, 0.15] }}
-            transition={{
-              duration: 1.6,
-              repeat: Infinity,
-              ease: "easeInOut",
-            }}
+            className="pointer-events-none absolute -inset-1 rounded-full ring-1 ring-border"
           />
         ) : null}
         <HoldToConfirmButton
@@ -842,19 +1124,19 @@ export function ControlosEpisodio({
           <span className="text-xs font-medium">CONTINUIDADE</span>
           {compacto ? null : (
             <span className="text-[0.65rem] text-muted-foreground">
-              contínuo por omissão · «parar no fim» só se quiseres parar o
-              episódio
+              sem reinício por omissão · a física continua no fim do episódio e
+              só o REINICIAR recomeça; CONTÍNUO reinicia sozinho (ep+1)
             </span>
           )}
         </div>
         <SegmentedToggle
-          value={loop ? "continuo" : "parar"}
+          value={loop ? "continuo" : "sem_reinicio"}
           onChange={(v) => onLoop(v === "continuo")}
-          ariaLabel="continuidade dos episódios (contínuo ou parar no fim)"
+          ariaLabel="continuidade dos episódios (contínuo ou sem reinício)"
           className="shrink-0"
         >
-          <SegmentedToggleOption value="parar">
-            PARAR NO FIM
+          <SegmentedToggleOption value="sem_reinicio">
+            SEM REINÍCIO
           </SegmentedToggleOption>
           <SegmentedToggleOption value="continuo">
             CONTÍNUO
@@ -874,7 +1156,7 @@ export function ControlosEpisodio({
         <span className="sr-only">
           episódio {fmt(ep, 0)} ·{" "}
           {estado === "episodio_terminado" ? "terminado" : "a correr"} ·
-          {loop ? "modo contínuo" : "parar no fim do episódio"} · ligação{" "}
+          {loop ? "modo contínuo" : "sem reinício (a física continua; só o REINICIAR recomeça)"} · ligação{" "}
           {ligado ? "ativa" : "inativa"}
         </span>
       ) : null}

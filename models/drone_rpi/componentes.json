@@ -1,0 +1,1839 @@
+{
+  "versao": 2,
+  "atualizado": "2026-10-10",
+  "nota": "Peças REAIS do drone do dono. Cada número tem a sua origem em `fontes` e o grau de confiança em `confianca`: 'fabricante' (declarado pelo fabricante, não medido por terceiros), 'medido' (laboratório/teste independente), 'estimado' (engenharia, a confirmar por SysID). As tabelas de ensaio dos motores são as do fabricante (banco de ensaio, fonte de tensão estável) e são OTIMISTAS face ao voo real (caso ArduPilot: MN4006+15″ voou 36 min contra 50–55 previstos pela tabela; corrente real +29 %) — o modelo acrescenta a perda por download do frame (NASA: 5–15 %), a queda de tensão da bateria e os consumos de bordo. Conteúdo web citado como evidência (untrusted).",
+  "motores": {
+    "tmotor_mn4004_kv300": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN4004 KV300",
+      "kv_rpm_v": 300,
+      "massa_g": 53,
+      "r_int_mohm": 452,
+      "i0_a": 0.2,
+      "i0_v": 22,
+      "i_max_a": 9,
+      "p_max_w": 216,
+      "diametro_mm": 44.35,
+      "altura_mm": 19,
+      "celulas": "4-6S",
+      "configuracao": "18N24P",
+      "helices_recomendadas": "13-17″ (T16x5.4)",
+      "esc_recomendado": "AIR 40A",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn4004-kv400-motor-antigravity-type.html"
+      ],
+      "nota": "O motor leve com melhor g/W no regime 300-500 g por motor (14,1 g/W a 474 g com a 15x5). 17x5.8 marcado HOT pelo fabricante.",
+      "tabela": [
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 0.9,
+          "potencia_w": 22,
+          "rpm": 3173,
+          "torque_nm": 0.06,
+          "empuxo_g": 311
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 1.1,
+          "potencia_w": 26,
+          "rpm": 3415,
+          "torque_nm": 0.07,
+          "empuxo_g": 358
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 1.4,
+          "potencia_w": 34,
+          "rpm": 3660,
+          "torque_nm": 0.07,
+          "empuxo_g": 416
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 1.7,
+          "potencia_w": 41,
+          "rpm": 3914,
+          "torque_nm": 0.09,
+          "empuxo_g": 477
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 2.4,
+          "potencia_w": 58,
+          "rpm": 4394,
+          "torque_nm": 0.11,
+          "empuxo_g": 608
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 3.3,
+          "potencia_w": 79,
+          "rpm": 4876,
+          "torque_nm": 0.13,
+          "empuxo_g": 754
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 4.2,
+          "potencia_w": 101,
+          "rpm": 5317,
+          "torque_nm": 0.16,
+          "empuxo_g": 895
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 1.1,
+          "potencia_w": 26,
+          "rpm": 3045,
+          "torque_nm": 0.08,
+          "empuxo_g": 374
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 1.4,
+          "potencia_w": 34,
+          "rpm": 3285,
+          "torque_nm": 0.09,
+          "empuxo_g": 439
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 1.7,
+          "potencia_w": 41,
+          "rpm": 3530,
+          "torque_nm": 0.1,
+          "empuxo_g": 507
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 2.1,
+          "potencia_w": 50,
+          "rpm": 3740,
+          "torque_nm": 0.11,
+          "empuxo_g": 586
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 3.1,
+          "potencia_w": 74,
+          "rpm": 4208,
+          "torque_nm": 0.14,
+          "empuxo_g": 753
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 4.3,
+          "potencia_w": 103,
+          "rpm": 4670,
+          "torque_nm": 0.17,
+          "empuxo_g": 930
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 5.4,
+          "potencia_w": 130,
+          "rpm": 5092,
+          "torque_nm": 0.2,
+          "empuxo_g": 1107
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 1.4,
+          "potencia_w": 34,
+          "rpm": 2860,
+          "torque_nm": 0.09,
+          "empuxo_g": 474
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 1.9,
+          "potencia_w": 46,
+          "rpm": 3108,
+          "torque_nm": 0.11,
+          "empuxo_g": 561
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 2.3,
+          "potencia_w": 55,
+          "rpm": 3336,
+          "torque_nm": 0.12,
+          "empuxo_g": 646
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 2.8,
+          "potencia_w": 67,
+          "rpm": 3540,
+          "torque_nm": 0.14,
+          "empuxo_g": 727
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 4.0,
+          "potencia_w": 96,
+          "rpm": 3966,
+          "torque_nm": 0.17,
+          "empuxo_g": 918
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 5.6,
+          "potencia_w": 134,
+          "rpm": 4383,
+          "torque_nm": 0.2,
+          "empuxo_g": 1110
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 7.5,
+          "potencia_w": 180,
+          "rpm": 4711,
+          "torque_nm": 0.24,
+          "empuxo_g": 1311
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 1.8,
+          "potencia_w": 43,
+          "rpm": 2689,
+          "torque_nm": 0.11,
+          "empuxo_g": 534
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 2.3,
+          "potencia_w": 55,
+          "rpm": 2928,
+          "torque_nm": 0.13,
+          "empuxo_g": 636
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 2.9,
+          "potencia_w": 70,
+          "rpm": 3135,
+          "torque_nm": 0.15,
+          "empuxo_g": 742
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 3.5,
+          "potencia_w": 84,
+          "rpm": 3325,
+          "torque_nm": 0.17,
+          "empuxo_g": 829
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 5.1,
+          "potencia_w": 122,
+          "rpm": 3640,
+          "torque_nm": 0.2,
+          "empuxo_g": 1028
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 7.1,
+          "potencia_w": 170,
+          "rpm": 4000,
+          "torque_nm": 0.24,
+          "empuxo_g": 1203
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 8.9,
+          "potencia_w": 214,
+          "rpm": 4210,
+          "torque_nm": 0.27,
+          "empuxo_g": 1295
+        }
+      ]
+    },
+    "tmotor_mn4004_kv400": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN4004 KV400",
+      "kv_rpm_v": 400,
+      "massa_g": 53,
+      "r_int_mohm": 359,
+      "i0_a": 0.2,
+      "i0_v": 22,
+      "i_max_a": 12,
+      "p_max_w": 300,
+      "diametro_mm": 44.35,
+      "altura_mm": 19,
+      "celulas": "4-6S",
+      "configuracao": "18N24P",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn4004-kv400-motor-antigravity-type.html"
+      ],
+      "tabela": [
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 1.8,
+          "potencia_w": 43,
+          "rpm": 3813,
+          "torque_nm": 0.08,
+          "empuxo_g": 448
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 2.2,
+          "potencia_w": 53,
+          "rpm": 4146,
+          "torque_nm": 0.09,
+          "empuxo_g": 535
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 8.2,
+          "potencia_w": 197,
+          "rpm": 6391,
+          "empuxo_g": 1311,
+          "torque_nm": 0.21
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 2.2,
+          "potencia_w": 53,
+          "rpm": 3623,
+          "empuxo_g": 566,
+          "torque_nm": 0.1
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 10.4,
+          "potencia_w": 250,
+          "rpm": 5766,
+          "empuxo_g": 1521,
+          "torque_nm": 0.24
+        }
+      ]
+    },
+    "tmotor_mn4006_kv380": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN4006 KV380",
+      "kv_rpm_v": 380,
+      "massa_g": 68,
+      "r_int_mohm": 194,
+      "i0_a": 0.3,
+      "i0_v": 22,
+      "i_max_a": 16,
+      "p_max_w": 380,
+      "diametro_mm": 44.35,
+      "altura_mm": 21,
+      "celulas": "4-6S",
+      "configuracao": "18N24P",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn4006-kv380-motor-antigravity-type.html",
+        "https://discuss.ardupilot.org/t/endurance-of-drone/117451",
+        "https://database.tytorobotics.com/tests/ym47/tm-mf1302-tm-mn4006-dmr-3040"
+      ],
+      "nota": "A página dá 68 g (tabela, com cabo) e 57 g (texto): usa-se 68 g. A série de RPM da 13x4.4 tem saltos (tabela ruidosa). Caso real ArduPilot: 15″, 3,6 kg, voou 36 min contra 50-55 previstos pela tabela (+29 % de corrente). As linhas com a MF1302 são a medição INDEPENDENTE da Tyto Robotics (ym47, banco Series 1780, ESC Castle DMR 30/40; acelerador = (µs−1000)/10).",
+      "tabela": [
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 2.0,
+          "potencia_w": 48,
+          "rpm": 3719,
+          "torque_nm": 0.1,
+          "empuxo_g": 544
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 2.5,
+          "potencia_w": 60,
+          "rpm": 4528,
+          "torque_nm": 0.11,
+          "empuxo_g": 656
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 3.1,
+          "potencia_w": 74,
+          "rpm": 4840,
+          "torque_nm": 0.12,
+          "empuxo_g": 753
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 3.7,
+          "potencia_w": 89,
+          "rpm": 5155,
+          "torque_nm": 0.14,
+          "empuxo_g": 853
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 5.1,
+          "potencia_w": 122,
+          "rpm": 5451,
+          "torque_nm": 0.17,
+          "empuxo_g": 1062
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 6.8,
+          "potencia_w": 163,
+          "rpm": 6327,
+          "torque_nm": 0.21,
+          "empuxo_g": 1286
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 9.7,
+          "potencia_w": 233,
+          "rpm": 6515,
+          "torque_nm": 0.27,
+          "empuxo_g": 1633
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 2.4,
+          "potencia_w": 58,
+          "rpm": 3961,
+          "torque_nm": 0.12,
+          "empuxo_g": 675
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 55,
+          "corrente_a": 3.2,
+          "potencia_w": 77,
+          "rpm": 4329,
+          "torque_nm": 0.14,
+          "empuxo_g": 798
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 3.8,
+          "potencia_w": 91,
+          "rpm": 4619,
+          "torque_nm": 0.16,
+          "empuxo_g": 908
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 50,
+          "corrente_a": 3.1,
+          "potencia_w": 74,
+          "rpm": 3746,
+          "torque_nm": 0.15,
+          "empuxo_g": 805
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 60,
+          "corrente_a": 5.9,
+          "potencia_w": 142,
+          "rpm": 4079,
+          "torque_nm": 0.25,
+          "empuxo_g": 1258
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 65,
+          "corrente_a": 7.2,
+          "potencia_w": 173,
+          "rpm": 4326,
+          "torque_nm": 0.29,
+          "empuxo_g": 1427
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 75,
+          "corrente_a": 10.0,
+          "potencia_w": 240,
+          "rpm": 4803,
+          "torque_nm": 0.34,
+          "empuxo_g": 1740
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 85,
+          "corrente_a": 12.9,
+          "potencia_w": 310,
+          "rpm": 5119,
+          "torque_nm": 0.39,
+          "empuxo_g": 1970
+        },
+        {
+          "helice": "tmotor_p16x5_4",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 17.5,
+          "potencia_w": 420,
+          "rpm": 5445,
+          "torque_nm": 0.45,
+          "empuxo_g": 2309
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 15.0,
+          "potencia_w": 360,
+          "rpm": 6177,
+          "empuxo_g": 2228,
+          "torque_nm": 0.4
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 24,
+          "acelerador_pct": 100,
+          "corrente_a": 12.2,
+          "potencia_w": 293,
+          "rpm": 6731,
+          "empuxo_g": 1975,
+          "torque_nm": 0.34
+        },
+        {
+          "helice": "tmotor_mf1302",
+          "tensao_v": 24.5,
+          "acelerador_pct": 50,
+          "corrente_a": 1.718,
+          "potencia_w": 42.2,
+          "rpm": 3676,
+          "empuxo_g": 441.6,
+          "independente": true
+        },
+        {
+          "helice": "tmotor_mf1302",
+          "tensao_v": 24.5,
+          "acelerador_pct": 60,
+          "corrente_a": 2.68,
+          "potencia_w": 65.8,
+          "rpm": 4314,
+          "empuxo_g": 616.6,
+          "independente": true
+        },
+        {
+          "helice": "tmotor_mf1302",
+          "tensao_v": 24.5,
+          "acelerador_pct": 70,
+          "corrente_a": 3.887,
+          "potencia_w": 95.2,
+          "rpm": 4949,
+          "empuxo_g": 818.9,
+          "independente": true
+        },
+        {
+          "helice": "tmotor_mf1302",
+          "tensao_v": 24.31,
+          "acelerador_pct": 100,
+          "corrente_a": 9.62,
+          "potencia_w": 233.8,
+          "rpm": 6751,
+          "empuxo_g": 1536,
+          "torque_nm": 0.2641,
+          "independente": true
+        }
+      ]
+    },
+    "tmotor_mn2806_kv400": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN2806 KV400",
+      "kv_rpm_v": 400,
+      "massa_g": 46,
+      "r_int_mohm": 645,
+      "i0_a": 0.2,
+      "i0_v": 18,
+      "i_max_a": 9.4,
+      "p_max_w": 216,
+      "diametro_mm": 35,
+      "altura_mm": 26,
+      "celulas": "4-6S",
+      "configuracao": "12N14P",
+      "helices_recomendadas": "P12x4/P13x4.4",
+      "esc_recomendado": "AIR40A6S",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn2806-motor-antigravity-type.html"
+      ],
+      "nota": "Tensão medida por linha (queda da fonte). Binário arredondado a 0,01 N·m.",
+      "tabela": [
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.59,
+          "acelerador_pct": 40,
+          "corrente_a": 0.76,
+          "potencia_w": 17.85,
+          "rpm": 3080,
+          "torque_nm": 0.04,
+          "empuxo_g": 230
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.54,
+          "acelerador_pct": 45,
+          "corrente_a": 1.0,
+          "potencia_w": 23.62,
+          "rpm": 3417,
+          "torque_nm": 0.05,
+          "empuxo_g": 282
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.46,
+          "acelerador_pct": 50,
+          "corrente_a": 1.32,
+          "potencia_w": 30.94,
+          "rpm": 3755,
+          "torque_nm": 0.06,
+          "empuxo_g": 344
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.33,
+          "acelerador_pct": 55,
+          "corrente_a": 1.63,
+          "potencia_w": 37.94,
+          "rpm": 4036,
+          "torque_nm": 0.07,
+          "empuxo_g": 398
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.28,
+          "acelerador_pct": 60,
+          "corrente_a": 2.0,
+          "potencia_w": 46.61,
+          "rpm": 4319,
+          "torque_nm": 0.08,
+          "empuxo_g": 458
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.16,
+          "acelerador_pct": 65,
+          "corrente_a": 2.38,
+          "potencia_w": 55.18,
+          "rpm": 4571,
+          "torque_nm": 0.08,
+          "empuxo_g": 511
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.12,
+          "acelerador_pct": 70,
+          "corrente_a": 2.83,
+          "potencia_w": 65.34,
+          "rpm": 4837,
+          "torque_nm": 0.09,
+          "empuxo_g": 568
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.09,
+          "acelerador_pct": 75,
+          "corrente_a": 3.34,
+          "potencia_w": 77.08,
+          "rpm": 5094,
+          "torque_nm": 0.1,
+          "empuxo_g": 642
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 23.01,
+          "acelerador_pct": 80,
+          "corrente_a": 3.84,
+          "potencia_w": 88.41,
+          "rpm": 5337,
+          "torque_nm": 0.11,
+          "empuxo_g": 705
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.14,
+          "acelerador_pct": 75,
+          "corrente_a": 3.82,
+          "potencia_w": 88.36,
+          "rpm": 4902,
+          "torque_nm": 0.12,
+          "empuxo_g": 729
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.09,
+          "acelerador_pct": 80,
+          "corrente_a": 4.4,
+          "potencia_w": 101.53,
+          "rpm": 5126,
+          "torque_nm": 0.13,
+          "empuxo_g": 798
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.11,
+          "acelerador_pct": 85,
+          "corrente_a": 5.07,
+          "potencia_w": 117.1,
+          "rpm": 5357,
+          "torque_nm": 0.14,
+          "empuxo_g": 875
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.11,
+          "acelerador_pct": 90,
+          "corrente_a": 5.8,
+          "potencia_w": 134.1,
+          "rpm": 5573,
+          "torque_nm": 0.15,
+          "empuxo_g": 947
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.07,
+          "acelerador_pct": 95,
+          "corrente_a": 6.56,
+          "potencia_w": 151.45,
+          "rpm": 5777,
+          "torque_nm": 0.16,
+          "empuxo_g": 1018
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.05,
+          "acelerador_pct": 100,
+          "corrente_a": 7.1,
+          "potencia_w": 163.53,
+          "rpm": 5902,
+          "torque_nm": 0.17,
+          "empuxo_g": 1068
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 22.86,
+          "acelerador_pct": 100,
+          "corrente_a": 6.3,
+          "potencia_w": 144.03,
+          "rpm": 6235,
+          "empuxo_g": 958,
+          "torque_nm": 0.15
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.63,
+          "acelerador_pct": 40,
+          "corrente_a": 0.86,
+          "potencia_w": 20.38,
+          "rpm": 2991,
+          "empuxo_g": 262,
+          "torque_nm": 0.04
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.6,
+          "acelerador_pct": 45,
+          "corrente_a": 1.14,
+          "potencia_w": 26.83,
+          "rpm": 3299,
+          "empuxo_g": 325,
+          "torque_nm": 0.05
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.57,
+          "acelerador_pct": 50,
+          "corrente_a": 1.5,
+          "potencia_w": 35.42,
+          "rpm": 3632,
+          "empuxo_g": 398,
+          "torque_nm": 0.07
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.53,
+          "acelerador_pct": 55,
+          "corrente_a": 1.88,
+          "potencia_w": 44.21,
+          "rpm": 3908,
+          "empuxo_g": 458,
+          "torque_nm": 0.07
+        },
+        {
+          "helice": "tmotor_p13x4_4",
+          "tensao_v": 23.43,
+          "acelerador_pct": 60,
+          "corrente_a": 2.32,
+          "potencia_w": 54.29,
+          "rpm": 4184,
+          "empuxo_g": 531,
+          "torque_nm": 0.09
+        }
+      ]
+    },
+    "tmotor_mn2806_kv650": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN2806 KV650",
+      "kv_rpm_v": 650,
+      "massa_g": 46,
+      "r_int_mohm": 275,
+      "i0_a": 0.2,
+      "i0_v": 18,
+      "i_max_a": 12.3,
+      "p_max_w": 187,
+      "diametro_mm": 35,
+      "altura_mm": 26,
+      "celulas": "4S",
+      "configuracao": "12N14P",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn2806-motor-antigravity-type.html"
+      ],
+      "tabela": [
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 15.47,
+          "acelerador_pct": 40,
+          "corrente_a": 1.21,
+          "potencia_w": 18.75,
+          "rpm": 3138,
+          "torque_nm": 0.04,
+          "empuxo_g": 237
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 15.44,
+          "acelerador_pct": 45,
+          "corrente_a": 1.77,
+          "potencia_w": 27.41,
+          "rpm": 3589,
+          "torque_nm": 0.05,
+          "empuxo_g": 314
+        },
+        {
+          "helice": "tmotor_p12x4",
+          "tensao_v": 15.43,
+          "acelerador_pct": 50,
+          "corrente_a": 2.19,
+          "potencia_w": 33.73,
+          "rpm": 3851,
+          "torque_nm": 0.06,
+          "empuxo_g": 361
+        }
+      ]
+    },
+    "tmotor_mn5006_kv450": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN5006 KV450",
+      "kv_rpm_v": 450,
+      "massa_g": 106,
+      "r_int_mohm": 60,
+      "i0_a": 0.9,
+      "i0_v": 22,
+      "i_max_a": 26,
+      "p_max_w": 650,
+      "diametro_mm": 55.6,
+      "altura_mm": 30,
+      "celulas": "6S",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn5006-kv450-motor-antigravity-type.html"
+      ],
+      "nota": "24N28P, Φ55,6×30 mm. Para builds pesados com hélices de 14-18″. A 100 % com a P15x5 em 6S puxa 26,28 A (acima do pico declarado).",
+      "tabela": [
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 23.65,
+          "acelerador_pct": 40,
+          "corrente_a": 2.66,
+          "potencia_w": 63,
+          "rpm": 3983,
+          "torque_nm": 0.11,
+          "empuxo_g": 610
+        },
+        {
+          "helice": "tmotor_p14x4_8",
+          "tensao_v": 23.07,
+          "acelerador_pct": 100,
+          "corrente_a": 20.16,
+          "potencia_w": 465,
+          "rpm": 8168,
+          "torque_nm": 0.44,
+          "empuxo_g": 2672
+        },
+        {
+          "helice": "tmotor_p17x5_8",
+          "tensao_v": 15.69,
+          "acelerador_pct": 40,
+          "corrente_a": 2.15,
+          "potencia_w": 34,
+          "rpm": 2353,
+          "empuxo_g": 438,
+          "torque_nm": 0.09
+        },
+        {
+          "helice": "tmotor_p17x5_8",
+          "tensao_v": 15.67,
+          "acelerador_pct": 45,
+          "corrente_a": 2.85,
+          "potencia_w": 45,
+          "rpm": 2614,
+          "empuxo_g": 562,
+          "torque_nm": 0.11
+        },
+        {
+          "helice": "tmotor_p17x5_8",
+          "tensao_v": 15.63,
+          "acelerador_pct": 50,
+          "corrente_a": 3.78,
+          "potencia_w": 59,
+          "rpm": 2912,
+          "empuxo_g": 694,
+          "torque_nm": 0.14
+        },
+        {
+          "helice": "tmotor_p17x5_8",
+          "tensao_v": 15.11,
+          "acelerador_pct": 100,
+          "corrente_a": 19.85,
+          "potencia_w": 300,
+          "rpm": 5153,
+          "empuxo_g": 2228,
+          "torque_nm": 0.44
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 22.89,
+          "acelerador_pct": 100,
+          "corrente_a": 26.28,
+          "potencia_w": 601,
+          "rpm": 7682,
+          "empuxo_g": 3218,
+          "torque_nm": 0.59
+        }
+      ]
+    },
+    "ref_2306_2450kv": {
+      "fabricante": "genérico (classe 2306 FPV)",
+      "modelo": "2306 2450KV (referência do plano)",
+      "kv_rpm_v": 2450,
+      "massa_g": 32,
+      "r_int_mohm": 65,
+      "i0_a": 1.2,
+      "i0_v": 10,
+      "i_max_a": 40,
+      "p_max_w": 700,
+      "diametro_mm": 28,
+      "altura_mm": 18,
+      "celulas": "4S",
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md §6 P0 (T-Motor F40 Pro V 2306 ≈ 1,2 kgf/motor a 4S)"
+      ],
+      "nota": "Só para comparar com o quad 5″ do plano; R/I₀ típicos da classe, não verificados nesta pesquisa."
+    },
+    "tmotor_mn5006_kv300": {
+      "fabricante": "T-Motor",
+      "modelo": "Antigravity MN5006 KV300",
+      "kv_rpm_v": 300,
+      "massa_g": 108,
+      "r_int_mohm": 125,
+      "i0_a": 0.6,
+      "i0_v": 22,
+      "i_max_a": 20,
+      "p_max_w": 500,
+      "diametro_mm": 55.6,
+      "altura_mm": 30,
+      "celulas": "4-6S",
+      "configuracao": "24N28P",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn5006-kv300-motor-antigravity-type.html",
+        "https://database.tytorobotics.com/tests/3496/t-motor-300kv-with-18x6"
+      ],
+      "nota": "Hélices P17-18″. ~1 kg por motor custa 87-91 W (quad de ~4 kg). 82 °C após 10 min a 100 %.",
+      "tabela": [
+        {
+          "helice": "tmotor_p18x6_1",
+          "tensao_v": 23.68,
+          "acelerador_pct": 40,
+          "corrente_a": 2.04,
+          "potencia_w": 48,
+          "rpm": 2410,
+          "empuxo_g": 629,
+          "torque_nm": 0.14
+        },
+        {
+          "helice": "tmotor_p18x6_1",
+          "tensao_v": 23.61,
+          "acelerador_pct": 50,
+          "corrente_a": 3.67,
+          "potencia_w": 87,
+          "rpm": 2988,
+          "empuxo_g": 968,
+          "torque_nm": 0.21
+        },
+        {
+          "helice": "tmotor_p18x6_1",
+          "tensao_v": 23.57,
+          "acelerador_pct": 55,
+          "corrente_a": 4.75,
+          "potencia_w": 112,
+          "rpm": 3264,
+          "empuxo_g": 1162,
+          "torque_nm": 0.24
+        },
+        {
+          "helice": "tmotor_p18x6_1",
+          "tensao_v": 23.09,
+          "acelerador_pct": 100,
+          "corrente_a": 19.63,
+          "potencia_w": 453,
+          "rpm": 5131,
+          "empuxo_g": 2996,
+          "torque_nm": 0.63
+        }
+      ]
+    },
+    "tmotor_mn3508_kv380": {
+      "fabricante": "T-Motor",
+      "modelo": "Navigator MN3508 KV380",
+      "kv_rpm_v": 380,
+      "massa_g": 103,
+      "r_int_mohm": 205,
+      "i0_a": 0.4,
+      "i0_v": 10,
+      "i_max_a": 14,
+      "p_max_w": 310,
+      "diametro_mm": 41.8,
+      "altura_mm": 26.5,
+      "celulas": "3-6S",
+      "configuracao": "12N14P",
+      "confianca": "fabricante",
+      "fontes": [
+        "https://store.tmotor.com/product/mn3508-motor-navigator-type.html"
+      ],
+      "nota": "103 g com 600 mm de cabo (82 g sem). Tabela a 4S SEM coluna de binário (kq pela corrente); a linha de 50 % (18,16 g/W) é provavelmente otimista. A 22,2 V a 15x5 dá 1880 g, 13,3 A, 295 W a 100 %.",
+      "tabela": [
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 14.8,
+          "acelerador_pct": 50,
+          "corrente_a": 1.6,
+          "potencia_w": 23.68,
+          "rpm": 2600,
+          "empuxo_g": 430
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 14.8,
+          "acelerador_pct": 65,
+          "corrente_a": 3.4,
+          "potencia_w": 50.32,
+          "rpm": 3400,
+          "empuxo_g": 670
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 14.8,
+          "acelerador_pct": 75,
+          "corrente_a": 5.0,
+          "potencia_w": 74.0,
+          "rpm": 3800,
+          "empuxo_g": 820
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 14.8,
+          "acelerador_pct": 85,
+          "corrente_a": 6.4,
+          "potencia_w": 94.72,
+          "rpm": 4200,
+          "empuxo_g": 1000
+        },
+        {
+          "helice": "tmotor_p15x5",
+          "tensao_v": 14.8,
+          "acelerador_pct": 100,
+          "corrente_a": 7.5,
+          "potencia_w": 111.0,
+          "rpm": 4500,
+          "empuxo_g": 1100
+        }
+      ]
+    }
+  },
+  "helices": {
+    "tmotor_p12x4": {
+      "fabricante": "T-Motor",
+      "modelo": "P12x4 CF",
+      "diametro_pol": 12,
+      "passo_pol": 4,
+      "massa_g": 12,
+      "pas": 2,
+      "confianca": "estimado (massa por escala com D); aero pela tabela do motor",
+      "fontes": [
+        "https://store.tmotor.com/product/mn2806-motor-antigravity-type.html"
+      ]
+    },
+    "tmotor_p13x4_4": {
+      "fabricante": "T-Motor",
+      "modelo": "P13x4.4 CF",
+      "diametro_pol": 13,
+      "passo_pol": 4.4,
+      "massa_g": 15,
+      "pas": 2,
+      "confianca": "estimado (massa: revendedores 14,2 g/unid.); aero pela tabela do motor",
+      "fontes": [
+        "https://www.indiamart.com/proddetail/t-motor-propeller-p13x4-4-2pcs-pair-2853163580497.html"
+      ]
+    },
+    "tmotor_p14x4_8": {
+      "fabricante": "T-Motor",
+      "modelo": "P14x4.8 CF",
+      "diametro_pol": 14,
+      "passo_pol": 4.8,
+      "massa_g": 18,
+      "pas": 2,
+      "confianca": "estimado (massa por escala com D); aero pela tabela do motor",
+      "fontes": [
+        "https://www.aeroflyhobbies.com/propellers/41-t-motor-14x48-carbon-fiber-propeller.html"
+      ]
+    },
+    "tmotor_p15x5": {
+      "fabricante": "T-Motor",
+      "modelo": "P15x5 CF (polish)",
+      "diametro_pol": 15,
+      "passo_pol": 5,
+      "massa_g": 21,
+      "pas": 2,
+      "confianca": "fabricante (massa 21 ± 1,5 g por unidade); aero pela tabela do motor",
+      "fontes": [
+        "https://store.tmotor.com/product/polish-carbon-fiber-15x5-prop.html"
+      ],
+      "nota": "Ótimo 5200-7000 rpm (fabricante); a NS15x5 ultraleve pesa 13 g mas não tem tabela de ensaio com estes motores."
+    },
+    "tmotor_p16x5_4": {
+      "fabricante": "T-Motor",
+      "modelo": "P16x5.4 CF",
+      "diametro_pol": 16,
+      "passo_pol": 5.4,
+      "massa_g": 24,
+      "pas": 2,
+      "confianca": "estimado (massa por escala com D); aero pela tabela do motor",
+      "fontes": [
+        "https://store.tmotor.com/product/mn4004-kv400-motor-antigravity-type.html"
+      ]
+    },
+    "apc_15x5_5mr": {
+      "fabricante": "APC",
+      "modelo": "15x5.5MR (multirotor)",
+      "diametro_pol": 15,
+      "passo_pol": 5.5,
+      "massa_g": 30,
+      "pas": 2,
+      "ct": 0.0782,
+      "cp": 0.0276,
+      "confianca": "C_T/C_P modelados pela APC (teoria de vórtices) a 4000 rpm; C_T reduzido 9 % (medições UIUC dão −9 a −10 % face ao modelo APC); massa estimada",
+      "fontes": [
+        "https://www.apcprop.com/files/PER3_15x55MR.dat",
+        "https://m-selig.ae.illinois.edu/props/volume-4/propDB-volume-4.html"
+      ],
+      "ct_vs_j": {
+        "j": [
+          0.0,
+          0.1935,
+          0.299,
+          0.4045,
+          0.4924
+        ],
+        "ct": [
+          0.0862,
+          0.0611,
+          0.0424,
+          0.021,
+          0.0023
+        ],
+        "fonte": "APC PER3 @5000 rpm (calculado; usado para ajustar o σa do BEMT)"
+      }
+    },
+    "ref_5x4_3": {
+      "fabricante": "genérico",
+      "modelo": "5x4.3 tri-pá (referência do plano)",
+      "diametro_pol": 5.1,
+      "passo_pol": 4.3,
+      "massa_g": 4.2,
+      "pas": 3,
+      "ct": 0.15,
+      "cp": 0.09,
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md"
+      ]
+    },
+    "tmotor_p17x5_8": {
+      "fabricante": "T-Motor",
+      "modelo": "P17x5.8 CF",
+      "diametro_pol": 17,
+      "passo_pol": 5.8,
+      "massa_g": 27,
+      "pas": 2,
+      "confianca": "estimado (massa por escala com D); aero pela tabela do motor (C_T 0,066-0,070, C_P ≈ 0,020)",
+      "fontes": [
+        "https://store.tmotor.com/product/mn5006-kv450-motor-antigravity-type.html"
+      ]
+    },
+    "tmotor_p18x6_1": {
+      "fabricante": "T-Motor",
+      "modelo": "P18x6.1 CF",
+      "diametro_pol": 18,
+      "passo_pol": 6.1,
+      "massa_g": 31,
+      "pas": 2,
+      "confianca": "estimado (massa por escala com D); aero pela tabela do motor (C_T 0,071-0,075, C_P 0,021-0,022, FOM 0,68-0,74)",
+      "fontes": [
+        "https://store.tmotor.com/product/mn5006-kv300-motor-antigravity-type.html"
+      ]
+    },
+    "tmotor_mf1302": {
+      "fabricante": "T-Motor",
+      "modelo": "MF1302 13.4x4.8 (carbono-plástico)",
+      "diametro_pol": 13.4,
+      "passo_pol": 4.8,
+      "massa_g": 16,
+      "pas": 2,
+      "confianca": "aero MEDIDA de forma independente (Tyto ym47: C_T 0,070-0,072); massa estimada",
+      "fontes": [
+        "https://database.tytorobotics.com/tests/ym47/tm-mf1302-tm-mn4006-dmr-3040"
+      ]
+    },
+    "apc_14x7e": {
+      "fabricante": "APC",
+      "modelo": "14x7 Thin Electric",
+      "diametro_pol": 14,
+      "passo_pol": 7,
+      "massa_g": 34,
+      "pas": 2,
+      "ct": 0.0932,
+      "cp": 0.0286,
+      "confianca": "C_T/C_P MEDIDOS de forma independente (UIUC vol. 4, estático 2953-4533 rpm); massa estimada",
+      "fontes": [
+        "https://m-selig.ae.illinois.edu/props/volume-4/propDB-volume-4.html",
+        "https://m-selig.ae.illinois.edu/props/volume-4/data/apce_14x7_1010od_5015.txt"
+      ],
+      "ct_vs_j": {
+        "j": [
+          0.088,
+          0.197,
+          0.217,
+          0.341,
+          0.43
+        ],
+        "ct": [
+          0.0955,
+          0.0865,
+          0.0836,
+          0.0559,
+          0.0371
+        ],
+        "fonte": "UIUC @5015 rpm (túnel)"
+      }
+    }
+  },
+  "celulas": {
+    "molicel_p50b": {
+      "fabricante": "Molicel",
+      "modelo": "INR-21700-P50B",
+      "quimica": "li-ion",
+      "capacidade_mah": 5000,
+      "massa_g": 68.8,
+      "r_dc_mohm": 15,
+      "v_max": 4.2,
+      "v_nom": 3.6,
+      "v_corte": 2.5,
+      "i_max_a": 45,
+      "ciclos_80": 750,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        21.7,
+        70.2
+      ],
+      "confianca": "medido (massa, DCIR a 50 % SoC: About:Energy 2024) + fabricante (ciclos)",
+      "fontes": [
+        "https://www.aboutenergy.io/post/molicel-p50b-vs-p45b-battery-performance",
+        "https://www.e-cigarette-forum.com/threads/bench-test-results-molicel-p50b-60a-5000mah-21700.986092"
+      ],
+      "nota": "Fabricante: 265 Wh/kg, DCIR máx 12,8 mΩ, 60 A com corte térmico a 80 °C (não é contínuo até 2,5 V — Mooch); usa-se o DCIR MEDIDO (15 mΩ) e 45 A. Ciclos: About:Energy mede até +50 % de ciclos face ao P45B (500+) → 750.",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "molicel_p45b": {
+      "fabricante": "Molicel",
+      "modelo": "INR-21700-P45B",
+      "quimica": "li-ion",
+      "capacidade_mah": 4500,
+      "massa_g": 66.0,
+      "r_dc_mohm": 15,
+      "v_max": 4.2,
+      "v_nom": 3.6,
+      "v_corte": 2.5,
+      "i_max_a": 35,
+      "ciclos_80": 500,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        21.7,
+        70.2
+      ],
+      "confianca": "medido (massa 66,0 g, DCIR 15 mΩ: About:Energy; ~35 A contínuos reais: Mooch) + fabricante (500+ ciclos)",
+      "fontes": [
+        "https://www.aboutenergy.io/post/molicel-p50b-vs-p45b-battery-performance",
+        "https://budgetlightforum.com/t/bench-test-results-molicel-p45b-50a-4500mah-21700/70213"
+      ],
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "lg_m50lt": {
+      "fabricante": "LG Energy Solution",
+      "modelo": "INR21700 M50LT",
+      "quimica": "li-ion",
+      "capacidade_mah": 4932,
+      "massa_g": 67.5,
+      "r_dc_mohm": 22,
+      "v_max": 4.2,
+      "v_nom": 3.69,
+      "v_corte": 2.5,
+      "i_max_a": 7.2,
+      "ciclos_80": 1000,
+      "c_ref_ciclos": 0.5,
+      "dims_mm": [
+        21.1,
+        70.15
+      ],
+      "confianca": "fabricante (capacidade, massa, corrente, ciclos); DCIR ESTIMADO (não publicado)",
+      "fontes": [
+        "https://f.hubspotusercontent10.net/hubfs/6584819/Cell%20Spec%20Sheets/LG/Lithium%20Ion%20LG%20INR%2021700%20M50LT%202021-LSD-MBD-b00002_21700_M50LT_PS_Promotion_V1.pdf"
+      ],
+      "nota": "Corrente máxima depende da temperatura: 14,4 A só a 10-25 °C, 7,2 A a 25-55 °C (usa-se 7,2 A). 1000 ciclos ≥80 % da energia numa janela reduzida (4,1-2,85 V, 0,3C/0,5C). Abaixo de ~7 A por célula dura mais que o P50B (Mooch).",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "samsung_50e": {
+      "fabricante": "Samsung SDI",
+      "modelo": "INR21700-50E",
+      "quimica": "li-ion",
+      "capacidade_mah": 4900,
+      "massa_g": 69,
+      "r_dc_mohm": 25,
+      "v_max": 4.2,
+      "v_nom": 3.63,
+      "v_corte": 2.5,
+      "i_max_a": 9.8,
+      "ciclos_80": 500,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        21.25,
+        70.8
+      ],
+      "confianca": "fabricante (spec V1.0 2018) + medido (HKJ); DCIR ESTIMADO",
+      "fontes": [
+        "https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/196/INR21700_2D00_50E-Cell-Specification_5F00_V1.0_5F00_180711.pdf",
+        "https://lygte-info.dk/review/batteries2012/Samsung%20INR21700-50E%205000mAh%20(Cyan)%20UK.html"
+      ],
+      "nota": "'Não gosta de corrente alta' (HKJ): célula de energia para ~3-5 A por célula em pairagem.",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "amprius_sa102": {
+      "fabricante": "Amprius",
+      "modelo": "SiCore SA102 (pouch, ânodo de silício)",
+      "quimica": "li-ion",
+      "capacidade_mah": 4240,
+      "massa_g": 33.1,
+      "r_dc_mohm": 45,
+      "v_max": 4.25,
+      "v_nom": 3.4,
+      "v_corte": 2.2,
+      "i_max_a": 4.3,
+      "ciclos_80": 150,
+      "c_ref_ciclos": 0.2,
+      "dims_mm": [
+        80,
+        50,
+        6
+      ],
+      "confianca": "fabricante (PRELIMINARY); DCIR estimado (publicado só ACIR ≤30 mΩ a 1 kHz); dimensões estimadas",
+      "fontes": [
+        "https://amprius.com/documents/Amprius_Product_Catalog.pdf"
+      ],
+      "nota": "450 Wh/kg mas só 1C contínuo e 150 ciclos; exige compressão externa de 30 PSI. Montar em paralelo (xP) para a corrente de pairagem.",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "tattu_semisolido_12ah": {
+      "fabricante": "Tattu (Grepow)",
+      "modelo": "célula do pack semi-sólido 380 Wh/kg 6S 12000 mAh (TARBG3812K06S10X)",
+      "quimica": "li-ion",
+      "capacidade_mah": 12000,
+      "massa_g": 133.3,
+      "r_dc_mohm": 7,
+      "v_max": 4.2,
+      "v_nom": 3.7,
+      "v_corte": 2.5,
+      "v_pouso": 2.88,
+      "i_max_a": 36,
+      "ciclos_80": 300,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        194,
+        71,
+        5.3
+      ],
+      "confianca": "fabricante (sem medição independente); R ≤7 mΩ sem dizer se é por célula — usa-se por célula (conservador)",
+      "fontes": [
+        "https://www.tattuworld.com/products/tattu-380wh-kg-12000mah-6s1p-22-2v-10c-semi-solid-state-uav-lipo-battery.html",
+        "http://www.grepow.com/semi-solid-state-battery/350wh-kg-series-high-energy-density-battery-pack.html"
+      ],
+      "nota": "Pack 6S: 266,4 Wh, 800 g (≈333 Wh/kg ao nível do pack), 194×71×32 mm, 36 A (3C) contínuos, >300 ciclos ≥80 %. Tensão de pouso 2,88 V/célula (Grepow 'land-off'). Ânodo Si-C + NMC alto níquel: usa-se a curva OCV Li-ion.",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "tattu_gtech_10ah": {
+      "fabricante": "Tattu (Grepow)",
+      "modelo": "célula do G-Tech 4S 10000 mAh 25C",
+      "quimica": "lipo",
+      "capacidade_mah": 10000,
+      "massa_g": 235,
+      "r_dc_mohm": 2.5,
+      "v_max": 4.2,
+      "v_nom": 3.7,
+      "v_corte": 3.0,
+      "i_max_a": 250,
+      "ciclos_80": 300,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        169,
+        65,
+        9.75
+      ],
+      "confianca": "fabricante (capacidade, massa, C); R e ciclos ESTIMADOS (não publicados)",
+      "fontes": [
+        "https://www.grepow.com/uav-battery/tattu-4s-10000mah-14-8v-25c-lipo-drone-battery.html"
+      ],
+      "nota": "Pack 4S: 940 g ±20 g, 148 Wh (≈157 Wh/kg), 169×65×39 mm.",
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "gensace_5ah_45c": {
+      "fabricante": "Gens Ace",
+      "modelo": "célula do 4S 5000 mAh 45C (softcase)",
+      "quimica": "lipo",
+      "capacidade_mah": 5000,
+      "massa_g": 120,
+      "r_dc_mohm": 3.5,
+      "v_max": 4.2,
+      "v_nom": 3.7,
+      "v_corte": 3.0,
+      "i_max_a": 225,
+      "ciclos_80": 150,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        140,
+        45,
+        9
+      ],
+      "confianca": "fabricante (massa 480 g/pack, 45C, 'pelo menos 150 ciclos'); R ESTIMADO; dimensões estimadas",
+      "fontes": [
+        "https://genstattu.com/gens-ace-5000mah-4s-45c-14-8v-lipo-battery-pack-with-dean-plug"
+      ],
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+    },
+    "lipo_1500_4s_cell": {
+      "fabricante": "genérico",
+      "modelo": "LiPo 1500 mAh (referência do plano)",
+      "quimica": "lipo",
+      "capacidade_mah": 1500,
+      "massa_g": 44,
+      "r_dc_mohm": 4,
+      "v_max": 4.2,
+      "v_nom": 3.7,
+      "v_corte": 3.3,
+      "i_max_a": 150,
+      "ciclos_80": 300,
+      "c_ref_ciclos": 1.0,
+      "dims_mm": [
+        72,
+        35,
+        9
+      ],
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md §2.2"
+      ]
+    }
+  },
+  "frames": {
+    "diy_tubo_carbono_650": {
+      "fabricante": "DIY",
+      "modelo": "X 650 mm de tubo de carbono 16 mm + placas 1,5 mm",
+      "wheelbase_mm": 650,
+      "massa_g": 235,
+      "helice_max_pol": 16,
+      "massa_pernas_g": 50,
+      "altura_pernas_mm": 120,
+      "perda_download": 0.05,
+      "confianca": "estimado por densidade do material (carbono 1,55 g/cm³): 4 braços 16×14 mm × 280 mm = 82 g, 2 placas 130×130×1,5 mm = 78 g, 4 abraçadeiras 32 g, 4 suportes de motor 28 g, parafusos 15 g; pernas de tubo 10 mm 50 g",
+      "fontes": [
+        "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400",
+        "https://rotorcraft.arc.nasa.gov/Publications/files/72-2016-374.pdf"
+      ],
+      "nota": "Braços finos de tubo: perda por download ~5 % (NASA, SUI Endurance 15″). Pesar o frame montado e corrigir aqui."
+    },
+    "tarot_650_sport": {
+      "fabricante": "Tarot",
+      "modelo": "650 Sport TL65S01 (dobrável, trem retrátil)",
+      "wheelbase_mm": 650,
+      "massa_g": 750,
+      "helice_max_pol": 16,
+      "massa_pernas_g": 0,
+      "altura_pernas_mm": 200,
+      "perda_download": 0.07,
+      "confianca": "fabricante/revendedor (massa líquida 0,75 kg; uma loja dá 600 mm de 'wheelbase diameter')",
+      "fontes": [
+        "https://www.readymaderc.com/products/details/86704-tarot-tl65s01-650-sport-carbon-quad-frame-w-retracting-gear"
+      ]
+    },
+    "holybro_x500_v2": {
+      "fabricante": "Holybro",
+      "modelo": "X500 V2 (frame)",
+      "wheelbase_mm": 500,
+      "massa_g": 610,
+      "helice_max_pol": 13,
+      "massa_pernas_g": 0,
+      "altura_pernas_mm": 215,
+      "perda_download": 0.07,
+      "confianca": "fabricante (610 g, 500 mm, trem 215 mm); hélice máx. pela geometria (354 mm entre eixos vizinhos)",
+      "fontes": [
+        "https://holybro.com/products/x500-v2-kits"
+      ]
+    },
+    "ref_5pol": {
+      "fabricante": "genérico",
+      "modelo": "frame 5″ 226 mm (referência do plano)",
+      "wheelbase_mm": 226,
+      "massa_g": 100,
+      "helice_max_pol": 5.1,
+      "massa_pernas_g": 0,
+      "altura_pernas_mm": 40,
+      "perda_download": 0.08,
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md §3"
+      ]
+    },
+    "diy_tubo_carbono_750": {
+      "fabricante": "DIY",
+      "modelo": "X 750 mm de tubo de carbono 16 mm + placas 1,5 mm",
+      "wheelbase_mm": 750,
+      "massa_g": 265,
+      "helice_max_pol": 18,
+      "massa_pernas_g": 55,
+      "altura_pernas_mm": 130,
+      "perda_download": 0.05,
+      "confianca": "estimado por densidade do material (o de 650 mm + 2 × 50 mm de tubo por braço)",
+      "fontes": [
+        "https://rotorcraft.arc.nasa.gov/Publications/files/72-2016-374.pdf"
+      ]
+    }
+  },
+  "esc": {
+    "tmotor_air40a": {
+      "fabricante": "T-Motor",
+      "modelo": "AIR 40A 6S (×4)",
+      "massa_total_g": 104,
+      "eficiencia": 0.95,
+      "r_on_mohm": 10,
+      "i_max_a": 40,
+      "dshot_bits": 11,
+      "idle": 0.055,
+      "travagem_ativa": true,
+      "formato": "individual",
+      "confianca": "massa: revendedor (26 g/unid.); eficiência e R_on estimados (típicos de ESC 6S)",
+      "fontes": [
+        "https://www.readymaderc.com/products/details/t-motor-esc-air-40a-2-6-cell-no-bec",
+        "https://store.tmotor.com/product/air-40a-6s-esc.html"
+      ],
+      "nota": "O ESC recomendado pela T-Motor para o MN4004/MN2806 (as tabelas de ensaio são com ESC da casa). Um 4-em-1 6S de ~15 g pouparia ~90 g."
+    },
+    "esc_4em1_35a": {
+      "fabricante": "genérico",
+      "modelo": "4-em-1 35 A BLHeli_S/Bluejay (referência 5″)",
+      "massa_total_g": 14,
+      "eficiencia": 0.95,
+      "r_on_mohm": 8,
+      "i_max_a": 35,
+      "dshot_bits": 11,
+      "idle": 0.055,
+      "travagem_ativa": true,
+      "formato": "4em1",
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md"
+      ]
+    }
+  },
+  "eletronica": {
+    "rpi5": {
+      "nome": "Raspberry Pi 5 (4 GB) + dissipador",
+      "massa_g": 52,
+      "potencia_w": {
+        "repouso": 2.7,
+        "voo": 5.0,
+        "pico": 8.8
+      },
+      "dims_mm": [
+        85,
+        56,
+        16
+      ],
+      "confianca": "medido (consumos, plano §2.1)",
+      "fontes": [
+        "https://raspberry.tips/en/raspberrypi-tutorials/raspberry-pi-power-consumption-update-2026-all-models-compared",
+        "https://www.tomshardware.com/reviews/raspberry-pi-5"
+      ]
+    },
+    "fc_h7": {
+      "nome": "Flight controller H7 30×30 (Betaflight/ArduPilot)",
+      "massa_g": 8,
+      "potencia_w": {
+        "repouso": 0.5,
+        "voo": 0.6,
+        "pico": 0.8
+      },
+      "dims_mm": [
+        36,
+        36,
+        6
+      ],
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md §7 C1"
+      ]
+    },
+    "cablagem": {
+      "nome": "módulo de energia + BEC 5 V/5 A + cablagem + XT60",
+      "massa_g": 30,
+      "potencia_w": {
+        "repouso": 0.0,
+        "voo": 0.0,
+        "pico": 0.0
+      },
+      "dims_mm": [
+        60,
+        40,
+        6
+      ],
+      "confianca": "estimado",
+      "fontes": [
+        "plano-drone-real.md §3"
+      ]
+    }
+  },
+  "sensores": {
+    "bmi088": {
+      "tipo": "imu",
+      "massa_g": 1.0,
+      "potencia_w": 0.017,
+      "giro": {
+        "taxa_hz": 1000,
+        "atraso_s": 0.002,
+        "bias_sigma": 0.0035,
+        "deriva_sigma": 0.0002,
+        "ruido_sigma": 0.0026,
+        "escala_sigma": 0.005,
+        "saturacao": 34.9,
+        "lsb": 0.00106
+      },
+      "acc": {
+        "taxa_hz": 1000,
+        "atraso_s": 0.002,
+        "bias_sigma": 0.05,
+        "deriva_sigma": 0.001,
+        "ruido_sigma": 0.02,
+        "escala_sigma": 0.005,
+        "saturacao": 235.0,
+        "lsb": 0.0072
+      },
+      "vibracao_acc_rms": 0.6,
+      "vibracao_giro_rms": 0.01,
+      "confianca": "fabricante (datasheet Bosch) + estimado (vibração)",
+      "fontes": [
+        "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf"
+      ]
+    },
+    "mpu6050": {
+      "tipo": "imu",
+      "massa_g": 1.0,
+      "potencia_w": 0.013,
+      "giro": {
+        "taxa_hz": 1000,
+        "atraso_s": 0.004,
+        "bias_sigma": 0.035,
+        "deriva_sigma": 0.0005,
+        "ruido_sigma": 0.002,
+        "escala_sigma": 0.02,
+        "saturacao": 34.9,
+        "lsb": 0.00106
+      },
+      "acc": {
+        "taxa_hz": 1000,
+        "atraso_s": 0.004,
+        "bias_sigma": 0.1,
+        "deriva_sigma": 0.002,
+        "ruido_sigma": 0.05,
+        "escala_sigma": 0.02,
+        "saturacao": 156.9,
+        "lsb": 0.0048
+      },
+      "vibracao_acc_rms": 0.8,
+      "vibracao_giro_rms": 0.015,
+      "confianca": "fabricante (legacy) + estimado",
+      "fontes": [
+        "https://www.cdiweb.com/datasheets/invensense/mpu-6050_datasheet_v3%204.pdf"
+      ]
+    },
+    "vl53l1x": {
+      "tipo": "tof",
+      "massa_g": 0.5,
+      "potencia_w": 0.06,
+      "taxa_hz": 30,
+      "atraso_s": 0.034,
+      "alcance_min": 0.04,
+      "alcance_max": 3.6,
+      "ruido_sigma": 0.004,
+      "ruido_rel": 0.008,
+      "confianca": "fabricante (ST) + estimado (ruído)",
+      "fontes": [
+        "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400"
+      ]
+    },
+    "pmw3901": {
+      "tipo": "fluxo",
+      "massa_g": 1.0,
+      "potencia_w": 0.04,
+      "taxa_hz": 100,
+      "atraso_s": 0.01,
+      "alcance_min": 0.08,
+      "alcance_max": 4.0,
+      "saturacao": 7.4,
+      "ruido_sigma": 0.03,
+      "confianca": "fabricante (PixArt/Bitcraze) + estimado (ruído)",
+      "fontes": [
+        "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400"
+      ]
+    },
+    "ina226": {
+      "tipo": "monitor",
+      "massa_g": 0.5,
+      "potencia_w": 0.001,
+      "tensao": {
+        "taxa_hz": 50,
+        "ruido_sigma": 0.01,
+        "escala_sigma": 0.002,
+        "lsb": 0.00125
+      },
+      "corrente": {
+        "taxa_hz": 50,
+        "ruido_sigma": 0.05,
+        "bias_sigma": 0.03,
+        "escala_sigma": 0.01
+      },
+      "confianca": "fabricante (TI) + estimado (shunt)",
+      "fontes": [
+        "https://www.ti.com/product/INA226"
+      ]
+    }
+  },
+  "correcao_tabelas": {
+    "kq": 1.075,
+    "fonte": "Tyto Robotics ym47/#3496 vs tabelas T-Motor: 6–9 % menos eficiência (pesquisa profunda verificada 3-0, 2026-10-10)"
+  }
+}

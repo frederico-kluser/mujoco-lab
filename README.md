@@ -78,7 +78,7 @@ Cada ação só aparece quando o experimento tem o ficheiro correspondente; os s
 ### Comandos úteis do laboratório
 
 ```bash
-uv run --group hover-rl python experiments/09_drone_hover_rl/run.py        # demo + validação física → exit 0/1 (121 checagens)
+uv run --group hover-rl python experiments/09_drone_hover_rl/run.py        # demo + validação física → exit 0/1 (146 checagens)
 uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py   # janela 3D CLEAN + site de monitoria
 uv run pytest .agents/mujoco-lab-agent-skill/tests -q                      # 30 testes (scripts, templates, armadilhas)
 python3 .agents/mujoco-lab-agent-skill/scripts/env_check.py                # diagnóstico: Python, MuJoCo, GL/EGL, GPU, docs
@@ -124,7 +124,8 @@ O projeto `09_drone_hover_rl` contra o critério do dono (pior das 3 seeds, roll
 | Stress denso (grelha 4×8×3 + 24 dinâmicas duras + 24 sequências) | **144/144** — o único candidato sem falhas |
 | Descolagem (física, sem teleporte) | **sobe em ~1 s** (47–52 passos de decisão) |
 | Erro em voo (pior caso, 3 m/s) | \|z−1\| ≤ **0,002 m** · \|yaw_err\| ≤ **0,020 rad** · ‖xy‖ ≤ **0,108 m** |
-| Validação analítica do ambiente | `run.py` **121/121** checagens, exit 0 |
+| Validação analítica do ambiente | `run.py` **146/146** checagens, exit 0 |
+| Provas da interface (câmara, PARAR, arranque, site) | `teste_camera.py` **50/50** · `teste_parar_vento.py` **15/15** sem flags (**16/16** com `--http`, **18/18** com `--http --navegador`) · `teste_arranque_loop.py` **68/68** · site `npm run test:camera` **62/62** |
 | Deploy ONNX (Raspberry Pi 5) | `max\|Δ\|` **5,7e-06** vs PyTorch · benchmark p50/p99 no painel |
 
 ## Como se cria um projeto novo
@@ -135,7 +136,7 @@ Resumo do método (**memória primeiro, física sempre, interface CLEAN + site, 
 
 Tudo o que corre aqui é **simulação física de verdade**, do primeiro ao último passo (`mj_step` com
 gravidade, arrasto, contactos, atuadores e sensores). Não há cinemática, teleporte (só `reset` explícito
-do simulador), corpos congelados nem "apoios mágicos": os robôs só se mexem por **comandos de atuador**
+do simulador), corpos imobilizados à força nem "apoios mágicos": os robôs só se mexem por **comandos de atuador**
 — os algoritmos são do utilizador — e a física decide o resto. Na prática:
 
 - os programas **arrancam** nesse estado: o drone ([`lab/crazyflie.py`](lab/crazyflie.py)) começa com **motores
@@ -182,12 +183,12 @@ bundle do front + códigos de conexão (para colar num projeto que não seja des
 cd experiments/NN_nome/site && npm install && npm run build      # 1.ª vez (fazer `source ~/.secrets` antes — token Motion+)
 uv run --group hover-rl python experiments/NN_nome/sim_site.py  # o comando único: janela + site
 ```
-- **`sim_view.py`** — janela 100 % **CLEAN** (só o 3D: `show_left_ui=False`, `show_right_ui=False`, `clear_texts`, zero `set_texts`/`set_figures`), telemetria JSONL (~10 Hz) e **contínuo por omissão** (`loop:true`): o episódio seguinte arranca sozinho no fim (transição discreta, toast «episódio N · contínuo»); **«parar no fim»** (`loop:false`/`--sem-loop`) é opt-in — a física **congela** e só o botão REINICIAR (contador atómico no ficheiro de controlo) recomeça.
-- **`site/`** — React construído com a skill **`motion-plus-ui`** (cascata `search`→`add`→`compor`; `../motion.theme`; npm, **não** pnpm): *todas* as métricas e controlos (curvas, rede 16→64→64→4 ao vivo, obs/ações, vento em tempo real, **vento dinâmico** — rajadas/frente/dryden/rajada, **rosa dos ventos viva**, **painel do Raspberry Pi 5**, **ajuda «?»** que explica cada elemento, REINICIAR, CONTINUIDADE **CONTÍNUO/PARAR NO FIM**). **CONTÍNUO** por omissão: o backend reinicia o episódio sozinho e o site nunca pede um REINICIAR que não é preciso.
-- **`site/` com SECÇÕES selecionáveis** — o painel não mostra tudo ao mesmo tempo: **Operação** (`1`: estado + valores atuais + curvas grandes) · **Rede** (`2`: ativações, observação, ação) · **Vento** (`3`: sliders, rosa, vento dinâmico) · **Bordo** (`4`: computador de bordo / RPi 5) · **Tudo** (`5`: layout completo). A escolha **persiste no `localStorage`**, os blocos escondidos usam `hidden` (continuam a atualizar, não são desmontados) e uma **barra crítica fixa** mostra sempre REINICIAR + CONTINUIDADE (CONTÍNUO/PARAR NO FIM) + estado em qualquer secção (faixa vermelha **só** com «parar no fim» no fim do episódio ou com a API em baixo); atalhos 1–5 não roubam teclas aos campos.
+- **`sim_view.py`** — janela 100 % **CLEAN** (só o 3D: `show_left_ui=False`, `show_right_ui=False`, `clear_texts`, zero `set_texts`/`set_figures`), telemetria JSONL (~10 Hz) e **SEM REINÍCIO por omissão** (`loop:false`, pedido do dono em 2026-10-09): **não pára nem reinicia nada** — no fim do episódio a física continua a integrar no estado em que ficou (o `passo`/`t` da telemetria continuam a subir e o `retorno` fica fixo) e só o botão REINICIAR (contador atómico no ficheiro de controlo) começa outro episódio. **CONTÍNUO** (`--com-loop`, alias antigo `--loop`) reinicia sozinho no fim (transição discreta). O `loop` é **sticky**: o ARRANQUE é autoritativo (corrige o `loop` do ficheiro de controlo — sem flag ou com `--sem-loop` para `false`, com `--com-loop` para `true`) e, depois do arranque, só o `POST /api/loop` do site o muda — as escritas parciais do controlo (vento, dinâmica, câmara) nunca tocam em `loop` nem em `reiniciar`. A **câmara da janela** também é do site (bloco `camera` + `POST /api/camera`, contrato v2 de **3ª-pessoa**: SEM `alvo` — o `lookat` segue o drone a cada frame, `body(CAM_CORPO).xpos + CAM_OFFSET`): os 3 valores de orbitar/zoom aplicam-se ao `viewer.cam` **1x por mudança de assinatura** (`seq`+valores), só apresentação — entre comandos o rato do viewer continua livre (ângulos/distância), mas o PAN é sobreposto pelo seguimento.
+- **`site/`** — React construído com a skill **`motion-plus-ui`** (cascata `search`→`add`→`compor`; `../motion.theme`; npm, **não** pnpm): *todas* as métricas e controlos (curvas, rede 16→64→64→4 ao vivo, obs/ações, vento em tempo real, **vento dinâmico** — rajadas/aleatoria/frente/dryden/rajada, **rosa dos ventos viva**, bloco **Câmara** — pad de orbitar (azimute/elevação) + distância da janela 3D em 3ª-pessoa (o alvo segue sempre o drone), com REPOR VISTA pelos valores de `camera_padrao`, **painel do Raspberry Pi 5**, **ajuda «?»** que explica cada elemento, REINICIAR, CONTINUIDADE **CONTÍNUO/SEM REINÍCIO**). **CONTÍNUO** por omissão: o backend reinicia o episódio sozinho; **SEM REINÍCIO** mostra o que o backend faz (a física continua no estado em que ficou) e o site nunca pede um REINICIAR que não é preciso.
+- **`site/` com SECÇÕES selecionáveis** — o painel não mostra tudo ao mesmo tempo: **Operação** (`1`: estado + valores atuais + curvas grandes) · **Rede** (`2`: ativações, observação, ação) · **Vento** (`3`: sliders, rosa, vento dinâmico) · **Bordo** (`4`: computador de bordo / RPi 5) · **Tudo** (`5`: layout completo). A escolha **persiste no `localStorage`**, os blocos escondidos usam `hidden` (continuam a atualizar, não são desmontados) e uma **barra crítica fixa** mostra sempre REINICIAR + CONTINUIDADE (CONTÍNUO/SEM REINÍCIO) + estado em qualquer secção (faixa vermelha **só** com a API em baixo — o fim do episódio sem reinício é uma linha NEUTRA, porque a física continua); atalhos 1–5 não roubam teclas aos campos.
 - **`assets/templates/front-conexao/`** — a pasta reutilizável com o **front + os códigos de conexão** (`site/`, `sim_view.py`, `sim_site.py`, **`CONTRATOS.md`**: controlo atómico, telemetria 15+2, API de 6 rotas, sem auto-loop) para colar em qualquer projeto. É uma **cópia única**: o `lab-padrao` **reutiliza-a por composição** (o `new_experiment.py` copia o bundle e sobrepõe-lhe o overlay do exemplo, `site/src/lib/config.ts`) — nada de manter 2-3 frentes iguais. Para criar só o bundle: `new_experiment.py <nome> --template front-conexao`.
 - **`INTERFACE.md`** — tudo o que é visível, elemento a elemento; auditoria `uxui-evaluator` (41 → 88/100 no painel; **43 → 94** depois das secções).
-- Contratos: `out/controle_vento.json` (7 campos + bloco `dinamico`) · `out/sim_telemetria.jsonl` (**15 + 2 chaves**, com `vento_vec`/`vento_modo`) · API de **6 rotas** (com `POST /api/vento-dinamico`) — literais em `assets/templates/front-conexao/CONTRATOS.md`.
+- Contratos: `out/controle_vento.json` (7 campos + blocos `dinamico` e `camera`) · `out/sim_telemetria.jsonl` (**19 chaves** = 15 campos + `loop`, `vento_modo`, `ctrl` e `camera`) · API de **8 rotas** (inclui `POST /api/vento-dinamico`, `POST /api/parar` e `POST /api/camera` — a câmara da janela 3D, só apresentação; o bundle `front-conexao` mantém as 6) — literais em `assets/templates/front-conexao/CONTRATOS.md` (o bundle) e em `experiments/09_drone_hover_rl/INTERFACE.md` (o contrato completo, com a convenção de sinais da câmara).
 
 ### 6 · Deploy no alvo (Raspberry Pi 5)
 ```bash
@@ -254,7 +255,7 @@ Os números oficiais (2,96 M / 3,35 M) não foram reproduzidos: a documentação
 ## Licença e contribuição
 
 - **Licença:** [MIT © 2026 Frederico Kluser](LICENSE). O [MuJoCo](https://github.com/google-deepmind/mujoco) é da Google DeepMind (Apache-2.0) e a documentação oficial espelhada em `docs/upstream/` **não** é versionada aqui (é gerada por `sync_docs.py`). Os modelos vendorizados em `models/*` mantêm as licenças upstream nos seus `LICENSE`.
-- **Contribuir:** ver [`CONTRIBUTING.md`](CONTRIBUTING.md) — `bash install.sh` · testes (`uv run pytest .agents/mujoco-lab-agent-skill/tests -q` — 30 · `run.py` 121/121 · `ruff check`) · convenções do laboratório · commits `tipo: resumo`.
+- **Contribuir:** ver [`CONTRIBUTING.md`](CONTRIBUTING.md) — `bash install.sh` · testes (`uv run pytest .agents/mujoco-lab-agent-skill/tests -q` — 30 · `run.py` 146/146 · `ruff check`) · convenções do laboratório · commits `tipo: resumo`.
 - **Segurança:** [`SECURITY.md`](SECURITY.md) — reportar vulnerabilidade por issue privada ou email do autor.
 - **Segredos:** nunca commitar chaves (`OPENROUTER_API_KEY`, `MOTION_TOKEN`, `TAVILY_*`, `ghp_`/`github_pat_`) — usar `~/.secrets` ou um `.env` fora do git.
 

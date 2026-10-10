@@ -85,7 +85,10 @@ for _caminho_sys in (str(_AQUI), str(_RAIZ)):     # `env` (irmão) e `lab` (raiz
     if _caminho_sys not in sys.path:
         sys.path.insert(0, _caminho_sys)
 
-OBS_DIM = 16                     # contrato do env: observação normalizada, sem VecNormalize ⇒ grafo puro
+OBS_DIM = 16                     # entrada do GRAFO: 16 no HoverEnv (cf2); na planta REAL = OBS_ATOR_DIM (21)
+OBS_ENV_DIM = 16                 # observação do ENV: 16 (cf2) ou 42 (real: ator 21 + crítico privilegiado 21)
+PLANTA = "cf2"                   # decidido no carregamento: política assimétrica (`_n_ator`) ⇒ "real"
+HARDWARE: dict | None = None     # hardware.json ao lado do modelo (peças com que a política foi treinada)
 ACAO_DIM = 4                     # [empuxo, momento x, momento y, momento z]
 FREQ_HZ = 50.0                   # decisão do env: decimation=10 × dt=0,002 s
 PERIODO_US = 1e6 / FREQ_HZ       # 20 000 µs — período do deadline a 50 Hz
@@ -230,7 +233,14 @@ def _cabe(p: dict) -> str:
 
 # ------------------------------------------------------------------------------------- env / modelo / obs
 def _novo_env():
-    """`HoverEnv` com a configuração default (a mesma do treino: alvo 1 m, decimation 10, ruído 0)."""
+    """Env de onde saem as observações REAIS: `HoverEnv` default (cf2) ou, na planta real, o
+    `DroneRealEnv` NOMINAL (sem DR) com o build/modo de ação do `hardware.json` do modelo."""
+    if PLANTA == "real":
+        from env_real import DroneRealEnv, build_do_hardware
+        build, motivo = build_do_hardware(HARDWARE)
+        print(f"      peças da política: {motivo}")
+        modo = (HARDWARE or {}).get("modo_acao", "ctbr")
+        return DroneRealEnv(build=build, modo_acao=modo, aleatorizar=False)
     from env import HoverEnv
     return HoverEnv()
 
@@ -283,12 +293,21 @@ def carregar_politica(caminho: Path):
     except Exception as e:                  # noqa: BLE001 — fronteira de I/O: qualquer falha é "modelo inválido"
         _erro(f"falha ao carregar o modelo {caminho} ({type(e).__name__}: {e}) — ficheiro corrompido/vazio, "
               f"não é um zip do Stable-Baselines3 ou foi gravado com outra versão")
+    global OBS_DIM, OBS_ENV_DIM, PLANTA, HARDWARE
     politica = modelo.policy
     forma_obs = tuple(modelo.observation_space.shape)
     forma_acao = tuple(modelo.action_space.shape)
-    if forma_obs != (OBS_DIM,) or forma_acao != (ACAO_DIM,):
+    if hasattr(politica, "_n_ator"):          # planta REAL: ator-crítico assimétrico (politica.py)
+        from env_real import OBS_DIM as _OBS_REAL
+        PLANTA, OBS_ENV_DIM, OBS_DIM = "real", int(forma_obs[0]), int(politica._n_ator)
+        hw = Path(caminho).parent / "hardware.json"
+        HARDWARE = json.loads(hw.read_text(encoding="utf-8")) if hw.is_file() else None
+        if forma_obs != (_OBS_REAL,) or forma_acao != (ACAO_DIM,):
+            _erro(f"o modelo espera obs {forma_obs} / ação {forma_acao}; o DroneRealEnv dá "
+                  f"({_OBS_REAL},) / ({ACAO_DIM},)")
+    elif forma_obs != (OBS_ENV_DIM,) or forma_acao != (ACAO_DIM,):
         _erro(f"o modelo espera obs {forma_obs} / ação {forma_acao}; o HoverEnv dá "
-              f"({OBS_DIM},) / ({ACAO_DIM},)")
+              f"({OBS_ENV_DIM},) / ({ACAO_DIM},)")
     politica.set_training_mode(False)        # sem dropout/batchnorm: caminho determinístico puro
     return modelo, politica
 
@@ -314,6 +333,8 @@ def exportar_onnx(politica, caminho_onnx: Path) -> dict:
             self.politica = politica
 
         def forward(self, obs):
+            if hasattr(self.politica, "acao_ator"):     # planta real: SÓ a parte real (sensores) entra
+                return self.politica.acao_ator(obs)
             features = self.politica.extract_features(obs, self.politica.pi_features_extractor)
             return self.politica.action_net(self.politica.mlp_extractor.forward_actor(features))
 
@@ -360,6 +381,7 @@ def criar_sessao(caminho: Path | str, threads: int = 1):
 
 def correr_grafo(sessao, obs: np.ndarray) -> np.ndarray:
     """Corre o grafo (lote ESTÁTICO = 1) observação a observação e devolve `(n, 4)`."""
+    obs = np.asarray(obs)[:, :OBS_DIM]        # o grafo só recebe a parte do ATOR (planta real)
     buf = np.zeros((1, OBS_DIM), dtype=np.float32)
     saida = np.empty((len(obs), ACAO_DIM), dtype=np.float32)
     for i, amostra in enumerate(obs):
@@ -412,7 +434,7 @@ def validar(sessao, politica, modelo, obs: np.ndarray) -> dict:
     d_media = float(np.abs(saida - media).max())
     d_privada_da_media = float(np.abs(privada - media).max())          # contraprova: _predict devolve a média
     d_predict = float(np.abs(saida - previsao).max())
-    fora_da_caixa = int(np.count_nonzero(np.abs(media) > 1.0))
+    fora_da_caixa = int(np.count_nonzero(np.any(np.abs(media) > 1.0, axis=1)))   # obs com ALGUMA média fora
 
     media_finita = _finitas(media)
     if referencia_ok and not media_finita:
@@ -437,6 +459,7 @@ def benchmark(sessao, obs_pool: np.ndarray, n: int, threads: int) -> dict:
     Observações/saídas não finitas são SINALIZADAS (`obs_finitas`/`saida_finita`), não escondidas: os tempos
     continuam válidos (o ORT corre à mesma), mas o resultado do grafo não é utilizável.
     """
+    obs_pool = np.asarray(obs_pool)[:, :OBS_DIM]   # só a parte do ATOR (planta real)
     buf = np.zeros((1, OBS_DIM), dtype=np.float32)
     n_pool = len(obs_pool)
     obs_finitas = _finitas(obs_pool)
@@ -499,7 +522,7 @@ def _processo_multi(indice: int, caminho_onnx: str, threads: int, duracao: float
             nucleo = obtidos[0] if len(obtidos) == 1 else None
 
     sessao = criar_sessao(caminho_onnx, threads)
-    buf = np.zeros((1, OBS_DIM), dtype=np.float32)
+    buf = np.zeros((1, obs_pool.shape[1]), dtype=np.float32)   # o filho (spawn) não herda o OBS_DIM do pai
     n_pool = len(obs_pool)
     periodo = 1.0 / FREQ_HZ
 
@@ -681,7 +704,7 @@ def main(argv=None) -> int:
     t_obs = time.perf_counter()
     obs, resets = gerar_observacoes(env, args.n_validacao, seed=args.seed)
     t_obs = time.perf_counter() - t_obs
-    print(f"\n[1/6] observações REAIS do HoverEnv: {obs.shape} float32 · {resets} resets · "
+    print(f"\n[1/6] observações REAIS do {'DroneRealEnv nominal' if PLANTA == 'real' else 'HoverEnv'}: {obs.shape} float32 · {resets} resets · "
           f"{t_obs:.1f} s · norma média {float(np.linalg.norm(obs, axis=1).mean()):.3f} "
           f"(passos de ação aleatória em [-1,1]⁴)")
 
@@ -768,7 +791,8 @@ def main(argv=None) -> int:
               f"(intra_op={args.threads})" + (f", afinidade ao core (i+1) % {args.nproc}"
                                               if args.pinned else ", sem afinidade") +
               f", loop a 50 Hz durante {args.duracao} s")
-        multi = correr_multi(onnx_caminho, args.nproc, args.duracao, args.threads, obs, args.pinned)
+        multi = correr_multi(onnx_caminho, args.nproc, args.duracao, args.threads, obs[:, :OBS_DIM],
+                             args.pinned)
         print(f"      {'proc':>4} {'pid':>7} {'core':>5} {'esp.':>5} {'iterações':>10} {'p50 µs':>9} "
               f"{'p99 µs':>9} {'max µs':>9} {'perdas':>7}")
         for r in multi["processos"]:
@@ -831,7 +855,11 @@ def main(argv=None) -> int:
                             "a média de 1 min reage devagar a testes de poucos segundos"},
         "modelo": {"caminho": str(modelo_caminho), "bytes": int(modelo_caminho.stat().st_size),
                    "mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(modelo_caminho.stat().st_mtime))},
-        "estatico": {"obs_dim": OBS_DIM, "acao_dim": ACAO_DIM, "freq_hz": FREQ_HZ,
+        "planta": PLANTA, "hardware": None if HARDWARE is None else {
+            "build": HARDWARE.get("build"), "modo_acao": HARDWARE.get("modo_acao"),
+            "massa_total_g": HARDWARE.get("derivados", {}).get("massa_total_g"),
+            "autonomia_min": HARDWARE.get("derivados", {}).get("autonomia_min")},
+        "estatico": {"obs_dim": OBS_DIM, "obs_env_dim": OBS_ENV_DIM, "acao_dim": ACAO_DIM, "freq_hz": FREQ_HZ,
                      "periodo_us": PERIODO_US, "periodo_100hz_us": PERIODO_100HZ_US},
         "cli": {"threads": args.threads, "threads_contraste": args.threads_contraste,
                 "timesteps_bench": args.timesteps_bench, "n_validacao": args.n_validacao,
@@ -839,7 +867,8 @@ def main(argv=None) -> int:
                 "int8": bool(args.int8), "skip_multi": bool(args.skip_multi), "seed": args.seed},
         "onnx": info_onnx, "validacao": validacao,
         "observacoes": {"n": len(obs), "resets": int(resets), "seed": int(args.seed),
-                        "geracao_s": float(t_obs), "politica": "aleatória em [-1,1]^4 sobre o HoverEnv"},
+                        "geracao_s": float(t_obs), "politica": "aleatória em [-1,1]^4 sobre o "
+                        + ("DroneRealEnv nominal" if PLANTA == "real" else "HoverEnv")},
         "benchmark": bench, "benchmark_contraste": bench_contraste, "int8": int8, "multi_ia": multi,
         "proxy": "PC desta máquina — PROXY, não o Raspberry Pi 5 (4×A76) alvo; o int8 ~1,83× no RPi vem "
                  "de outra pesquisa, não deste benchmark",

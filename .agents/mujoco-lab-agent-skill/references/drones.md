@@ -241,6 +241,13 @@ for k in (1, 100):                                                          # ge
 X2 com o PD do §3.1: t_s 1.52 s, sem sobressinal (✔ bloco; Q8: 1.51 s). Q8 (mesmo tipo de controlador, estado exato): X2 recupera 20° em 0.33 s (rotores saturam em 0 e 13 N) e, com vento 4 m/s e PID, termina com x ≈ 0 e arfagem −1.78°; CF2 como distribuído (PD) sobe 0.5→0.8 m com t_s 2.0 s e sobressinal 5.7 %.
 
 ## 5. Limites: o que o MuJoCo NÃO modela
+
+> **Implementado no laboratório (2026-10-10)**: `lab/drone_rpi/` traz, por rotor e por passo de física, o efeito de solo
+> multirrotor (Sanchez-Cuevas 2017, `mj_ray` ao chão), o empuxo vs inflow axial (BEMT ajustado à curva C_T(J) da APC
+> 15×5.5MR), o VRS, o arrasto de rotor (Faessler & Franchi), o download do frame (NASA), o giroscópico, o motor BLDC
+> elétrico + ESC (curva calibrada nas tabelas T-Motor: a 100 % o rpm é só 0,64–0,80·KV·V) e a bateria Thevenin com
+> SoC/desgaste — tudo pelo `mj_step1`→forças→`mj_step2` e validado no `experiments/09_drone_hover_rl/valida_real.py`.
+
 | Efeito | Evidência | O que fazer |
 |---|---|---|
 | Efeito de solo (+20–37 % de empuxo na literatura) | ✔ empuxo idêntico de z = 0.02 a 5 m (bloco) | `xfrc_applied` com ganho `g(z)` calibrado (bloco) |

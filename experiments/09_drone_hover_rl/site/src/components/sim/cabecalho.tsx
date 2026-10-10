@@ -67,6 +67,8 @@ interface CabecalhoProps {
   modelo: string | null
   ligacao: Ligacao
   atualizadoEm: number | null
+  /** Subtítulo alternativo (planta real: build, obs do ator, ação ctbr); sem ele fica o do Crazyflie 2. */
+  subtitulo?: string
 }
 
 function Contador({
@@ -110,6 +112,7 @@ export function Cabecalho({
   modelo,
   ligacao,
   atualizadoEm,
+  subtitulo,
 }: CabecalhoProps) {
   // `modelo` já vem do `modelo_nome` do /api/state (pasta/ficheiro.zip); o caminho ABSOLUTO nunca entra
   // no DOM — este é um rótulo de painel, não um explorador de ficheiros, e a página pode ser partilhada.
@@ -126,7 +129,8 @@ export function Cabecalho({
             Drone a pairar · política ao vivo
           </StaggerRevealHeadline>
           <StaggerRevealItem as="p" className="text-xs text-muted-foreground">
-            Crazyflie 2 (MuJoCo 3.15) · obs 16 → 64 → 64 → 4 ações · alvo z = 1,0 m
+            {subtitulo ??
+              "Crazyflie 2 (MuJoCo 3.15) · obs 16 → 64 → 64 → 4 ações · alvo z = 1,0 m"}
           </StaggerRevealItem>
         </StaggerReveal>
         <div className="flex flex-wrap items-center gap-2">

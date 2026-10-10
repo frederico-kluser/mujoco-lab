@@ -176,7 +176,7 @@ Constantes derivadas (`lab/crazyflie.py:39-56`): `MASSA = 0.027 kg` · `PESO = M
 **modelo fresco** (o `env.py` compila o seu próprio `MjModel` em cada `HoverEnv(...)`), impõe estados à mão
 e compara com o que a teoria diz, **sem histórico de simulação** — e sai com **exit 0/1**.
 
-No drone são **121 checagens** em 8 secções:
+No drone são **146 checagens** em 8 secções:
 
 | secção | o que prova |
 |---|---|
@@ -187,7 +187,7 @@ No drone são **121 checagens** em 8 secções:
 | 5 · observação | forma (16,), escalas por bloco, coerência do bloco de yaw, transformação mundo→corpo, ruído |
 | 6 · Gymnasium | `reset(seed)` determinístico (incluindo o vento sorteado), `info` com 8 chaves, truncagem, e o **`check_env` do Stable-Baselines3** |
 | 7 · contrato do modelo | `nu`, sensores, `dt`, `decimation`, `ctrladr` 1:1 — e **`cf2.xml` upstream intacto** |
-| 8 · vento dinâmico | `rajadas` contra o envelope `u·sin(π·k/(N+1))`, `frente` com o degrau em `floor(t_s/0,02)+1`, `dryden` contra o OU `x ← α·x + σ·√(1−α²)·ξ` |
+| 8 · vento dinâmico | `rajadas` contra o envelope `u·sin(π·k/(N+1))`, `aleatoria` contra a mistura `base + sin(π·k/(N+1))·(rajada − base)` (a rajada é sorteada por inteiro), `frente` com o degrau em `floor(t_s/0,02)+1`, `dryden` contra o OU `x ← α·x + σ·√(1−α²)·ξ` |
 
 Duas ideias que valem a pena reter: (a) a secção 7 **verifica por hash/atributo que o XML upstream não foi
 tocado** — o contrato da camada 1 é testado, não só prometido; (b) a secção 2 compara a recompensa do
@@ -259,17 +259,21 @@ solver de fluido subtrai à velocidade do corpo no cálculo do arrasto inercial.
 Magnitudes de referência (m = 27 g, W = 0,265 N): a **3 m/s** o arrasto inercial vale ≈10 % do peso; a
 5 m/s ≈29 %.
 
-**Vento dinâmico (ronda 10)** — três modos, validados por `env.valida_vento_dinamico()`:
+**Vento dinâmico (ronda 10, com o modo `aleatoria` acrescentado depois)** — quatro modos, validados por
+`env.valida_vento_dinamico()`:
 
 | modo | o que faz a cada passo de decisão (50 Hz) |
 |---|---|
 | `rajadas` | com prob. `p` (0,02) sorteia uma rajada que **soma** ao vento base durante `duracao` (10 passos = 0,2 s) |
+| `aleatoria` | a mecânica de `rajadas`, mas cada rajada re-sorteia **direção e força por inteiro** (U[0, 5] m/s, azimute U[0, 360°), elevação U[±90°]) e é aplicada por **mistura** com o vento base pelo mesmo envelope — no pico do envelope o vento *é* o vetor sorteado e nas pontas fica junto do base; só `p` e `duracao` têm semântica |
 | `frente` | no instante `t_s` (2,0 s) chega uma frente que **substitui** o vento base até ao fim |
 | `dryden` | **turbulência** OU de 1.ª ordem (filtro de Dryden discreto), saturada em ±`u_max` |
 
-Detalhe de desenho que denuncia cuidado: **`u_max = 0` é inerte nos três modos** e, importante, **não
+Detalhe de desenho que denuncia cuidado: **`u_max = 0` é inerte em todos os modos** e, importante, **não
 consome o `np_random`** — logo um estágio sem vento é indistinguível do contrato v2b. Sem essa guarda, os
-modos não-`rajadas` consumiriam números aleatórios e mudariam silenciosamente o comportamento.
+modos não-`rajadas` consumiriam números aleatórios e mudariam silenciosamente o comportamento. O
+`aleatoria` é a exceção ao teto: ignora o `u_max` (sorteia sempre em U[0, 5] m/s) e só a guarda `u_max = 0`
+o deixa inerte.
 
 **O `reset` não teleporta — e isto é a regra do dono a aparecer no código.** O reset faz
 `mj_resetDataKeyframe` (keyframe `hover`, z = 0,1 m), **zera o `ctrl` (motores desligados)**, aplica
@@ -296,7 +300,7 @@ recompensa NaN com `terminated=False` para sempre — envenenaria o treino em si
 2. **Currículo de vento** — `--curriculo-vento 0,1,2,3` sobe o teto do DR em estágios, e **só avança
    quando a política atinge o critério** (`frac_xy_z ≥ --avanco-frac`).
 3. **`--retomar`** — fine-tune a partir de um checkpoint, em vez de treinar de zero.
-4. **Vento dinâmico no treino** — `--vento-dinamico rajadas|frente|dryden`, mudando **dentro** do episódio.
+4. **Vento dinâmico no treino** — `--vento-dinamico rajadas|aleatoria|frente|dryden`, mudando **dentro** do episódio.
 
 **Defaults reais do CLI** (fase v2b): `n_envs 8`, `n_steps 512`, `lr 1e-4`, `ent_coef 0,001`,
 `log_std_init −0,5`, `weight_decay 1e-4`, `--curriculo-vento 0,1,2,3`.
@@ -368,33 +372,34 @@ estiver ocupada, tenta a seguinte e imprime o URL real. `Ctrl+C` fecha servidor 
 | `azimute` | direção horizontal, 0–360° (**0° = +x, 90° = +y**, anti-horário) |
 | `elevacao` | componente vertical, −90…90° |
 | `ativo` | `false` ⇒ vento **0** na física (direção/força ficam guardadas) |
-| `reiniciar` | **contador inteiro**; quando **muda**, o runner faz `env.reset()` — é o **ÚNICO** caminho para recomeçar |
-| `loop` | `true` liga o auto-reset no fim do episódio; **campo ausente = não mexe** |
+| `reiniciar` | **contador inteiro**; quando **muda**, o runner faz `env.reset()` — é o **ÚNICO reset pedido por fora**, e vale com e sem `loop` (com CONTÍNUO há ainda o auto-reset do próprio runner) |
+| `loop` | `true` = **CONTÍNUO** (o runner reinicia sozinho no fim do episódio: ep+1); `false` = **SEM REINÍCIO** (o runner **não pára nem reinicia nada** — no fim do episódio a física continua a integrar no estado em que ficou, `passo` e `t` continuam a subir e o `retorno` fica fixo — e só o REINICIAR começa outro episódio); **campo ausente = não mexe**. É **STICKY**: `--sem-loop` é autoritativo no arranque (vence um `true` velho do ficheiro e corrige-o) e, depois, só o `POST /api/loop` o muda — uma escrita parcial nunca o converte em `true`. Um `POST /api/loop` feito **durante a janela de arranque** (o runner ainda a importar o SB3/torch) **nunca é revertido**: o site carimba a escrita de arranque com `loop_arranque` + um token que passa ao filho, e o POST limpa o carimbo — o runner respeita o que já não é o carimbo dele |
 | `t` | carimbo de tempo (informativo) |
-| **`dinamico`** | *(opcional, acrescentado na ronda 10)* `{modo, params, ativo, seq}` — liga o **vento dinâmico ao vivo** (`rajadas`/`frente`/`dryden`/`nenhum`) **sem reiniciar o episódio**. Ver §9, ponto 1 |
+| **`dinamico`** | *(opcional, acrescentado na ronda 10)* `{modo, params, ativo, seq}` — liga o **vento dinâmico ao vivo** (`nenhum`/`rajadas`/`aleatoria`/`frente`/`dryden`, mais `rajada_agora` = rajada dirigida one-shot) **sem reiniciar o episódio**; com um modo ativo, editar um campo do painel aplica-se sozinho ao fim de ~300 ms (live-apply). Ver §9, ponto 1 |
 
 O runner deteta mudanças pela assinatura `mtime_ns + tamanho` — logo **escrever o ficheiro à mão também
 funciona** (é um contrato de ficheiro, não uma API privada). E o padrão de "campo ausente = não mexe"
 aplica-se a `loop`, `reiniciar` e `dinamico`: um ficheiro escrito à mão só com `{"vel":2}` continua
 válido e não reinicia nada nem desliga o loop.
 
-**`out/sim_telemetria.jsonl` — o runner escreve, o site lê** (15 campos, uma linha JSON por amostra,
-sempre com `flush`):
+**`out/sim_telemetria.jsonl` — o runner escreve, o site lê** (**18 chaves** = 15 campos + `loop`,
+`vento_modo` e `ctrl`, uma linha JSON por amostra, sempre com `flush`):
 
 | campo | significado |
 |---|---|
-| `t` | tempo de **simulação** do episódio (s); volta a 0 em cada reset |
-| `estado` | `a_correr` ou `episodio_terminado` |
-| `ep` · `passo` | nº do episódio · passo de decisão (0–500 = 10 s a 50 Hz) |
+| `t` | tempo de **simulação** do episódio (s); volta a 0 em cada reset — com SEM REINÍCIO continua a crescer depois do fim do episódio (é a prova de que a física não parou nem reiniciou) |
+| `estado` | `a_correr` ou `episodio_terminado` — **`episodio_terminado` diz que o EPISÓDIO fechou** e não houve reinício, **não** que a física parou (com SEM REINÍCIO ela continua a integrar no estado em que ficou) |
+| `ep` · `passo` | nº do episódio · passo de decisão (0–500 = 10 s a 50 Hz); sem reinício o `passo` cresce para lá dos 500 |
 | `retorno` | recompensa v2b acumulada |
 | `z` · `dist_xy` · `yaw_err` | as **3 métricas** de voo |
 | `vento_vel` · `vento_azim` | vento **em vigor na física** (não o slider) |
+| `loop` · `vento_modo` | o modo de continuidade em vigor · o modo de vento dinâmico em vigor (`nenhum` quando não há dinâmica) |
 | `obs` (16) · `act` (4) | o que a rede viu · o que a rede mandou (média crua) |
 | `ctrl` (4) | o comando **físico** que a ação produziu: `[empuxo N, mx, my, mz N·m]` |
 | `h1` (64) · `h2` (64) | ativações das camadas escondidas, **na mesma linha** que `obs`/`act` — logo alinhadas |
 
-Cadência: **~10 Hz** com o episódio a correr, **1 Hz** com ele parado (batimento, porque o estado não
-muda) e **uma linha imediata** no instante em que termina.
+Cadência: **~10 Hz sempre** (com o episódio a correr ou já terminado — não há batimento lento) e **uma linha
+imediata** no instante em que termina e em cada REINICIAR.
 
 **A API: 5 rotas documentadas — mas são 6 no código.** Ver §9 (é a única divergência real que encontrei
 entre a documentação e a implementação).
@@ -413,10 +418,18 @@ Estados honestos: **400** (valor/faixa inválidos, com `{"erro","codigo"}`), **4
 **500** (falha interna — nenhum pedido mata o servidor). No site, quando não há dados mostra-se «—»,
 **nunca números inventados**.
 
-**Sem auto-loop, e isto é uma decisão de operação, não uma limitação.** No fim do episódio
-(`terminated` ou `truncated`) a física **congela**: a janela fica viva, o drone fica onde está, e não há
-episódio seguinte nenhum. Só o **REINICIAR** do site (ou `loop: true` / `--loop`) recomeça. O runner
-imprime a geometria completa aqui — quem estiver a ver percebe *porque* parou.
+**SEM REINÍCIO é o modo por omissão (pedido do dono, 2026-10-09: o simulador arranca com o loop DESLIGADO);
+SEM REINÍCIO não pára nada — e isto é uma decisão de operação, não uma
+limitação.** No fim do episódio (`terminated` ou `truncated`), o modo **CONTÍNUO** (`loop: true` /
+`--com-loop`) arranca logo o episódio seguinte; o modo **SEM REINÍCIO** (`loop: false` / `--sem-loop`) **não
+reinicia nem pára a física**: o drone continua a voar no estado em que ficou, com `passo`/`t` a crescer na
+telemetria e o `retorno` fixo. O arranque é **autoritativo** (corrige o `loop` do ficheiro de controlo, nos
+dois sentidos) e depois dele só o `POST /api/loop` muda o modo — e um `POST /api/loop` feito **durante a
+janela de arranque** (com o runner ainda a importar) vence na mesma: nunca é revertido (ver a linha `loop` da
+tabela do controlo). Em qualquer dos modos o **REINICIAR** do site
+(contador no ficheiro de controlo) é o único
+reset pedido por fora; no SEM REINÍCIO é o **único** caminho para começar outro episódio. O runner imprime a
+geometria completa aqui — quem estiver a ver percebe *como* o episódio acabou.
 
 **O site** (`experiments/09_drone_hover_rl/site/`) é React 19 + Vite 8 + Tailwind 4, construído com a
 skill **`motion-plus-ui`** (registry `@motion`), com **polling a `GET /api/sim` a 2,9 Hz**
@@ -429,7 +442,7 @@ skill **`motion-plus-ui`** (registry `@motion`), com **polling a `GET /api/sim` 
 | 4 curvas | `z(t)` (com linha de alvo 1,0 m) · `yaw_err(t)` · `retorno(t)` · `vento_vel(t)` |
 | rede ao vivo | **16 → 64 → 64 → 4**, cada retângulo um neurónio; cor/opacidade = `|ativação|` normalizada ao máximo da camada; **primary** = positiva, **destructive** = negativa |
 | obs + ação | tabela das 16 obs (valor normalizado **e** cru) + cartão da ação com empuxo em N (com traço de referência no hover) e momentos em mN·m |
-| controlos | sliders de força/azimute/elevação + **rosa dos ventos** (SVG) · **APLICAR VENTO** (`multi-state-button`) · **PARAR VENTO** · **REINICIAR** (`hold-to-confirm`, manter ~1 s) · **LOOP** (`segmented-toggle`, OFF por omissão) |
+| controlos | sliders de força/azimute/elevação + **rosa dos ventos** (SVG) · **APLICAR VENTO** (`multi-state-button`) · **PARAR VENTO** · **vento dinâmico** (`segmented-toggle`: PARADO/RAJADAS/ALEATÓRIA/DRYDEN + **RAJADA AGORA**/**FRENTE AGORA**) · **REINICIAR** (`hold-to-confirm`, manter ~1 s) · **LOOP** (`segmented-toggle`, **SEM REINÍCIO por omissão** desde 2026-10-09 — o arranque corrige o ficheiro e depois só o `POST /api/loop` o muda) |
 
 Dois detalhes que revelam a filosofia: a rede **não desenha arestas** entre neurónios, porque o contrato de
 telemetria traz **ativações, não pesos** — desenhar ligações seria inventar dados; e sem ativações a
@@ -489,7 +502,7 @@ usa. O `deploy.py` regista o `/proc/loadavg` antes e depois em todos os relatór
   ║            ├─ recompensa v2b       ├─ vento FÍSICO via opt.wind                          ║
   ║            ├─ reset POUSADO        └─ guardas NaN → RuntimeError                         ║
   ║            │                                                                             ║
-  ║            ├──▶ run.py       121 checagens por fórmulas fechadas ......... exit 0/1      ║
+  ║            ├──▶ run.py       146 checagens por fórmulas fechadas ......... exit 0/1      ║
   ║            │                                                                             ║
   ║            ├──▶ train.py     PPO + currículo + DR ──▶ best_model.zip / final.zip         ║
   ║            │                        │                                                    ║
@@ -568,7 +581,7 @@ ativo no treino.
 | pior caso a 3 m/s | `‖xy‖ = 0,084–0,096 m` — **abaixo do limite estrito de 0,10** |
 | subida | atinge a faixa [0,95, 1,05] m em **59–66 passos** (≈1,2 s) e fica lá |
 | `z` mínimo de todo o episódio | **0,015 m** — é o repouso no chão do 1.º passo, com motores desligados (o `reset` não teleporta) |
-| ambiente | `run.py` **121/121** · suíte do laboratório **29 passed** |
+| ambiente | `run.py` **146/146** · suíte do laboratório **30 passed** |
 
 ### O que o padrão ensinou (e que está registado para não se repetir)
 
@@ -705,8 +718,8 @@ foram confirmadas a 2026-10-08.
 1. **A API tem 6 rotas, não 5.** `README.md:100`, `INTERFACE.md` §4.3 e o `LEIAME.md` do `lab-padrao`
    falam de "API de 5 rotas" e listam `GET /api/sim`, `GET /api/state`, `POST /api/vento`,
    `POST /api/reiniciar`, `POST /api/loop`. O código tem **mais uma**:
-   **`POST /api/vento-dinamico`** (`sim_site.py:494`, handler em `_post_vento_dinamico`), que liga a
-   dinâmica de vento ao vivo (rajadas/frente/dryden) **sem** reiniciar o episódio — e que **o site usa**
+   **`POST /api/vento-dinamico`** (`sim_site.py:752`, handler em `_post_vento_dinamico`), que liga a
+   dinâmica de vento ao vivo (rajadas/aleatoria/frente/dryden) **sem** reiniciar o episódio — e que **o site usa**
    (`site/src/lib/api.ts:116`, `App.tsx:111`). Não é código morto: é uma rota integrada que ficou fora da
    documentação. É a única divergência **material** que encontrei.
 2. **`INTERFACE.md` §3.5 diz que as dinâmicas de treino "existem no ambiente e no treino, não neste
@@ -726,7 +739,7 @@ foram confirmadas a 2026-10-08.
    `/api/state` **não** publica `mg`/`thrust_max`/`momento_max`/`tau_escala`: quem mexer no site tem de
    saber que esses números estão duplicados no TypeScript.
 
-Nada disto afeta a física, o treino ou os resultados — as 121 checagens do `run.py`, os 57/57 e os 144/144
+Nada disto afeta a física, o treino ou os resultados — as 146 checagens do `run.py`, os 57/57 e os 144/144
 foram todos reproduzidos/confirmados contra os artefactos em disco. São divergências **de documentação**,
 e a correção delas é trabalho de minutos.
 

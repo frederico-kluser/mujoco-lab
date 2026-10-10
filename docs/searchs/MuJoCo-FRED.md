@@ -6,6 +6,21 @@
 >
 > Verificado contra o código e os artefactos em disco a **2026-10-08**. Onde os documentos do repositório
 > e o código divergem, este documento diz qual é o caso real (ver §9).
+>
+> **Errata 2026-10-09** — isto é o registo datado de 2026-10-08 (a fotografia; o documento vivo é
+> [`docs/o-padrao-do-drone.md`](docs/o-padrao-do-drone.md)), e o experimento mudou depois. Duas correções ao
+> que se lê abaixo: **(1) o `loop` mudou de semântica** — `true` = **CONTÍNUO** (o runner reinicia sozinho no
+> fim do episódio) e `false` / `--sem-loop` = **SEM REINÍCIO** (a física **nunca pára nem reinicia**: no fim
+> do episódio continua a integrar no estado em que ficou, com `passo` e `t` a crescer e o `retorno` fixo);
+> o **REINICIAR** (contador `reiniciar`) é o único reset e vale com e sem `loop`; o `loop` é **sticky**
+> (`--sem-loop` é autoritativo no arranque e depois só o `POST /api/loop` o muda; escritas parciais nunca
+> tocam em `loop`/`reiniciar`); `episodio_terminado` na telemetria quer dizer «o episódio fechou, a física
+> continua» — **não** que a física parou. **(2) os modos de vento dinâmico são** `nenhum`, `rajadas`,
+> `aleatoria`, `frente`, `dryden` e `rajada_agora` (rajada única): o `aleatoria` (novo) faz rajadas com
+> direção e força **totalmente aleatórias** dentro das faixas disponíveis (U[0, 5] m/s, azimute U[0, 360°),
+> elevação U[±90°]), aplicadas por **mistura** `base + sin(π·k/(N+1))·(rajada − base)`, com `p`/`duracao`
+> (0,02 / 10), **live-apply ≈300 ms** no site e `u_max = 0` inerte em todos os modos. A telemetria passou a
+> **18 chaves** (15 campos + `loop`, `vento_modo` e `ctrl`), publicada a ~10 Hz sempre.
 ---
 ## 1. Em uma página
 O **padrão do drone** é a resposta a uma pergunta prática: *como é que eu pego um robô que não é meu, faço-o
@@ -285,9 +300,9 @@ estiver ocupada, tenta a seguinte e imprime o URL real. `Ctrl+C` fecha servidor 
 | `elevacao` | componente vertical, −90…90° |
 | `ativo` | `false` ⇒ vento **0** na física (direção/força ficam guardadas) |
 | `reiniciar` | **contador inteiro**; quando **muda**, o runner faz `env.reset()` — é o **ÚNICO** caminho para recomeçar |
-| `loop` | `true` liga o auto-reset no fim do episódio; **campo ausente = não mexe** |
+| `loop` | `true` liga o auto-reset no fim do episódio; **campo ausente = não mexe** — *(errata 2026-10-09: `true` = CONTÍNUO, `false`/`--sem-loop` = SEM REINÍCIO, a física nunca pára nem reinicia; sticky, só o `POST /api/loop` o muda; ver a nota no topo)* |
 | `t` | carimbo de tempo (informativo) |
-| **`dinamico`** | *(opcional, acrescentado na ronda 10)* `{modo, params, ativo, seq}` — liga o **vento dinâmico ao vivo** (`rajadas`/`frente`/`dryden`/`nenhum`) **sem reiniciar o episódio**. Ver §9, ponto 1 |
+| **`dinamico`** | *(opcional, acrescentado na ronda 10)* `{modo, params, ativo, seq}` — liga o **vento dinâmico ao vivo** (`rajadas`/`frente`/`dryden`/`nenhum`) **sem reiniciar o episódio**. Ver §9, ponto 1 — *(errata 2026-10-09: os modos são `nenhum`/`rajadas`/`aleatoria`/`frente`/`dryden`, mais `rajada_agora`; ver a nota no topo)* |
 O runner deteta mudanças pela assinatura `mtime_ns + tamanho` — logo **escrever o ficheiro à mão também
 funciona** (é um contrato de ficheiro, não uma API privada). E o padrão de "campo ausente = não mexe"
 aplica-se a `loop`, `reiniciar` e `dinamico`: um ficheiro escrito à mão só com `{"vel":2}` continua
@@ -321,10 +336,14 @@ entre a documentação e a implementação).
 Estados honestos: **400** (valor/faixa inválidos, com `{"erro","codigo"}`), **404** (rota/asset/traversal),
 **500** (falha interna — nenhum pedido mata o servidor). No site, quando não há dados mostra-se «—»,
 **nunca números inventados**.
-**Sem auto-loop, e isto é uma decisão de operação, não uma limitação.** No fim do episódio
-(`terminated` ou `truncated`) a física **congela**: a janela fica viva, o drone fica onde está, e não há
-episódio seguinte nenhum. Só o **REINICIAR** do site (ou `loop: true` / `--loop`) recomeça. O runner
-imprime a geometria completa aqui — quem estiver a ver percebe *porque* parou.
+**(2026-10-08) Sem auto-loop, e isto era uma decisão de operação, não uma limitação.** No fim do episódio
+(`terminated` ou `truncated`) a física **parava no estado em que estava** — era essa a semântica da altura:
+a janela continuava viva, o drone ficava onde estava e não havia episódio seguinte nenhum; só o
+**REINICIAR** do site (ou `loop: true` / `--loop`) recomeçava. **Errata 2026-10-09:** isto já não é assim —
+hoje `loop: true` = **CONTÍNUO** (o runner reinicia sozinho no fim do episódio) e `false` / `--sem-loop` =
+**SEM REINÍCIO**, em que a física **continua a integrar** no estado em que ficou (nunca pára nem reinicia) e
+o REINICIAR é o único reset; ver a nota no topo. O runner imprimia a geometria completa aqui — quem
+estivesse a ver percebia *como* o episódio acabou.
 **O site** (`experiments/09_drone_hover_rl/site/`) é React 19 + Vite 8 + Tailwind 4, construído com a
 skill **`motion-plus-ui`** (registry `@motion`), com **polling a `GET /api/sim` a 2,9 Hz**
 (`INTERVALO_POLLING_MS = 350`) — **sem websockets**. Uma página, duas colunas: **métricas** (esquerda) e

@@ -48,7 +48,7 @@ export const SECOES: MetaSecao[] = [
     rotulo: "Operação",
     tecla: "1",
     paraQueServe:
-      "vigiar o voo: cabeçalho (selo de estado, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel) e as 4 curvas grandes",
+      "vigiar o voo e enquadrar a cena: cabeçalho (selo de estado, modelo), valores atuais (z, dist_xy, yaw_err, vento_vel), as 4 curvas grandes e o bloco Câmara (pad de órbita + distância da janela 3D)",
   },
   {
     id: "rede",
@@ -62,14 +62,14 @@ export const SECOES: MetaSecao[] = [
     rotulo: "Vento",
     tecla: "3",
     paraQueServe:
-      "comandar o vento: sliders do vento constante, rosa dos ventos e vento dinâmico (rajadas, Dryden, frente)",
+      "comandar o vento: sliders do vento constante, rosa dos ventos e vento dinâmico (rajadas, aleatórias, Dryden, frente)",
   },
   {
     id: "bordo",
     rotulo: "Bordo",
     tecla: "4",
     paraQueServe:
-      "acompanhar o computador de bordo: painel do Raspberry Pi 5 (latências, semáforo, specs)",
+      "acompanhar o computador de bordo: painel do Raspberry Pi 5 (latências, semáforo, specs) e, só na planta real, os blocos Bateria, Motores e potência e Hardware (peças reais)",
   },
   {
     id: "tudo",
@@ -237,14 +237,20 @@ interface BarraEstadoProps {
   loop: boolean
   ligacao: Ligacao
   erro: string | null
+  /**
+   * Indicador extra no fim da faixa (planta real: SoC % + alerta da bateria — `IndicadorBateria`).
+   * Sem ele (cf2) a faixa fica exatamente como sempre foi.
+   */
+  indicador?: ReactNode
 }
 
 /**
  * Faixa de estado SEMPRE visível (qualquer secção): neutra quando tudo corre bem, vermelha e com
- * `role="alert"` quando há crítico — e o crítico é só o que EXIGE ação: **API em baixo** ou
- * **episódio terminado com `loop:false`** (modo «parar no fim»). Com o backend CONTÍNUO (por omissão) o
- * episódio a terminar é uma transição normal: diz-se numa linha neutra e o backend arranca o seguinte
- * sozinho — o dono não quer ser travado com um «clica REINICIAR» que não é preciso.
+ * `role="alert"` quando há crítico — e o crítico é só o que EXIGE ação: **API em baixo**.
+ * **Episódio terminado com `loop:false`** (modo «sem reinício») é uma linha neutra: o episódio fechou
+ * mas a física CONTINUA no estado em que ficou (não congela), portanto não há nada a exigir — o
+ * REINICIAR é opcional e só serve para começar outro episódio. Com o backend CONTÍNUO o episódio a
+ * terminar também é uma transição normal (o backend arranca já o seguinte).
  */
 export function BarraEstado({
   estado,
@@ -252,32 +258,33 @@ export function BarraEstado({
   loop,
   ligacao,
   erro,
+  indicador,
 }: BarraEstadoProps) {
   const ui = useMotionUITransition("ui")
   const terminado = estado === "episodio_terminado"
   const semLigacao = ligacao === "sem_ligacao"
-  /** Terminado E sem continuidade: é aqui (e só aqui) que o episódio PRECISA de REINICIAR. */
-  const paradoNoFim = terminado && !loop
-  const critico = paradoNoFim || semLigacao
+  /** Terminado E sem reinício automático: o episódio fechou e a física continua — o REINICIAR é opcional. */
+  const semReinicio = terminado && !loop
+  const critico = semLigacao
   // Com a API em baixo o estado do episódio é VELHO: o alerta fresco (ligação) tem prioridade.
   const testid = semLigacao
     ? "aviso-ligacao"
-    : paradoNoFim
+    : semReinicio
       ? "aviso-terminado"
       : terminado
         ? "aviso-transicao"
         : "aviso-a-correr"
   const texto = semLigacao
     ? `sem resposta do servidor da simulação — a tentar de novo a cada 0,35 s${erro ? ` · ${erro}` : ""}`
-    : paradoNoFim
-      ? `episódio ${fmt(ep, 0)} terminado — clica REINICIAR`
+    : semReinicio
+      ? `episódio ${fmt(ep, 0)} terminado · sem reinício: a física continua no estado em que ficou (REINICIAR = episódio novo)`
       : terminado
         ? `episódio ${fmt(ep, 0)} terminado · modo contínuo: o backend arranca já o seguinte`
         : ligacao === "a_ligar"
           ? "à espera da API…"
           : loop
             ? "episódio a correr · modo contínuo (o backend reinicia ao terminar)"
-            : "episódio a correr · parar no fim do episódio"
+            : "episódio a correr · sem reinício (a física continua depois do fim)"
 
   return (
     <motion.div
@@ -304,6 +311,7 @@ export function BarraEstado({
       >
         loop={loop ? "true" : "false"} · estado={estado}
       </span>
+      {indicador}
     </motion.div>
   )
 }
