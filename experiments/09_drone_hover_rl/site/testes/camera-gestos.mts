@@ -27,6 +27,7 @@ import {
   descreverCamera,
   distanciaDeFracao,
   elevacaoDePontoLado,
+  estabilizarRumo,
   fracaoDeDistancia,
   limitesDistancia,
   MaquinaCamera,
@@ -84,6 +85,24 @@ ok(perto(pontoTopoDeAzimute(0).sy, 1) && perto(pontoTopoDeAzimute(0).sx, 0), "az
 ok(perto(pontoTopoDeAzimute(90).sx, 1), "azimute 90° (olha para +y, a esquerda) = câmara à DIREITA")
 ok(azimuteDePontoTopo(0.1, 0.1, 1) === null, "vista de cima: muito perto do centro não há direção (null)")
 ok(rotacaoGlifoTopo(30) === -30, "glifo do drone: rumo + (nariz para a esquerda) roda −ψ no SVG")
+
+// 1a-bis. estabilizarRumo: morta-banda da moldura «relativa ao nariz» (o rumo deriva 2–7° no voo e fazia
+// a vista de cima da câmara rodar sozinha; ver o docstring de estabilizarRumo)
+ok(estabilizarRumo(3, 0) === 0, "morta-banda: deriva de 3° NÃO move a moldura")
+ok(estabilizarRumo(9.9, 0) === 0, "morta-banda: até ao limiar (10°) a moldura fica parada")
+ok(perto(estabilizarRumo(10.1, 0), 10.1), "morta-banda: acima do limiar a moldura ACOMPANHA (snap)")
+ok(perto(estabilizarRumo(-25, 0), -25), "morta-banda: rotação real negativa também acompanha")
+ok(estabilizarRumo(355, 0) === 0, "morta-banda: 355° ≡ −5° — deriva de 5° através da costura de ±180 fica parada (sem salto)")
+ok(perto(estabilizarRumo(350, 10), -10), "morta-banda: rotação real através da costura faz snap (350° ≡ −10°)")
+ok(perto(estabilizarRumo(120, 90), 120), "morta-banda: o snap é para o rumo ao vivo, não acumula atraso")
+ok(
+  (() => {
+    let r = 0
+    for (let i = 0; i <= 100; i++) r = estabilizarRumo(Math.sin(i / 10) * 7, r)
+    return r === 0
+  })(),
+  "morta-banda: deriva contínua de ±7° (o caso reportado) mantém a moldura em 0 durante todo o episódio"
+)
 
 // ---------------------------------------------------------------- 1b. vista de lado ↔ fórmula do MuJoCo
 let piorLado = 0

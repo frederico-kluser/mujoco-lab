@@ -12,7 +12,10 @@ import motionTheme from "../motion.theme"
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MotionUIThemeProvider theme={motionTheme}>
-      <ThemeProvider>
+      {/* Tema FIXO em escuro (2026-10-10): o painel de piloto não muda de cor a meio de um voo. O
+          `storageKey` novo (`tema`) ignora os valores `theme` deixados pelo antigo atalho `d` (que
+          alternava dark/light cada vez que se voava à direita — defeito reportado pelo dono). */}
+      <ThemeProvider defaultTheme="dark" storageKey="tema">
         <App />
       </ThemeProvider>
     </MotionUIThemeProvider>

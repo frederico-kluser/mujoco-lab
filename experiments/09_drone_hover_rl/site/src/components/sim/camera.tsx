@@ -65,6 +65,7 @@ import {
   descreverCamera,
   distanciaDeFracao,
   elevacaoDePontoLado,
+  estabilizarRumo,
   fracaoDeDistancia,
   limitesDistancia,
   MaquinaCamera,
@@ -278,8 +279,21 @@ export function ControlosCamera({
 
   const sem = valores === null
   const ativo = !sem && ligado
-  /** Rumo de referência das vistas: o do drone, ou 0 sem verdade (o desenho fica relativo ao arranque). */
-  const rumo = rumoGraus ?? 0
+  /**
+   * Rumo de referência das vistas: o do drone, ou 0 sem verdade (o desenho fica relativo ao arranque).
+   * ESTABILIZADO com morta-banda (`estabilizarRumo`): o rumo ao vivo deriva 2–7° devagar durante o voo e
+   * fazia a vista de cima da câmara rodar sozinha «devagar e suavemente» (defeito reportado 2026-10-10) —
+   * o desenho só acompanha rotações REAIS do nariz (> 10°); o rótulo numérico continua a mostrar o rumo
+   * ao vivo (é dado, não geometria).
+   */
+  const [rumo, setRumo] = useState(0)
+  const rumoAlvo = rumoGraus ?? 0
+  const rumoEstavel = estabilizarRumo(rumoAlvo, rumo)
+  if (rumoEstavel !== rumo) {
+    // derivação em render (padrão dos docs do React, guardada por comparação): atualiza quando o rumo
+    // passa a morta-banda — sem efeitos e sem refs durante o render
+    setRumo(rumoEstavel)
+  }
 
   // ---------------------------------------------------------------------------- comandos
   const orbitarPassos = useCallback(

@@ -104,6 +104,25 @@ export function rotacaoGlifoTopo(rumoGraus: number): number {
   return -rumoGraus
 }
 
+/**
+ * Rumo ESTABILIZADO para os desenhos que usam a moldura «relativa ao nariz» (a vista de cima da câmara):
+ * mantém o rumo anterior enquanto a diferença ficar DENTRO do limiar e só acompanha mudanças maiores.
+ *
+ * PORQUÊ (defeito medido, 2026-10-10): o rumo do drone DERIVA 2–7° devagar durante o voo (estimador sem
+ * magnetómetro no drone real; atitude suave no cf2) e a vista de cima da câmara, desenhada como
+ * `azimute − rumo`, rodava sozinha «devagar e suavemente» enquanto se voava. Com a morta-banda o desenho
+ * fica parado na rotação e continua a seguir rotações REAIS do nariz (acima do limiar). Os instrumentos de
+ * rumo (ponteiro, horizonte) continuam a usar o rumo AO VIVO — isto é só para a moldura dos desenhos.
+ */
+export function estabilizarRumo(
+  rumoGraus: number,
+  rumoAnterior: number,
+  limiar = 10
+): number {
+  const delta = envolver(rumoGraus - rumoAnterior)
+  return Math.abs(delta) > limiar ? rumoAnterior + delta : rumoAnterior
+}
+
 // ------------------------------------------------------------------------------ vista de lado
 
 /** Faixa do ângulo acima do horizonte na UI (graus): de 30° por baixo a quase a pique (89°). */
