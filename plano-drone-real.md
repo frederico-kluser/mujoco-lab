@@ -13,7 +13,7 @@
 ## 0. Estado da implementação (2026-10-10) — o plano está FEITO
 
 Implementado de ponta a ponta no `09_drone_hover_rl`, com **peças reais trocáveis** (catálogo com fontes) e
-validado por fórmulas fechadas (`run.py` → `valida_real.py`: **96 checagens da planta real, todas [OK]**).
+validado por fórmulas fechadas (`run.py` → `valida_real.py`: **97 checagens da planta real, todas [OK]**).
 
 | Item do plano | Onde está | Validação |
 |---|---|---|
@@ -28,7 +28,7 @@ validado por fórmulas fechadas (`run.py` → `valida_real.py`: **96 checagens d
 | P1.7 arquitetura FC | `fc.py`: malha de taxa 500 Hz (PID com ganhos calculados da planta), mistura X, airmode, idle; política `ctbr` a 50 Hz | G1–G2 |
 | P1.8 / §8.2–8.3 solo + arrasto de rotor | `aero.py` (Sanchez-Cuevas 2017; Faessler & Franchi) | D1–D4 |
 | P2.9 inflow, VRS, download, giroscópico, frio | `aero.py` (BEMT ajustado à APC 15×5.5MR), `bateria.py` (Arrhenius) | D5, D5b, D6, D8, C4 |
-| Validações §6/§8.5 | `valida_real.py` (ligado ao `run.py`) | 96/96 |
+| Validações §6/§8.5 | `valida_real.py` (ligado ao `run.py`) | 97/97 (o **D9** — efeito giroscópico — foi acrescentado na auditoria de 2026-10-10) |
 | Treino com os dados das peças | `train.py --planta real` grava `hardware.json` (peças + derivados + DR) ao lado da política; `deploy.py` exporta só o ator `(1, 21)` | `avaliar_real.py` (grelha de 9 condições) |
 
 **Decisão do §3 (1 h ⇒ classe ≥ 10″ + Li-ion) — tomada com peças reais**: build ativo
@@ -122,6 +122,10 @@ escolha recomendada (vibração, ruído, SPI 10 MHz).
 
 ### 2.2 Bateria — energia, massa, tensão, resistência, desgaste
 
+> ⚠ **Correção (2026-10-10, §0.7)**: nenhuma alegação de células/packs passou a verificação 2/3 da
+> pesquisa (fontes únicas); os valores do catálogo (About:Energy, Mooch, fabricantes) estão marcados
+> para **medir no pack real**.
+
 | Grandeza | Valor | Fonte |
 |---|---|---|
 | Densidade energética **LiPo** | **~150 Wh/kg** (140–200+ Wh/kg) | [UAVMODEL — LiPo vs Li-Ion](https://blog.uavmodel.com/fpv-drone-battery-guide-lipo-vs-li-ion-and-c-ratings-explained) · [Tyto Robotics — guide to LiPo](https://www.tytorobotics.com/blogs/articles/a-guide-to-lithium-polymer-batteries-for-drones) |
@@ -187,6 +191,9 @@ Com a bateria Li-ion 4S2P 21700 (560 g) chega-se aos **~35 min** — o máximo s
 
 ### 3.3 Como obter 1 h: mudar a classe de propulsão
 
+> ✅ **Decisão tomada (§0)**: build `endurance_15pol_p50b` — T-Motor MN4004 KV300 + P15×5, 6S2P
+> Molicel P50B, RPi 5 + FC H7 → 1664 g, 133 W, **99 min de pairagem no modelo** (≥ 60 min pedidos).
+
 Com hélices de **10″ e motores de baixo KV** (classe endurance, ~11 g/W a ~0,6 kg), o ponto fixo
 **converge**: `m_bat ≈ 0,25 kg` (Li-ion 21700, 4S1P ≈ 280 g) · **M total ≈ 0,58 kg** · **P ≈ 50 W** ·
 **60 min**. Alternativas: 7–10″ com motores 2806/2212 low-KV, ou manter 5″ e aceitar 30 min.
@@ -202,6 +209,9 @@ eletrónica realmente puxam):
 1. **Ledger de potência** (a cada passo de decisão):
    `P_total = P_motores + P_RPi5 + P_IMU + P_BEC`, com
    `P_motores = Σ_i kq·ω_i³/η` (η ≈ 0,78 motor+ESC — calibrar por SysID),
+   > ⚠ **Correção (§0.5)**: η = 0,78 era a estimativa do §2.3; a pesquisa verificada dá 0,65–0,80 e o
+   > modelo implementado usa a física (η ≈ 0,79 em pairagem) com **+7,5 % de binário** sobre as tabelas
+   > T-Motor (ensaios independentes ficam 6–9 % abaixo).
    `P_RPi5 = 5 W` (perfil voo; faixa 3–8,8 W), `P_IMU ≈ 0,013 W`, `P_BEC ≈ 1 W`.
 2. **SoC por contagem de Coulomb** (o que o site mostra como **%**):
    `SoC(t) = SoC₀ − ∫ I dt / C_usável(SoH)` com `I = P_total / V_terminal`.
@@ -217,6 +227,10 @@ eletrónica realmente puxam):
    (telemetria JSONL + controlo atómico por ficheiro — ver `experiments/09_drone_hover_rl/INTERFACE.md`).
 
 ## 5. Limite de rotação e empuxo vs estado da bateria
+
+> ⚠ **Correção (2026-10-10, §0.1)**: `ω_max = KV·V` **sobrestima o teto** — a 100 % de acelerador o
+> rpm real é **0,64–0,80·KV·V** (tabelas T-Motor); o `ω_max` implementado vem da **curva do ESC
+> calibrada** na tabela. O decaimento com a descarga mantém-se (−29 % de T_max de 100 % a 10 % de SoC).
 
 O teto de rotação dos motores é **`ω_max = KV · (V_terminal)`** (KV em rad/s por V) e o empuxo teto é
 `T_max = kf·ω_max²` — logo **ambos decaem com a descarga**. Simulado com 2450 KV (2306, 4S),
@@ -244,6 +258,9 @@ resolvido, a referência está entre parênteses.
 ### P0 — planta, motores e observação real
 1. **Motores brushless reais** no lugar dos 4 canais de wrench instantâneos (o `cf2.xml` upstream não
    se toca — adaptação em runtime via MjSpec/`lab`):
+   > ⚠ **Correção (§0.2)**: os τ fixos de 11/27 ms foram substituídos pelo **modelo elétrico**
+   > `τ = J/(K_t²/R + dQ₀/dω + 2·kq·ω)` (58 ms na 15″, medido a 0,1 %); a assimetria vem da
+   > **travagem ativa do ESC** vs roda livre, não de dois τ.
    - 4 velocidades de rotor ω com **lag de 1.ª ordem assimétrico** (τ_sub ≈ **11 ms**, τ_desc ≈
      **27 ms**; alternativa Tm ≈ 72 ms — §7 B2) integradas à taxa de física, escrevendo 1 canal de
      empuxo **por rotor** (`mjcb_act_dot` **não existe** no binding Python do 3.15 — verificado — por
@@ -257,6 +274,12 @@ resolvido, a referência está entre parênteses.
      passar para a escala certa (o CF2 de 27 g **não transporta um RPi 5 de 46 g** — ver §7 B0);
 2. **Bateria** (§4): ledger de potência, SoC por Coulomb, V_terminal com sag, `ω_max/T_max` dinâmicos
    (§5), SoH/desgaste persistente, telemetria para o site;
+> ⚠ **Correção (2026-10-10, §0.6)**: "giroscópio [+ acelerómetro] + ação anterior" **não chega** — o
+> próprio §7 A mostra que a pairagem não é observável só com IMU. A observação do ATOR junta sensores
+> reais e baratos (**ToF VL53L1X + fluxo ótico PMW3901**, o par do Flow deck) e a **estimação de bordo**
+> que o RPi faria (atitude por filtro complementar, rumo integrado, altura/v_z, velocidade por fluxo,
+> odometria) — nada privilegiado; xyz continua só na recompensa.
+
 3. **Observação REAL** (§7 A): remover da entrada da política a posição xyz, a velocidade ground-truth e
    a atitude ground-truth; ficar com **giroscópio medido** (bias pós-calibração + deriva + ruído +
    amostragem + atraso — presets MPU6050/BMI088 verificados no trabalho de 2026-10-09) **+ acelerómetro
@@ -346,8 +369,10 @@ segue é o que falta e **vai ser considerado** (prioridades revistas em §6/§8.
 - **Hoje no lab**: nada — `T = kf·ω²` aplanado.
 - **Implementar**: correção multiplicativa do empuxo por rotor,
   `T_eff = kf·ω²·c_T(v_axial/(ω·R))` com `c_T` decrescente (ex.: `1 − k_v·(v_axial/(ω·R))`, cortada em
-  `[0.4, 1.2]`, `k_v` por identificação); v_a positiva em descida (reduz) e negativa em subida (aumenta
-  ligeiramente). Prioridade **P2** para hover; **P1** se houver descidas rápidas.
+  `[0.4, 1.2]`, `k_v` por identificação). ⚠ **Correção (§0.4)**: o sinal abaixo estava **trocado** — à
+  mesma rotação **subir REDUZ o empuxo** (−26 % a 3 m/s na 15″, J ≈ 0,17) e **descer aumenta-o**
+  (+7 % a 1 m/s) até ao VRS (teoria de momento e curvas C_T(J) medidas — UIUC/APC). Prioridade **P2**
+  para hover; **P1** se houver descidas rápidas.
 
 ### 8.2 Efeito de solo (IGE) — afeta a DECOLAGEM de cada episódio
 - **Física**: o solo limita a esteira, o ângulo de ataque das pás sobe e **o empuxo aumenta** (e a
@@ -358,8 +383,10 @@ segue é o que falta e **vai ser considerado** (prioridades revistas em §6/§8.
 - **Hoje no lab**: nada (empuxo idêntico a 2 cm e a 5 m do solo — Q8).
 - **Implementar**: ganho `g(h)` sobre o empuxo dos rotores, `h` = altura do rotor acima do solo, corte a
   ~1,75 D. Modelo clássico de momentum com "imagem" (usado em muitos simuladores):
-  `T_IGE = T_OGE / (1 − (R/(4h))²)` — **confirmar na fonte primária (Cheeseman–Bishop) antes de fixar
-  constantes**; alternativa empírica do `gym-pybullet-drones` (`_groundEffect()`, constante × (R/h)² com
+  `T_IGE = T_OGE / (1 − (R/(4h))²)` — fonte primária **Cheeseman & Bennett (1955)** (⚠ o nome
+  "Bishop" que aqui estava era erro, §0.3); para **multirrotor** usa-se **Sanchez-Cuevas 2017**
+  (+21 % a 0,5·D; ainda **+5 % a 1,75·D** — o "volta a igualar" só vale para o rotor isolado, ≈ 1 a
+  ~5 m); alternativa empírica do `gym-pybullet-drones` (`_groundEffect()`, constante × (R/h)² com
   velocidades e raio das hélices — [Shi et al. 2019 / Forster 2015](https://ar5iv.labs.arxiv.org/html/2103.02142)).
   No MuJoCo: multiplicar na camada ESC/Motor (por rotor, a `h` de cada rotor) ou `xfrc_applied` com
   ganho `g(z)` (receita verificada no `drones.md` §5). **Prioridade P1** — entra logo a seguir ao P0.
@@ -404,9 +431,11 @@ segue é o que falta e **vai ser considerado** (prioridades revistas em §6/§8.
 | Flapping / downwash / esteira | manobras agressivas / multi-drone | camada externa (§8.4) | P2 |
 
 **Validações a acrescentar ao `run.py`** (além das do §6): (a) empuxo medido a 0,5 D do solo é ≥ 15 %
-superior ao de 5 m (efeito de solo ligado) e volta a igualar a > 1,75 D; (b) arrasto de rotor: a 5 m/s no
+superior ao de 5 m (efeito de solo ligado) e ≈ 1 só a ~5 m no multirrotor (⚠ corrigido: o rotor
+isolado iguala a > 1,75 D, o multirrotor ainda tem +5 % — §0.3); (b) arrasto de rotor: a 5 m/s no
 eixo x, aceleração = `−d_x·5` ± 10 % (arrasto linear no frame corpo — girar o corpo muda a direção);
-(c) empuxo em descida 3 m/s < empuxo em subida 3 m/s (inflow); (d) VRS: perda de empuxo só acima de
+(c) inflow (⚠ sinal corrigido, §0.4): à mesma ω, empuxo em SUBIDA 3 m/s < pairagem < empuxo em
+DESCIDA 1 m/s até ao VRS; (d) VRS: perda de empuxo só acima de
 `v_i` calculada; (e) tudo desligável por flag (modo "aerodinâmica base" continua bit-idêntico).
 
 ---

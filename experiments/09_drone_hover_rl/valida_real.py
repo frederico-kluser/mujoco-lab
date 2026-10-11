@@ -446,6 +446,27 @@ def checa_aero(v: Validador, hw) -> None:
     v.check("D8 tudo desligado = aerodinâmica base (T = kf·ω²) bit-idêntica; ligado muda o voo",
             np.array_equal(base1, base2) and float(np.abs(com - base1).max()) > 1e-6,
             f"Δ entre bases = {float(np.abs(base1 - base2).max()):.1e} · Δ com aero = {float(np.abs(com - base1).max()):.3f}")
+    # D9 efeito giroscópico dos rotores: τ = −Ω × H = −(Σ h_i)·(Ω × ẑ)  (h_i = s_i·J·ω_i)
+    ag = dra.Aerodinamica(hw)
+    hs = 2.37e-4          # kg·m²/s — soma dos momentos angulares dos rotores (2 CW + 2 CCW a ω diferentes)
+    casos = [((0.8, 0.0, 0.0), (0.0, 0.0, 1.0)), ((0.0, -0.5, 0.0), (0.0, 0.0, 1.0)),
+             ((0.3, -0.2, 0.1), (0.0, 0.0, 1.0)), ((0.9, 0.1, 0.4), (0.0, 0.0, 1.0)),
+             ((0.7, -0.7, 0.7), (0.7071067811865476, 0.0, 0.7071067811865476))]
+    erros = [float(np.abs(ag.binario_giroscopico(np.array(w), np.full(4, hs / 4), np.array(e))
+                          - (-hs * np.cross(np.array(w), np.array(e)))).max()) for w, e in casos]
+    expl = ag.binario_giroscopico(np.array((0.8, 0.0, 0.0)), np.full(4, hs / 4), np.array((0.0, 0.0, 1.0)))
+    paralelo = ag.binario_giroscopico(np.array((0.0, 0.0, 1.2)), np.full(4, hs / 4), np.array((0.0, 0.0, 1.0)))
+    desligado = dra.Aerodinamica(hw, dra.FlagsAero(giroscopico=False)).binario_giroscopico(
+        np.array((0.8, 0.0, 0.0)), np.full(4, hs / 4), np.array((0.0, 0.0, 1.0)))
+    _m9, _d9, pl9 = _planta(hw, dra.FlagsAero(), seed=13)
+    pl9.prop.omega = np.array([100.0, 200.0, 150.0, 120.0])
+    ok_h = bool(np.allclose(pl9.prop.momento_angular(),
+                            pl9.prop.giro * pl9.prop.j * pl9.prop.omega, rtol=0, atol=1e-15))
+    v.check("D9 giroscópico: τ = −Ω × H = −(Σh_i)·(Ω × ẑ) com h_i = s_i·J·ω_i; Ω ∥ ẑ ⇒ 0; flag off ⇒ 0",
+            max(erros) < 1e-15 and abs(expl[1] - 0.8 * hs) < 1e-15
+            and float(np.abs(paralelo).max()) == 0.0 and float(np.abs(desligado).max()) == 0.0 and ok_h,
+            f"τ(Ω=0,8·x̂) = {expl.round(9)} (esperado [0, {0.8 * hs:.3e}, 0]) · "
+            f"‖τ(Ω∥ẑ)‖ = {float(np.abs(paralelo).max()):.1e} · h_i = s_i·J·ω_i ✔")
 
 
 # ============================================================================================ E. sensores
