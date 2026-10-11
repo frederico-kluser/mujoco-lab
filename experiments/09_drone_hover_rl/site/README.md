@@ -29,7 +29,7 @@ fica visível de cada vez** e a escolha é **persistente** — guardada em `loca
 
 | secção | tecla | para que serve |
 |---|---|---|
-| **Operação** | `1` | o cockpit: cabeçalho (estado em linguagem simples, contadores, modelo), **valores atuais** (altura, distância ao alvo, erro de rumo, vento), no drone real o **Painel de voo** (instrumentos com estimado vs real) e o resumo **Bateria e motores**, o bloco **Câmara da janela 3D** e as 4 curvas |
+| **Operação** | `1` | o cockpit: cabeçalho (estado em linguagem simples, contadores, modelo), **valores atuais** (altura, distância ao alvo, erro de rumo, vento), o **Controlo de voo** (teclas WASD/QE para pilotar o drone), no drone real o **Painel de voo** (instrumentos com estimado vs real) e o resumo **Bateria e motores**, o bloco **Câmara da janela 3D** e as 4 curvas |
 | **Rede** | `2` | a política a decidir: rede com ativações ao vivo (cf2 16→64→64→4; real 21→128→128→4), entradas da rede (no real com nomes simples e unidades do dia a dia) e ação (4 canais) |
 | **Vento** | `3` | comandar o vento: sliders constantes, rosa dos ventos, APLICAR/PARAR e vento dinâmico (rajadas, rajadas aleatórias, Dryden, frente) |
 | **Bordo** | `4` | computador de bordo: painel do Raspberry Pi 5 e, no drone real, Bateria, Motores e potência e Hardware |
@@ -49,18 +49,19 @@ fica visível de cada vez** e a escolha é **persistente** — guardada em `loca
   desmontarem** (`BlocoSecao`), logo o polling (`GET /api/sim`) continua, os widgets mantêm o estado
   (sliders e params dinâmicos não perdem o rascunho) e, ao voltar à secção, os valores estão frescos.
 
-## Contrato da API (é o que o site consome — **8 rotas** `/api/*`, 2 GET + 6 POST)
+## Contrato da API (é o que o site consome — **9 rotas** `/api/*`, 2 GET + 7 POST)
 
 | pedido | resposta |
 |---|---|
-| `GET /api/sim` | `{estado:"a_correr"\|"episodio_terminado", ep, passo, retorno, loop?, vento:{vel,azimute,elevacao,ativo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,[vel,azimute,elevacao],modo,fonte}, rpi5:{…}, camera_padrao:{azimute,elevacao,distancia}, camera_atual:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null, linhas:[{t,estado,ep,passo,retorno,z,dist_xy,yaw_err,vento_vel,vento_azim,vento_vec[3],vento_modo,loop?,obs[16],act[4],h1[64],h2[64],ctrl?[4],camera:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null}]}` — cada linha de telemetria tem **19 chaves** (`../INTERFACE.md` §4.2); o `alvo` do `camera`/`camera_atual` é só **LEITURA** (o `lookat` real = drone+offset) e nunca é campo de comando (§4.3) |
-| `GET /api/state` | resumo; o site lê **`modelo_nome`** primeiro (`pasta/ficheiro.zip`, o rótulo legível) e só depois `modelo`/`model`/… — e, se existirem, `mg`, `thrust_max`, `momento_max`, `tau_escala`, `rpi5`, `camera_atual`/`camera_padrao` |
+| `GET /api/sim` | `{estado:"a_correr"\|"episodio_terminado", ep, passo, retorno, loop?, vento:{vel,azimute,elevacao,ativo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,[vel,azimute,elevacao],modo,fonte}, rpi5:{…}, camera_padrao:{azimute,elevacao,distancia}, camera_atual:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null, linhas:[{t,estado,ep,passo,retorno,z,dist_xy,yaw_err,vento_vel,vento_azim,vento_vec[3],vento_modo,loop?,obs[16],act[4],h1[64],h2[64],ctrl?[4],camera:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null,voo:{ativo,teclas,v_ref[3],p_ref[3],erro_xy,erro_z,erro_v,seguindo}\|null}]}` — cada linha de telemetria tem **19 chaves** (`../INTERFACE.md` §4.2) mais as ADITIVAS (`voo`, contrato r11: `null` quando a política em uso não tem modo comando); o `alvo` do `camera`/`camera_atual` é só **LEITURA** (o `lookat` real = drone+offset) e nunca é campo de comando (§4.3). O topo da resposta ganhou também `"voo": {"pedido": {bloco}\|null, "eco": {eco}\|null}` (contrato r11) |
+| `GET /api/state` | resumo; o site lê **`modelo_nome`** primeiro (`pasta/ficheiro.zip`, o rótulo legível) e só depois `modelo`/`model`/… — e, se existirem, `mg`, `thrust_max`, `momento_max`, `tau_escala`, `rpi5`, `camera_atual`/`camera_padrao`, `voo` (contrato r11) e `amostras` (nº de linhas de telemetria publicadas — distingue «à espera da simulação» de «modo comando indisponível») |
 | `POST /api/vento` | `{vel 0–5, azimute 0–360, elevacao −90–90}` → 200/400 |
 | `POST /api/vento-dinamico` | `{modo:"nenhum"\|"rajadas"\|"aleatoria"\|"frente"\|"dryden"\|"rajada_agora", params?, ativo?}` → 200/400 |
 | `POST /api/parar` | **PARAR VENTO — PARA TUDO** numa só escrita atómica: cancela todas as rajadas dinâmicas (a one-shot e os modos contínuos) **e** zera o vento base (mantém azimute/elevação, `ativo: false`) → 200 |
 | `POST /api/reiniciar` | → `{contador: n}` |
 | `POST /api/loop` | `{ativo: bool}` → 200 |
 | `POST /api/camera` | **contrato v2**: subconjunto de `{azimute, elevacao, distancia}` → 200/400 — **sem** `alvo` (o alvo é do backend: `body(CAM_CORPO).xpos + CAM_OFFSET` do `sim_view.py` = drone+offset, seguido a cada frame) nem `seq` no comando (o `seq` do corpo é **ignorado** — o servidor incrementa-o). **Exceções reais do contrato** (`../INTERFACE.md` §4.3): `{}` e `{"seq": n}` são **aceites com 200** («toque»: mantém os valores e carimba `seq` novo); `null` presente → 400 e chave desconhecida (ex. `alvo` do contrato v1) → 400; faixas UI: azimute 0–360 (wrap 360↔0), elevação −90…90, distância 0,1–10 m (o backend aceita ]0,20]) |
+| `POST /api/voo` | **contrato r11 (controlo de voo)**: `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}}` → 200 `{"ok": true, "voo": {ativo, teclas, seq}}` ou 400 `{"erro": "mensagem", "codigo": 400}`. As **6 teclas sempre presentes** (booleanos) e **sem** `seq` no corpo (o servidor carimba o dele, +1 por pedido); chaves desconhecidas (inclusive `seq`) são recusadas com 400. É ESTADO completo a cada mudança — nunca uma lista de eventos |
 
 Polling de `GET /api/sim` a **2,9 Hz** (350 ms, dentro dos 2–5 Hz do contrato); sem websockets.
 O histórico é acumulado por `ep:passo`, portanto tanto serve um backend que devolva tudo como um que
@@ -107,6 +108,54 @@ controlo de vento (constante ou dinâmico) reinicia o episódio: todos escrevem 
 física muda no passo de decisão seguinte — e as escritas parciais (sem `loop`/`reiniciar`) não tocam
 nesses dois campos.
 
+## Controlo de voo (teclas WASD/QE)
+
+`components/sim/controlo-voo.tsx` + `lib/voo.ts` (funções puras, testadas por `npm run test:voo`) —
+painel da secção **Operação** (e **Tudo**), nas **duas** plantas, para comandar o drone pelo backend
+(**contrato r11**). Nada de overlays na janela 3D: todo o controlo vive no site.
+
+- **semântica** (frame MUNDO, yaw alvo 0): `W` = +x (frente) · `S` = −x (trás) · `A` = +y (esquerda) ·
+  `D` = −y (direita) · `Q` = +z (subir) · `E` = −z (descer). Diagonais horizontais normalizadas para
+  **1,0 m/s** (`vRefDeTeclas` divide pela hipotenusa quando ‖[vx,vy]‖ > 1), `|vz|` = **0,7 m/s** e sem
+  teclas `v_ref = [0,0,0]` = o drone **SEGURA** a posição (pares opostos anulam-se).
+- **ARMAR/DESARMAR** primeiro: só ARMADO é que as teclas são captadas em `window` (`keydown`/`keyup`,
+  com `preventDefault` dessas teclas; ignoradas em `input`/`textarea`/`select`/`[contenteditable]` e
+  com modificadores — Ctrl+W etc. nunca se roubam). DESARMAR envia `{"ativo": false, "teclas": <tudo
+  false>}`; `blur` da janela **solta tudo** (e envia o estado zerado se alguma tecla estivesse
+  pressionada); sair do painel desarma.
+- **keycaps** com rato/toque (`pointerdown`/`pointerup`/`pointerleave`/`pointercancel`) com a mesma
+  semântica de tecla pressionada; o ativo fica invertido (fundo, contraste, borda + anel) — nunca só
+  cor. `data-testid="tecla-<letra>"` com `data-estado="ativa"|"inativa"`.
+- **estado otimista + «o último vence»**: os keycaps acendem/apagam IMEDIATAMENTE com o estado local e
+  cada mudança dispara um `POST /api/voo` assíncrono (estado completo das 6 teclas, sem `seq`); havendo
+  um envio em curso guarda-se só o estado MAIS RECENTE e envia-se quando o anterior terminar (os
+  intermédios descartam-se). Falhas → toast + re-sincronização com o eco do servidor.
+- **leitura de estado**: o `v_ref` principal é o **comando local/otimista** (`vRefDeTeclas` — aparece ao
+  instante, no mesmo registo temporal dos keycaps) e ao lado mostra-se o **eco** (`voo` da telemetria:
+  `voo-vref-eco`): `v_ref` aplicado, `p_ref` (m), erros (`xy`/`z` em cm, `v` em m/s) e o selo
+  **«A SEGUIR ✓ / a corrigir»** (`seguindo`); quando o eco diverge do estado local (latência ou **outro
+  cliente** a comandar) mostra-se também o estado do servidor.
+- **estados honestos**: `voo.eco === null` com `amostras > 0` (do `/api/state`) → «modo comando
+  indisponível: esta política não foi treinada com `--comandos`» e controlos desativados
+  (`data-testid="voo-indisponivel"`); sem amostras ainda → «à espera da simulação». Nada é inventado.
+- `data-testid` estáveis: `controlo-voo`, `voo-ativar`, `voo-ativo`, `voo-vref`, `voo-seguindo`,
+  `voo-indisponivel`, `tecla-<letra>` (mais `voo-teclas`, `voo-pref`, `voo-erros`, `voo-eco`,
+  `voo-leitura`, `voo-raw` e `voo-mapa` para provas de DOM).
+
+### Defeitos reparados (2026-10-10, reportados pelo dono durante o voo)
+
+1. **«o site mudava pra modo light»** — o `theme-provider.tsx` do template tinha um atalho de teclado `d`
+   que alternava dark/light; `D` é a tecla de VOAR À DIREITA (WASDQE), logo cada voo à direita mudava o
+   tema (e o `localStorage` ficava a marcar `light`). **Reparado**: atalho removido (as teclas de voo são
+   do piloto) e o tema passou a ser FIXO em escuro com `storageKey="tema"` (ignora os valores `theme`
+   velhos). Regressão no `teste_controle_voo.py` §4: pressionar `d` não muda a classe do `<html>`.
+2. **«a câmara vai mudando a rotação devagar»** — a vista de cima da câmara é desenhada relativa ao
+   nariz (`azimute − rumo`) e o rumo do drone deriva **2–7° devagar** durante o voo (medido: o yaw do
+   estimador sem magnetómetro; a janela 3D está verificada ESTÁVEL — deriva de azimute 0,000°). A vista
+   rodava sozinha. **Reparado**: `estabilizarRumo` (morta-banda de 10°) para a moldura dos desenhos — o
+   desenho fica parado e só acompanha rotações REAIS do nariz; o rótulo do rumo continua ao vivo.
+   7 provas novas em `testes/camera-gestos.mts`.
+
 ## Painel do Raspberry Pi 5 (computador de bordo)
 
 `components/sim/rpi5.tsx` — imagem do alvo + especificações + medidores que atualizam com o polling:
@@ -142,9 +191,10 @@ e o componente só a percorre: acrescentar uma explicação é acrescentar um ob
 
 ```
 src/
-  main.tsx                    MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider
+  main.tsx                    MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider (tema FIXO escuro, `storageKey="tema"` — ver «defeitos reparados»)
   App.tsx                     barra fixa (seletor · REINICIAR/CONTINUIDADE · estado crítico), `loop` lido da API, aviso de episódio novo + as secções (operacao/rede/vento/bordo/tudo) · ajuda · toasts
   lib/sim.ts                  tipos do contrato, normalização defensiva, rótulos das 16 obs/4 ações (cf2) e dos 21 canais reais (nome simples, unidade amigável, faixa), `verdade`/`fim`, taxas e coletivo do ctbr
+  lib/voo.ts                  CONTROLO DE VOO (contrato r11): teclas WASD/QE → `v_ref` (m/s, mundo) e parsers tolerantes dos blocos `voo` (puro, testado em testes/voo-teclas.mts)
   lib/sensores.ts             PAINEL DE VOO da planta real: linha → graus/cm/cm/s/g, estimado (bloco `estimador`) vs real (`verdade`), erro do estimador
   lib/api.ts                  fetch dos 5 endpoints (erros legíveis; `?api=` para testes)
   hooks/use-sim.ts            polling, fusão do histórico, estado de ligação, ações (POST)
@@ -160,8 +210,9 @@ src/
   components/sim/observacoes.tsx  tabela das 16 obs (obs/cru/barra) + ação (empuxo em N e momentos); na planta real «Entradas da rede» (nome simples, valor amigável, na rede, barra centrada) + ação ctbr (× o peso, rad/s e °/s)
   components/sim/controlos.tsx    ControlosVento (sliders + APLICAR/PARAR + dinâmico) · ControlosEpisodio (REINICIAR hold · continuidade, barra fixa)
   components/sim/camera.tsx       widget «Câmara da janela 3D» v3: vista de cima (órbita) + vista de lado (altura, chão à escala) + zoom log + vistas rápidas + REPOR VISTA
+  components/sim/controlo-voo.tsx CONTROLO DE VOO: keycaps WASD/QE (teclado + rato/toque), ARMAR/DESARMAR, estado otimista com «o último vence» e leitura do eco do runner
   lib/camera-gestos.ts            geometria das vistas, vistas rápidas, descrição em português + máquina de gestos (snapshot DEF-1, «—» DEF-2, throttle 150 ms, corpo completo)
-  testes/                         camera-roundtrip.mts + camera-gestos.mts (`npm run test:camera`) · planta-real.mts (`npm run test:planta`, inclui o painel de voo)
+  testes/                         camera-roundtrip.mts + camera-gestos.mts (`npm run test:camera`) · planta-real.mts (`npm run test:planta`, inclui o painel de voo) · voo-teclas.mts (`npm run test:voo`, o controlo de voo)
   components/sim/avisos.tsx       toasts das ações (toast-stack)
   assets/rpi5.webp            imagem do alvo (ilustração de referência; CC BY-SA 3.0)
   components/motion-ui/**     componentes do registry @motion (source do CLI — não editar)
@@ -188,6 +239,8 @@ src/
 | **esfera do pad «Câmara»** | arrastar: horizontal = azimute (a direita aumenta; wrap 360↔0 nas bordas), vertical = elevação (**cima = câmara mais alta**; limites ±90° travam a esfera) |
 | **distância (câmara)** | slider 0,1–10 m — zoom mantendo o alvo |
 | **REPOR VISTA** | envia o `camera_padrao` `{azimute, elevacao, distancia}` (contrato v2) |
+| **ARMAR CONTROLO / DESARMAR** (bloco «Controlo de voo») | ativa/desativa a captura das teclas WASD/QE; DESARMAR envia `{"ativo": false, "teclas": <tudo false>}` (`POST /api/voo`) |
+| **keycaps W/A/S/D/Q/E** | teclado (enquanto armado) ou rato/toque (`pointerdown`/`up`/`leave`): cada mudança manda o estado completo das 6 teclas em `POST /api/voo` («o último vence»); W = +x, S = −x, A = +y, D = −y, Q = +z, E = −z |
 
 A **rosa dos ventos** (`rosa-ventos.tsx`) mostra duas setas: a **sólida** é o vetor EM VIGOR
 (base + dinâmica, da telemetria) e a **tracejada** é a seleção dos sliders; tem N/E/S/O com graus
@@ -250,7 +303,7 @@ drone+offset) e o site escolhe **de onde** se olha. Implementação: `src/compon
 | elemento | o que faz | geometria |
 |---|---|---|
 | **leitura** | «onde · altura · distância» em português, relativa ao NARIZ do drone | `descreverCamera` (rel = azimute − rumo: 0 = atrás, ±180 = à frente, +90 = à direita) |
-| **vista de cima** | o drone com o NARIZ PARA CIMA e o ícone da câmara ONDE ela está (cone de visão a apontar ao drone); arrastar/clicar = orbitar; ↺/↻ = ±15° | a câmara fica em −(cos a, sin a) do drone (`pos = alvo − d·f`); ecrã: `sx = sin(a − rumo)`, `sy = cos(a − rumo)`; o rumo é o real (`verdade.yaw`) |
+| **vista de cima** | o drone com o NARIZ PARA CIMA e o ícone da câmara ONDE ela está (cone de visão a apontar ao drone); arrastar/clicar = orbitar; ↺/↻ = ±15° | a câmara fica em −(cos a, sin a) do drone (`pos = alvo − d·f`); ecrã: `sx = sin(a − rumo)`, `sy = cos(a − rumo)`; o rumo do desenho é o real (`verdade.yaw`) **ESTABILIZADO com morta-banda de 10°** (`estabilizarRumo`): o rumo deriva 2–7° devagar no voo e fazia a vista rodar sozinha — o desenho só acompanha rotações REAIS do nariz; o rótulo numérico continua ao vivo (2026-10-10) |
 | **vista de lado** | a câmara num arco à volta do drone; arrastar = subir/descer; ▲/▼ = ±10°; o chão à escala (altura ÷ distância) e aviso a vermelho abaixo do chão | ângulo acima do horizonte `h = −elevação` (MuJoCo: elevação negativa = por cima), faixa da UI −30…89° |
 | **zoom** | slider LOGARÍTMICO, −/+ (×1,25) e roda do rato sobre as vistas | `d = d_min·(d_max/d_min)^f`; limites por planta: real 0,6–15 m, cf2 0,1–5 m |
 | **vistas rápidas** | Atrás (perseguição) · Frente · Esquerda · Direita · De cima · À altura; mantêm o zoom | `anguloVistaRapida(vista, rumo)` |
@@ -282,9 +335,11 @@ pelo comando seguinte do site.
   explica porquê e desativa o bloco — nunca se retém o valor antigo.
 
 **Testes** (`npm run test:camera`): `testes/camera-roundtrip.mts` (20 — round-trip pos↔alvo, ground truth do
-MuJoCo 3.15, contrato v2) + `testes/camera-gestos.mts` (**67** — a vista de cima posta à prova contra
+MuJoCo 3.15, contrato v2) + `testes/camera-gestos.mts` (**75** — a vista de cima posta à prova contra
 `posicaoCamera` para 55 poses (erro 2e-16) e a de lado (1e-14), idas e voltas, travões da UI, zoom
 logarítmico e limites, passos, as vistas rápidas para 4 rumos — «Atrás» fica mesmo atrás do nariz, etc. —,
+mais a morta-banda de `estabilizarRumo` (7 casos, incl. a costura de ±180° e o caso reportado de deriva
+contínua de ±7°),
 a descrição em português, DEF-1/DEF-2, REPOR VISTA, coalescência, o corpo completo e o zoom do rato
 preservado), sem dependências (Node ≥ 22.6, type-stripping).
 

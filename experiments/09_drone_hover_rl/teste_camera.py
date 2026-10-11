@@ -157,10 +157,11 @@ TOL_CAM = 1e-9            # colagem exacta do seguimento (mesma expressão aritm
 TOL_REPOUSO = 2e-3        # comparações cruzadas em repouso (telemetria arredondada a 6 casas + folga)
 LIMIAR_MOV = 0.25         # m — deslocamento mínimo do drone para a janela de movimento ser prova de movimento
 # Contrato da linha de telemetria: as 19 chaves do contrato v2, por esta ordem (`camera` é a 19.ª), e depois só
-# chaves ADITIVAS — `planta` e `fim` (2026-10-10) e, na planta real, os blocos de bordo e a `verdade`.
+# chaves ADITIVAS — `planta` e `fim` (2026-10-10), `voo` (contrato r11 do controle de voo, 2026-10-10) e, na
+# planta real, os blocos de bordo e a `verdade`.
 CHAVES_CONTRATO = ("t", "estado", "loop", "ep", "passo", "retorno", "z", "dist_xy", "yaw_err", "vento_vel",
                    "vento_azim", "vento_vec", "vento_modo", "obs", "act", "ctrl", "h1", "h2", "camera")
-CHAVES_ADITIVAS = {"planta", "fim", "bateria", "motores", "potencia", "aero", "estimador", "verdade"}
+CHAVES_ADITIVAS = {"planta", "fim", "voo", "bateria", "motores", "potencia", "aero", "estimador", "verdade"}
 
 
 def _chaves_ok(linha: dict) -> bool:

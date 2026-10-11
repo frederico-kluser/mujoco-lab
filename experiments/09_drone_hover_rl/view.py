@@ -990,11 +990,14 @@ def main(argv=None) -> int:
     caminho = args.model if args.model is not None else modelo_por_omissao()
     if not caminho.is_file():
         raise SystemExit(f"[view] modelo inexistente: {caminho}")
+    politica = carregar_politica(caminho)
     try:
-        env = HoverEnv(alvo_z=args.alvo_z)        # 2.ª barreira: o --alvo-z já foi validado no CLI
+        # modo comando (contrato r11) pela OBSERVAÇÃO da política: 19 dims = `--comandos` (o env tem de
+        # nascer em modo comando, senão a rede recebe 16 entradas onde espera 19 e o predict rebenta);
+        # o --alvo-z continua a ser a 2.ª barreira (já validado no CLI)
+        env = HoverEnv(alvo_z=args.alvo_z, comando=int(politica.observation_space.shape[0]) == 19)
     except ValueError as erro:
         _erro_cli(f"o HoverEnv recusou alvo_z={args.alvo_z:g}: {erro}")
-    politica = carregar_politica(caminho)
     controlo = ControloVento(args.controlo, args.vento_inicial)
     controlo.aplicar_inicial(env)                 # --vento-inicial: vale já para o 1.º reset
     if args.sem_janela:

@@ -16,6 +16,13 @@ import {
   type RespostaSim,
   type ResumoEstado,
 } from "./sim"
+import {
+  lerBlocoVoo,
+  TECLAS_VOO,
+  TECLAS_VOO_ZERADAS,
+  type BlocoVoo,
+  type TeclasVoo,
+} from "./voo.ts"
 
 declare global {
   interface Window {
@@ -191,6 +198,44 @@ export async function enviarLoop(ativo: boolean): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ativo }),
   })
+}
+
+/**
+ * Corpo de `POST /api/voo` (contrato r11) — `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}}`:
+ * as 6 teclas SEMPRE presentes e **sem** `seq` (o servidor carimba o dele). Chaves desconhecidas
+ * (inclusive `seq` no corpo) são recusadas pelo servidor com 400.
+ */
+export interface CorpoVoo {
+  ativo: boolean
+  teclas: TeclasVoo
+}
+
+/**
+ * `POST /api/voo` (contrato r11) — estado das teclas de voo → 200 `{"ok": true, "voo": {bloco}}`
+ * (o bloco confirmado, com o `seq` do servidor) ou 400 (a mensagem do `erro` chega ao utilizador
+ * como `ErroApi`, como nos restantes POSTs). O corpo leva só `{"ativo", "teclas"}` com as 6
+ * teclas normalizadas para booleanos — nada mais entra, para nunca levar o servidor a devolver
+ * «chaves desconhecidas».
+ */
+export async function enviarVoo(corpo: CorpoVoo): Promise<BlocoVoo> {
+  const teclas: TeclasVoo = { ...TECLAS_VOO_ZERADAS }
+  for (const tecla of TECLAS_VOO) teclas[tecla] = corpo.teclas[tecla] === true
+  const bruto = await pedirJson("/api/voo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ativo: corpo.ativo === true, teclas }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const bloco = lerBlocoVoo(o.voo)
+  // Um 200 sem bloco `voo` é uma violação do contrato: diz-se alto (aviso + re-sincronização com
+  // o eco) em vez de fingir que o servidor confirmou.
+  if (bloco === null)
+    throw new ErroApi("resposta do POST /api/voo sem bloco `voo`", 200)
+  return bloco
 }
 
 /** Comandos de bateria da planta real: fechar o ciclo do pack ou trocar por um pack novo. */

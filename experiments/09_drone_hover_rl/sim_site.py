@@ -79,8 +79,18 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
                                     (`body("cf2").xpos` + offset constante); sem viewer ignora sem erro.
                                     REPOR VISTA = enviar os valores de `camera_padrao` como um comando
                                     normal.
+  · `POST /api/voo`               → `{"ativo": bool, "teclas": {"w","a","s","d","q","e": bool}}` —
+                                    CONTROLE DE VOO (contrato r11): o estado das 6 teclas WASDQE (W=+x,
+                                    S=−x, A=+y, D=−y, Q=subir, E=descer; frame mundo, yaw 0), mandado
+                                    COMPLETO a cada keydown/keyup (ESTADO, não evento). O `seq` do corpo é
+                                    ignorado e o servidor carimba o seu a cada pedido; teclas em falta valem
+                                    `false` e uma chave desconhecida (gralha) → **400** (como na câmara). O runner aplica o bloco em
+                                    `env.definir_comando_teclas` (1x por mudança de assinatura) — só faz
+                                    efeito com política treinada com `train.py --comandos` (a deteção é
+                                    automática pela observação da política; com política clássica o runner
+                                    ignora com aviso e o eco `voo` da telemetria fica `null`, honesto).
 
-São 9 rotas `/api/*` no total (2 GET + 7 POST); a 9.ª, `POST /api/bateria`
+São 10 rotas `/api/*` no total (2 GET + 8 POST); a 9.ª, `POST /api/bateria`
 `{"acao": "recarregar"|"nova"}`, é da planta REAL (recarregar fecha o ciclo com desgaste; nova = pack novo).
 
 O ficheiro de controlo (o site escreve, o runner lê a cada passo de decisão) e a telemetria (o runner
@@ -388,11 +398,12 @@ def resumo_telemetria(caminho: Path) -> dict:
     if not linhas:
         return {"estado": "desconhecido", "ep": 0, "passo": 0, "retorno": 0.0, "linhas": 0, "t": None,
                 "loop": None, "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None,
-                "camera_atual": None}
+                "camera_atual": None, "voo": None}
     ultima = linhas[-1]
     vec = ultima.get("vento_vec")
     loop = ultima.get("loop")
     camera = ultima.get("camera")
+    voo = ultima.get("voo")
     return {"estado": str(ultima.get("estado", "desconhecido")), "ep": int(ultima.get("ep", 0) or 0),
             "passo": int(ultima.get("passo", 0) or 0), "retorno": float(ultima.get("retorno", 0.0) or 0.0),
             "linhas": len(linhas), "t": ultima.get("t"),
@@ -401,7 +412,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "vento_vel": float(ultima.get("vento_vel", 0.0) or 0.0),
             "vento_azim": float(ultima.get("vento_azim", 0.0) or 0.0),
             "vento_modo": str(ultima.get("vento_modo", "nenhum") or "nenhum"),
-            "camera_atual": _camera_da_amostra(camera)}
+            "camera_atual": _camera_da_amostra(camera),
+            "voo": voo if isinstance(voo, dict) else None}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -717,6 +729,8 @@ class Handler(BaseHTTPRequestHandler):
             "vento": {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")},
             "vento_dinamico": vento_do_controlo(controlo),
             "vento_atual": vento_em_vigor(resumo, controlo),
+            "voo": {"pedido": controlo.get("voo"),
+                    "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
             "modelo": None if self.servidor.modelo is None else str(self.servidor.modelo),
@@ -739,6 +753,8 @@ class Handler(BaseHTTPRequestHandler):
             "vento": {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")},
             "vento_dinamico": vento_do_controlo(controlo),
             "vento_atual": vento_em_vigor(resumo, controlo),
+            "voo": {"pedido": controlo.get("voo"),
+                    "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
             "planta": "real" if self.servidor.hardware else "cf2",
@@ -803,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_loop(dados)
             elif rota == "/api/camera":
                 self._post_camera(dados)
+            elif rota == "/api/voo":
+                self._post_voo(dados)
             elif rota == "/api/bateria":
                 self._post_bateria(dados)
             else:
@@ -968,6 +986,70 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[site] camera (3a pessoa): az {cam['azimute']:.1f} deg, elev {cam['elevacao']:+.1f} deg, "
               f"distancia {cam['distancia']:.2f} m (seq {cam['seq']}) — alvo segue o drone", flush=True)
         self._json(200, {"ok": True, "camera": cam})
+
+    def _post_voo(self, dados) -> None:
+        """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
+
+        O corpo é `{ativo, teclas: {w,a,s,d,q,e}}` (o `seq` é incrementado AQUI, a cada pedido); o bloco
+        segue para o ficheiro de controlo por `escrever_controlo` (merge: nunca toca em vento/`loop`/
+        `reiniciar`). É ESTADO — cada keydown/keyup do site manda o estado completo das 6 teclas — e o
+        runner aplica-o em `env.definir_comando_teclas`. Só faz efeito com política `--comandos`; o eco
+        `voo` da telemetria diz o que o runner está mesmo a aplicar (honesto para o site).
+        """
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_voo(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["voo"]
+        ligadas = "".join(t.upper() for t, on in sorted(bloco["teclas"].items()) if on) or "—"
+        print(f"[site] voo: {'ATIVO' if bloco['ativo'] else 'em espera'} · teclas {ligadas} "
+              f"(seq {bloco['seq']})", flush=True)
+        self._json(200, {"ok": True, "voo": bloco})
+
+
+def validar_voo(dados, atual: dict) -> dict:
+    """`POST /api/voo` → bloco `{"voo": {"ativo", "teclas", "seq"}}` (contrato r11; `seq` do SERVIDOR, +1).
+
+    `teclas` = objeto com as 6 teclas do contrato (`w,a,s,d,q,e`) booleanas (tolera 0/1) — teclas em
+    falta valem `False`, mas uma chave DESCONHECIDA (gralha como `ww`) → **400** (como na câmara: num
+    painel de piloto uma tecla morta em silêncio é pior do que um erro claro); `ativo` booleano,
+    predefinido `False` (sem `ativo` explícito não se pilota por acidente). O corpo não precisa de `seq`
+    (é sempre incrementado aqui, como na câmara e na bateria) e uma chave de topo desconhecida → 400.
+    Fora do tipo → `ValueError` → 400.
+    """
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON")  # noqa: TRY004  (contrato: 400 por ValueError)
+    desconhecidas = set(dados) - {"ativo", "teclas", "seq"}
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['ativo', 'seq', 'teclas']")
+    teclas_bruto = dados.get("teclas") or {}
+    if not isinstance(teclas_bruto, dict):
+        raise ValueError("`teclas` tem de ser um objeto JSON {w,a,s,d,q,e}")
+    desconhecidas = set(teclas_bruto) - {"w", "a", "s", "d", "q", "e"}
+    if desconhecidas:
+        raise ValueError(f"`teclas` tem chaves desconhecidas {sorted(desconhecidas)} — aceita "
+                         "['a', 'd', 'e', 'q', 's', 'w']")
+    teclas = {}
+    for tecla in ("w", "a", "s", "d", "q", "e"):
+        valor = teclas_bruto.get(tecla, False)
+        if isinstance(valor, bool):
+            teclas[tecla] = valor
+        elif isinstance(valor, int) and valor in (0, 1):
+            teclas[tecla] = bool(valor)
+        else:
+            raise ValueError(f"`teclas.{tecla}` tem de ser booleano (recebido {valor!r})")
+    ativo = dados.get("ativo", False)
+    if isinstance(ativo, int) and not isinstance(ativo, bool) and ativo in (0, 1):
+        ativo = bool(ativo)
+    if not isinstance(ativo, bool):
+        raise ValueError(f"`ativo` tem de ser booleano (recebido {ativo!r})")
+    anterior = atual.get("voo") if isinstance(atual.get("voo"), dict) else {}
+    seq = int(anterior.get("seq", 0) or 0) + 1
+    return {"voo": {"ativo": ativo, "teclas": teclas, "seq": seq}}
 
 
 def validar_bateria(dados, atual: dict) -> dict:

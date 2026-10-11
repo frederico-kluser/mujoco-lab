@@ -5,6 +5,13 @@
  * `numero()`/`vetor()` e o que faltar sai do ecrã como "—" (nunca `undefined`/`NaN` no DOM).
  */
 
+import {
+  lerBlocoVoo,
+  lerEcoVoo,
+  type BlocoVoo,
+  type EcoVoo,
+} from "./voo.ts"
+
 export type EstadoEpisodio = "a_correr" | "episodio_terminado"
 
 /**
@@ -73,6 +80,11 @@ export interface LinhaSim {
   verdade: VerdadeTelemetria | null
   /** Porque fechou o episódio (`fim`): `tempo` (os 10 s) ou `queda`; `null` a correr ou sem a chave. */
   fim: MotivoFim | null
+  /**
+   * Controlo de voo (contrato r11, chave ADITIVA `voo`): o ECO do runner — o que a política em uso
+   * está mesmo a aplicar. `null` quando a política NÃO tem modo comando (ou o runner é antigo).
+   */
+  voo: EcoVoo | null
 }
 
 /** Motivo do fim do episódio publicado pelo runner (`fim`). */
@@ -122,6 +134,8 @@ export interface RespostaSim {
   cameraPublicada: boolean
   /** Planta anunciada pelo servidor (`planta`); `null` se a resposta não a trouxer. */
   planta: Planta | null
+  /** Controlo de voo (contrato r11); `null` quando a resposta não publica o bloco. */
+  voo: VooEstado | null
   linhas: LinhaSim[]
 }
 
@@ -151,11 +165,36 @@ export interface ResumoEstado {
   planta: Planta | null
   /** Peças reais do modelo em uso (`hardware`, só na planta real); `null` se não vier. */
   hardware: Hardware | null
+  /** Controlo de voo (contrato r11); `null` quando o resumo não publica o bloco. */
+  voo: VooEstado | null
+  /** Nº de amostras de telemetria publicadas (`amostras`); `null` se o resumo não as contar. */
+  amostras: number | null
+}
+
+/**
+ * Bloco `voo` do `/api/sim` e do `/api/state` (contrato r11): o PEDIDO escrito no ficheiro de
+ * controlo × o ECO do runner na telemetria. `null` = esta resposta não publica o bloco (backend
+ * antigo); `{pedido: null, eco: null}` = publica mas ainda sem dados (nada se inventa).
+ */
+export interface VooEstado {
+  pedido: BlocoVoo | null
+  eco: EcoVoo | null
 }
 
 /** `true`/`false` quando o valor é mesmo booleano; `null` para tudo o resto (nunca se inventa). */
 function booleano(bruto: unknown): boolean | null {
   return typeof bruto === "boolean" ? bruto : null
+}
+
+/**
+ * Bloco `voo` do `/api/sim`/`/api/state` (contrato r11) → `VooEstado`, ou `null` quando a resposta
+ * não o publica (backend antigo). O `pedido` e o `eco` são lidos pelos parsers tolerantes de
+ * `lib/voo.ts`: `null` dentro do bloco propaga-se (sem dados → sem dados), nunca se inventa.
+ */
+function lerVooEstado(bruto: unknown): VooEstado | null {
+  const o = objetoComDados(bruto)
+  if (o === null) return null
+  return { pedido: lerBlocoVoo(o.pedido), eco: lerEcoVoo(o.eco) }
 }
 
 /** Constantes físicas de recurso (lab/crazyflie.py + env.py) usadas SÓ para derivar valores de ecrã. */
@@ -271,6 +310,7 @@ export function lerLinha(bruto: unknown): LinhaSim | null {
     estimador: lerEstimador(o.estimador),
     verdade: lerVerdade(o.verdade),
     fim: lerFim(o.fim),
+    voo: lerEcoVoo(o.voo),
   }
 }
 
@@ -302,6 +342,7 @@ export function lerSim(bruto: unknown): RespostaSim {
     cameraPublicada:
       "camera" in o || "camera_atual" in o || "camera_padrao" in o,
     planta: lerPlanta(o.planta),
+    voo: lerVooEstado(o.voo),
     linhas,
   }
 }
@@ -357,6 +398,8 @@ export function lerResumo(bruto: unknown): ResumoEstado {
       ["camera", "camera_atual", "camera_padrao"].some((c) => c in o || c in aninhado),
     planta: lerPlanta(primeiro("planta")),
     hardware: lerHardware(primeiro("hardware")),
+    voo: lerVooEstado(primeiro("voo")),
+    amostras: numero(primeiro("amostras")),
   }
 }
 

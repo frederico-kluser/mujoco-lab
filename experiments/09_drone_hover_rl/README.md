@@ -178,6 +178,35 @@ uv run --group hover-rl python experiments/09_drone_hover_rl/train.py \
 #     --vento-dinamico dryden --vento-dinamico-params '{"sigma": 0.5, "L": 10}' --timesteps 600000
 #                                                                        → out/vento_r10_ft_dryden_600k  ← CAMPEÃO
 
+# 2d) receita do CONTROLE DE VOO (contrato r11, `--comandos`) — WASDQE, seguimento + rajadas corrigidas
+#     ETAPA 0 (obrigatória): TRANSFERIR uma política que já voa para a observação de comando (16→19 no
+#     cf2, 42→48 na planta real) — as entradas novas (`v_ref`) ficam a zero e a validação exige AÇÕES
+#     IDÊNTICAS em estados sem comando. PORQUÊ: treinar o modo comando do zero cai no atrator «sentar no
+#     chão» (medido 2026-10-10: a política desliga os motores e colhe r≈0,7/passo; com perfis de comando
+#     desde o início, pior ainda — e o cf2 nem no modo clássico aprende a voar de raiz: a campanha v2b
+#     precisou de 20 treinos/25 M passos). Arrancar de quem já voa resolve-o (o fine-tune só tem de
+#     aprender o SEGUIMENTO).
+uv run --group hover-rl python experiments/09_drone_hover_rl/transferir_politica.py \
+    --de experiments/09_drone_hover_rl/out/vento_r10_ft_dryden_600k/best_model.zip \
+    --para experiments/09_drone_hover_rl/out/voo_cf2_transferida --planta cf2
+#     ETAPA 1: fine-tune de SEGUIMENTO com perfis de comando aleatórios + rajadas de vento (o `--comandos`
+#     SEM `--sem-perfis-comando` sorteia os perfis: 1.º segmento hover 1–2 s e depois segmentos 0,5–2 s com
+#     velocidades de 0,3 a 1,0 m/s em direções aleatórias, ±0,7 m/s na vertical; a recompensa é de
+#     seguimento LIMITADA — erros `p − p_ref` e `v − v_ref`, `tanh` — com o bónus a exigir posição E
+#     velocidade; `--sucesso` por omissão sobe para 720 em modo comando: o 450 do hover parava o treino
+#     a meio do seguimento)
+uv run --group hover-rl python experiments/09_drone_hover_rl/train.py \
+    --planta cf2 --comandos --retomar experiments/09_drone_hover_rl/out/voo_cf2_transferida/final.zip \
+    --sem-curriculo --vento-max 3 --vento-dinamico rajadas \
+    --vento-dinamico-params '{"p": 0.03, "duracao": 12}' --timesteps 3000000 --n-envs 10 \
+    --sem-painel --seed 0 --out-dir experiments/09_drone_hover_rl/out/voo_cf2_r1
+#     a planta real é igual com --planta real e o --de out/real_endurance15_rajadas/final.zip (a
+#     transferência copia também o hardware.json) → out/real_voo_r1; `--sem-perfis-comando` é o ESTÁGIO 0
+#     (pairagem na obs de comando) para casos de raiz — ver o help do train.py
+#     PROVA: teste_controle_voo.py (§1 peças, §2 seguimento — inclui a SIMETRIA proa/cauda, o núcleo do
+#     pedido do dono —, §3 servidor+eco, §4 navegador com os keycaps ao vivo)
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_controle_voo.py --navegador
+
 # 3) ver a política: janela 3D + HUD (ESPAÇO pausa · Q/Esc fecha) ou o mesmo ciclo sem janela
 uv run --group hover-rl python experiments/09_drone_hover_rl/view.py                 # melhor de out/runs/*/
 uv run --group hover-rl python experiments/09_drone_hover_rl/view.py --sem-janela --passos 300
@@ -712,6 +741,74 @@ Achados operacionais: **`lr 3e-4` oscila** (16/16 ↔ 12/16 entre checkpoints, p
 "esquece" a rejeição de vento), logo o vento tem de ficar no treino; e o `--retomar` do SB3 precisa de
 `reset_num_timesteps=False` (senão o `learn()` reinicia o contador e retreina tudo de zero).
 
+### Controle de voo (r11) — WASDQE com rajadas corrigidas (verificado, 2026-10-10)
+
+**O pedido do dono**: «um controle de voo onde mudo a altitude e a direção — WASD para as direções, Q e E
+para subir e descer — vendo no site quando ativo; ajustar o treinamento para isso; e durante a
+movimentação corrigir as rajadas de vento para não ir mais lento nem a favor: respeitar a movimentação
+proposta sem sofrer a influência do vento». Contrato completo em [INTERFACE.md §4.5](INTERFACE.md).
+
+**O que foi construído**: modo comando no `env.py`/`env_real.py` (a referência `p_ref` integra o `v_ref`
+comandado a 50 Hz; observação ganha o `v_ref` — cf2 16→19 dims, planta real 42→48 — e a recompensa passa
+a erros de SEGUIMENTO limitados); `train.py --comandos` (perfis de comando aleatórios por episódio) +
+`transferir_politica.py` (transfere políticas que já voam para a obs de comando — as entradas novas a
+zero, validação: **ações idênticas**); bloco `"voo"` no ficheiro de controlo + `POST /api/voo` + eco `"voo"`
+na telemetria; painel **CONTROLO DE VOO** no site (keycaps WASDQE que acendem ao vivo, armado/desarmado,
+estado honesto); e a prova toda em `teste_controle_voo.py` (§1–§4).
+
+**Receita de treino** (o `--comandos` do zero cai num atrator — ver «Achados» abaixo):
+
+| etapa | comando | cf2 | planta real |
+|---|---|---|---|
+| 0 · transferir | `transferir_politica.py --de <política que voa> --para out/voo_*_transferida` | 16→19 dims | 42→48 dims (+ `hardware.json`) |
+| 1 · seguir | `train.py --planta … --comandos --retomar out/voo_*_transferida/final.zip --sem-curriculo --vento-max 3 --vento-dinamico rajadas --vento-dinamico-params '{"p":0.03,"duracao":12}'` | `out/voo_cf2_r2/best_model.zip` | `out/real_voo_r1/best_model.zip` |
+
+**Critérios medidos** (`teste_controle_voo.py` §2 — política determinística, guiões de 2,5 s de
+descolagem + 3 s de comando; os limiares estão no cabeçalho do teste). Núcleo do pedido = a **SIMETRIA
+proa/cauda**: o mesmo comando `vx = 1,0 m/s` com vento de **2 m/s contra** e **2 m/s a favor** tem de dar
+velocidades médias **iguais** — nem mais lento nem a favor:
+
+| critério (limiar) | cf2 (`out/voo_cf2_r2/final.zip`) | planta real (`out/real_voo_r1/final.zip`) |
+|---|---|---|
+| calmaria: ⟨v⟩ segue W (±0,15 cf2 / ±0,25 real) | **[1,001 · +0,010 · −0,001]** m/s | **[0,967 · −0,062 · −0,013]** m/s |
+| **simetria proa vs cauda (≤ 0,20 m/s)** | **0,001 m/s** (1,001 / 1,000 / 1,001) | **0,004 m/s** (0,966 / 0,970 / 0,968) |
+| vento constante não desvia ⟨vx⟩ (≤ 0,30) | 0,001 m/s | 0,004 m/s |
+| rajadas p=0,15 u_max=3: RMS(vx−1) (≤ 0,45) + quedas | 0,27–0,32 m/s · **0 quedas** | 0,30–0,35 m/s · **0 quedas** |
+| Q (subir) ⟨vz⟩ ≈ +0,7 (±0,25) | +0,684 m/s | +0,747 m/s |
+| E (descer) ⟨vz⟩ ≈ −0,7 (±0,25) | −0,629 m/s | −0,722 m/s |
+| paragem com vento de 2 m/s: \|v\| (≤ 0,25) + deriva (≤ 0,6 m) | 0,01 m/s · 0,19 m | 0,02 m/s · 0,26 m |
+| baseline nulo FALHA os limiares (não-tautologia) | ✓ falha | ✓ falha |
+
+Os valores são médias da janela estável de cada guião (2.ª metade; Q/E medem nos 0,2–1,2 s, antes de a
+referência saturar na caixa z ∈ [0,25; 2,75]). O **teste de não-tautologia** corre os mesmos guiões com a
+ação `[0,0,0,0]` (hover aberto, sem política) e exige que **falhem**: é a prova de que os limiares
+separam mesmo «seguir» de «não seguir».
+
+**Achados do treino (2026-10-10, medidos — não repetir os erros)**:
+
+1. **Atrator da morte com recompensa linear**: a 1.ª versão do modo comando punia os erros de seguimento
+   linearmente (v2b). Como a referência anda, os erros crescem a metros e cada passo custava −1…−3, ao
+   passo que capotar custa −100 uma só vez — «terminar cedo ficava MELHOR do que voar» (o MESMO achado
+   já documentado na v3-real da planta real). Medido: a política cf2 capotava aos 16 passos de propósito.
+   **Correção**: recompensa LIMITADA (`tanh`, como a v3-real, pesos que somam 1, morte −50): cada passo
+   vivo vale r ∈ [0, 1,5] e morrer nunca compensa;
+2. **Atrator «sentar no chão»** com o modo comando do zero: mesmo com a recompensa limitada, a política
+   descobre que desligar os motores e ficar no chão dá r≈0,7/passo SEM risco de queda — e não descola
+   (medido: 840 k passos na planta real e 780 k no cf2, ambos sentados; com perfis de comando desde o
+   início, ainda pior). **Correção**: arrancar SEMPRE de uma política que já voa — `transferir_politica.py`
+   copia os pesos para a obs de comando (linhas do `v_ref` a zero; validação: ações idênticas em
+   `n` estados sem comando) e o fine-tune só tem de aprender o SEGUIMENTO (resolveu em ~400 k passos);
+   `--sem-perfis-comando` é o estágio 0 para quem quiser treinar pairagem em modo comando sem os perfis;
+3. **`--sucesso 450` (o critério do hover) parava o treino de seguimento a meio** (disparou aos 400 k com
+   `frac_xy_z` = 0,09): em modo comando o default passa a **720** (o teto é 1,5×500 = 750);
+4. O **cf2 não aprende a voar de raiz** nem no modo clássico (confirmado: 400 k passos sem descolar — a
+   campanha v2b precisou de 20 treinos/25 M passos); a planta real voa quase de imediato porque o FC
+   dedicado fecha a malha de taxa (o clássico voava já aos 40 k passos).
+
+**Estado honesto no site**: com uma política **clássica** (sem `--comandos`) o runner ignora o bloco `voo`
+com aviso e o eco vem `null` — o painel diz «modo comando indisponível: esta política não foi treinada com
+`--comandos» e desativa os controlos (testado em `teste_controle_voo.py` §3b).
+
 ### Deploy — ONNX, validação numérica e latência
 
 Exportação com o *exporter legacy* (`torch.onnx.export(..., dynamo=False)`; `dynamo=True` exigiria
@@ -759,7 +856,8 @@ tornam vantajosa. 212 320 inferências/s num core (fp32).
 
 | prova | comando | resultado |
 |---|---|---|
-| ambiente por fórmulas fechadas | `run.py` | **146/146 [OK]**, 0 falhas · ≈ 3 300–5 400 passos de decisão/s num env, validação completa em ~5–6 s |
+| ambiente por fórmulas fechadas | `run.py` | **243/243 [OK]** (re-medido 2026-10-10), 0 falhas · inclui o cf2 (146) e a planta real (97) |
+| controle de voo (contrato r11) | `teste_controle_voo.py --navegador` | **§1** 36 peças (funções puras, envs, retro-compatibilidade) · **§2** seguimento nas 2 plantas (calmaria, **simetria proa/cauda**, rajadas, Q/E, paragem + não-tautologia) · **§3** servidor real (`POST /api/voo`, 400 por gralha, eco, merge, honestidade com política clássica) · **§4** navegador real (keycaps WASDQE a acender/apagar, `v_ref` ao instante, POST chega ao servidor) |
 | animação visual das hélices | `run.py` §10 (13 checagens) + `helices_render.py` | hélices rodam ∝ √t_i com o sentido de `GIRO` e param com os motores desligados; **física idêntica AO BIT** (max\|Δ\| = 0) com a animação ligada/desligada e vs o modelo upstream · 2 imagens EGL em `out/helices_1.png` e `out/helices_2.png` |
 | `HoverEnv` como `gym.Env` | `run.py` §5 | `check_env` do SB3, `reset(seed)` determinístico, `info` e truncagem corretos |
 | robustez do ambiente | `run.py` §7 | não-finitos → `ValueError` (vento/ação/`alvo_z`), `alvo_z ∈ [0,10, 2,90] m`, divergência → `RuntimeError` |
@@ -776,14 +874,29 @@ o `deploy.py` regista o `/proc/loadavg` antes/depois em todos os relatórios exa
 
 ## Limites e nits conhecidos
 
+**Controle de voo (r11, 2026-10-10)** — o que o contrato NÃO cobre (honesto):
+
+- **Só velocidade + altitude**: as teclas comandam `v_ref` (1,0 m/s horizontal, 0,7 m/s vertical); não há
+  comandos de RUMO (o yaw é fixo em 0, como no hover) nem de posição direta. A caixa de trabalho é
+  `xy ±4 m`, `z ∈ [0,25; 2,75]` m e na borda a referência PARA (o drone paira na parede, não continua);
+- **não treinar `--comandos` do zero**: converge para o atrator «sentar no chão» (medido, ver
+  §Resultados/achados) — a receita é `transferir_politica.py` + fine-tune; o `--sem-perfis-comando` só
+  serve para o estágio 0 (pairagem na obs de comando);
+- as políticas de comando seguem a **velocidade** proposta — a posição deriva se o piloto não corrigir
+  (é controlo de velocidade, não de posição absoluta; ao soltar as teclas o drone segura a posição atual,
+  não volta ao ponto de partida);
+- a simetria proa/cauda foi medida com vento CONSTANTE de ±2 m/s e rajadas até 3 m/s (o envelope do
+  treino); ventos acima disso não estão certificados.
+
 **Planta real (2026-10-10)** — o que falta medir ou ainda não cobre:
 
 - **SysID do hardware**: kf/kq/curva do ESC vêm das tabelas T-Motor (+7,5 % de realismo); J do rotor, R efetiva,
   download e arrasto de rotor são estimados (a DR cobre as faixas). Medir em banco (empuxo, binário, rpm, corrente
   a 6S) e o pack (capacidade a 1C, DCIR) — nenhuma alegação de baterias passou a verificação adversarial.
 - **Massa do frame DIY** (235 g + 50 g de pernas) é estimada pela densidade do carbono: pesar e corrigir no catálogo.
-- `view.py`, `dashboard.py`, `net_probe.py` e `helices_render.py` continuam a ser ferramentas do **cf2** (16 obs);
-  a planta real usa o site (`sim_site.py`), o `train.py`, o `deploy.py` e o `valida_real.py`.
+- `view.py`, `dashboard.py`, `net_probe.py` e `helices_render.py` continuam a ser ferramentas do **cf2**
+  (a planta real usa o site (`sim_site.py`), o `train.py`, o `deploy.py` e o `valida_real.py`); o `view.py`
+  e o `net_probe.py` já abrem o env em **modo comando** quando a política carregada é `--comandos` (19 obs).
 - O FC simulado faz a malha de TAXA (modo acro); modos de ângulo/altitude do firmware não são simulados — quem
   estabiliza atitude e posição é a política (a decisão do dono).
 - Sem magnetómetro o rumo absoluto não é observável: a recompensa usa o rumo relativo ao do arranque.

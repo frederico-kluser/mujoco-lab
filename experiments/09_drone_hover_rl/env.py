@@ -108,6 +108,24 @@ CONTRATO (as peças train/view/dashboard/deploy/net_probe importam-no)
       [9:12]  ω/10 rad·s⁻¹            (sensor `body_gyro`, frame do corpo)
       [12:16] ação anterior           (já em [-1, 1])
     `ruido_obs>0` acrescenta ruído gaussiano σ=ruido_obs à observação (treino com ruído de sensor);
+  · CONTROLE DE VOO — `comando=True` (contrato r11; por omissão `False` e NADA muda): o alvo deixa de ser o
+    ponto fixo e passa a ser uma REFERÊNCIA que se move — WASDQE (do site, bloco `voo` do ficheiro de
+    controlo) comandam o `v_ref` (m/s, frame MUNDO): W = +x (frente), S = −x, A = +y (esquerda),
+    D = −y (direita), Q = +z (subir), E = −z (descer); diagonais normalizadas para `VOO_VEL` (1 m/s),
+    `|vz| = VOO_SUBIDA` (0,7 m/s), sem teclas → `v_ref = 0` = segurar posição. A referência de POSIÇÃO
+    `p_ref` INTEGRA o `v_ref` por passo de decisão e satura na caixa `xy ±4 m`, `z ∈ [0,25; 2,75]` (na borda
+    a componente que bate fica com `v_ref = 0`); `definir_comando(v)` e `definir_comando_teclas(...)` mandam
+    na referência à mão (é assim que o runner e os testes pilotam) e `comandos_aleatorios=True` sorteia
+    perfis em segmentos para o TREINO (1.º segmento sempre hover, 1–2 s, para a descolagem).
+    No modo comando a observação tem 19 dims ([0:3] = `p − p_ref`, [16:19] = `v_ref` escalado) e a
+    recompensa é de SEGUIMENTO (`recompensa_voo`, LIMITADA com `tanh` como a v3-real — uma versão linear
+    nos erros cria o atrator da morte «capotar cedo é melhor do que voar»): os erros `p − p_ref` e
+    `v − v_ref` substituem os absolutos
+    — uma rajada que deixe o drone mais lento OU a ir mais rápido que o comando custa o mesmo, que é o que
+    faz a política corrigir o vento em vez de "ir ao sabor dele" — com bónus (`bonus_seguindo`) que exige
+    posição E velocidade (‖v−v_ref‖ < 0,10 m/s). `comando_estado()` devolve o bloco `voo` da telemetria
+    `{ativo, teclas, v_ref, p_ref, erro_xy, erro_z, erro_v, seguindo}` e `info["voo"]` traz o mesmo.
+    As teclas W/A/S/D são no MUNDO (yaw alvo 0, logo "frente" = +x) e o site mostra-as acendidas ao vivo;
   · terminação: z < 0.005 m (caiu — o piso impede z<0) ∨ max(|φ|, |θ|) > π/2 ∨ z > 3 m;
     truncagem: `episodio_s` segundos (10 s = 500 passos de decisão);
   · `reset(seed)`: `mj_resetDataKeyframe` + keyframe `hover` do lab (z = 0.1 m), MOTORES DESLIGADOS, jitter xy
@@ -146,6 +164,8 @@ import numpy as np
 from gymnasium import spaces
 
 # ----------------------------------------------------------------------------------------- escalas da observação
+OBS_DIM = 16                  # dimensão da observação do contrato v2b (sem comando)
+OBS_DIM_COMANDO = 19          # dimensão da observação em modo comando (contrato r11: 16 + v_ref escalado)
 ESCALA_DELTA_POS = 1.0    # m      → [0:3]   (p − p_alvo)/1 m
 ESCALA_ANG = np.pi        # rad    → [3:6]   rpy/π  (≈ [-1, 1] para atitudes válidas)
 ESCALA_VEL = 1.0          # m/s    → [6:9]   v_corpo/1 m·s⁻¹
@@ -205,6 +225,23 @@ DRYDEN_SIGMA_PADRAO = 0.5         # m/s — desvio-padrão estacionário da turb
 DRYDEN_L_PADRAO = 10.0            # m — escala de comprimento do Dryden
 DRYDEN_V_MIN_PADRAO = 1.0         # m/s — piso de V = max(‖vento base‖, v_min) na correlação α = exp(−Δt·V/L)
 VENTO_DINAMICO_U_MAX_PADRAO = 3.0  # m/s — teto do modo (amplitude da rajada/frente ou saturação da turbulência)
+
+# ----------------------------------------------------------------------------------------- controle de voo
+# (modo `comando=True` — contrato r11: WASDQE movem o ALVO DE VELOCIDADE e a referência de posição
+#  integra-o; ver o docstring do módulo. Por omissão `comando=False` e NADA muda em relação ao v2b/v3-real.)
+VOO_VEL = 1.0             # m/s — velocidade horizontal comandada (WASD; diagonais normalizadas para isto)
+VOO_SUBIDA = 0.7          # m/s — velocidade vertical comandada (Q = +z, E = −z)
+VOO_Z_MIN = 0.25          # m — piso da referência de altitude (abaixo o bónus sairia de graça pousado)
+VOO_Z_MAX = 2.75          # m — teto da referência de altitude (o teto de terminação é z > 3 m)
+VOO_XY_MAX = 4.0          # m — caixa de trabalho em xy: a referência integra e satura aqui (v_ref zera na borda)
+VOO_TOL_V = 0.10          # m/s — tolerância ‖v − v_ref‖ do bónus "seguindo" (ESTRITA)
+VOO_TECLAS = ("w", "a", "s", "d", "q", "e")   # as 6 teclas do contrato (ordem canónica do bloco `voo`)
+# perfis de comando do TREINO (`comandos_aleatorios=True`): segmentos retangulares amostrados no reset
+VOO_SEG_INICIAL = (1.0, 2.0)   # s — 1.º segmento sempre em hover (tempo de descolar até p_ref)
+VOO_SEG_DURACAO = (0.5, 2.0)   # s — duração de cada segmento seguinte
+VOO_P_HOVER = 0.35             # probabilidade de um segmento ser hover (v_ref = 0)
+VOO_P_SUBIDA = 0.25            # probabilidade de um segmento ter componente vertical ≠ 0
+VOO_V_MINIMO = 0.3             # m/s — piso da velocidade horizontal sorteada (comando parcial aprende-se à mesma)
 
 # jitter do reset e assentamento inicial (a queda de 9 cm do keyframe tem de terminar antes do episódio)
 JITTER_XY = 0.02          # m
@@ -369,6 +406,66 @@ def bonus_no_alvo(dist_xy: float, dz: float, yaw_err: float) -> bool:
     return bool(dist_xy < BONUS_XY and dz < BONUS_Z and abs(float(yaw_err)) < BONUS_YAW)
 
 
+def bonus_seguindo(erro_xy: float, erro_z: float, erro_v: float, yaw_err: float) -> bool:
+    """Bónus do modo comando (ESTRITO): posição E velocidade a seguir a referência, yaw ok.
+
+    `erro_xy` = ‖p_xy − p_xy_ref‖, `erro_z` = |z − z_ref|, `erro_v` = ‖v − v_ref‖ — a leitura "o drone está
+    a fazer exatamente o que se pediu" (o pedir inclui a velocidade: um drone à deriva com o vento NÃO
+    recebe o bónus mesmo estando no sítio certo por acaso).
+    """
+    return bool(erro_xy < BONUS_XY and erro_z < BONUS_Z and float(erro_v) < VOO_TOL_V
+                and abs(float(yaw_err)) < BONUS_YAW)
+
+
+def teclas_para_velocidade(w: bool, a: bool, s: bool, d: bool, q: bool, e: bool,
+                           vel: float = VOO_VEL, subida: float = VOO_SUBIDA) -> np.ndarray:
+    """`v_ref` (vx, vy, vz) em m/s no frame MUNDO das teclas WASDQE (contrato r11).
+
+    W = +x (frente), S = −x, A = +y (esquerda), D = −y (direita), Q = +z (subir), E = −z (descer) —
+    yaw alvo 0, logo "frente" é o eixo +x do mundo. As diagonais (ex. W+D) são NORMALIZADAS para `vel`
+    (nunca mais rápidas que uma tecla só) e `|vz| = subida`. Sem teclas → (0, 0, 0) = segurar posição.
+    """
+    x = float(bool(w)) - float(bool(s))
+    y = float(bool(a)) - float(bool(d))
+    z = float(bool(q)) - float(bool(e))
+    norma = float(np.hypot(x, y))
+    if norma > 1.0:
+        x, y = x / norma, y / norma
+    return np.array([float(vel) * x, float(vel) * y, float(subida) * z], dtype=float)
+
+
+def integrar_referencia(p_ref, v_ref, dt: float,
+                        xy_max: float = VOO_XY_MAX, z_min: float = VOO_Z_MIN,
+                        z_max: float = VOO_Z_MAX) -> tuple[np.ndarray, np.ndarray]:
+    """`p_ref ← p_ref + v_ref·dt` com saturação da caixa de trabalho; devolve `(p_ref_novo, v_ref_efetivo)`.
+
+    Na borda a componente que bate no limite fica a ZERO no `v_ref_efetivo` (a referência não continua a
+    empurrar contra a parede e o erro de velocidade do bónus/recompensa não pune quem respeita o limite).
+    `dt` finito e ≥ 0, `ValueError` para vetores não-finitos.
+    """
+    dt = finito("dt", dt)
+    if dt < 0.0:
+        raise ValueError(f"`dt` tem de ser ≥ 0 s (recebido {dt!r})")
+    p = np.asarray(p_ref, dtype=float).reshape(-1).copy()
+    v = np.asarray(v_ref, dtype=float).reshape(-1).copy()
+    if p.shape != (3,) or v.shape != (3,):
+        raise ValueError(f"`p_ref` e `v_ref` têm de ter 3 componentes (recebidos {p.shape}, {v.shape})")
+    if not np.isfinite(p).all() or not np.isfinite(v).all():
+        raise ValueError("`p_ref` e `v_ref` têm de ser FINITOS, sem NaN/inf")
+    novo = p + v * dt
+    efetivo = v.copy()
+    for i, (lim_inf, lim_sup) in enumerate(((-xy_max, xy_max), (-xy_max, xy_max), (z_min, z_max))):
+        if novo[i] < lim_inf:
+            novo[i] = lim_inf
+            if v[i] < 0.0:
+                efetivo[i] = 0.0
+        elif novo[i] > lim_sup:
+            novo[i] = lim_sup
+            if v[i] > 0.0:
+                efetivo[i] = 0.0
+    return novo, efetivo
+
+
 def termina(z: float, phi: float, theta: float) -> bool:
     """Terminação do episódio: caiu (z < Z_TERMINA), capotou (|roll| ou |pitch| > π/2) ou subiu demais (z > Z_TETO)."""
     return bool(z < Z_TERMINA or z > Z_TETO or max(abs(phi), abs(theta)) > TILT_MAX)
@@ -394,6 +491,48 @@ def recompensa(x: float, y: float, z: float, v: float, yaw_err: float, omega_xy,
     return float(r)
 
 
+# pesos do modo comando (voo): recompensa LIMITADA (tanh), como a v3-real da planta real. Os erros de
+# seguimento são ILIMITADOS por construção (a referência anda e a política pode ficar para trás) e uma
+# penalidade LINEAR por passo cria o ATRATOR DA MORTE já medido neste laboratório (env_real, v3-real:
+# "terminar cedo ficava MELHOR do que voar" — com erros de ~2 m cada passo custava −2 e capotar só −100
+# uma vez; medido no 1.º treino r11: a política cf2 capotava aos 16 passos de propósito). Aqui cada passo
+# vivo vale r ∈ [0, 1,5] (os pesos somam 1) e morrer custa −50: cair nunca compensa. A SIMETRIA mantém-se:
+# `tanh(‖v − v_ref‖)` pune por igual ficar para trás e ir à frente do comando.
+R_VIVO_VOO = 1.0
+PESOS_VOO = {"xy": 0.30, "z": 0.30, "yaw": 0.10, "v": 0.20, "omega": 0.05, "delta_a": 0.05}
+ESCALAS_VOO = {"xy": 1.0, "z": 0.5, "yaw": 0.5, "v": 1.0, "omega": 2.0}
+BONUS_VOO = 0.5
+PENALIDADE_TERMINAL_VOO = 50.0
+
+
+def recompensa_voo(erro_xy: float, erro_z: float, v, v_ref, yaw_err: float, omega_xy, omega_z: float,
+                   delta_a, terminado: bool) -> float:
+    """Recompensa do modo comando (contrato r11) — pura, sem estado: LIMITADA, com ERROS DE SEGUIMENTO.
+
+    Substitui ‖xy‖ → ‖p_xy − p_xy_ref‖, |z−alvo| → |z−z_ref| e ‖v‖ → ‖v − v_ref‖ (frame mundo). O termo de
+    velocidade é o coração do pedido do dono: uma rajada de vento que deixe o drone MAIS LENTO ou a ir MAIS
+    RÁPIDO que o comando custa exatamente o mesmo — o alvo é a velocidade PROPOSTA, não "quanto antes" nem
+    "ao sabor do vento". Cada termo é um `tanh` (r por passo limitado; ver a nota dos pesos acima — a
+    versão linear criava o atrator da morte) e o bónus (`bonus_seguindo`) exige posição E velocidade.
+    """
+    v = np.asarray(v, dtype=float)
+    v_ref = np.asarray(v_ref, dtype=float)
+    w, e = PESOS_VOO, ESCALAS_VOO
+    omega = np.concatenate((np.asarray(omega_xy, dtype=float).reshape(-1),
+                            np.asarray(omega_z, dtype=float).reshape(-1)))
+    r = (R_VIVO_VOO - w["xy"] * np.tanh(float(erro_xy) / e["xy"])
+         - w["z"] * np.tanh(float(erro_z) / e["z"])
+         - w["yaw"] * np.tanh(abs(float(yaw_err)) / e["yaw"])
+         - w["v"] * np.tanh(float(np.linalg.norm(v - v_ref)) / e["v"])
+         - w["omega"] * np.tanh(float(np.linalg.norm(omega)) / e["omega"])
+         - w["delta_a"] * min(float(np.linalg.norm(np.asarray(delta_a, dtype=float))), 1.0))
+    if bonus_seguindo(float(erro_xy), float(erro_z), float(np.linalg.norm(v - v_ref)), float(yaw_err)):
+        r += BONUS_VOO
+    if terminado:
+        r -= PENALIDADE_TERMINAL_VOO
+    return float(r)
+
+
 # ----------------------------------------------------------------------------------------- ambiente
 class HoverEnv(gym.Env):
     """Drone trava-se em (0, 0, alvo_z) com yaw = 0 e aguenta o vento — ambiente Gymnasium headless."""
@@ -405,6 +544,7 @@ class HoverEnv(gym.Env):
                  vento: tuple[float, float, float] | None = None,
                  vento_aleatorio: tuple[float, float] | None = None,
                  vento_dinamico: dict | None = None,
+                 comando: bool = False, comandos_aleatorios: bool = False,
                  helices: bool = False,
                  render_mode: str | None = None):
         """Cria o ambiente (contrato, recompensa v2 e vento no docstring do módulo).
@@ -426,6 +566,12 @@ class HoverEnv(gym.Env):
         `vento` não tiver 3 componentes finitas, se as faixas de vento forem inválidas (não-finitas, negativas
         ou U_min > U_max) ou se a config do vento dinâmico for inválida (ver `valida_vento_dinamico`); com
         `modo="frente"`, se o passo da frente passar de `max_passos` (a frente nunca chegaria a entrar).
+
+        `comando=True` liga o CONTROLE DE VOO (contrato r11, ver o docstring do módulo): a observação ganha
+        o `v_ref` (16→19 dims), [0:3] passa a ser `p − p_ref` e a recompensa passa a ser de SEGUIMENTO
+        (`recompensa_voo`); `definir_comando`/`definir_comando_teclas` mandam na referência. Com
+        `comandos_aleatorios=True` (só treino) cada episódio sorteia um perfil de comandos em segmentos
+        (determinístico dada a seed). Por omissão `comando=False`: obs/recompensa BIT-IDÊNTICAS ao v2b.
 
         `helices=True` (desligado por omissão) divide a malha das hélices em 4 geoms VISUAIS no modelo
         (`cf.carregar(helices=True)`) para a animação de apresentação de `cf.Helices` — é só a janela 3D:
@@ -517,8 +663,22 @@ class HoverEnv(gym.Env):
         if self.vento_dinamico is not None:
             self._reinicia_dinamico()       # plano do episódio (frente amostrada, rajada/turbulência a zero)
 
+        # controle de voo (contrato r11): `comando=False` (predefinição) não toca em nada do v2b/v3-real
+        if comandos_aleatorios and not comando:
+            raise ValueError("`comandos_aleatorios` exige `comando=True` (os perfis aleatórios só fazem "
+                             "sentido no modo de controle de voo)")
+        self.comando = bool(comando)
+        self.comandos_aleatorios = bool(comandos_aleatorios)
+        self.v_ref = np.zeros(3)          # velocidade comandada (m/s, mundo) em vigor neste passo
+        self.p_ref = self.alvo.copy()     # referência de POSIÇÃO (integra v_ref; z alvo no arranque)
+        self._teclas: dict[str, bool] | None = None   # estado WASDQE do site (`definir_comando_teclas`)
+        self._voo_ativo = True            # `ativo` do bloco `voo` (False = teclas tratadas como soltas)
+        self._plano: list[tuple[int, np.ndarray]] = []   # perfil sorteado: (passos_restantes, v_ref)
+        self._plano_i = 0
+        self._plano_restante = 0
+
         self.action_space = spaces.Box(-1.0, 1.0, (4,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf, np.inf, (16,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, (19 if self.comando else 16,), dtype=np.float32)
 
     # ------------------------------------------------------------------ vento
     @staticmethod
@@ -781,6 +941,105 @@ class HoverEnv(gym.Env):
             total = total * (u_max / norma)
         self._escreve_vento_vetor(total)
 
+    # ------------------------------------------------------------------ controle de voo (contrato r11)
+    def definir_comando(self, v_ref) -> np.ndarray:
+        """Fixa o alvo de VELOCIDADE `v_ref` (m/s, frame mundo) e desliga as teclas/perfis.
+
+        Cortado às faixas do contrato (‖v_xy‖ ≤ VOO_VEL, |vz| ≤ VOO_SUBIDA) e validado (3 componentes
+        finitas, senão `ValueError` — nunca entra NaN no integrador da referência). Devolve o `v_ref`
+        efetivo. A referência de posição `p_ref` integra-o a cada passo de decisão (`step`).
+        """
+        if not self.comando:
+            raise RuntimeError("esta instância não está em modo comando (`comando=True` no construtor)")
+        v = np.asarray(v_ref, dtype=float).reshape(-1)
+        if v.shape != (3,):
+            raise ValueError(f"`v_ref` tem de ter 3 componentes (vx, vy, vz) em m/s (recebido {v_ref!r})")
+        if not np.isfinite(v).all():
+            raise ValueError(f"`v_ref` tem de ter 3 componentes FINITAS, sem NaN/inf (recebido {v_ref!r})")
+        xy = float(np.hypot(v[0], v[1]))
+        if xy > VOO_VEL:
+            v[:2] *= VOO_VEL / xy
+        v[2] = float(np.clip(v[2], -VOO_SUBIDA, VOO_SUBIDA))
+        self.v_ref = v
+        self._teclas = None
+        self._plano = []
+        return self.v_ref.copy()
+
+    def definir_comando_teclas(self, w: bool = False, a: bool = False, s: bool = False,
+                               d: bool = False, q: bool = False, e: bool = False,
+                               ativo: bool = True) -> np.ndarray:
+        """Estado WASDQE (contrato r11) → `v_ref` em vigor; `ativo=False` trata as teclas como soltas.
+
+        W = +x (frente), S = −x, A = +y (esquerda), D = −y (direita), Q = subir, E = descer — o mapeamento
+        é o de `teclas_para_velocidade`. O estado fica guardado e RECALCULADO a cada `step` (as teclas
+        podem mudar entre passos — é assim que o site pilota); `p_ref` integra o resultado.
+        """
+        if not self.comando:
+            raise RuntimeError("esta instância não está em modo comando (`comando=True` no construtor)")
+        self._teclas = {tecla: bool(val) for tecla, val in zip(VOO_TECLAS, (w, a, s, d, q, e))}
+        self._voo_ativo = bool(ativo)
+        self._plano = []
+        if not ativo:
+            self.v_ref = np.zeros(3)
+        else:
+            self.v_ref = teclas_para_velocidade(w, a, s, d, q, e)
+        return self.v_ref.copy()
+
+    def comando_estado(self, d: dict | None = None) -> dict:
+        """Bloco `voo` da telemetria (contrato r11) a partir do estado atual — `None` fora do modo comando.
+
+        `{ativo, teclas, v_ref, p_ref, erro_xy, erro_z, erro_v, seguindo}`: o que se pediu (v_ref/p_ref),
+        o que se apanhou (erros) e se o drone está a seguir a referência (`bonus_seguindo`, sem o yaw).
+        """
+        if not self.comando:
+            return None
+        d = self._derivados() if d is None else d
+        teclas = dict(self._teclas) if self._teclas is not None else {
+            tecla: False for tecla in VOO_TECLAS}
+        return {"ativo": bool(self._teclas is None or getattr(self, "_voo_ativo", True)),
+                "teclas": teclas, "v_ref": [float(x) for x in self.v_ref],
+                "p_ref": [float(x) for x in self.p_ref],
+                "erro_xy": float(d["erro_xy"]), "erro_z": float(d["erro_z"]), "erro_v": float(d["erro_v"]),
+                "seguindo": bonus_seguindo(d["erro_xy"], d["erro_z"], d["erro_v"], d["yaw_err"])}
+
+    def _sortear_plano_comando(self) -> None:
+        """Perfil de comandos do episódio (`comandos_aleatorios`): segmentos retangulares pelo `np_random`."""
+        rng = self.np_random
+        plano: list[tuple[int, np.ndarray]] = []
+        restante = self.max_passos
+        primeiro = max(1, round(float(rng.uniform(*VOO_SEG_INICIAL)) / self.dt_decisao))
+        plano.append((min(primeiro, restante), np.zeros(3)))
+        restante -= plano[-1][0]
+        while restante > 0:
+            dur = max(1, round(float(rng.uniform(*VOO_SEG_DURACAO)) / self.dt_decisao))
+            if float(rng.random()) < VOO_P_HOVER:
+                v = np.zeros(3)
+            else:
+                ang = float(rng.uniform(0.0, 2.0 * np.pi))
+                vel = float(rng.uniform(VOO_V_MINIMO, VOO_VEL))
+                vz = float(rng.choice([-VOO_SUBIDA, 0.0, VOO_SUBIDA],
+                                      p=[VOO_P_SUBIDA / 2.0, 1.0 - VOO_P_SUBIDA, VOO_P_SUBIDA / 2.0]))
+                v = np.array([vel * np.cos(ang), vel * np.sin(ang), vz])
+            plano.append((min(dur, restante), v))
+            restante -= plano[-1][0]
+        self._plano = plano
+        self._plano_i = 0
+        self._plano_restante = plano[0][0]
+        self.v_ref = plano[0][1].copy()
+
+    def _passo_comando(self) -> None:
+        """Avança o comando do passo de decisão que começa e integra `p_ref` (1× por `step`)."""
+        if self.comandos_aleatorios and self._plano:
+            self._plano_restante -= 1
+            if self._plano_restante <= 0 and self._plano_i + 1 < len(self._plano):
+                self._plano_i += 1
+                self._plano_restante = self._plano[self._plano_i][0]
+            self.v_ref = self._plano[self._plano_i][1]
+        elif self._teclas is not None:
+            ativo = bool(getattr(self, "_voo_ativo", True))
+            self.v_ref = (teclas_para_velocidade(**self._teclas) if ativo else np.zeros(3))
+        self.p_ref, self.v_ref = integrar_referencia(self.p_ref, self.v_ref, self.dt_decisao)
+
     # ------------------------------------------------------------------ ação → atuadores
     def _acao_valida(self, acao) -> np.ndarray:
         """Ação → vector (4,) em [-1, 1]; `ValueError` se não tiver 4 componentes FINITAS.
@@ -819,33 +1078,56 @@ class HoverEnv(gym.Env):
 
     # ------------------------------------------------------------------ estado → observação
     def observacao(self) -> np.ndarray:
-        """Observação (16,) normalizada por escalas fixas; `ruido_obs>0` injeta ruído gaussiano σ=ruido_obs."""
+        """Observação (16,) — ou (19,) no modo comando — normalizada por escalas fixas.
+
+        `ruido_obs>0` injeta ruído gaussiano σ=ruido_obs. No modo comando (contrato r11) [0:3] passa a ser
+        `p − p_ref` (a referência de POSIÇÃO, que integra o `v_ref`) e entram 3 canais novos no fim:
+        [16:19] = (vx_ref, vy_ref)/VOO_VEL e vz_ref/VOO_SUBIDA — o que se está a pedir, em [-1, 1].
+        """
         pos = self.data.sensor("posicao").data            # m, mundo (site `cm` = CM do corpo)
         quat = self.data.sensor("body_quat").data         # [w x y z]
         giro = self.data.sensor("body_gyro").data         # rad/s, frame do corpo
         rpy = atitude(quat)
         v_corpo = quat_para_matriz(quat).T @ self.data.qvel[:3]   # v do corpo (mundo → corpo; junta livre)
-        obs = np.concatenate(((pos - self.alvo) / ESCALA_DELTA_POS,
-                              rpy / ESCALA_ANG,
-                              v_corpo / ESCALA_VEL,
-                              giro / ESCALA_GIRO,
-                              self.acao_anterior))
+        alvo = self.p_ref if self.comando else self.alvo
+        partes = [(pos - alvo) / ESCALA_DELTA_POS,
+                  rpy / ESCALA_ANG,
+                  v_corpo / ESCALA_VEL,
+                  giro / ESCALA_GIRO,
+                  self.acao_anterior]
+        if self.comando:
+            partes.append(np.array([self.v_ref[0] / VOO_VEL, self.v_ref[1] / VOO_VEL,
+                                    self.v_ref[2] / VOO_SUBIDA]))
+        obs = np.concatenate(partes)
         if self.ruido_obs > 0.0:
             obs = obs + self.np_random.normal(0.0, self.ruido_obs, obs.shape)
         return obs.astype(np.float32)
 
     def _derivados(self) -> dict:
-        """Quantidades derivadas do estado ATUAL (chamar depois de `mj_forward`): sensores, yaw_err e vento."""
+        """Quantidades derivadas do estado ATUAL (chamar depois de `mj_forward`): sensores, yaw_err e vento.
+
+        No modo comando `dist_xy`/`dz` são ERROS DE SEGUIMENTO (‖p_xy−p_xy_ref‖ e |z−z_ref|) e acrescentam-se
+        `v_vec` (velocidade do mundo), `erro_xy`, `erro_z` e `erro_v` = ‖v − v_ref‖.
+        """
         pos = self.data.sensor("posicao").data
         x, y, z = (float(v) for v in pos)
         phi, theta, yaw = (float(v) for v in atitude(self.data.sensor("body_quat").data))
-        d = float(np.hypot(x, y))
-        dz = abs(z - self.alvo_z)
+        if self.comando:
+            d = float(np.hypot(x - self.p_ref[0], y - self.p_ref[1]))
+            dz = abs(z - self.p_ref[2])
+        else:
+            d = float(np.hypot(x, y))
+            dz = abs(z - self.alvo_z)
         yaw_err = envolve_pi(yaw - YAW_ALVO)
-        return {"x": x, "y": y, "z": z, "phi": phi, "theta": theta, "yaw": yaw,
-                "yaw_err": yaw_err, "dist_xy": d, "dz": dz,
-                "v": float(np.linalg.norm(self.data.sensor("vel").data)),
-                "omega": np.array(self.data.sensor("body_gyro").data, dtype=float)}
+        v_vec = np.array(self.data.qvel[:3], dtype=float)     # velocidade linear no frame MUNDO (junta livre)
+        out = {"x": x, "y": y, "z": z, "phi": phi, "theta": theta, "yaw": yaw,
+               "yaw_err": yaw_err, "dist_xy": d, "dz": dz,
+               "v": float(np.linalg.norm(self.data.sensor("vel").data)),
+               "v_vec": v_vec,
+               "omega": np.array(self.data.sensor("body_gyro").data, dtype=float)}
+        if self.comando:
+            out.update(erro_xy=d, erro_z=dz, erro_v=float(np.linalg.norm(v_vec - self.v_ref)))
+        return out
 
     def _info(self, d: dict | None = None) -> dict:
         """`info` do reset/step (as 8 chaves do contrato) a partir do estado atual.
@@ -857,10 +1139,14 @@ class HoverEnv(gym.Env):
         d = self._derivados() if d is None else d
         vento = self.vento_atual
         norma = float(np.linalg.norm(vento))
-        return {"z": d["z"], "dist_xy": d["dist_xy"], "v": d["v"],
-                "no_alvo": bonus_no_alvo(d["dist_xy"], d["dz"], d["yaw_err"]),
+        info = {"z": d["z"], "dist_xy": d["dist_xy"], "v": d["v"],
+                "no_alvo": (bonus_seguindo(d["erro_xy"], d["erro_z"], d["erro_v"], d["yaw_err"])
+                            if self.comando else bonus_no_alvo(d["dist_xy"], d["dz"], d["yaw_err"])),
                 "yaw_err": d["yaw_err"], "vento_vel": norma, "vento_atual": norma,
                 "vento_azim": azimute_graus(vento)}
+        if self.comando:
+            info["voo"] = self.comando_estado(d)
+        return info
 
     # ------------------------------------------------------------------ API Gymnasium
     def reset(self, *, seed: int | None = None, options: dict | None = None):
@@ -891,6 +1177,15 @@ class HoverEnv(gym.Env):
         self.data.time = 0.0                              # tempo do episódio começa em 0 (nada aqui depende de t)
         self.passos = 0
         self.acao_anterior = np.zeros(4, dtype=np.float32)   # ctrl efetivo no reset = 0
+        if self.comando:
+            self.p_ref = self.alvo.copy()                 # a referência arranca no alvo clássico (0, 0, alvo_z)
+            self.v_ref = np.zeros(3)
+            self._teclas = None
+            self._voo_ativo = True
+            if self.comandos_aleatorios:
+                self._sortear_plano_comando()
+            else:
+                self._plano, self._plano_i, self._plano_restante = [], 0, 0
         if self.vento_dinamico is not None:
             self._reinicia_dinamico()      # frente reamostrada / rajada e turbulência a zero, relógio no 0
             self._passo_vento()            # vento (base + dinâmico) do 1.º passo de decisão JÁ aplicado
@@ -907,6 +1202,8 @@ class HoverEnv(gym.Env):
         """
         a = self._acao_valida(acao)
         delta_a = a - self.acao_anterior.astype(float)    # ‖Δa‖ da recompensa v2 (suavidade)
+        if self.comando:
+            self._passo_comando()                         # v_ref do passo + integração de p_ref (1× por decisão)
         self.aplicar_acao(a)
         if self.vento_dinamico is not None and self._din_passo < self.passos + 1:
             self._passo_vento()                           # vento do passo de decisão que agora começa
@@ -930,8 +1227,12 @@ class HoverEnv(gym.Env):
                 "valor são ANTES do reset (um reset sozinho reescreve o mesmo vento e diverge outra vez; um "
                 "NaN silencioso envenenaria o treino)")
         terminado = termina(d["z"], d["phi"], d["theta"])
-        r = recompensa(d["x"], d["y"], d["z"], d["v"], d["yaw_err"], d["omega"][:2], d["omega"][2],
-                       delta_a, terminado, self.alvo_z)
+        if self.comando:
+            r = recompensa_voo(d["erro_xy"], d["erro_z"], d["v_vec"], self.v_ref, d["yaw_err"],
+                               d["omega"][:2], d["omega"][2], delta_a, terminado)
+        else:
+            r = recompensa(d["x"], d["y"], d["z"], d["v"], d["yaw_err"], d["omega"][:2], d["omega"][2],
+                           delta_a, terminado, self.alvo_z)
         truncado = bool(self.passos >= self.max_passos)
         return self.observacao(), float(r), bool(terminado), truncado, self._info(d)
 

@@ -1,7 +1,7 @@
 /**
  * SITE do experimento 09 (drone a pairar com política RL) — organizado em SECÇÕES selecionáveis:
- * **Operação** (vigiar o voo: valores atuais, Painel de voo e resumo de bordo do drone real, Câmara e
- * curvas) · **Rede** (política, entradas, ações) · **Vento** (constante + dinâmico) ·
+ * **Operação** (vigiar e comandar o voo: valores atuais, Controlo de voo (teclas WASD/QE), Painel de
+ * voo e resumo de bordo do drone real, Câmara e curvas) · **Rede** (política, entradas, ações) · **Vento** (constante + dinâmico) ·
  * **Bordo** (RPi 5 e, só na planta REAL, Bateria · Motores e potência · Hardware) · **Tudo** (layout
  * completo). O dono escolhe o que ver em vez de ver tudo ao
  * mesmo tempo; a escolha fica guardada (`localStorage`) e há atalhos 1–5.
@@ -31,6 +31,7 @@ import {
 } from "@/components/sim/seccoes"
 import { Cabecalho } from "@/components/sim/cabecalho"
 import { ControlosCamera } from "@/components/sim/camera"
+import { ControloVoo } from "@/components/sim/controlo-voo"
 import { Curvas, ValoresAtuais } from "@/components/sim/curvas"
 import {
   ControlosEpisodio,
@@ -409,6 +410,13 @@ export function App() {
     ultima === null || ultima.h1.length === 0
       ? null
       : `${ultima.obs.length}→${ultima.h1.length}→${ultima.h2.length}→${ultima.act.length}`
+  // CONTROLO DE VOO (contrato r11): o eco do runner vem no bloco `voo` do `/api/sim` (em reforço do
+  // `/api/state`) e, em último recurso, na última linha da telemetria (runner antigo). Um `eco: null`
+  // explícito PROPAGA (política sem modo comando → o painel desativa-se, honesto).
+  const vooEco = sim.voo !== null ? sim.voo.eco : (ultima?.voo ?? null)
+  // Amostras de telemetria publicadas (`amostras` do `/api/state`) — distingue «à espera da
+  // simulação» (0) de «modo comando indisponível» (eco `null` com telemetria já a chegar).
+  const amostras = sim.resumo?.amostras ?? sim.linhas.length
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -477,8 +485,9 @@ export function App() {
         ) : null}
 
         <SkeletonReveal loading={semDados} skeleton={<Esqueleto />}>
-          {/* SECÇÃO «OPERAÇÃO» — o cockpit: estado + modelo, valores atuais, o Painel de voo e o resumo de
-              bordo (só no drone real), a câmara da janela 3D e as curvas (também na secção «Tudo»). */}
+          {/* SECÇÃO «OPERAÇÃO» — o cockpit: estado + modelo, valores atuais, o Controlo de voo (teclas
+              WASD/QE), o Painel de voo e o resumo de bordo (só no drone real), a câmara da janela 3D e
+              as curvas (também na secção «Tudo»). */}
           <BlocoSecao id="operacao" visivel={ver("operacao")}>
             <Cabecalho
               estado={sim.estado}
@@ -492,6 +501,12 @@ export function App() {
               fim={ultima?.fim ?? null}
             />
             <ValoresAtuais linha={ultima} />
+            <ControloVoo
+              eco={vooEco}
+              amostras={amostras}
+              ligado={sim.ligacao === "ligado"}
+              onAviso={notificar}
+            />
             {real ? <PainelVoo linha={ultima} /> : null}
             <div
               className={

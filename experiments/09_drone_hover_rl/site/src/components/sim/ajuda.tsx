@@ -69,7 +69,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "Operação (tecla 1)",
         texto:
-          "o cockpit: cabeçalho (estado, contadores, modelo), valores atuais (altura, distância ao alvo, erro de rumo, vento), no drone real o «Painel de voo» (inclinação, rumo, altura, posição estimada vs real, giroscópio, acelerómetro, sensores) e o resumo «Bateria e motores», o bloco «Câmara» (vistas de cima e de lado, zoom, vistas rápidas) e as 4 curvas.",
+          "o cockpit: cabeçalho (estado, contadores, modelo), valores atuais (altura, distância ao alvo, erro de rumo, vento), o «Controlo de voo» (teclas WASD/QE para pilotar o drone), no drone real o «Painel de voo» (inclinação, rumo, altura, posição estimada vs real, giroscópio, acelerómetro, sensores) e o resumo «Bateria e motores», o bloco «Câmara» (vistas de cima e de lado, zoom, vistas rápidas) e as 4 curvas.",
       },
       {
         rotulo: "Rede (tecla 2)",
@@ -95,6 +95,11 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
         rotulo: "atalhos 1–5",
         texto:
           "as teclas 1–5 saltam para a secção correspondente; as setas do teclado percorrem as abas. Os atalhos NÃO atuam enquanto escreves num campo nem com o rato/foco sobre um slider.",
+      },
+      {
+        rotulo: "teclas de voo (W/A/S/D/Q/E)",
+        texto:
+          "Com o controlo de voo ARMADO (botão «ARMAR CONTROLO» no bloco da secção Operação) as teclas W/A/S/D/Q/E comandam o drone: W = +x (frente), S = −x (trás), A = +y (esquerda), D = −y (direita), Q = +z (subir), E = −z (descer). Sem teclas o drone SEGURA a posição. DESARMAR solta tudo (envia as 6 teclas desligadas) e perder a janela (blur) também solta tudo por segurança. Enquanto armado, estas teclas não escrevem nada nos campos (só se captam fora de input/textarea/select/conteúdo editável) e o atalho 1–5 continua a funcionar.",
       },
       {
         rotulo: "escolha guardada",
@@ -231,6 +236,43 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
         rotulo: "detalhes técnicos",
         texto:
           "Recolhidos no fim do bloco: azimute/elevação/distância exatos, alvo e posição da câmara, a convenção do MuJoCo (pos = alvo − d·f, f = [cos e·cos a, cos e·sin a, sin e]; elevação negativa = por cima) e o envio (POST /api/camera, 1 comando a cada 150 ms durante o gesto + o final).",
+      },
+    ],
+  },
+  {
+    id: "controlo-voo",
+    titulo: "Controlo de voo (teclas WASD/QE)",
+    onde: "secção «Operação» (e «Tudo»), por baixo dos valores atuais",
+    itens: [
+      {
+        rotulo: "o que é",
+        texto:
+          "Pilota o drone a partir do site (nada de overlays na janela 3D): arma-se o controlo e as teclas W/A/S/D/Q/E mandam uma velocidade comandada (v_ref) ao backend, que a aplica no modo comando da política. As teclas também funcionam com rato/toque nos keycaps (para quem não tem teclado).",
+      },
+      {
+        rotulo: "ARMAR / DESARMAR",
+        texto:
+          "Só com ARMADO é que as teclas são captadas (e só aí deixam de rolar a página). DESARMAR envia «ativo: false» com as 6 teclas soltas. Os keycaps acendem IMEDIATAMENTE com o teu estado local (estado otimista) e cada mudança manda um POST /api/voo com o estado completo das 6 teclas — havendo um envio em curso fica só o estado mais recente («o último vence»).",
+      },
+      {
+        rotulo: "as 6 teclas (W · +x frente)",
+        texto:
+          "W = +x frente · A = +y esquerda · S = −x trás · D = −y direita · Q = +z subir · E = −z descer (frame do mundo, yaw alvo 0). Diagonais horizontais normalizadas para 1,0 m/s (ex.: W+A anda a 1,0 m/s na diagonal) e |vz| = 0,7 m/s. Pares opostos (W+S, A+D, Q+E) anulam-se.",
+      },
+      {
+        rotulo: "leitura de estado (comando + eco)",
+        texto:
+          "O `v_ref` principal é o teu comando local (calculado das tuas teclas, aparece ao instante); ao lado, o eco `voo` da telemetria mostra o que o runner está MESMO a aplicar: v_ref, p_ref (m), os erros (xy e z em cm, velocidade em m/s) e o selo «A SEGUIR ✓ / a corrigir». Quando o eco diverge dos teus keycaps (latência ou OUTRO cliente a comandar), o painel mostra o estado do servidor ao lado do teu.",
+      },
+      {
+        rotulo: "segurança",
+        texto:
+          "Perder a janela (blur) solta TUDO e envia o estado zerado; sair do painel desarma. Enquanto armado, as teclas de voo não atuam quando escreves num campo (input/textarea/select/conteúdo editável) e atalhos do browser como Ctrl+W nunca são roubados.",
+      },
+      {
+        rotulo: "modo comando indisponível",
+        texto:
+          "Se a política em uso não foi treinada com `--comandos`, o eco `voo` vem `null` e o painel desativa-se com a mensagem honesta (nada é inventado). Sem telemetria ainda, diz «à espera da simulação».",
       },
     ],
   },
@@ -674,7 +716,7 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
       {
         rotulo: "como os dados chegam",
         texto:
-          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST (vento, vento dinâmico, parar, reiniciar, loop, câmara e bateria). Não há websockets nem recarregamento da página — e com uma secção escondida os updates CONTINUAM (o seletor só esconde a renderização); ao voltares, os valores estão frescos.",
+          "GET /api/sim a cada 350 ms (~2,9 Hz) traz o estado, o vento e as linhas novas; os controlos escrevem por POST (vento, vento dinâmico, parar, reiniciar, loop, câmara, bateria e controlo de voo). Não há websockets nem recarregamento da página — e com uma secção escondida os updates CONTINUAM (o seletor só esconde a renderização); ao voltares, os valores estão frescos.",
       },
     ],
   },

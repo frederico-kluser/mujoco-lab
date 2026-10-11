@@ -57,9 +57,13 @@ export function useStaggerReveal(): StaggerRevealHandle {
   const gentleRef = useRef(gentle)
   const uiRef = useRef(ui)
   const themeRef = useRef(theme)
-  gentleRef.current = gentle
-  uiRef.current = ui
-  themeRef.current = theme
+  // Espelhos atualizados a cada commit (nunca escritos durante o render): a chamada assíncrona a
+  // fonts.ready mais abaixo só retoma depois do commit, logo vê sempre os valores mais recentes.
+  useLayoutEffect(() => {
+    gentleRef.current = gentle
+    uiRef.current = ui
+    themeRef.current = theme
+  })
 
   useLayoutEffect(() => {
     const container = ref.current

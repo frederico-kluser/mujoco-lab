@@ -41,6 +41,7 @@ import {
   type Rpi5,
   type VentoDinamico,
   type VentoEstado,
+  type VooEstado,
 } from "@/lib/sim"
 
 /** Período do polling em ms (≈2,9 Hz, dentro da janela 2–5 Hz do contrato). */
@@ -85,6 +86,13 @@ export interface SimStream {
    * resposta o disse. A planta EM VIGOR é a da última linha (`plantaEmVigor`): esta é o recurso.
    */
   planta: Planta | null
+  /**
+   * CONTROLO DE VOO (contrato r11) tal como o `/api/sim` o publica (em reforço do `/api/state`):
+   * o `pedido` escrito no ficheiro de controlo × o `eco` do runner na telemetria. `null` = backend
+   * que ainda não publica o bloco; dentro dele, um `eco: null` é honesto (a política não tem modo
+   * comando) e propaga-se para o painel dizer «indisponível».
+   */
+  voo: VooEstado | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -141,6 +149,7 @@ export function useSim(): SimStream {
     camera: CameraEstado | null
     cameraPadrao: CameraEstado | null
     planta: Planta | null
+    voo: VooEstado | null
   }>({
     estado: "a_correr",
     ep: 0,
@@ -159,6 +168,8 @@ export function useSim(): SimStream {
     cameraPadrao: null,
     // Planta: `null` até alguma resposta a anunciar (o site comporta-se como cf2 até lá).
     planta: null,
+    // Controlo de voo: `null` até alguma resposta publicar o bloco (backend antigo).
+    voo: null,
   })
   const [resumo, setResumo] = useState<ResumoEstado | null>(null)
   const [ligacao, setLigacao] = useState<Ligacao>("a_ligar")
@@ -225,6 +236,9 @@ export function useSim(): SimStream {
         cameraPadrao: dados.cameraPadrao ?? anterior.cameraPadrao,
         // Como o rpi5: um backend que ainda não publique `planta` não apaga o que já se sabia.
         planta: dados.planta ?? anterior.planta,
+        // CONTROLO DE VOO: o bloco publicado manda (inclusive `eco: null`, honesto — política sem
+        // modo comando); só uma resposta sem bloco nenhum retém o anterior.
+        voo: dados.voo ?? anterior.voo,
       }))
       if (dados.linhas.length === 0) return
       setLinhas((anteriores) => {
@@ -307,6 +321,10 @@ export function useSim(): SimStream {
         // Planta (reforço do `/api/sim`): só escreve quando o resumo a anuncia.
         if (dados.planta !== null) {
           setCabecalho((anterior) => ({ ...anterior, planta: dados.planta }))
+        }
+        // Controlo de voo (reforço do `/api/sim`): só escreve quando o resumo publica o bloco.
+        if (dados.voo !== null) {
+          setCabecalho((anterior) => ({ ...anterior, voo: dados.voo }))
         }
         // Câmara (reforço do `/api/sim`, como o rpi5): o `/api/state` também publica
         // `camera_atual`/`camera_padrao` — a MESMA fusão honesta do `/api/sim` (o `null` explícito
@@ -461,6 +479,7 @@ export function useSim(): SimStream {
     cameraPadrao: cabecalho.cameraPadrao,
     loop: cabecalho.loop ?? resumo?.loop ?? null,
     planta: cabecalho.planta ?? resumo?.planta ?? null,
+    voo: cabecalho.voo ?? resumo?.voo ?? null,
     resumo,
     ligacao,
     erro,

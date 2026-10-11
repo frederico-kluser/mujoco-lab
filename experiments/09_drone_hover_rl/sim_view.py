@@ -157,8 +157,8 @@ sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 # `import mujoco`. O viewer (GLFW) não depende disso — ver o cabeçalho do `lab/mjkit.py`.
 from lab import mjkit  # noqa: F401, I001
 from lab import crazyflie as cf
-from env import HoverEnv
-from env_real import OBS_ATOR_DIM, DroneRealEnv
+from env import VOO_TECLAS, HoverEnv
+from env_real import OBS_ATOR_DIM, OBS_ATOR_DIM_COMANDO, DroneRealEnv
 
 import numpy as np
 
@@ -253,6 +253,26 @@ class Camera:
 
 
 @dataclass
+class Voo:
+    """Bloco `"voo"` do controlo (contrato r11): `{ativo, teclas, seq}` — o CONTROLE DE VOO do site.
+
+    `teclas` = `{w, a, s, d, q, e}` booleanas (W = +x, S = −x, A = +y, D = −y, Q = subir, E = descer) e
+    `ativo: false` (ou a chave ausente com `teclas` presentes) trata as teclas como SOLTAS (segurar
+    posição). O bloco é ESTADO: o runner aplica-o em `env.definir_comando_teclas` a cada mudança de
+    assinatura (as teclas mudam ao vivo — cada keydown/keyup do site escreve o bloco). Só faz efeito em
+    ambientes em modo comando (`comando=True`); num env clássico é ignorado com aviso (uma vez).
+    """
+
+    ativo: bool = False
+    teclas: dict = field(default_factory=dict)
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        """Assinatura estável do bloco (estado das teclas + ativo + seq): só uma MUDANÇA o (re)aplica."""
+        return json.dumps({"ativo": self.ativo, "teclas": self.teclas, "seq": self.seq}, sort_keys=True)
+
+
+@dataclass
 class Registo:
     """Conteúdo validado do ficheiro de controlo (vento base + comandos de episódio + vento dinâmico)."""
 
@@ -264,6 +284,7 @@ class Registo:
     loop: bool | None = None         # None = campo ausente: não mexe no modo
     dinamico: Dinamico | None = None  # None = campo ausente: não mexe no vento dinâmico
     camera: Camera | None = None     # None = campo ausente: não mexe na câmara
+    voo: "Voo | None" = None         # None = campo ausente: não mexe no controle de voo
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -407,6 +428,37 @@ def _ler_camera(bruto) -> Camera | None:
     return Camera(azimute, elevacao, distancia, seq)
 
 
+def _ler_voo(bruto) -> Voo | None:
+    """`"voo"` do controlo → `Voo` validado (`None` se o campo não vier) — contrato r11.
+
+    `teclas` = objeto com as 6 teclas do contrato (`w,a,s,d,q,e`) booleanas (tolera 0/1) — chaves
+    DESCONHECIDAS são ignoradas em silêncio (um ficheiro com lixo não rebenta) e as teclas em falta valem
+    `False`; `ativo` booleano (predefinido `False` — sem `ativo` explícito não se pilota por acidente);
+    `seq` inteiro ≥ 0 opcional. Um bloco que não seja objeto JSON → `ValueError` (como os outros blocos).
+    """
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`voo` tem de ser um objeto JSON {ativo, teclas}")  # noqa: TRY004
+    teclas_bruto = bruto.get("teclas") or {}
+    if not isinstance(teclas_bruto, dict):
+        raise ValueError("`voo.teclas` tem de ser um objeto JSON {w,a,s,d,q,e}")
+    teclas = {}
+    for tecla in VOO_TECLAS:
+        valor = teclas_bruto.get(tecla, False)
+        if isinstance(valor, bool):
+            teclas[tecla] = valor
+        elif isinstance(valor, int) and valor in (0, 1):
+            teclas[tecla] = bool(valor)
+        else:
+            raise ValueError(f"`voo.teclas.{tecla}` tem de ser booleano (recebido {valor!r})")
+    ativo = _booleano(bruto, "ativo")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`voo.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return Voo(False if ativo is None else ativo, teclas, seq)
+
+
 def ler_registo(dados) -> Registo:
     """Ficheiro de controlo → `Registo` validado (mesmas regras do net_probe/dashboard).
 
@@ -432,7 +484,7 @@ def ler_registo(dados) -> Registo:
         reiniciar = int(reiniciar)
     return Registo(vel, azimute, elevacao, True if ativo is None else ativo, reiniciar,
                    _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")),
-                   _ler_camera(dados.get("camera")))
+                   _ler_camera(dados.get("camera")), _ler_voo(dados.get("voo")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -562,6 +614,9 @@ class Controlo:
         self.camera: Camera | None = None       # último bloco `camera` APLICADO
         self.n_cameras = 0                      # aplicações de câmara feitas (contador de auditoria)
         self._assinatura_camera: str | None = None
+        self.voo: Voo | None = None             # último bloco `voo` APLICADO (controle de voo, contrato r11)
+        self._assinatura_voo: str | None = None
+        self.n_voos = 0                         # aplicações de controle de voo (contador de auditoria)
         self._assinatura: tuple[int, int] | None = None
         self._avisos: set[str] = set()
         self.bateria_seq: int | None = None     # `seq` do último comando de bateria visto (linha de base)
@@ -680,6 +735,7 @@ class Controlo:
         self._aplica_base(env, registo)
         self._aplica_dinamico(env, registo.dinamico)
         self._aplica_camera(registo)                     # apresentação: 1x por mudança de assinatura
+        self._aplica_voo(env, registo.voo)               # controle de voo: estado das teclas (contrato r11)
         self.n_ventos += 1                               # o controlo está APLICADO (contador de auditoria)
         print(f"[sim] vento -> {registo.vel:.2f} m/s @ {registo.azimute:.1f} deg"
               + (f" (elev {registo.elevacao:+.1f} deg)" if registo.elevacao else "")
@@ -774,6 +830,33 @@ class Controlo:
         print(f"[sim] camera (3a pessoa) -> az {bloco.azimute:.1f} deg, elev {bloco.elevacao:.1f} deg, "
               f"distancia {bloco.distancia:.2f} m (seq {bloco.seq}) — alvo segue o drone", flush=True)
 
+    def _aplica_voo(self, env: HoverEnv, voo: Voo | None) -> None:
+        """Aplica o bloco `voo` (contrato r11) em `env.definir_comando_teclas` — ESTADO, 1x por mudança.
+
+        As teclas WASDQE do site mudam ao vivo (keydown/keyup) e cada mudança escreve o bloco; aqui
+        aplica-se a CADA mudança de assinatura (o estado novo é sempre levado ao env — a semântica é de
+        estado, não de evento). `ativo=False` (ou bloco ausente = manter o anterior) trata as teclas como
+        soltas: `v_ref = 0` = segurar posição. Um env que não esteja em modo comando (política antiga,
+        obs 16/42) ignora o bloco com um aviso (uma vez) — o site vê o eco `voo: null` e mostra o painel
+        como indisponível, em vez de fingir que pilota.
+        """
+        if voo is None:
+            return
+        assinatura = voo.assinatura()
+        if assinatura == self._assinatura_voo:
+            return
+        self._assinatura_voo = assinatura
+        self.voo = voo
+        if not getattr(env, "comando", False):
+            self._aviso("bloco `voo` ignorado: esta política/ambiente não foi treinada em modo comando "
+                        "(contrato r11) — use uma política `--comandos` para pilotar com WASDQE")
+            return
+        env.definir_comando_teclas(ativo=voo.ativo, **voo.teclas)
+        self.n_voos += 1
+        ligadas = "".join(t.upper() for t, on in sorted(voo.teclas.items()) if on) or "—"
+        print(f"[sim] voo -> {'ATIVO' if voo.ativo else 'em espera'} · teclas {ligadas} (seq {voo.seq})",
+              flush=True)
+
     def _aplica_degrau(self, env: HoverEnv, params: dict) -> None:
         """`frente` formato (a): degrau IMEDIATO do vento base, sem passar pelo validador do env.
 
@@ -833,12 +916,15 @@ class Controlo:
         """Volta a escrever o controlo EM VIGOR depois de um `env.reset` (transição de episódio invisível).
 
         O ficheiro de controlo é a FONTE: um reset não pode apagar o que o dono pediu. Reaplica o vento
-        base, o modo dinâmico (degrau do `frente` incluído) e RE-ARMA uma rajada one-shot que tenha sido
-        pedida e ainda não tenha corrido (ex.: foi pedida com a física parada ou caiu a meio de um reset) —
-        sem isto, mexer no vento em tempo real "perdia-se" no reset seguinte. Uma rajada já CONCLUÍDA não
-        volta a disparar (o `seq` novo no controlo é que manda).
+        base, o modo dinâmico (degrau do `frente` incluído), o CONTROLE DE VOO (as teclas continuam
+        pressionadas → o comando volta a valer; a referência `p_ref` do env é refeita pelo reset) e
+        RE-ARMA uma rajada one-shot que tenha sido pedida e ainda não tenha corrido (ex.: foi pedida com a
+        física parada ou caiu a meio de um reset) — sem isto, mexer no vento em tempo real "perdia-se" no
+        reset seguinte. Uma rajada já CONCLUÍDA não volta a disparar (o `seq` novo no controlo é que manda).
         """
         self._aplica_base(env)
+        self._assinatura_voo = None                   # o reset limpa o comando no env: re-aplica o bloco
+        self._aplica_voo(env, self.voo)
         din = self.dinamico
         if din is None or not din.ativo or din.modo == "nenhum":
             env.definir_vento_dinamico(None)
@@ -1259,8 +1345,10 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "vento_azim": round(vento_azim, PRECISAO),
         "vento_vec": _lista(env.vento_atual, 3),        # [vx, vy, vz] m/s — o vento que a física leva
         "vento_modo": str(est.vento_modo or "nenhum"),  # modo dinâmico em vigor (aditivo)
-        "obs": (_lista(None if est.obs is None else np.asarray(est.obs)[:OBS_ATOR_DIM], OBS_ATOR_DIM)
-                if real else _lista(est.obs, 16)),      # real: SÓ a parte do ator (sensores + estimação)
+        "obs": (_lista(None if est.obs is None else np.asarray(est.obs)[:getattr(env, "obs_ator_dim",
+                                                                                OBS_ATOR_DIM)],
+                       getattr(env, "obs_ator_dim", OBS_ATOR_DIM))
+                if real else _lista(est.obs, 19 if getattr(env, "comando", False) else 16)),  # real: SÓ ator
         "act": _lista(est.acao, 4),
         "ctrl": _lista(env.data.ctrl[:4] if real else env.data.ctrl, 4),   # real: empuxo de cada rotor (N)
         # cf2: as 64+64 do contrato; real: a camada INTEIRA (o ator é 128-128 — cortar a 64 dava zeros)
@@ -1269,6 +1357,7 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "camera": camera_real(cam),                 # 19.ª chave: câmara REAL da janela (null sem viewer)
         "planta": "real" if real else "cf2",        # aditivo: o site escolhe os blocos/rótulos certos
         "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
+        "voo": info.get("voo"),                     # aditivo: controle de voo (contrato r11; null = fora do modo)
     }
     if real:
         linha.update(campos_planta_real(env, gestor))
@@ -1612,7 +1701,13 @@ def modelo_real_por_omissao(out: Path) -> tuple[Path, str] | None:
 
 def ambiente_para(politica, caminho: Path, sem_helices: bool = False):
     """(env, gestor) certos para a política: planta REAL se for o ator-crítico assimétrico (`_n_ator`),
-    com o build/modo de ação do `hardware.json` do modelo; senão o `HoverEnv` histórico do Crazyflie."""
+    com o build/modo de ação do `hardware.json` do modelo; senão o `HoverEnv` histórico do Crazyflie.
+
+    O MODO COMANDO (contrato r11) detecta-se da política carregada — nunca de flags: a observação da
+    política é que manda (cf2 19 dims / real ator 24 = `--comandos`) e o env é criado a condizer. Assim
+    qualquer `.zip` voa com o contrato com que foi treinado e o site mostra o painel de voo só quando
+    existe mesmo controlo de voo (honesto: sem política `--comandos` não há WASDQE).
+    """
     global CAM_CORPO, CAM_PADRAO
     if hasattr(politica.policy, "_n_ator"):
         from env_real import build_do_hardware
@@ -1620,11 +1715,20 @@ def ambiente_para(politica, caminho: Path, sem_helices: bool = False):
         dados = json.loads(hw_json.read_text(encoding="utf-8")) if hw_json.is_file() else {}
         build, motivo = build_do_hardware(dados)
         print(f"[sim] peças da política: {motivo}", flush=True)
-        env = DroneRealEnv(build=build, modo_acao=dados.get("modo_acao", "ctbr"), aleatorizar=False)
+        comando = int(getattr(politica.policy, "_n_ator", OBS_ATOR_DIM)) == OBS_ATOR_DIM_COMANDO
+        env = DroneRealEnv(build=build, modo_acao=dados.get("modo_acao", "ctbr"), aleatorizar=False,
+                           comando=comando)
         CAM_CORPO = "drone"
         CAM_PADRAO = camera_padrao_do_modelo(env.model)
+        print(f"[sim] planta real · modo comando (contrato r11): "
+              + ("LIGADO (obs 48 = 24+24) — WASDQE pelo site" if comando else
+                 "desligado (política clássica, obs 42)"), flush=True)
         return env, GestorBateria(env)
-    return HoverEnv(helices=not sem_helices), None
+    comando = int(np.asarray(politica.observation_space.shape[0])) == 19
+    print(f"[sim] cf2 · modo comando (contrato r11): "
+          + ("LIGADO (obs 19) — WASDQE pelo site" if comando else "desligado (política clássica, obs 16)"),
+          flush=True)
+    return HoverEnv(helices=not sem_helices, comando=comando), None
 
 
 def camera_padrao_do_modelo(model) -> dict:
@@ -1695,7 +1799,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
             "Teclado (foco na janela): ESPACO pausa/retoma · Q ou Esc fecha.\n"
             "\n"
             "Ficheiros: --controlo {\"vel\",\"azimute\",\"elevacao\",\"ativo\",\"reiniciar\",\"loop\",\"t\",\n"
-            "\"dinamico\",\"camera\"} (lido a cada passo de decisão) e --telemetria JSONL a ~10 Hz, sempre\n"
+            "\"dinamico\",\"camera\",\"voo\"} (lido a cada passo de decisão) e --telemetria JSONL a ~10 Hz, sempre\n"
             "(não há batimento lento). `dinamico` = {modo: nenhum|rajadas|aleatoria|frente|dryden|rajada_agora, params,\n"
             "ativo, seq}: `rajadas` = {p,duracao,u_max} e `aleatoria` = {p,duracao} (direção e força\n"
             "re-sorteadas a cada rajada em 0–5 m/s, 0–360° e ±90°, misturadas com o vento base pelo envelope);\n"
@@ -1706,6 +1810,14 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
             "e o bloco manda só no ORBITAR/zoom, aplicado UMA VEZ por mudança de assinatura (seq+valores) —\n"
             "entre comandos o rato orbita/zoom livre (o PAN é sobreposto pelo seguimento); sem viewer\n"
             "ignora-se sem erro.\n"
+            "`voo` = {ativo, teclas:{w,a,s,d,q,e}, seq} (contrato r11): CONTROLE DE VOO pelo site —\n"
+            "W=+x (frente), S=-x, A=+y (esquerda), D=-y (direita), Q=subir, E=descer (frame mundo, yaw 0);\n"
+            "as diagonais normalizam-se para 1,0 m/s e |vz| = 0,7 m/s; sem teclas o drone SEGURA posicao.\n"
+            "O bloco e ESTADO (cada keydown/keyup do site o escreve) e so faz efeito com politica treinada\n"
+            "em modo comando (train.py --comandos: obs 19 no cf2 / 48 na planta real) — a deteccao e\n"
+            "automatica pela observacao da politica; com politica classica o bloco e ignorado com aviso e a\n"
+            "telemetria publica \"voo\": null. O eco \"voo\" de cada linha traz {ativo, teclas, v_ref, p_ref,\n"
+            "erro_xy, erro_z, erro_v, seguindo}.\n"
             "\n"
             "LOOP: o padrão é SEM REINÍCIO (pedido do dono, 2026-10-09): no fim do episódio a física CONTINUA\n"
             "a integrar no estado em que ficou (nunca reinicia sozinha e nunca congela) e só um REINICIAR\n"

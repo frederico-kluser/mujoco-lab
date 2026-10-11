@@ -85,8 +85,9 @@ for _caminho_sys in (str(_AQUI), str(_RAIZ)):     # `env` (irmão) e `lab` (raiz
     if _caminho_sys not in sys.path:
         sys.path.insert(0, _caminho_sys)
 
-OBS_DIM = 16                     # entrada do GRAFO: 16 no HoverEnv (cf2); na planta REAL = OBS_ATOR_DIM (21)
-OBS_ENV_DIM = 16                 # observação do ENV: 16 (cf2) ou 42 (real: ator 21 + crítico privilegiado 21)
+OBS_DIM = 16                     # entrada do GRAFO: 16 no HoverEnv (cf2, 19 em modo comando r11);
+                                 # na planta REAL = OBS_ATOR_DIM (21 clássica, 24 em modo comando)
+OBS_ENV_DIM = 16                 # observação do ENV: 16/19 (cf2) ou 42/48 (real: ator+crítico; r11 = +3+3)
 PLANTA = "cf2"                   # decidido no carregamento: política assimétrica (`_n_ator`) ⇒ "real"
 HARDWARE: dict | None = None     # hardware.json ao lado do modelo (peças com que a política foi treinada)
 ACAO_DIM = 4                     # [empuxo, momento x, momento y, momento z]
@@ -234,15 +235,23 @@ def _cabe(p: dict) -> str:
 # ------------------------------------------------------------------------------------- env / modelo / obs
 def _novo_env():
     """Env de onde saem as observações REAIS: `HoverEnv` default (cf2) ou, na planta real, o
-    `DroneRealEnv` NOMINAL (sem DR) com o build/modo de ação do `hardware.json` do modelo."""
+    `DroneRealEnv` NOMINAL (sem DR) com o build/modo de ação do `hardware.json` do modelo.
+
+    O MODO COMANDO (contrato r11) segue a observação da política carregada (`OBS_ENV_DIM`): uma política
+    `--comandos` precisa de obs 19 (cf2) / 48 (real) — com o env clássico a validação rebentava com
+    "size of tensor a (42) must match ... (48)" e o grafo era marcado como NÃO fiável.
+    """
     if PLANTA == "real":
+        from env_real import OBS_DIM_COMANDO as _OBS_COM
         from env_real import DroneRealEnv, build_do_hardware
         build, motivo = build_do_hardware(HARDWARE)
         print(f"      peças da política: {motivo}")
         modo = (HARDWARE or {}).get("modo_acao", "ctbr")
-        return DroneRealEnv(build=build, modo_acao=modo, aleatorizar=False)
+        return DroneRealEnv(build=build, modo_acao=modo, aleatorizar=False,
+                            comando=OBS_ENV_DIM == _OBS_COM)
+    from env import OBS_DIM_COMANDO as _OBS_COM
     from env import HoverEnv
-    return HoverEnv()
+    return HoverEnv(comando=OBS_ENV_DIM == _OBS_COM)
 
 
 def gerar_observacoes(env, n: int, seed: int = 0) -> tuple[np.ndarray, int]:
@@ -299,15 +308,20 @@ def carregar_politica(caminho: Path):
     forma_acao = tuple(modelo.action_space.shape)
     if hasattr(politica, "_n_ator"):          # planta REAL: ator-crítico assimétrico (politica.py)
         from env_real import OBS_DIM as _OBS_REAL
+        from env_real import OBS_DIM_COMANDO as _OBS_REAL_COM
         PLANTA, OBS_ENV_DIM, OBS_DIM = "real", int(forma_obs[0]), int(politica._n_ator)
         hw = Path(caminho).parent / "hardware.json"
         HARDWARE = json.loads(hw.read_text(encoding="utf-8")) if hw.is_file() else None
-        if forma_obs != (_OBS_REAL,) or forma_acao != (ACAO_DIM,):
+        if forma_obs not in ((_OBS_REAL,), (_OBS_REAL_COM,)) or forma_acao != (ACAO_DIM,):
             _erro(f"o modelo espera obs {forma_obs} / ação {forma_acao}; o DroneRealEnv dá "
-                  f"({_OBS_REAL},) / ({ACAO_DIM},)")
-    elif forma_obs != (OBS_ENV_DIM,) or forma_acao != (ACAO_DIM,):
-        _erro(f"o modelo espera obs {forma_obs} / ação {forma_acao}; o HoverEnv dá "
-              f"({OBS_ENV_DIM},) / ({ACAO_DIM},)")
+                  f"({_OBS_REAL},) clássica ou ({_OBS_REAL_COM},) em modo comando (contrato r11) / "
+                  f"({ACAO_DIM},)")
+    else:
+        from env import OBS_DIM_COMANDO as _OBS_CF2_COM
+        if forma_obs not in ((OBS_ENV_DIM,), (_OBS_CF2_COM,)) or forma_acao != (ACAO_DIM,):
+            _erro(f"o modelo espera obs {forma_obs} / ação {forma_acao}; o HoverEnv dá "
+                  f"({OBS_ENV_DIM},) clássica ou ({_OBS_CF2_COM},) em modo comando (contrato r11) / "
+                  f"({ACAO_DIM},)")
     politica.set_training_mode(False)        # sem dropout/batchnorm: caminho determinístico puro
     return modelo, politica
 

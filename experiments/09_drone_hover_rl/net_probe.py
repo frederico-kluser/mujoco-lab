@@ -477,10 +477,16 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGINT, _pedido)
     signal.signal(signal.SIGTERM, _pedido)
 
-    env = HoverEnv(alvo_z=float(args.alvo_z))
     try:
         agente = PPO.load(str(modelo), device="cpu")
         agente.policy.set_training_mode(False)
+    except Exception as erro:                     # noqa: BLE001  (erro de carga relatado e devolvido no exit code)
+        print(f"net_probe: falhou a carregar a política de {modelo}: {erro}", file=sys.stderr)
+        return 3
+    # modo comando (contrato r11) pela OBSERVAÇÃO da política: 19 dims = `--comandos` (o env tem de nascer
+    # em modo comando, senão a rede recebe 16 entradas onde espera 19 e o predict rebenta)
+    env = HoverEnv(alvo_z=float(args.alvo_z), comando=int(agente.observation_space.shape[0]) == 19)
+    try:
         sonda = Sonda(agente.policy)
         controlo = ControloVento(controlo_caminho, env, inicial=args.vento_inicial)
     except SystemExit:

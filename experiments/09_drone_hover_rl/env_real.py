@@ -47,6 +47,12 @@ passo), estimador calibrado com as leituras em repouso. `options={"manter_bateri
 `options={"soc0": x}` fixa o SoC inicial. Com `aleatorizar=True` (treino) cada episódio sorteia
 massa/inércia/CM, kf/kq/J/R/KV/I₀ por motor, bateria (SoC₀, SoH, R, temperatura), atraso de comando,
 ruído dos sensores e arrasto de rotor/solo/VRS (plano §6 P1.5).
+
+CONTROLE DE VOO (`comando=True`, contrato r11 do `env.py`; por omissão `False` e nada muda): WASDQE
+comandam o `v_ref` e a referência `p_ref` integra-o — a observação passa a 48 dims (24+24, com o `v_ref`
+escalado em cada parte e os erros relativos a `p_ref`) e a recompensa a `recompensa_real_voo` (erros de
+SEGUIMENTO `p − p_ref` e `v − v_ref`: a política corrige rajadas de vento para a velocidade ser a
+PROPOSTA, nem mais lenta nem a favor). `comandos_aleatorios=True` sorteia perfis de comando no treino.
 """
 from __future__ import annotations
 
@@ -67,11 +73,14 @@ from gymnasium import spaces
 
 from env import (
     TILT_MAX,
+    VOO_SUBIDA,
+    VOO_VEL,
     Z_TETO,
     HoverEnv,
     atitude,
     azimute_graus,
     bonus_no_alvo,
+    bonus_seguindo,
     envolve_pi,
     finito,
     quat_yaw,
@@ -83,6 +92,11 @@ from fc import ControladorFC
 OBS_ATOR_DIM = 21
 OBS_CRITICO_DIM = 21
 OBS_DIM = OBS_ATOR_DIM + OBS_CRITICO_DIM
+# modo comando (contrato r11): +3 canais de `v_ref` escalado no ATOR e no CRÍTICO (e os erros passam a ser
+# relativos à referência `p_ref` — ver o docstring do módulo)
+OBS_ATOR_DIM_COMANDO = OBS_ATOR_DIM + 3
+OBS_CRITICO_DIM_COMANDO = OBS_CRITICO_DIM + 3
+OBS_DIM_COMANDO = OBS_ATOR_DIM_COMANDO + OBS_CRITICO_DIM_COMANDO
 TAXA_MAX = np.array([2.0, 2.0, 1.0])      # rad/s — setpoints de taxa máximos (p, q, r): pairar não pede mais
 ESCALA_GIRO = 2.0
 MODOS_ACAO = ("ctbr", "motores")
@@ -125,6 +139,31 @@ def recompensa_real(dist_xy: float, dz: float, yaw_err: float, v: float, omega, 
     return float(r)
 
 
+# recompensa v3-real MODO COMANDO (contrato r11): mesma forma, erros de SEGUIMENTO (p − p_ref, v − v_ref);
+# os pesos somam 1 e a velocidade sobe 0,10 → 0,20 (seguir a movimentação proposta É o objetivo)
+PESOS_REAL_VOO = {"xy": 0.30, "z": 0.30, "yaw": 0.10, "v": 0.20, "omega": 0.05, "delta_a": 0.05}
+
+
+def recompensa_real_voo(erro_xy: float, erro_z: float, erro_v: float, yaw_err: float, omega, delta_a,
+                        terminado: bool) -> float:
+    """Recompensa do modo comando da planta real — pura, sem estado: a v3-real com erros de SEGUIMENTO.
+
+    `erro_v` = ‖v − v_ref‖: uma rajada que deixe o drone MAIS LENTO ou a ir MAIS RÁPIDO que o comando
+    custa o mesmo (é isto que faz a política corrigir o vento durante a movimentação). O bónus é o
+    `bonus_seguindo` (posição E velocidade), com os limiares do contrato r11.
+    """
+    w, e = PESOS_REAL_VOO, ESCALAS_REAL
+    r = (R_VIVO - w["xy"] * math.tanh(erro_xy / e["xy"]) - w["z"] * math.tanh(erro_z / e["z"])
+         - w["yaw"] * math.tanh(abs(yaw_err) / e["yaw"]) - w["v"] * math.tanh(abs(erro_v) / e["v"])
+         - w["omega"] * math.tanh(float(np.linalg.norm(omega)) / e["omega"])
+         - w["delta_a"] * min(float(np.linalg.norm(delta_a)), 1.0))
+    if bonus_seguindo(erro_xy, erro_z, erro_v, yaw_err):
+        r += BONUS_REAL
+    if terminado:
+        r -= PENALIDADE_REAL
+    return float(r)
+
+
 def build_do_hardware(dados: dict | None) -> tuple[str | dict | None, str]:
     """O build com que uma política treinou, a partir do seu `hardware.json`: o NOME (se ainda existir em
     `builds.json`) → a configuração GRAVADA no `hardware.json` (se as peças ainda existirem no catálogo) → o build
@@ -156,6 +195,7 @@ class DroneRealEnv(HoverEnv):
                  vento: tuple[float, float, float] | None = None,
                  vento_aleatorio: tuple[float, float] | None = None,
                  vento_dinamico: dict | None = None,
+                 comando: bool = False, comandos_aleatorios: bool = False,
                  soc0: float = 1.0, desgaste: dr.EstadoDesgaste | None = None,
                  render_mode: str | None = None):
         gym.Env.__init__(self)
@@ -240,8 +280,22 @@ class DroneRealEnv(HoverEnv):
         self._contagem_atraso = 0
         self.yaw0 = 0.0
         self.parametros_dr: dict = {}
+        # controle de voo (contrato r11, herança do HoverEnv): `comando=False` muda NADA no contrato v3-real
+        if comandos_aleatorios and not comando:
+            raise ValueError("`comandos_aleatorios` exige `comando=True`")
+        self.comando = bool(comando)
+        self.comandos_aleatorios = bool(comandos_aleatorios)
+        self.v_ref = np.zeros(3)
+        self.p_ref = self.alvo.copy()
+        self._teclas = None
+        self._voo_ativo = True
+        self._plano = []
+        self._plano_i = 0
+        self._plano_restante = 0
+        self.obs_ator_dim = OBS_ATOR_DIM_COMANDO if self.comando else OBS_ATOR_DIM
+        self.obs_dim = OBS_DIM_COMANDO if self.comando else OBS_DIM
         self.action_space = spaces.Box(-1.0, 1.0, (4,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf, np.inf, (OBS_DIM,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, (self.obs_dim,), dtype=np.float32)
 
     # ------------------------------------------------------------------ arranque físico
     def _medir_repouso(self) -> float:
@@ -367,6 +421,15 @@ class DroneRealEnv(HoverEnv):
         self._cmd_ativo = np.zeros(4)
         self._cmd_pendente = np.zeros(4)
         self._contagem_atraso = 0
+        if self.comando:
+            self.p_ref = self.alvo.copy()
+            self.v_ref = np.zeros(3)
+            self._teclas = None
+            self._voo_ativo = True
+            if self.comandos_aleatorios:
+                self._sortear_plano_comando()
+            else:
+                self._plano, self._plano_i, self._plano_restante = [], 0, 0
         if self.vento_dinamico is not None:
             self._reinicia_dinamico()
             self._passo_vento()
@@ -424,6 +487,8 @@ class DroneRealEnv(HoverEnv):
     def step(self, acao):
         a = self._acao_valida(acao)
         delta_a = a - self.acao_anterior.astype(float)
+        if self.comando:
+            self._passo_comando()                     # v_ref do passo + integração de p_ref (1× por decisão)
         self._cmd_pendente = self._comando(a)
         self._contagem_atraso = round(self.atraso_comando / self.dt)
         if self.vento_dinamico is not None and self._din_passo < self.passos + 1:
@@ -451,13 +516,21 @@ class DroneRealEnv(HoverEnv):
             raise RuntimeError("simulação DIVERGIU (estado fora da sanidade) — chame reset()")
         terminado = bool(d["z"] < self.z_termina or d["z"] > Z_TETO
                          or max(abs(d["phi"]), abs(d["theta"])) > TILT_MAX or pl.brownout)
-        r = recompensa_real(d["dist_xy"], d["dz"], d["yaw_err"], d["v"], d["omega"], delta_a, terminado)
+        if self.comando:
+            r = recompensa_real_voo(d["erro_xy"], d["erro_z"], d["erro_v"], d["yaw_err"], d["omega"],
+                                    delta_a, terminado)
+        else:
+            r = recompensa_real(d["dist_xy"], d["dz"], d["yaw_err"], d["v"], d["omega"], delta_a, terminado)
         truncado = bool(self.passos >= self.max_passos)
         return self.observacao(d), float(r), terminado, truncado, self._info(d)
 
     # ------------------------------------------------------------------ estado → observação
     def _derivados(self) -> dict:
-        """Estado PRIVILEGIADO exato (qpos/qvel — sem desfasamento de 1 passo): só recompensa/crítico/info."""
+        """Estado PRIVILEGIADO exato (qpos/qvel — sem desfasamento de 1 passo): só recompensa/crítico/info.
+
+        No modo comando `dist_xy`/`dz` são ERROS DE SEGUIMENTO (relativos a `p_ref`) e acrescentam-se
+        `erro_xy`/`erro_z`/`erro_v` = ‖v − v_ref‖ (contrato r11).
+        """
         q = self.data.qpos
         rmat = np.zeros(9)
         mujoco.mju_quat2Mat(rmat, q[3:7])
@@ -466,24 +539,46 @@ class DroneRealEnv(HoverEnv):
         phi, theta, yaw = (float(v) for v in atitude(q[3:7]))
         x, y, z = (float(v) for v in cm)
         v = np.array(self.data.qvel[0:3])
-        return {"x": x, "y": y, "z": z, "phi": phi, "theta": theta, "yaw": yaw,
-                "yaw_err": envolve_pi(yaw - self.yaw0), "dist_xy": float(math.hypot(x, y)),
-                "dz": abs(z - self.alvo_z), "v": float(np.linalg.norm(v)), "v_vec": v,
-                "omega": np.array(self.data.qvel[3:6], dtype=float)}
+        if self.comando:
+            d_xy = float(math.hypot(x - self.p_ref[0], y - self.p_ref[1]))
+            dz = abs(z - self.p_ref[2])
+        else:
+            d_xy = float(math.hypot(x, y))
+            dz = abs(z - self.alvo_z)
+        out = {"x": x, "y": y, "z": z, "phi": phi, "theta": theta, "yaw": yaw,
+               "yaw_err": envolve_pi(yaw - self.yaw0), "dist_xy": d_xy,
+               "dz": dz, "v": float(np.linalg.norm(v)), "v_vec": v,
+               "omega": np.array(self.data.qvel[3:6], dtype=float)}
+        if self.comando:
+            out.update(erro_xy=d_xy, erro_z=dz, erro_v=float(np.linalg.norm(v - self.v_ref)))
+        return out
 
     def observacao(self, d: dict | None = None) -> np.ndarray:
+        """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).
+
+        No modo comando os erros passam a ser relativos à referência `p_ref` ([9] = ĥ − z_ref,
+        [13:15] = x̂−x_ref, ŷ−y_ref e o crítico `p − p_ref`) e entram 3 canais novos em CADA parte:
+        o `v_ref` escalado (vx/VOO_VEL, vy/VOO_VEL, vz/VOO_SUBIDA) — o ATOR sabe assim o que se pediu,
+        sem nada que não exista no hardware (o comando vem do piloto de bordo).
+        """
         pl, est = self.planta, self.estimador
         d = self._derivados() if d is None else d
+        alvo = self.p_ref if self.comando else self.alvo
         ator = np.concatenate((
             pl.imu.giro.medicao / ESCALA_GIRO, pl.imu.acc.medicao / self.gravidade,
-            [est.roll, est.pitch, est.psi / math.pi, est.h - self.alvo_z, est.vz, est.vx, est.vy, est.x, est.y,
+            [est.roll, est.pitch, est.psi / math.pi, est.h - alvo[2], est.vz, est.vx, est.vy,
+             est.x - alvo[0], est.y - alvo[1],
              1.0 if pl.tof.valido else 0.0, 1.0 if pl.fluxo.valido else 0.0],
             self.acao_anterior))
         critico = np.concatenate((
-            [d["x"] - self.alvo[0], d["y"] - self.alvo[1], d["z"] - self.alvo[2]], d["v_vec"],
+            [d["x"] - alvo[0], d["y"] - alvo[1], d["z"] - alvo[2]], d["v_vec"],
             [d["phi"] / math.pi, d["theta"] / math.pi, d["yaw_err"] / math.pi], d["omega"] / ESCALA_GIRO,
             pl.prop.omega / self.omega_ref, [pl.bat.soc, pl.v_bus / self.hw.bateria.v_nominal],
             np.asarray(self.model.opt.wind) / 5.0))
+        if self.comando:
+            v_esc = np.array([self.v_ref[0] / VOO_VEL, self.v_ref[1] / VOO_VEL, self.v_ref[2] / VOO_SUBIDA])
+            ator = np.concatenate((ator, v_esc))
+            critico = np.concatenate((critico, v_esc))
         return np.concatenate((ator, critico)).astype(np.float32)
 
     def _info(self, d: dict | None = None) -> dict:
@@ -491,15 +586,21 @@ class DroneRealEnv(HoverEnv):
         vento = self.vento_atual
         norma = float(np.linalg.norm(vento))
         b = self.planta.bat
-        return {"z": d["z"], "dist_xy": d["dist_xy"], "v": d["v"],
-                "no_alvo": bonus_no_alvo(d["dist_xy"], d["dz"], d["yaw_err"]), "yaw_err": d["yaw_err"],
+        info = {"z": d["z"], "dist_xy": d["dist_xy"], "v": d["v"],
+                "no_alvo": (bonus_seguindo(d["erro_xy"], d["erro_z"], d["erro_v"], d["yaw_err"])
+                            if self.comando else bonus_no_alvo(d["dist_xy"], d["dz"], d["yaw_err"])),
+                "yaw_err": d["yaw_err"],
                 "vento_vel": norma, "vento_atual": norma, "vento_azim": azimute_graus(vento),
                 "soc": b.soc, "v_bat": self.planta.v_bus, "i_bat": self.planta.i_total, "p_total": b.p,
                 "soh": b.desgaste.soh, "brownout": self.planta.brownout}
+        if self.comando:
+            info["voo"] = self.comando_estado(d)
+        return info
 
     def close(self) -> None:
         return
 
 
-__all__ = ["DR", "MODOS_ACAO", "OBS_ATOR_DIM", "OBS_CRITICO_DIM", "OBS_DIM", "TAXA_MAX", "DroneRealEnv",
-           "build_do_hardware", "recompensa_real"]
+__all__ = ["DR", "MODOS_ACAO", "OBS_ATOR_DIM", "OBS_ATOR_DIM_COMANDO", "OBS_CRITICO_DIM",
+           "OBS_CRITICO_DIM_COMANDO", "OBS_DIM", "OBS_DIM_COMANDO", "TAXA_MAX", "DroneRealEnv",
+           "build_do_hardware", "recompensa_real", "recompensa_real_voo"]

@@ -137,17 +137,6 @@ export function SmoothTabs({
   const slide = motionAllowed ? contentOffsetX : 0
   const restBlur = motionAllowed ? "blur(4px)" : "blur(0px)"
   const restOpacity = still ? 1 : 0
-  const enterTransition: PanelTransition = still
-    ? { duration: 0 }
-    : { type: "tween", duration: uiTransition.duration, ease: uiTransition.ease }
-  const exitTransition: PanelTransition = still
-    ? { duration: 0 }
-    : {
-        type: "tween",
-        duration: uiTransition.duration * 0.5,
-        ease: uiTransition.ease,
-      }
-
   const ctx = useMemo<SmoothTabsContextValue>(
     () => ({
       value,
@@ -161,8 +150,20 @@ export function SmoothTabs({
       slide,
       restOpacity,
       restBlur,
-      enterTransition,
-      exitTransition,
+      enterTransition: still
+        ? { duration: 0 }
+        : {
+            type: "tween",
+            duration: uiTransition.duration,
+            ease: uiTransition.ease,
+          },
+      exitTransition: still
+        ? { duration: 0 }
+        : {
+            type: "tween",
+            duration: uiTransition.duration * 0.5,
+            ease: uiTransition.ease,
+          },
       presenceCustom: direction,
     }),
     [
@@ -176,8 +177,7 @@ export function SmoothTabs({
       slide,
       restOpacity,
       restBlur,
-      enterTransition,
-      exitTransition,
+      still,
     ]
   )
 
@@ -209,14 +209,14 @@ export function SmoothTabsList({
   className,
   children,
 }: SmoothTabsListProps) {
-  const ctx = useContextOrThrow("SmoothTabsList")
+  const { listRef } = useContextOrThrow("SmoothTabsList")
 
   return (
     <TabsPrimitive.List
       activateOnFocus
       aria-label={ariaLabel}
       aria-orientation="horizontal"
-      ref={ctx.listRef}
+      ref={listRef}
       className={`flex rounded-full border border-border/70 bg-card p-1${className ? ` ${className}` : ""}`}
     >
       {children}
@@ -353,6 +353,9 @@ export interface SmoothTabsPanelProps {
 }
 
 /** Declarative panel config read by `SmoothTabsPanels`. Renders nothing itself. */
-export function SmoothTabsPanel(_props: SmoothTabsPanelProps) {
+export function SmoothTabsPanel(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- os `props` são lidos pelo `SmoothTabsPanels` (aqui renderiza-se nada)
+  _props: SmoothTabsPanelProps,
+) {
   return null
 }

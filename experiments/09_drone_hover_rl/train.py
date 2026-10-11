@@ -17,6 +17,18 @@ não abre browser e não precisa de TensorBoard.
         --vento-dinamico-params '{"t_s": 2.0}' --sem-curriculo --vento-max 3
     uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --retomar out/runs/seed2/best_model.zip \
         --timesteps 200000 --out-dir out/runs/seed2_yaw   # fine-tune a partir da política v1
+    uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --comandos \
+        --vento-dinamico rajadas --timesteps 3000000      # controle de voo WASDQE + rajadas (contrato r11)
+
+CONTROLE DE VOO (`--comandos`, contrato r11 do `env.py`; por omissão DESLIGADO → nada muda): a política
+aprende a SEGUIR o comando de voo (W/S = ±x, A/D = ±y, Q/E = ±z — velocidade proposta `v_ref` que a
+referência de posição `p_ref` integra). Os envs nascem com `comando=True, comandos_aleatorios=True`: cada
+episódio sorteia um perfil de comandos em segmentos (1.º segmento hover 1–2 s para a descolagem, depois
+segmentos 0,5–2 s com hover ou velocidades de VOO_V_MINIMO a VOO_VEL em direção aleatória, ±VOO_SUBIDA na
+vertical) e a recompensa passa a erros de SEGUIMENTO (`p − p_ref`, `v − v_ref` — o termo de velocidade é o
+que faz a política corrigir as rajadas de vento: nem mais lenta nem a favor do vento). A observação ganha o
+`v_ref` (cf2 16→19 dims; planta real 42→48, ator 21→24). Combinar com o vento dinâmico é de propósito:
+é aí que o seguimento é testado a sério.
 
 VENTO EM CURRÍCULO DE DR (domain randomization; CoALA #7978/#7979 — "currículo 0→1→2→3 m/s, sobe quando
 SR ≳ 80 %"). Os envs de TREINO nascem com `vento_aleatorio=(0, u_atual)` — vento POR EPISÓDIO (norma
@@ -175,7 +187,7 @@ from env import (  # ANTES de mujoco/gymnasium: lab.mjkit fixa MUJOCO_GL
     valida_vento_dinamico,
 )
 from env_real import DR as FAIXAS_DR
-from env_real import MODOS_ACAO, OBS_ATOR_DIM, DroneRealEnv
+from env_real import MODOS_ACAO, OBS_ATOR_DIM, OBS_ATOR_DIM_COMANDO, DroneRealEnv
 from politica import PoliticaAssimetrica
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
@@ -360,8 +372,10 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ent-coef", type=float, default=0.001, help="coeficiente de entropia (evita colapso)")
     p.add_argument("--lr", type=float, default=1e-4, help="learning rate do PPO")
     p.add_argument("--sucesso", type=float, default=None,
-                   help="limiar de retorno médio (StopTrainingOnRewardThreshold); por omissão 450 no cf2 (~500 = "
-                        "hover perfeito na v2b) e 700 na planta real (~750 = pairagem perfeita na v3-real)")
+                   help="limiar de retorno médio (StopTrainingOnRewardThreshold); por omissão 450 no cf2 "
+                        "(~500 = hover perfeito na v2b), 700 na planta real (~750 = pairagem perfeita na "
+                        "v3-real) e **720 em modo `--comandos`** (teto ≈750: o critério do hover parava o "
+                        "treino de seguimento a meio — medido)")
     p.add_argument("--eval-freq", type=int, default=5000,
                    help="passos do VEC entre avaliações (n_calls = timesteps/n_envs)")
     p.add_argument("--sem-painel", action="store_true",
@@ -373,6 +387,22 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="build do catálogo (models/drone_rpi/builds.json); por omissão o ATIVO")
     p.add_argument("--modo-acao", choices=MODOS_ACAO, default="ctbr",
                    help="planta real: `ctbr` = coletivo + taxas para o FC dedicado; `motores` = 4 aceleradores")
+    p.add_argument("--comandos", action="store_true",
+                   help="CONTROLE DE VOO (contrato r11 do env.py): treina a política para SEGUIR o comando "
+                        "WASDQE (v_ref: W/S = ±x, A/D = ±y, Q/E = ±z) — cada episódio sorteia um perfil de "
+                        "comandos em segmentos (comandos_aleatorios) e a recompensa passa a erros de "
+                        "SEGUIMENTO (p − p_ref, v − v_ref), para a política corrigir as rajadas de vento e "
+                        "manter a velocidade PROPOSTA (nem mais lenta nem a favor). A observação ganha o "
+                        "v_ref (cf2: 16→19 dims; planta real: 42→48) — a política treinada SÓ serve em modo "
+                        "comando e o runner/auto-detecção trata disso")
+    p.add_argument("--sem-perfis-comando", action="store_true",
+                   help="com --comandos: NÃO sorteia perfis de comando (v_ref fica 0 = só pairagem, mas com a "
+                        "observação/recompensa de comando). É o 1.º ESTÁGIO do currículo de comandos: o drone "
+                        "aprende a pairar na obs de comando sem o atrator «sentar no chão» (medido no 1.º "
+                        "treino r11: com perfis desde o início a política desligava os motores e ficava no "
+                        "chão a colher r≈0,7 — descobrir voo com referências a fugir é demasiado difícil); "
+                        "depois acabe o treino com --retomar <best_model.zip> SEM esta flag para aprender o "
+                        "SEGUIMENTO (perfis aleatórios + vento) — a receita é a dos fine-tunes r9/r10")
     p.add_argument("--sem-dr", action="store_true",
                    help="planta real: desliga a domain randomization dos parâmetros físicos (só vento)")
     p.add_argument("--net-arch", type=str, default=None,
@@ -380,7 +410,10 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "real, 64,64 no cf2)")
     args = p.parse_args(argv)
     if args.sucesso is None:
-        args.sucesso = 700.0 if args.planta == "real" else 450.0
+        # em modo comando o retorno "bom" é outro (r limitado por passo, máximo ≈ 1,5×500 = 750): o
+        # critério clássico 450 disparava a meio do seguimento (medido: parou aos 400 k passos a rastrear
+        # a 0,09 de frac_xy_z) — o modo comando só para perto da perfeição
+        args.sucesso = 720.0 if args.comandos else (700.0 if args.planta == "real" else 450.0)
     if args.log_std_init is None:
         args.log_std_init = -1.0 if args.planta == "real" else -0.5
     if args.net_arch is None:
@@ -565,12 +598,14 @@ def descricao_vento_dinamico(cfg: dict | None, u_teto: float) -> str:
 # ----------------------------------------------------------------------------------------------- envs
 def _fabrica_env(semente: int, pasta: str, raiz: str, u_teto: float,
                  din_cfg: dict | None = None, planta: str = "cf2", build: str | None = None,
-                 modo_acao: str = "ctbr", aleatorizar: bool = True) -> Callable[[], Any]:
+                 modo_acao: str = "ctbr", aleatorizar: bool = True,
+                 comando: bool = False, perfis: bool = True) -> Callable[[], Any]:
     """Fábrica picklável (cloudpickle) de UM env com `Monitor`, vento `U ~ U[0, u_teto]` e vento dinâmico.
 
     `din_cfg` é a config JÁ completa (com `u_max` = teto do currículo, via `config_dinamica`) ou `None`
     (treino sem vento dinâmico — o default, que não toca no caminho do env). `planta="real"` cria o
-    `DroneRealEnv` (peças do build, observação só de sensores, DR física se `aleatorizar`).
+    `DroneRealEnv` (peças do build, observação só de sensores, DR física se `aleatorizar`). `comando=True`
+    (contrato r11) liga o controle de voo com perfis de comando aleatórios por episódio.
     """
 
     def _init():
@@ -584,14 +619,16 @@ def _fabrica_env(semente: int, pasta: str, raiz: str, u_teto: float,
             )
 
             ambiente = _Real(build=build, modo_acao=modo_acao, aleatorizar=aleatorizar,
-                             vento_aleatorio=(0.0, float(u_teto)), vento_dinamico=din_cfg)
+                             vento_aleatorio=(0.0, float(u_teto)), vento_dinamico=din_cfg,
+                             comando=comando, comandos_aleatorios=perfis)
         else:
             from env import (
                 HoverEnv as _HoverEnv,  # import DENTRO do subprocesso (mujoco por processo)
             )
 
             ambiente = _HoverEnv(vento_aleatorio=(0.0, float(u_teto)),  # currículo de vento no 1.º estágio
-                                 vento_dinamico=din_cfg)                # vento que muda a meio do voo (ou None)
+                                 vento_dinamico=din_cfg,               # vento que muda a meio do voo (ou None)
+                                 comando=comando, comandos_aleatorios=perfis)
         ambiente.reset(seed=semente)  # fixa o stream do np_random (jitter do reset) antes do 1.º reset do vec
         return Monitor(ambiente)
 
@@ -602,18 +639,25 @@ def criar_envs_treino(n_envs: int, seed: int, u_teto: float,
                       din_cfg: dict | None = None, args: argparse.Namespace | None = None) -> SubprocVecEnv:
     """`n_envs` cópias do env (vento até `u_teto` + dinâmico `din_cfg`) em processos separados."""
     planta = getattr(args, "planta", "cf2")
+    comando = bool(getattr(args, "comandos", False))
+    perfis = comando and not bool(getattr(args, "sem_perfis_comando", False))
     extra = {} if planta != "real" else {"planta": "real", "build": args.build, "modo_acao": args.modo_acao,
                                          "aleatorizar": not args.sem_dr}
-    fabricas = [_fabrica_env(seed + i, str(_PASTA), str(_RAIZ), u_teto, din_cfg, **extra) for i in range(n_envs)]
+    fabricas = [_fabrica_env(seed + i, str(_PASTA), str(_RAIZ), u_teto, din_cfg, comando=comando,
+                             perfis=perfis, **extra)
+                for i in range(n_envs)]
     return SubprocVecEnv(fabricas)
 
 
 def criar_env_avaliacao(args: argparse.Namespace) -> HoverEnv:
     """Env de AVALIAÇÃO/MÉTRICAS: sem vento e, na planta real, com os parâmetros NOMINAIS (sem DR) e a
     bateria cheia — a régua tem de ser comparável entre avaliações."""
+    comando = bool(getattr(args, "comandos", False))
+    perfis = comando and not bool(getattr(args, "sem_perfis_comando", False))
     if getattr(args, "planta", "cf2") == "real":
-        return DroneRealEnv(build=args.build, modo_acao=args.modo_acao, aleatorizar=False)
-    return HoverEnv()
+        return DroneRealEnv(build=args.build, modo_acao=args.modo_acao, aleatorizar=False,
+                            comando=comando, comandos_aleatorios=perfis)
+    return HoverEnv(comando=comando, comandos_aleatorios=perfis)
 
 
 def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
@@ -631,7 +675,9 @@ def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
         "pecas": {"motor": hw.motor.dados, "helice": hw.helice.dados, "celula": hw.bateria.celula.dados,
                   "frame": hw.frame.dados, "esc": hw.esc.dados,
                   "eletronica": [c.dados for c in hw.consumidores], "sensores": hw.sensores},
-        "derivados": resumo, "modo_acao": args.modo_acao, "obs_ator_dim": OBS_ATOR_DIM,
+        "derivados": resumo, "modo_acao": args.modo_acao,
+        "obs_ator_dim": OBS_ATOR_DIM_COMANDO if getattr(args, "comandos", False) else OBS_ATOR_DIM,
+        "comando": bool(getattr(args, "comandos", False)),
         "domain_randomization": None if args.sem_dr else FAIXAS_DR,
     }
     with (out_dir / "hardware.json").open("w", encoding="utf-8") as fh:
@@ -1068,7 +1114,8 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
     if args.retomar is None:
         real = getattr(args, "planta", "cf2") == "real"
         camadas = list(getattr(args, "camadas", [64, 64]))
-        extra_politica = {"n_ator": OBS_ATOR_DIM} if real else {}
+        extra_politica = {"n_ator": (OBS_ATOR_DIM_COMANDO if getattr(args, "comandos", False)
+                                     else OBS_ATOR_DIM)} if real else {}
         modelo = PPO(
             PoliticaAssimetrica if real else "MlpPolicy",
             venv,
@@ -1159,10 +1206,13 @@ def treinar(args: argparse.Namespace) -> int:
             f"planta REAL · build '{hw_json['build']}' · {d['massa_total_g']:.0f} g · T/W {d['t_w_cheia']:.2f} · "
             f"pairagem {d['pairagem_v_nominal']['p_total']:.0f} W ({d['pairagem_v_nominal']['g_por_w']:.1f} g/W) · "
             f"autonomia estimada {d['autonomia_min']:.0f} min · ação {args.modo_acao} · "
-            f"DR {'DESLIGADA' if args.sem_dr else 'ligada'} · ator vê {OBS_ATOR_DIM} entradas reais "
+            f"DR {'DESLIGADA' if args.sem_dr else 'ligada'} · ator vê "
+            f"{OBS_ATOR_DIM_COMANDO if getattr(args, 'comandos', False) else OBS_ATOR_DIM} entradas reais "
             f"(crítico assimétrico) · {out_dir / 'hardware.json'}")
     else:
-        painel.escrever("planta cf2 · HoverEnv histórico do Crazyflie (observação privilegiada, 16 dims)")
+        painel.escrever("planta cf2 · HoverEnv histórico do Crazyflie (observação privilegiada, "
+                        + ("19 dims — MODO COMANDO (contrato r11)" if getattr(args, "comandos", False)
+                           else "16 dims"))
     # O SB3 avisa que o env de TREINO (SubprocVecEnv) e o de AVALIAÇÃO (DummyVecEnv de 1 env) são de tipos
     # diferentes. É intencional e inócuo aqui: sem VecNormalize não há estatísticas para sincronizar.
     warnings.filterwarnings("ignore", message="Training and eval env are not of the same type")

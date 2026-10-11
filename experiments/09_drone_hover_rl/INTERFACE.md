@@ -98,6 +98,13 @@ Uma página, sem navegação, em duas colunas: **métricas** (esquerda, larga) e
 shadcn/Tailwind; componentes do registry `@motion`) e atualizado por **polling a `GET /api/sim` a 2,9 Hz**
 (350 ms). Sem websockets.
 
+**CONTROLO DE VOO** (contrato r11, secção «Operação» — ver §4.5): o painel das teclas **WASDQE** com os
+keycaps a ACENDER ao vivo quando pressionados (estado otimista, imediato), armado/desarmado explícito,
+o `v_ref` comandado ao instante + o eco do runner ao lado, e os erros de seguimento em cm/(m/s). Só fica
+ativo com política `--comandos` (autodetetada); com política clássica diz «modo comando indisponível» e
+desativa os controlos. Os `data-testid` (`controlo-voo`, `tecla-w`…`tecla-e`, `voo-ativar`, `voo-vref`,
+`voo-seguindo`, `voo-indisponivel`) são os que o `teste_controle_voo.py` §4 usa na prova de navegador.
+
 ### 3.1 Cabeçalho (topo)
 
 | elemento | o que é |
@@ -375,6 +382,7 @@ deixa de ser de milissegundos e o defeito é determinístico. Os controlos corre
 | `reiniciar` | **contador inteiro**. Quando **muda**, o runner faz `env.reset()` — é o ÚNICO caminho para recomeçar um episódio (não há auto-reset fora do `loop`). A 1.ª leitura é linha de base; um contador ≥1 que apareça sem ficheiro prévio conta como reinício já pedido. Uma escrita **parcial** (sem esta chave) **não** mexe no contador e por isso não dispara reset nenhum |
 | `loop` | `true` = **CONTÍNUO** (o runner reinicia sozinho no fim do episódio, ep+1); `false` = **SEM REINÍCIO** (a física continua no estado em que ficou — não congela — e só um REINICIAR recomeça); **campo ausente = não mexe** (um ficheiro antigo só com vento continua válido). É **STICKY** e o **padrão é `false`** (2026-10-09): o ARRANQUE é autoritativo e **corrige o ficheiro** — sem flag (ou com `--sem-loop`) um `loop: true` velho passa a `false`, e com `--com-loop` um `loop: false` velho passa a `true` — preservando vento, dinâmica e o contador `reiniciar`; depois do arranque, quem o muda é só o `POST /api/loop`. Escritas parciais nunca lhe tocam |
 | `camera` | bloco **`{"azimute", "elevacao", "distancia", "seq"}`** — o comando de ORBITAR/zoom da câmara 3D (só apresentação: **nunca** toca na física nem nos outros campos). **SEM `alvo`** (contrato v2: o alvo é SEMPRE o drone — o `seguir_drone` escreve o `lookat = body(CAM_CORPO).xpos + CAM_OFFSET` a cada frame, §4.4). Faixas: `azimute` finito (normalizado **mod 360**), `elevacao` ∈ [−90, 90]°, `distancia` ∈ ]0, 20] m (a UI usa 0,1–10); `seq` inteiro ≥ 0, **incrementado a cada comando** pelo servidor (como o `dinamico.seq`) — a assinatura do bloco (`seq`+valores) é o que faz o runner **(re)aplicar UMA vez** os 3 valores ao `viewer.cam` (§4.4). Bloco ausente = não mexe na câmara; bloco com campos em falta/fora de faixa → o registo é ignorado com aviso (como o `dinamico`); **chaves desconhecidas** (ex. o `alvo` de ficheiros v1) são **ignoradas em silêncio** — ficheiros velhos não rebentam (o `POST /api/camera` é que as recusa com 400: a assimetria é intencional). O bloco é sempre COMPLETO (os 3 valores): quem o escreve é o `POST /api/camera` (que completa os campos **ausentes** a partir do bloco em vigor e carimba o `seq`; um campo **presente com valor `null`** é recusado com **400** — `null` não é «ausente») ou a mão |
+| `voo` | bloco **`{"ativo", "teclas": {"w","a","s","d","q","e"}, "seq"}`** — o CONTROLE DE VOO (contrato r11, §4.5): o **estado** das 6 teclas WASDQE, escrito COMPLETO a cada keydown/keyup do site. `W = +x (frente)`, `S = −x`, `A = +y (esquerda)`, `D = −y (direita)`, `Q = subir`, `E = descer` (frame **mundo**, yaw alvo 0); diagonais normalizadas para 1,0 m/s, `|vz| = 0,7 m/s`; `ativo: false` (ou teclas soltas) ⇒ `v_ref = 0` = o drone **segura posição**. `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor; o runner aplica o bloco em `env.definir_comando_teclas` UMA vez por mudança de assinatura. Bloco ausente = não mexe no comando; teclas em falta valem `false`; chaves desconhecidas **ignoradas em silêncio** no ficheiro (o `POST /api/voo` é que as recusa com 400). Só faz efeito com **política `--comandos`** (modo comando detetado pela observação da política): com política clássica o runner ignora o bloco com aviso e a telemetria publica `"voo": null` — o site mostra o painel como **indisponível** em vez de fingir que pilota |
 | `t` | carimbo de tempo da escrita (informativo; o site e o runner carimbam-no quando escrevem) |
 
 Todas as escritas são **atrónicas** (ficheiro temporário + `os.replace`), portanto o runner nunca lê um
@@ -411,6 +419,7 @@ Uma linha JSON por amostra (**15 campos** + os aditivos `loop`, `vento_modo`, `c
 | `ctrl` | 4 números — o comando **físico** que essa ação produziu: `data.ctrl` = [empuxo N, momento x, momento y, momento z (N·m)]. Invariante: `ctrl == acao_para_ctrl(act)` quando `passo > 0` (ação aplicada); nas linhas de reset (`passo == 0`, `t == 0`) vale `[0,0,0,0]`, porque o `env.reset()` zera o `data.ctrl` e não houve ação nenhuma. É este campo que o site rotula **«ctrl do backend»** (§3.3); sem ele, o site deriva da ação |
 | `h1`, `h2` | 64 + 64 ativações das camadas escondidas (forward hooks nos `nn.Linear`), **na mesma linha** que `obs`/`act`/`ctrl` ⇒ alinhadas |
 | `camera` | **19.ª chave** (sempre no fim): a câmara **REAL** da janela, `{"azimute", "elevacao", "distancia", "alvo": [x,y,z]}` lida de `viewer.cam` — inclui arrastos do rato feitos entre comandos. O `alvo` é o **`lookat` real = drone+offset** (escrito pelo `seguir_drone` a cada frame, §4.4 — sem lag). **`null` sem viewer** (`--sem-janela`, testes): sem dados não se inventa câmara (é o que sai em `camera_atual` na API) |
+| `voo` | **chave aditiva** (contrato r11, §4.5): o CONTROLE DE VOO em vigor = `{"ativo", "teclas": {w,a,s,d,q,e}, "v_ref": [vx,vy,vz], "p_ref": [x,y,z], "erro_xy", "erro_z", "erro_v", "seguindo"}` — o que se pediu (`v_ref`/`p_ref`, em m/s e m), o que se apanhou (erros: `erro_xy`/`erro_z` em m, `erro_v` = ‖v − v_ref‖ em m/s) e se o drone está a seguir a referência (`seguindo`, os limiares do bónus). **`null` quando a política em uso NÃO tem modo comando** — é o que faz o painel do site ficar honestamente indisponível em vez de fingir que pilota |
 
 Cada linha é escrita com `flush`, para o site ver sem esperar pelo fecho do ficheiro.
 
@@ -479,6 +488,37 @@ ser atualizada. Nota honesta: com `--sem-helices` o default automático do model
 invisível.
 
 ---
+
+### 4.5 Controle de voo (WASDQE) — contrato r11 (2026-10-10)
+
+O pedido do dono: «um controle de voo onde mudo a altitude e a direção — WASD para as direções, Q e E para
+subir e descer — vendo no site quando ativo; e durante a movimentação corrigir as rajadas de vento para
+não ir mais lento nem a favor: respeitar a movimentação proposta sem sofrer a influência do vento».
+
+**Semântica** (frame **mundo**, yaw alvo 0 — «frente» é o +x): `W = +x`, `S = −x`, `A = +y (esquerda)`,
+`D = −y (direita)`, `Q = subir (+z)`, `E = descer (−z)`. As teclas comandam o **`v_ref`** (velocidade
+proposta em m/s): diagonais horizontais normalizadas para **1,0 m/s**, `|vz| = 0,7 m/s`, sem teclas →
+`v_ref = 0` = **segurar posição**. O env integra o `v_ref` na referência de POSIÇÃO `p_ref` a cada passo
+de decisão (50 Hz) e satura na caixa de trabalho `xy ±4 m`, `z ∈ [0,25; 2,75]` m — na borda a componente
+que bate fica com `v_ref = 0` (a referência não empurra contra a parede). O **REINICIAR** repõe
+`p_ref = (0, 0, 1)` e o comando em vigor volta a ser aplicado (as teclas continuam pressionadas).
+
+**O que a política faz dele** (só com política `--comandos`, treinada com `train.py --comandos`): segue a
+**velocidade proposta** — e é aqui que entra a exigência do dono: a recompensa de seguimento pune
+`tanh(‖v − v_ref‖)`, ou seja, uma rajada que deixe o drone **mais lento** OU a levando **mais rápido** que
+o comando custa **exatamente o mesmo** (simetria provada em `teste_controle_voo.py` §1 e §2 — a prova §2
+mede ⟨vx⟩ com vento de proa e de cauda: têm de ser iguais). O bónus exige posição **E** velocidade
+(`‖v − v_ref‖ < 0,10 m/s`), e a referência **nunca** se perde: quando o vento desvia o drone, o erro de
+posição acumulado manda-o voltar — «respeitar a movimentação proposta» significa isso mesmo.
+
+**Cadeia completa** (tudo testado em `teste_controle_voo.py`): tecla do site → `POST /api/voo` (estado
+completo das 6 teclas) → bloco `"voo"` no ficheiro de controlo (escrita atómica, `seq` do servidor) →
+runner aplica em `env.definir_comando_teclas` (1× por mudança de assinatura) → a política vê o `v_ref` na
+observação e comanda o drone → o eco `"voo"` de cada linha de telemetria volta ao site (`v_ref`/`p_ref`
+aplicados, erros, `seguindo`). O painel do site acende os keycaps **ao instante** (estado otimista) e o
+`v_ref` comandado imediatamente; o eco mostra ao lado o que o runner está mesmo a aplicar (honesto para
+vários clientes). Com política **clássica** o runner ignora o bloco com aviso e o eco vem `null` — o
+painel diz «modo comando indisponível: esta política não foi treinada com `--comandos`».
 
 ## 5. Interfaces alternativas (o resto do experimento)
 
