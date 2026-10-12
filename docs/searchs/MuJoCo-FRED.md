@@ -511,13 +511,13 @@ simulador físico, a validação por fórmulas fechadas, o ciclo de registo na m
 **O que muda por robô:** o `model.xml`/`models/<robo>/`, a camada `lab/<robo>.py` (sensores e atuadores
 certos para a máquina) e — no `env.py` — a observação, a ação e a recompensa. O `lab-padrao` formaliza
 isto numa tabela "o que adaptar primeiro" com 9 pontos, e "o que NUNCA mudar".
-**A versão empacotada do padrão** vive em `.agents/mujoco-lab-agent-skill/assets/templates/lab-padrao/`
+**A versão empacotada do padrão** vive em `.agents/mujoco-lab-coala-agent-skill/assets/templates/lab-padrao/`
 (56 ficheiros): `model.xml`, `env.py`, `run.py`, `train.py`, `view.py`, `sim_view.py`, `sim_site.py`,
 `site/`, `dashboard.py`, `net_probe.py`, `deploy.py`, `LEIAME.md`, `INTERFACE.md` — um exemplo que arranca
 de raiz (uma haste com junta hinge) e que o `new_experiment.py --template lab-padrao` gera já montado.
 ---
 ## 7. A skill e a memória: o que torna o padrão transmissível
-O padrão não vive só no código — vive na **`mujoco-lab-agent-skill`**, que é a *única* skill do
+O padrão não vive só no código — vive na **`mujoco-lab-coala-agent-skill`**, que é a *única* skill do
 laboratório e junta duas coisas:
 1. **A memória CoALA local** (`memory/coala.sqlite`, motor `scripts/coala.py`) — o que já se decidiu,
    testou e verificou. É o **primeiro passo de qualquer tarefa**:
@@ -543,15 +543,15 @@ Quem pegar neste projeto a seguir começa exatamente onde esta sessão parou.
 ## 8. Como usar o padrão num robô novo (receita)
 ```bash
 # 0) a memória primeiro — o que já se sabe
-python3 .agents/mujoco-lab-agent-skill/scripts/coala.py recall "<o que quero fazer>" --budget 1500
-python3 .agents/mujoco-lab-agent-skill/scripts/coala.py recall "<o que quero fazer>" --type episodic --budget 600
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<o que quero fazer>" --budget 1500
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<o que quero fazer>" --type episodic --budget 600
 # 1) o modelo: clone SPARSE só da pasta do robô → vendorizar em models/<robo>/ INTACTO
 #    (cruzar com o datasheet real do fabricante e citar a fonte no README)
 # 2) inspecionar antes de acreditar
-.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py models/<robo>/<x>.xml --tree
+.venv/bin/python .agents/mujoco-lab-coala-agent-skill/scripts/inspect_model.py models/<robo>/<x>.xml --tree
 # 3) a camada lab/<robo>.py: carregar() · definir_*() · MODOS · ler_*()   (sem algoritmos!)
 # 4) criar o experimento já no padrão
-python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template lab-padrao
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/new_experiment.py <nome> --template lab-padrao
 # 5) adaptar, pela ordem do LEIAME: model.xml → obs → acao_para_ctrl → recompensa →
 #    perturbação → run.py → sim_view.amostra → site/src/lib/sim.ts → train.FASES
 # 6) validar SEM JANELAS (regra do dono: agentes nunca abrem viewer)
@@ -607,10 +607,10 @@ e a correção delas é trabalho de minutos.
 | o comando único (janela + site + API) | [`sim_site.py`](experiments/09_drone_hover_rl/sim_site.py) |
 | o site React | [`site/`](experiments/09_drone_hover_rl/site/) |
 | deploy ONNX / benchmark / multi-IA | [`deploy.py`](experiments/09_drone_hover_rl/deploy.py) |
-| o padrão empacotado (template base) | [`.agents/mujoco-lab-agent-skill/assets/templates/lab-padrao/`](.agents/mujoco-lab-agent-skill/assets/templates/lab-padrao/) |
+| o padrão empacotado (template base) | [`.agents/mujoco-lab-coala-agent-skill/assets/templates/lab-padrao/`](.agents/mujoco-lab-coala-agent-skill/assets/templates/lab-padrao/) |
 | o padrão em 8 passos + experimentos | [`README.md`](README.md) |
 | regras do projeto para agentes | [`AGENTS.md`](AGENTS.md) |
-| a skill única (memória CoALA + MuJoCo 3.15) | [`.agents/mujoco-lab-agent-skill/SKILL.md`](.agents/mujoco-lab-agent-skill/SKILL.md) |
+| a skill única (memória CoALA + MuJoCo 3.15) | [`.agents/mujoco-lab-coala-agent-skill/SKILL.md`](.agents/mujoco-lab-coala-agent-skill/SKILL.md) |
 **Fontes externas citadas** (conteúdo web = `untrusted`, só se cita):
 [mujoco_menagerie · bitcraze_crazyflie_2](https://github.com/google-deepmind/mujoco_menagerie/tree/main/bitcraze_crazyflie_2)
 (modelo MIT e a nota de que os `ctrlrange` são *"arbitrary"*) ·

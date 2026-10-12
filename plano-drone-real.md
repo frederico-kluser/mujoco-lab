@@ -438,7 +438,9 @@ segue é o que falta e **vai ser considerado** (prioridades revistas em §6/§8.
 
 **Validações a acrescentar ao `run.py`** (além das do §6): (a) empuxo medido a 0,5 D do solo é ≥ 15 %
 superior ao de 5 m (efeito de solo ligado) e ≈ 1 só a ~5 m no multirrotor (⚠ corrigido: o rotor
-isolado iguala a > 1,75 D, o multirrotor ainda tem +5 % — §0.3); (b) arrasto de rotor: a 5 m/s no
+isolado iguala a > 1,75 D, o multirrotor ainda tem +5 % — §0.3; ⚠ o «≥ 15 %» é do frame compacto de 650 mm, rotores a
+1,2 D: com o de 1950 mm, a 3,6 D, o ganho a 0,5 D é ×1,074, quase o rotor isolado ×1,067 — o critério vigente é a conta
+fechada de Sanchez-Cuevas + o piso do rotor isolado, `valida_real.py` D1 e `test_efeito_de_solo`); (b) arrasto de rotor: a 5 m/s no
 eixo x, aceleração = `−d_x·5` ± 10 % (arrasto linear no frame corpo — girar o corpo muda a direção);
 (c) inflow (⚠ sinal corrigido, §0.4): à mesma ω, empuxo em SUBIDA 3 m/s < pairagem < empuxo em
 DESCIDA 1 m/s até ao VRS; (d) VRS: perda de empuxo só acima de

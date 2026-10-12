@@ -80,10 +80,10 @@ Cada ação só aparece quando o experimento tem o ficheiro correspondente; os s
 ```bash
 uv run --group hover-rl python experiments/09_drone_hover_rl/run.py        # demo + validação física → exit 0/1 (146 checagens)
 uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py   # janela 3D CLEAN + site de monitoria
-uv run pytest .agents/mujoco-lab-agent-skill/tests -q                      # 30 testes (scripts, templates, armadilhas)
-python3 .agents/mujoco-lab-agent-skill/scripts/env_check.py                # diagnóstico: Python, MuJoCo, GL/EGL, GPU, docs
-python3 .agents/mujoco-lab-agent-skill/scripts/sync_docs.py                # (opcional) espelha a documentação oficial em docs/upstream/
-python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao
+uv run pytest .agents/mujoco-lab-coala-agent-skill/tests -q                      # 30 testes (scripts, templates, armadilhas)
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/env_check.py                # diagnóstico: Python, MuJoCo, GL/EGL, GPU, docs
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/sync_docs.py                # (opcional) espelha a documentação oficial em docs/upstream/
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao
 ```
 
 Sem janela (CI/agentes) o render usa `MUJOCO_GL=egl`.
@@ -92,26 +92,26 @@ Sem janela (CI/agentes) o render usa `MUJOCO_GL=egl`.
 
 - **[`experiments/09_drone_hover_rl`](experiments/09_drone_hover_rl/README.md)** — o projeto de ponta a ponta: drone Crazyflie 2 que **descola pela física** e paira a **1 m** com uma política PPO, sob vento constante e dinâmico. Ambiente Gymnasium, treino com currículo, interface CLEAN + site, validação por fórmulas fechadas e deploy ONNX → Raspberry Pi 5. *Nota histórica: os experimentos 01–08 (queda, pêndulo, haste, quadricóptero, carro, braço, Spot, Crazyflie-motores) foram **removidos em 2026-10-08 por decisão do dono** — o histórico está no git.*
 - **Modelos e camada de adaptação** — `models/` com robôs vendorizados intactos (Crazyflie 2 e Spot do `mujoco_menagerie`, com as licenças upstream) e `lab/` com toda a adaptação em runtime (`crazyflie.py`, `spot.py`, `mjkit.py`).
-- **Templates testados** — `lab-padrao` (o padrão completo: RL + interface CLEAN + site) e `front-conexao` (só o bundle do front + contratos), em `.agents/mujoco-lab-agent-skill/assets/templates/`.
-- **[`mujoco-lab-agent-skill`](.agents/mujoco-lab-agent-skill/SKILL.md)** — a skill única do laboratório: a **memória CoALA local** (episódica, semântica, procedimental e working memory orçamentada) **e** o controle verificado do MuJoCo 3.15 — 16 referências de MuJoCo (+ o schema da memória), 10 scripts, 5 templates testados e uma suíte `pytest` (30 testes).
+- **Templates testados** — `lab-padrao` (o padrão completo: RL + interface CLEAN + site) e `front-conexao` (só o bundle do front + contratos), em `.agents/mujoco-lab-coala-agent-skill/assets/templates/`.
+- **[`mujoco-lab-coala-agent-skill`](.agents/mujoco-lab-coala-agent-skill/SKILL.md)** — a skill única do laboratório: a **memória CoALA local** (episódica, semântica, procedimental e working memory orçamentada) **e** o controle verificado do MuJoCo 3.15 — 16 referências de MuJoCo (+ o schema da memória), 10 scripts, 5 templates testados e uma suíte `pytest` (30 testes).
 - **Deploy no alvo (padrão, não opção)** — o **Raspberry Pi 5** é o computador de bordo de todos os projetos: export ONNX, validação numérica, benchmark `p50/p99` e painel no site (ver [§6 do padrão](#6--deploy-no-alvo-raspberry-pi-5)).
-- **Documentação oficial offline** — espelho da tag 3.15.0 (MuJoCo, MuJoCo Warp, Playground, MJPC, Menagerie) + busca por texto, atributo MJCF, elemento, função C, enum e changelog ([`docs_search.py`](.agents/mujoco-lab-agent-skill/scripts/docs_search.py)).
+- **Documentação oficial offline** — espelho da tag 3.15.0 (MuJoCo, MuJoCo Warp, Playground, MJPC, Menagerie) + busca por texto, atributo MJCF, elemento, função C, enum e changelog ([`docs_search.py`](.agents/mujoco-lab-coala-agent-skill/scripts/docs_search.py)).
 - **Pesquisa profunda auditada** — [dossiê](pesquisas/2026-10-07-qual-e-a-forma-correta-e-atual-mujoco-3-15-x-out-2026-de-ins.md) com 16 perguntas, 362 fontes citadas e [verificação independente](pesquisas/verificacao/independente.md) por reexecução.
-- **Benchmarks de GPU reais** — MJX e MuJoCo Warp medidos numa RTX 4070 Laptop de 8 GB ([resultados](.agents/mujoco-lab-agent-skill/references/gpu-benchmarks.md)).
+- **Benchmarks de GPU reais** — MJX e MuJoCo Warp medidos numa RTX 4070 Laptop de 8 GB ([resultados](.agents/mujoco-lab-coala-agent-skill/references/gpu-benchmarks.md)).
 
 ### A agent skill, em detalhe
 
-Peça ao agente para carregar `mujoco-lab-agent-skill` antes de qualquer trabalho com MuJoCo (ela é descoberta por `.agents/skills/` e `.claude/skills/`, symlinks locais ignorados pelo git — o instalador da memória CoALA (`coala-agent-skill`) cria-os). Ela impõe um protocolo com a **memória primeiro**: `coala.py recall` do que já se sabe → consultar a documentação local antes de afirmar → partir de um template testado → validar o modelo → simular sem janela com critérios de aceitação → depurar → `coala.py add` do que ficou durável.
+Peça ao agente para carregar `mujoco-lab-coala-agent-skill` antes de qualquer trabalho com MuJoCo (ela é descoberta por `.agents/skills/` e `.claude/skills/`, symlinks locais ignorados pelo git — o instalador da memória CoALA (`coala-agent-skill`) cria-os). Ela impõe um protocolo com a **memória primeiro**: `coala.py recall` do que já se sabe → consultar a documentação local antes de afirmar → partir de um template testado → validar o modelo → simular sem janela com critérios de aceitação → depurar → `coala.py add` do que ficou durável.
 
 | Referência | Para quê |
 | --- | --- |
-| [`mjcf-cheatsheet`](.agents/mujoco-lab-agent-skill/references/mjcf-cheatsheet.md) · [`python-api`](.agents/mujoco-lab-agent-skill/references/python-api.md) | modelar e programar (o que mudou de 3.0 a 3.15) |
-| [`physics-tuning`](.agents/mujoco-lab-agent-skill/references/physics-tuning.md) · [`actuators-sensors`](.agents/mujoco-lab-agent-skill/references/actuators-sensors.md) | integradores, contato, estabilidade; atuadores e sensores |
-| [`robots`](.agents/mujoco-lab-agent-skill/references/robots.md) · [`drones`](.agents/mujoco-lab-agent-skill/references/drones.md) · [`vehicles`](.agents/mujoco-lab-agent-skill/references/vehicles.md) | braços e URDF, quadricópteros e aerodinâmica, rodas e pneus |
-| [`gpu-mjx-warp`](.agents/mujoco-lab-agent-skill/references/gpu-mjx-warp.md) · [`gpu-benchmarks`](.agents/mujoco-lab-agent-skill/references/gpu-benchmarks.md) | MJX e MuJoCo Warp: limites, receita e medições |
-| [`rendering-viewer`](.agents/mujoco-lab-agent-skill/references/rendering-viewer.md) · [`telemetry-rerun`](.agents/mujoco-lab-agent-skill/references/telemetry-rerun.md) · [`install-linux`](.agents/mujoco-lab-agent-skill/references/install-linux.md) | render/viewer em Wayland+NVIDIA, Rerun, instalação |
-| [`docs-map`](.agents/mujoco-lab-agent-skill/references/docs-map.md) · [`official-skills-errata`](.agents/mujoco-lab-agent-skill/references/official-skills-errata.md) | mapa da doc e quebras por versão; 63 blocos das skills oficiais executados (12 falham) |
-| [`experiments-playbook`](.agents/mujoco-lab-agent-skill/references/experiments-playbook.md) · [`relatorio-auditoria`](.agents/mujoco-lab-agent-skill/references/relatorio-auditoria.md) | método de validação e catálogo de experimentos; auditoria de um relatório técnico |
+| [`mjcf-cheatsheet`](.agents/mujoco-lab-coala-agent-skill/references/mjcf-cheatsheet.md) · [`python-api`](.agents/mujoco-lab-coala-agent-skill/references/python-api.md) | modelar e programar (o que mudou de 3.0 a 3.15) |
+| [`physics-tuning`](.agents/mujoco-lab-coala-agent-skill/references/physics-tuning.md) · [`actuators-sensors`](.agents/mujoco-lab-coala-agent-skill/references/actuators-sensors.md) | integradores, contato, estabilidade; atuadores e sensores |
+| [`robots`](.agents/mujoco-lab-coala-agent-skill/references/robots.md) · [`drones`](.agents/mujoco-lab-coala-agent-skill/references/drones.md) · [`vehicles`](.agents/mujoco-lab-coala-agent-skill/references/vehicles.md) | braços e URDF, quadricópteros e aerodinâmica, rodas e pneus |
+| [`gpu-mjx-warp`](.agents/mujoco-lab-coala-agent-skill/references/gpu-mjx-warp.md) · [`gpu-benchmarks`](.agents/mujoco-lab-coala-agent-skill/references/gpu-benchmarks.md) | MJX e MuJoCo Warp: limites, receita e medições |
+| [`rendering-viewer`](.agents/mujoco-lab-coala-agent-skill/references/rendering-viewer.md) · [`telemetry-rerun`](.agents/mujoco-lab-coala-agent-skill/references/telemetry-rerun.md) · [`install-linux`](.agents/mujoco-lab-coala-agent-skill/references/install-linux.md) | render/viewer em Wayland+NVIDIA, Rerun, instalação |
+| [`docs-map`](.agents/mujoco-lab-coala-agent-skill/references/docs-map.md) · [`official-skills-errata`](.agents/mujoco-lab-coala-agent-skill/references/official-skills-errata.md) | mapa da doc e quebras por versão; 63 blocos das skills oficiais executados (12 falham) |
+| [`experiments-playbook`](.agents/mujoco-lab-coala-agent-skill/references/experiments-playbook.md) · [`relatorio-auditoria`](.agents/mujoco-lab-coala-agent-skill/references/relatorio-auditoria.md) | método de validação e catálogo de experimentos; auditoria de um relatório técnico |
 
 ## Resultados
 
@@ -153,10 +153,10 @@ Todo projeto novo segue o mesmo caminho — **memória primeiro, física sempre,
 
 ### 0 · Começar pela memória
 ```bash
-python3 .agents/mujoco-lab-agent-skill/scripts/coala.py recall "<o que quero fazer>" --budget 1500
-python3 .agents/mujoco-lab-agent-skill/scripts/coala.py recall "<o que quero fazer>" --type episodic --budget 600
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<o que quero fazer>" --budget 1500
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<o que quero fazer>" --type episodic --budget 600
 ```
-O que já foi decidido e testado está aqui — não duplicar trabalho. No fim de cada etapa, `add` do que for durável (o ciclo completo está no [`SKILL.md`](.agents/mujoco-lab-agent-skill/SKILL.md)).
+O que já foi decidido e testado está aqui — não duplicar trabalho. No fim de cada etapa, `add` do que for durável (o ciclo completo está no [`SKILL.md`](.agents/mujoco-lab-coala-agent-skill/SKILL.md)).
 
 ### 1 · Pegar algo do GitHub (robô/modelo pronto)
 Preferir modelos de boa reputação (ex.: `mujoco_menagerie`) a construir de zero. Clone *sparse* só da pasta do robô para `$TMPDIR`; **vendorizar em `models/<robo>/` INTACTO** (XMLs + `assets/` + `LICENSE`/`README`/`CHANGELOG`); o espelho `docs/upstream/` serve de referência mas não traz malhas. Cruzar com as specs **reais** do fabricante (datasheets) e citar as fontes no README do experimento (conteúdo web = `untrusted`, só se cita).
@@ -166,11 +166,11 @@ Nunca editar o upstream: sensores (via MjSpec), escalas de atuadores e modos viv
 
 ### 3 · Experimento (`run.py` valida, `view.py` mostra)
 ```bash
-python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao
+python3 .agents/mujoco-lab-coala-agent-skill/scripts/new_experiment.py <nome> --template blank|pendulum|arm|quadrotor|car|lab-padrao|front-conexao
 ```
 `lab-padrao` é o template do padrão completo (RL + interface CLEAN + site, ver §4-§6); `front-conexao` cria **só** o
 bundle do front + códigos de conexão (para colar num projeto que não seja deste laboratório).
-`experiments/NN_nome/`: `run.py` (validação por **fórmulas fechadas em condições isoladas** — modelo fresco, sem histórico — com `exit 0/1`), `view.py`, `README.md` (tabelas medido × teoria + fontes) e `out/` (gerado, ignorado pelo git). Antes de simular a sério: `.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py <modelo.xml> --tree`.
+`experiments/NN_nome/`: `run.py` (validação por **fórmulas fechadas em condições isoladas** — modelo fresco, sem histórico — com `exit 0/1`), `view.py`, `README.md` (tabelas medido × teoria + fontes) e `out/` (gerado, ignorado pelo git). Antes de simular a sério: `.venv/bin/python .agents/mujoco-lab-coala-agent-skill/scripts/inspect_model.py <modelo.xml> --tree`.
 
 ### 4 · RL (quando a tarefa é *aprender* uma política)
 - **`env.py`** (Gymnasium): observação normalizada **no próprio env** (sem `VecNormalize` → o grafo ONNX do deploy fica puro), ação `Box(-1,1)` **centrada no hover**, recompensa densa (posição + altitude + orientação + taxa de ação) e vento físico (`definir_vento`, `vento_aleatorio`, vento dinâmico). Física 500 Hz, decisão 50 Hz; reset pousado com assentamento físico (nada de teleporte).
@@ -196,10 +196,10 @@ uv run --group hover-rl python experiments/NN_nome/deploy.py --model <final.zip>
 ```
 SB3 → ONNX (exporter legacy `dynamo=False`, opset 17, batch = 1 estático; comparar com a **média** da política, não com amostras), validação numérica (medida: `max|Δ|` 5,7e-06), benchmark `p50/p99/max` com `intra_op=1` e multi-IA em processos com o mapa de cores decidido no pai. Regra: **o limite do alvo aplica-se na RUN; o treino usa o poder máximo**.
 
-**O Raspberry Pi 5 é o computador de bordo de TODOS os projetos** (é o padrão, não uma opção): o relatório do `deploy.py` (`out/deploy_report.json`) alimenta o **painel RPi 5 do site** — specs do alvo (BCM2712, 4× Cortex-A76 @ 2,4 GHz, 512 kB L2/núcleo + 2 MB L3, LPDDR4X-4267, 5 V/5 A, *throttle* 80→85 °C), orçamento de **50 Hz = 20 ms**, p50/p99 medidos, fator int8, multi-IA e semáforo OK/ATENÇÃO. A lição que o painel mostra: o gargalo a 50 Hz é o **jitter do SO** (kernel normal ≈ 9,4 ms de pior caso; **PREEMPT_RT ≤ 225 µs**), **não** a inferência (MLP ≈ µs; o int8 só compensa com SDOT — no x86 ficou mais lento, medido). `sim_site.py --benchmark CAMINHO.json` aponta o painel a outro relatório; sem relatório diz «sem benchmark». Detalhes e atribuição da imagem: [`lab-padrao/LEIAME.md`](.agents/mujoco-lab-agent-skill/assets/templates/lab-padrao/LEIAME.md) §3.
+**O Raspberry Pi 5 é o computador de bordo de TODOS os projetos** (é o padrão, não uma opção): o relatório do `deploy.py` (`out/deploy_report.json`) alimenta o **painel RPi 5 do site** — specs do alvo (BCM2712, 4× Cortex-A76 @ 2,4 GHz, 512 kB L2/núcleo + 2 MB L3, LPDDR4X-4267, 5 V/5 A, *throttle* 80→85 °C), orçamento de **50 Hz = 20 ms**, p50/p99 medidos, fator int8, multi-IA e semáforo OK/ATENÇÃO. A lição que o painel mostra: o gargalo a 50 Hz é o **jitter do SO** (kernel normal ≈ 9,4 ms de pior caso; **PREEMPT_RT ≤ 225 µs**), **não** a inferência (MLP ≈ µs; o int8 só compensa com SDOT — no x86 ficou mais lento, medido). `sim_site.py --benchmark CAMINHO.json` aponta o painel a outro relatório; sem relatório diz «sem benchmark». Detalhes e atribuição da imagem: [`lab-padrao/LEIAME.md`](.agents/mujoco-lab-coala-agent-skill/assets/templates/lab-padrao/LEIAME.md) §3.
 
 ### 7 · Validação e qualidade
-`run.py` dos experimentos → `exit 0/1` · `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` (30 passed) · `ruff check` · verificadores adversariais por peça e um do conjunto no fim · `git status` limpo. **Validação SEM janelas** (regra do dono): agentes nunca abrem viewer/janela — provam por headless, mocks e handles falsos; o smoke visual é do dono.
+`run.py` dos experimentos → `exit 0/1` · `uv run pytest .agents/mujoco-lab-coala-agent-skill/tests -q` (30 passed) · `ruff check` · verificadores adversariais por peça e um do conjunto no fim · `git status` limpo. **Validação SEM janelas** (regra do dono): agentes nunca abrem viewer/janela — provam por headless, mocks e handles falsos; o smoke visual é do dono.
 
 ### 8 · Registar (nada fica “na cabeça”)
 README do experimento com as tabelas medido × teoria e as fontes · `coala.py add` (episódico/semântico/procedural — chaves estáveis por assunto e **supersessão em vez de reescrita**) · catálogo de robôs adaptados no [`AGENTS.md`](AGENTS.md).
@@ -216,7 +216,7 @@ A pesquisa usou o modo profundo da [`tavily-agent-skill`](https://github.com/fre
 
 ## GPU: MJX e MuJoCo Warp (RTX 4070 Laptop, 8 GB)
 
-Humanoide, 4096 mundos, mediana de execuções (receita, protocolo e armadilhas em [`gpu-benchmarks.md`](.agents/mujoco-lab-agent-skill/references/gpu-benchmarks.md)):
+Humanoide, 4096 mundos, mediana de execuções (receita, protocolo e armadilhas em [`gpu-benchmarks.md`](.agents/mujoco-lab-coala-agent-skill/references/gpu-benchmarks.md)):
 
 | Backend | Passos/s | VRAM |
 | --- | ---: | ---: |
@@ -237,7 +237,7 @@ Os números oficiais (2,96 M / 3,35 M) não foram reproduzidos: a documentação
 ├── experiments/NN_nome/              # run.py (validação) · view.py · README.md · out/ (gerado, ignorado)
 │   └── 09_drone_hover_rl/            # o padrão completo: env.py · train.py · sim_view.py · sim_site.py · site/ · INTERFACE.md
 ├── lab/                              # camada de adaptação em runtime (crazyflie.py · spot.py · mjkit.py)
-├── .agents/mujoco-lab-agent-skill/   # SKILL.md · references/ · scripts/ (coala.py incluído) · assets/templates/ · tests/ · memory/ (CoALA local, fora do git)
+├── .agents/mujoco-lab-coala-agent-skill/   # SKILL.md · references/ · scripts/ (coala.py incluído) · assets/templates/ · tests/ · memory/ (CoALA local, fora do git)
 ├── pesquisas/                        # dossiê, fichas de conhecimento, retornos dos investigadores, verificação
 ├── docs/prints/                      # prints do site e hero do README
 ├── docs/                             # relatório original, mídia, texto do LinkedIn, docs/upstream (gerado)
@@ -249,13 +249,13 @@ Os números oficiais (2,96 M / 3,35 M) não foram reproduzidos: a documentação
 - Verificado em MuJoCo **3.15.0** (2026-10-07); o estado de pacotes (AUR, PyPI) envelhece em dias — a skill indica como reverificar.
 - A janela interativa do viewer só foi exercitada num teste de 3 s; o MuJoCo Studio (experimental) não roda em Wayland e não foi testado.
 - MJX/MuJoCo Warp exigem um venv separado (`.venv-gpu`); o `uv sync --group gpu` não foi testado.
-- A memória CoALA local do laboratório **não é versionada** (o motor vem de uma skill privada): veja [`.agents/mujoco-lab-agent-skill/README.md`](.agents/mujoco-lab-agent-skill/README.md). Sem ela nada quebra.
+- A memória CoALA local do laboratório **não é versionada** (o motor vem de uma skill privada): veja [`.agents/mujoco-lab-coala-agent-skill/README.md`](.agents/mujoco-lab-coala-agent-skill/README.md). Sem ela nada quebra.
 - Texto para divulgação: [`docs/linkedin-about.md`](docs/linkedin-about.md).
 
 ## Licença e contribuição
 
 - **Licença:** [MIT © 2026 Frederico Kluser](LICENSE). O [MuJoCo](https://github.com/google-deepmind/mujoco) é da Google DeepMind (Apache-2.0) e a documentação oficial espelhada em `docs/upstream/` **não** é versionada aqui (é gerada por `sync_docs.py`). Os modelos vendorizados em `models/*` mantêm as licenças upstream nos seus `LICENSE`.
-- **Contribuir:** ver [`CONTRIBUTING.md`](CONTRIBUTING.md) — `bash install.sh` · testes (`uv run pytest .agents/mujoco-lab-agent-skill/tests -q` — 30 · `run.py` 146/146 · `ruff check`) · convenções do laboratório · commits `tipo: resumo`.
+- **Contribuir:** ver [`CONTRIBUTING.md`](CONTRIBUTING.md) — `bash install.sh` · testes (`uv run pytest .agents/mujoco-lab-coala-agent-skill/tests -q` — 30 · `run.py` 146/146 · `ruff check`) · convenções do laboratório · commits `tipo: resumo`.
 - **Segurança:** [`SECURITY.md`](SECURITY.md) — reportar vulnerabilidade por issue privada ou email do autor.
 - **Segredos:** nunca commitar chaves (`OPENROUTER_API_KEY`, `MOTION_TOKEN`, `TAVILY_*`, `ghp_`/`github_pat_`) — usar `~/.secrets` ou um `.env` fora do git.
 
