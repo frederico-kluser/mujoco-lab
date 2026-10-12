@@ -26,6 +26,7 @@ import pathlib
 import mujoco
 import numpy as np
 
+from .. import camera_rpi as cam_rpi
 from .componentes import Hardware
 
 TIMESTEP = 0.002
@@ -45,7 +46,8 @@ def _caixa_pack(hw: Hardware) -> tuple[float, float, float]:
     return tuple(sorted(dims, reverse=True))      # (comprido, largo, alto) — deitado ao longo de x
 
 
-def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.3) -> mujoco.MjSpec:
+def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.3,
+             com_alvo: bool = False) -> mujoco.MjSpec:
     """Constrói o spec; `deslocamento` é subtraído a todas as posições do corpo (põe a origem no CM)."""
     spec = mujoco.MjSpec()
     spec.modelname = f"drone_rpi_{hw.nome}"
@@ -54,8 +56,10 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     spec.option.density = 1.225
     spec.option.viscosity = 1.8e-5
-    spec.visual.global_.offwidth = 1280
-    spec.visual.global_.offheight = 720
+    # framebuffer offscreen: comporta o MODO maior do módulo de câmara (4608×2592 = 11,9 MP) —
+    # o MuJoCo nunca renderiza acima de `<visual><global offwidth/offheight>` (regra do lab)
+    spec.visual.global_.offwidth = 4608
+    spec.visual.global_.offheight = 2592
     spec.stat.extent = max(1.0, 2.0 * hw.frame.wheelbase)
 
     tex = spec.add_texture(name="chao", type=mujoco.mjtTexture.mjTEXTURE_2D,
@@ -85,7 +89,12 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     rot = hw.pos_rotores
 
     # ---- frame: placa central + 4 braços
-    lado = max(0.045, 0.16 * hw.frame.wheelbase)
+    # PLACA CENTRAL: `placa_mm` do catálogo quando existe (é o caso do frame 1950: a placa NÃO cresce
+    # com o wheelbase — são os braços que esticam, e o orçamento de massa do catálogo trata as placas
+    # como constantes); sem o campo, a fórmula histórica 0,16·wheelbase (os frames antigos, para os quais
+    # ela foi calibrada).
+    lado = (0.5 * float(hw.frame.dados["placa_mm"]) / 1000.0 if hw.frame.dados.get("placa_mm")
+            else max(0.045, 0.16 * hw.frame.wheelbase))
     esp = 0.0015
     corpo.add_geom(name="placa", type=mujoco.mjtGeom.mjGEOM_BOX, size=[lado, lado, esp], pos=p(0, 0, 0),
                    mass=0.4 * massas["frame"] + massas["extra"], material="frame")
@@ -146,6 +155,25 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                    pos=p(0, 0, z_baixo + 0.002), mass=max(m_sens, 1e-4), material="sensor", **sem_contacto)
     corpo.add_site(name="baixo", pos=p(0, 0, z_baixo), quat=[0, 1, 0, 0], size=[0.004, 0, 0])
 
+    # ---- módulo de câmara CSI À FRENTE do drone (peça REAL do catálogo: massa, dimensões e FoV)
+    # Placa na vertical no nariz (+x): a LENTE aponta para a frente, por isso a espessura no eixo ótico é a
+    # ALTURA COM LENTE (dims[2] = 11,5/12,4 mm) e as outras duas dimensões ficam em y (largura) e z
+    # (profundidade da placa, de pé). A `<camera fpv>` fica 1 mm à frente da face da lente (para o próprio
+    # módulo não entrar na imagem) e olha para +x (ver `camera_rpi.add_camera_fpv`). A massa entra no
+    # orçamento (`massas["camera"]`), como em qualquer peça real; sem contacto (o payload não colide, tal
+    # como o ESC/pilha).
+    if hw.camera is not None:
+        d_largura, d_profundidade, d_altura = hw.camera.dims   # (placa y, placa z, espessura+lente em x)
+        d_x, d_y, d_z = d_altura, d_largura, d_profundidade
+        x_cam = lado + 0.5 * d_x - 0.002    # encostada à frente da placa central, lente para +x
+        z_cam = esp + 0.5 * d_z + 0.001     # sobre a placa
+        corpo.add_geom(name="camera", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.5 * d_x, 0.5 * d_y, 0.5 * d_z], pos=p(x_cam, 0, z_cam),
+                       mass=hw.camera.massa, material="sensor", **sem_contacto)
+        cam_rpi.add_camera_fpv(corpo, p(x_cam + 0.5 * d_x + 0.001, 0, z_cam),
+                               cam_rpi.fovy_graus(cam_rpi.modulo_da_peca(hw.camera.id),
+                                                  cam_rpi.OMISSAO_MODO), nome="fpv")
+
     # ---- trem de pouso (colisão): 4 pernas sob os braços, mais baixas do que o pack
     h_pernas = max(hw.frame.altura_pernas, -z_baixo + 0.03)
     for i, (x, y) in enumerate(rot):
@@ -180,21 +208,30 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     spec.add_sensor(name="quat", type=S.mjSENS_FRAMEQUAT, objtype=O.mjOBJ_BODY, objname="drone")
     spec.add_sensor(name="vel", type=S.mjSENS_FRAMELINVEL, objtype=O.mjOBJ_SITE, objname="cm")
 
+    # ---- PONTO-ALVO VISUAL opcional (IA de seguimento visual: «ver o ponto e seguir») — esfera brilhante no
+    # mundo, SEM massa e SEM colisão: o que a câmara vê, nunca a física (regra do simulador físico)
+    if com_alvo:
+        cam_rpi.adicionar_ponto(spec)
+
     spec.add_key(name="pousado", qpos=[0, 0, z0, 1, 0, 0, 0])
     return spec
 
 
-def construir_spec(hw: Hardware) -> mujoco.MjSpec:
+def construir_spec(hw: Hardware, com_alvo: bool = False) -> mujoco.MjSpec:
     """Spec final com a origem do corpo no CM (duas passagens)."""
-    m1 = _montar(hw).compile()
+    m1 = _montar(hw, com_alvo=com_alvo).compile()
     cm = np.array(m1.body_ipos[m1.body("drone").id])
-    spec = _montar(hw, deslocamento=cm)
+    spec = _montar(hw, deslocamento=cm, com_alvo=com_alvo)
     return spec
 
 
-def carregar(hw: Hardware) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    """(model, data) do build, com o drone no ar a 0,3 m (o `reset` do ambiente pousa-o pela física)."""
-    model = construir_spec(hw).compile()
+def carregar(hw: Hardware, com_alvo: bool = False) -> tuple[mujoco.MjModel, mujoco.MjData]:
+    """(model, data) do build, com o drone no ar a 0,3 m (o `reset` do ambiente pousa-o pela física).
+
+    `com_alvo=True` acrescenta o corpo mocap `ponto` (esfera brilhante emissiva) da IA de seguimento: sem massa, sem colisão,
+    só para a câmara ver — a física do modelo não muda um átomo.
+    """
+    model = construir_spec(hw, com_alvo=com_alvo).compile()
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     return model, data

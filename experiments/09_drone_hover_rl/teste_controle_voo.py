@@ -11,8 +11,10 @@ CONTRATO r11 (o que este script prova, ponto por ponto):
   · teclas WASDQE → `v_ref` (m/s, frame MUNDO, yaw alvo 0): W = +x (frente), S = −x, A = +y (esquerda),
     D = −y (direita), Q = +z (subir), E = −z (descer); diagonais NORMALIZADAS para 1,0 m/s,
     `|vz| = 0,7 m/s`; sem teclas → `v_ref = 0` = segurar posição (`env.teclas_para_velocidade`);
-  · a referência de POSIÇÃO `p_ref` INTEGRA o `v_ref` por passo de decisão e satura em xy ±4 m,
-    z ∈ [0,25; 2,75] m — na borda a componente que bate fica com `v_ref = 0` (`env.integrar_referencia`);
+  · a referência de POSIÇÃO `p_ref` INTEGRA o `v_ref` por passo de decisão e satura em xy ±25 m (a
+    ARENA de 50×50 m — antes era uma caixa de ±4 m; pedido do dono, 2026-10-11: «quero andar por um
+    espaço maior»), z ∈ [0,25; 25] m (o teto de TERMINAÇÃO é o céu, z > 30 m) — na borda a componente
+    que bate fica com `v_ref = 0` (`env.integrar_referencia`);
   · observação em modo comando: cf2 19 dims ([0:3] = `p − p_ref`, [16:19] = `v_ref` escalado) e planta real
     48 (24+24, ator com os erros relativos a `p_ref` + `v_ref`); SEM `comando` os contratos v2b (16) e
     v3-real (42) ficam BIT-IDÊNTICOS (nada muda);
@@ -240,7 +242,11 @@ def secao_pecas() -> bool:
     # Q pressionado muito tempo: z_ref satura no teto e a subida PARA (não voa para o teto de terminação)
     e.definir_comando_teclas(q=True)
     z_ref_hist = []
-    for _ in range(int(6.0 / e.dt_decisao)):
+    # duração até ao TETO com folga (o teto é 25 m e a subida 0,7 m/s: ~35 s de referência — são os
+    # passos que faltam para a referência andar de onde está até VOO_Z_MAX; antes eram 6 s, com o teto
+    # a 2,75 m)
+    n_passos_teto = int(((VOO_Z_MAX - VOO_Z_MIN) / VOO_SUBIDA + 2.0) / e.dt_decisao)
+    for _ in range(n_passos_teto):
         e.step([0, 0, 0, 0])
         z_ref_hist.append(e.p_ref[2])
     c.ok("Q longo: z_ref satura em VOO_Z_MAX e vz_efetivo zera (não empurra contra o teto)",
@@ -414,9 +420,10 @@ def secao_seguimento(modelos: dict[str, Path], acao_nula: bool = True) -> bool:
              quedas == 0 and max(erros_rms) <= RMS_RAJADA,
              f"RMS por seed = {np.round(erros_rms, 3).tolist()} m/s · quedas = {quedas}")
 
-        # (d) Q/E: subir/descer ≈ ±VOO_SUBIDA — medido ANTES de a referência saturar (Q em 2,5 s atinge o
-        # teto 2,75 m e E em ~1,1 s o piso 0,25 m; depois o vz_efetivo é 0 por contrato, logo a janela de
-        # medida é os primeiros 1,2 s do segmento, com 0,2 s de transitório cortados)
+        # (d) Q/E: subir/descer ≈ ±VOO_SUBIDA — medido ANTES de a referência saturar (com os limites
+        # novos, 2026-10-11, o teto está a 25 m e o Q já não satura no segmento; o E continua a bater no
+        # piso 0,25 m em ~1,1 s se soltar… a janela de medida mantém-se os primeiros 1,2 s do segmento,
+        # com 0,2 s de transitório cortados — sempre pré-saturação nos dois sentidos)
         n_janela = int(1.2 / env.dt_decisao)
         n_transito = int(0.2 / env.dt_decisao)
         for rotulo, guiao, sinal in (("Q (subir)", guioes["subir"], +1), ("E (descer)", guioes["descer"], -1)):
@@ -488,16 +495,18 @@ def _arrancar_site(pasta: Path, modelo: Path | None, porta: int, fator_tempo: fl
     processo = subprocess.Popen(comando, cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, start_new_session=True)
     base_url = None
-    t0 = time.perf_counter()
+    lidas = []                                    # as linhas ANTES da URL (o readline consome-as — sem
+    t0 = time.perf_counter()                      # as guardar, um erro do filho aparecia como "vazio")
     while time.perf_counter() - t0 < 180:
         linha = processo.stdout.readline()
         if not linha:
             break
+        lidas.append(linha.rstrip())
         achado = re.search(r"(http://[\d.]+:\d+/)", linha)
         if achado:
             base_url = achado.group(1).rstrip("/")
             break
-    return processo, base_url, controlo, telemetria, processo.stdout
+    return processo, base_url, controlo, telemetria, "\n".join(lidas)
 
 
 def _fechar_site(processo) -> str:
@@ -523,10 +532,13 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
     if comando is None:
         return c.ok("há política --comandos para o §3", False, "nenhum modelo em out/ (treine primeiro)")
     planta, modelo = comando
-    processo, base, controlo, telemetria, _stdout = _arrancar_site(pasta / "voo", modelo, porta)
+    processo, base, controlo, telemetria, stdout = _arrancar_site(pasta / "voo", modelo, porta)
     if base is None:
-        _fechar_site(processo)
-        return c.ok("servidor arrancou", False, "sem URL do sim_site em 180 s")
+        vivo = processo.poll() is None
+        linhas = (stdout or "") + "\n" + (_fechar_site(processo) or "")
+        return c.ok("servidor arrancou", False,
+                    f"sem URL do sim_site em 180 s · filho {'VIVO (mudo)' if vivo else f'morto (exit {processo.poll()})'} · saída: "
+                    + (linhas[-400:].replace("\n", " | ") if linhas else "(vazia — morreu sem escrever)"))
     try:
         c.ok("servidor arrancou com a política de comando", True, f"{base} · modelo {modelo.name}")
 
@@ -546,9 +558,9 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
              f"HTTP {codigo} · {corpo.get('erro', '')}")
 
         # o eco da telemetria reflete as teclas (o runner aplicou no env de comando). O W mantém-se
-        # pressionado: o `p_ref` integra +1 m/s até à parede da caixa (xy = 4 m) e AÍ o `v_ref_efetivo`
-        # zera por contrato — logo aceita-se qualquer eco com `v_ref = [+1,0,0]` (antes da parede) ou
-        # `p_ref.x` já colado à parede (a referência andou = o comando chegou à física).
+        # pressionado: o `p_ref` integra +1 m/s até à borda da ARENA (xy = 25 m) e AÍ o `v_ref_efetivo`
+        # zera por contrato — logo aceita-se qualquer eco com `v_ref = [+1,0,0]` (é o caso normal: a
+        # borda está longe) ou `p_ref.x` já colado ao limite (a referência andou = o comando chegou).
         eco, viu_comando = None, False
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < 30 and not viu_comando:
@@ -560,7 +572,7 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
                                or (p_ref and p_ref[0] >= VOO_XY_MAX - 1e-6))
             if not viu_comando:
                 time.sleep(0.1)
-        c.ok("eco `voo` na telemetria: W aplicado (v_ref = [+1,0,0] ou p_ref colado à parede de +4 m)",
+        c.ok("eco `voo` na telemetria: W aplicado (v_ref = [+1,0,0] ou p_ref colado ao limite de +25 m)",
              viu_comando, f"eco = {eco}")
         codigo, estado = _http(base + "/api/state")
         c.ok("/api/state traz voo.pedido e voo.eco",
@@ -876,10 +888,15 @@ def descobrir_modelos(args) -> dict[str, Path]:
     if args.model is not None:
         if not args.model.is_file():
             raise SystemExit(f"[teste] --model não existe: {args.model}")
-        return {args.planta: args.model}
+        # ABSOLUTO sempre: o sim_site corre com cwd=experiments/09_drone_hover_rl e o `_absoluto` dele
+        # resolveria um caminho relativo contra aí (…/experiments/09_drone_hover_rl/experiments/… →
+        # «modelo inexistente»); um `--model` relativo à raiz rebentava o §3 sem explicação
+        return {args.planta: args.model.resolve()}
     modelos = {}
     for planta, padrao in (("real", "real_*/final.zip"), ("cf2", "voo_*/final.zip")):
-        candidatos = sorted((_AQUI / "out").glob(padrao), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+        candidatos = sorted((p for p in (_AQUI / "out").glob(padrao)
+                             if "seguimento" not in p.parent.name),      # IA-2 nunca é voo
+                            key=lambda p: p.stat().st_mtime_ns, reverse=True)
         if candidatos:
             modelos[planta] = candidatos[0]
     return modelos

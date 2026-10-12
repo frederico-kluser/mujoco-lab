@@ -43,9 +43,12 @@ uv run --group hover-rl python experiments/09_drone_hover_rl/deploy.py --model e
 ```
 
 **Build ativo** `endurance_15pol_p50b`: T-Motor MN4004 KV300 + P15×5 CF, 6S2P Molicel P50B (216 Wh), ESC T-Motor
-AIR 40A, frame DIY 650 mm, RPi 5 + FC H7, BMI088 + VL53L1X + PMW3901 + INA226 → **1664 g · 133 W em pairagem
-(12,5 g/W) · T/W 3,4 · 99 min de pairagem no modelo** (~80–90 min reais esperados). Detalhe, alternativas e
-fontes: `models/drone_rpi/README.md`.
+AIR 40A, **frame DIY 1950 mm (wheelbase ×3, 2026-10-11)**, RPi 5 + FC H7, BMI088 + VL53L1X + PMW3901 +
+INA226 + **câmara Pi Camera Module 3 Wide (FPV, à frente)** → **2183 g · 198,1 W em pairagem (11,0 g/W) ·
+T/W 2,6 · 65,8 min de pairagem no modelo** (pesquisa: 2150–2250 g · 190–206 W · 64–70 min · T/W 2,5–2,7 —
+os números do modelo batem todos). Efeitos do ×3 e riscos (J ×10,9, guinada ÷10–12, FC com retuning
+automático, flexão dos braços vs prop passing): `models/drone_rpi/README.md`. Detalhe, alternativas e
+fontes: idem.
 
 | Peça do simulador | Ficheiro | O que faz (tudo pelo `mj_step` a 500 Hz) |
 |---|---|---|
@@ -324,7 +327,7 @@ r = −1,0·‖xy‖ − 1,0·|z − alvo_z| − 0,2·|yaw_err| − 0,05·‖v�
 - o bónus é **estrito** nos três limiares (0,05 m / 0,05 m / 0,10 rad) e a terminação vale **−100** exatos.
 
 Episódio de **10 s = 500 passos de decisão** (truncagem — truncar **não** é terminar). Terminação:
-`z < 0,005 m` (caiu — o piso impede `z < 0`), `max(|φ|, |θ|) > π/2` (capotou) ou `z > 3 m` (subiu demais).
+`z < 0,005 m` (caiu — o piso impede `z < 0`), `max(|φ|, |θ|) > π/2` (capotou) ou `z > Z_TETO (30 m desde 2026-10-11; eram 3 m)` (subiu demais).
 
 ### Vento e orientação fixa (v2b)
 
@@ -586,6 +589,181 @@ velha, assinatura sem `seq`, validação de desconhecidas removida e validação
 uv run --group hover-rl python experiments/09_drone_hover_rl/teste_camera.py   # 50/50, exit 0
 ```
 
+### Módulo de câmara FPV — a câmara que o drone VÊ (2026-10-11)
+
+Não confundir com a câmara da JANELA 3D (secção acima, apresentação): esta é o **módulo de câmara real
+emulado**, montado **na frente do drone** (`<camera fpv>`, a olhar para +x) e transmitido para o site — a
+mesma experiência de um módulo de câmara Raspberry Pi ligado ao RPi 5 por CSI-2.
+
+**A peça (real, no catálogo)**: `models/drone_rpi/componentes.json` → `cameras` tem os dois módulos
+oficiais, com fontes e grau de confiança: **Raspberry Pi Camera Module 3** (Sony IMX708, 11,9 MP
+4608×2592, píxel 1,4 µm, FoV 75° diag/66°H×41°V, f=4,74 mm F1.8, 25×24×11,5 mm, 4 g) e a **Wide**
+(FoV 120° diag/102°H×67°V, f=2,75 mm F2.2, foco PDAF 5 cm–∞, 25×24×12,4 mm, 4 g). A **Wide** é a do
+build ativo (`builds.json` → `camera`), montada no nariz com **massa real** (entra no orçamento: +4 g,
+ΔCM ≈ +0,27 mm — provado em `valida_real.py` A3a–A3d); troca-se com `hardware.py montar/usar`, como
+qualquer peça. Fontes: `pesquisas/relatorio-modulos-camera-rpi.md` (tabela oficial + driver `imx708.c`).
+
+**O emulador (`lab/camera_rpi.py`)** reproduz a experiência do hardware real — e só o que é real:
+
+| o que | como é no módulo real | como está aqui |
+|---|---|---|
+| modos de sensor | 4608×2592@14,35 · 2304×1296@56,03 (binning, FOV completo) · 1536×864@120,13 (recorte 3072×1728 = 2/3 do FOV) | **os mesmos**, com os mesmos crops → o FoV de cada modo é o da janela real |
+| modos de vídeo | 1080p50 · 720p100 · 480p120 (product brief) | **os mesmos** (+ os modos nativos do sensor), por omissão **1080p50** |
+| megapixels | sensor 11,9 MP; saída 2,1 MP (1080p) | **os mesmos** (o site mostra MP de sensor e de saída) |
+| ótica | FoV publicado 102°H×67°V (Wide) | `fovy` = FoV VERTICAL publicado × recorte do modo (fórmula fechada provada; os resíduos da tabela publicada — internamente inconsistente — estão ditos em `fovy_graus`) |
+| JPEG | `rpicam-vid --quality` default **50** | **qualidade 50**, bytes reais → bitrate real |
+| latência | MJPEG 1080p publicado 150–300 ms | modelo de estágios **cumprido na entrega** (116 ms a 1080p50; o mesmo modelo a 1080p30 dá 163 ms, dentro da faixa) |
+| CPU no Pi 5 | JPEG é **SOFTWARE** (o Pi 5 não tem encoder hardware) | modelo por etapa com faixas/fontes (0,94 núcleo A76 a 1080p50) **+ o medido neste PC**, sempre separados |
+
+O que **não** é reproduzido (dito, nunca fingido): o merge HDR do modo 2304×1296p30 (existe na tabela,
+recusa-se com erro), o autofoco PDAF, a distorção da lente, o ruído de sensor e o rolling shutter.
+
+**O pipeline** (`ModuloCamera`): thread própria que captura ao ritmo do modo ao **relógio de parede** (o
+cristal do sensor corre em tempo real — a pausa e o `--fator-tempo` não o mudam); o estado do simulador
+chega por `apontar(data)` a cada passo de decisão (cópia de ~5 µs, na thread do simulador); cada quadro é
+renderizado na **proporção da janela de recorte** do modo (é assim que o FoV fica correto sem redimensionar
+nada — a única fatia posterior é o 4:3 do 480p120) e codificado em JPEG; e cada quadro só fica disponível
+`latencia_modelada()` ms depois da captura — a latência real do pipeline, reproduzida.
+
+**O stream** (padrão do exemplo *web streaming* do picamera2): o runner escreve `out/fpv/quadro.jpg` +
+`out/fpv/estado.json` (atómico, só o ÚLTIMO quadro) e o `sim_site.py` serve-o em
+**`GET /api/fpv.mjpg`** (`multipart/x-mixed-replace`, partes `image/jpeg`, `Cache-Control: no-cache` —
+clientes lentos perdem frames em vez de acumular atraso) mais `GET /api/fpv.jpg`, `GET /api/fpv/estado`
+e **`POST /api/fpv`** `{ligada?, modo?}` (bloco `fpv` do controlo, `seq` do servidor). O site mostra a
+imagem ao vivo e as métricas; o painel RPi 5 ganha o custo da câmara por etapa.
+
+**Medido nesta máquina** (render + ISP + JPEG, sem a simulação a correr):
+
+| modo | saída | fps nominal | host ms/quadro | JPEG q50 | latência modelo | CPU Pi 5 (modelo) |
+|---|---|---|---|---|---|---|
+| `480p120` | 640×480 | 120,00 | 1,2 | 6 KB | 56 ms | 0,45 núcleo |
+| `720p100` | 1280×720 | 100,00 | 2,6 | 15 KB | 68 ms | 0,84 núcleo |
+| **`1080p50`** (omissão) | 1920×1080 | 50,00 | 5,7 | 34 KB | 116 ms | 0,94 núcleo |
+| `2304x1296p56` | 2304×1296 | 56,03 | 8,4 | 48 KB | 118 ms | 1,43 núcleos |
+| `1536x864p120` | 1536×864 | 120,13 | 3,6 | 21 KB | 67 ms | 1,36 núcleos |
+| `4608x2592p14` (11,9 MP) | 4608×2592 | 14,35 | 41,9 | 187 KB | 399 ms | 1,46 núcleos |
+
+Todos os modos sustentam os seus fps nominais neste PC (o 11,9 MP@14,35 fps leva 42 ms dos 70 ms do
+período); a cadência medida no runner é 48,2–49,9 fps a 1080p50 (nominal 50) e o teste exige ±10 %. Os
+`host ms/quadro` da tabela são do pipeline **sozinho**; com o runner a correr (simulação + política ao
+mesmo tempo) o `host_ms` da telemetria sobe (≈17 ms a 1080p50 nesta máquina) — é o medido, e vai sempre
+rotulado como tal.
+O custo do Pi 5 é MODELO (faixas e fontes de `pesquisas/relatorio-pipeline-camera-rpi5-custo-cpu.md`:
+aquisição CSI 0–3 % + controlo do ISP 8–12 % + cópias 8–15 % + **JPEG software 50–80 %** + transporte,
+todos % de 1 núcleo A76; a comparação com H.264 x264 software — whitepaper oficial RP-010033-WP-1 —
+vai no resultado e no painel, como nota); o `host_ms` publicado é o MEDIDO neste PC e nunca se mistura
+com o modelo.
+
+**Validação**: `teste_fpv.py` — **78/78 checagens** (§1 especificação catálogo×emulador + fórmulas do
+FoV + modelos de CPU/latência · §2 JPEG por modo + qualidade + latência cumprida + validação do controlo
+· §3 cadência real em thread ±10 % · §4 runner e servidor reais: stream MJPEG **que avança** (partes
+distintas), POST, estado **velho marcado como velho**, painel RPi 5 e os valores do MODELO do Pi 5
+separados do MEDIDO no host por número, não só por rótulo) e **4/4 mutações** (§5: cada mutação textual
+nas fontes FALHA a checagem certa — o teste não é tautológico). Mais as suites existentes, todas verdes
+depois da integração (`teste_camera.py` 50/50, `teste_parar_vento.py` 15/15, `teste_controle_voo.py`
+TUDO OK, `teste_arranque_loop.py` 68/68, `run.py` 287/287, pytest da skill 37/37) e as do site
+(`test:fpv` 22/22, `test:camera` 20/20+75/75, `test:planta` 72/72, `test:voo` 53/53, build+lint).
+
+### Câmara da SIMULAÇÃO — a segunda vista, trocável com a FPV (2026-10-11)
+
+Além da FPV (a câmara do módulo, à frente do drone), o módulo emulado tem uma **segunda fonte de
+imagem**: a «Câmara da Simulação» — a vista 3.ª-pessoa da simulação a correr (o que a janela mostraria),
+renderizada pelo MESMO pipeline (mesmos modos/fps/JPEG/latência) e transmitida em
+**`GET /api/simulacao.mjpg`**. O site tem um seletor de fonte no bloco «Câmara FPV»
+(**FPV (bordo) | Simulação (3.ª pessoa)**) que troca a imagem — é isto que permite **testar e fazer tudo
+pelo site, sem janela**: o widget de câmara do site (orbitar/zoom) comanda a vista da simulação mesmo sem
+viewer, e os dois streams correm ao mesmo tempo (`out/fpv/quadro.jpg` e `out/fpv/quadro_sim.jpg`).
+
+HONESTIDADE: a vista da simulação **não é hardware de bordo** — o seu `custo_pi5` é `null` (não há CPU de
+Raspberry Pi a contabilizar para uma vista do simulador; só o `host_ms` medido) e o painel RPi 5 mantém o
+custo da câmara FPV apenas. O FoV desta fonte é o global do MuJoCo (45° — a câmara livre não tem FoV de
+modo; documentado no `lab/camera_rpi.py`). Com os DOIS streams a 1080p50 o host satura: **27–46 fps por stream** (50 nominais) a PC carregado, ~43 a PC livre — é um orçamento de HOST, não do módulo: a fidelidade ±10 % da taxa nominal prova-se com o módulo isolado (§3 do teste, com retentativas sob carga) e, para ver os dois a 50 fps, corre o `sim_site` sem mais nada a competir por CPU/GPU.
+
+### Rajadas de vento — estado SEMPRE visível (remediação UX, 2026-10-11)
+
+A avaliação `uxui-evaluator` do painel de vento dinâmico (`pesquisas/ux-rajadas-avaliacao.json`, score
+61/fair) apontou que não ficava claro quando as rajadas corriam nem em que modo; as remediações ficaram
+aplicadas no painel (`controlos.tsx`, teste `site/testes/rajadas-ux.mts` 43/43):
+
+- **faixa de estado sticky** com 3 estados exaustivos: `PARADO` · `A CORRER — RAJADAS|ALEATÓRIA|DRYDEN` ·
+  `RAJADA EM CURSO +X,X m/s` (derivada da física: |‖vento_vec‖ − base| > 0,05 m/s) — durante a rajada
+  mostra-se o MODO de origem (responde a «está no modo aleatório ou não»);
+- **progresso dos instantâneos** (RAJADA/FRENTE AGORA) com a **duração comandada** rotulada como tal;
+- **léxico único** (`ROTULOS_MODO_ESTADO`) em toggle/faixa/botões/toasts — zero divergências de rótulo;
+- **salvaguarda anti-esquecimento**: com dinâmica ativa, o selo `selo-rajadas-ativas` vive na **barra
+  crítica global** (visível em qualquer secção; clique abre o painel);
+- params em 2 linhas com unidades naturais («p 0,40 por passo · rajadas de 0,5 s (25 passos) até 3,0 m/s»).
+
+## Arquitetura MULTI-IA de bordo (2026-10-11)
+
+O dono pediu várias IAs a correr em simultâneo, cada uma com o seu papel — e liberdade para decidir o
+melhor arranjo («não se prenda só a uma se achar que não precisa»). A decisão, com a evidência deste
+projeto:
+
+| papel | quem cumpre | porquê |
+|---|---|---|
+| **estabilidade** | **FC H7 dedicado** (determinístico, `fc.py` modela a malha de taxa) | o hardware real TEM um FC dedicado («o Linux não serve de FC primário»); trocar uma malha de taxa verificável por uma IA seria menos seguro e não resolve nada que o FC não resolva — **não se treina IA de estabilidade** (decisão documentada, não esquecimento) |
+| **controlo de comandos (WASDQE)** | **IA-1 «voo»** (PPO, já treinada) | `v_ref` → ação a 50 Hz; é o que transforma comandos em voo |
+| **«ver o ponto e seguir»** | **IA-2 «seguimento»** (PPO nova) | observa o ponto-alvo NA IMAGEM da câmara FPV e produz `v_ref` — a IA-1 segue; é visão no circuito, coisa que nenhum sensor de bordo dá |
+
+**Cascata** (e não rede única): ponto → detetor (projeção/detector clássico) → IA-2 (25 Hz) → `v_ref` →
+IA-1 (50 Hz) → **FC** (500 Hz) → motores. As IAs são especializadas, auditáveis e substituíveis; a
+interface entre elas é o MESMO contrato de `v_ref` do WASDQE (faixas ±1,0 m/s xy, ±0,7 m/s z), por isso
+a IA-2 reutiliza o que a IA-1 já sabe seguir. **Watchdog/fail-safe**: sem IA-2 (ou a falhar) o `v_ref`
+vem do teclado do site — nunca se fica sem controlo; a estabilidade nunca depende de uma IA.
+
+**Números da pesquisa** (`pesquisas/relatorio-seguimento-visual-rl.md`, 11 buscas Tavily): *freeze inner,
+train outer* é o padrão e mais eficiente em amostras que treinar tudo junto; **propriocepção é
+obrigatória** na obs do tracker (sem ela a sobrevivência cai de 97,1 % → 4,4 %, arXiv 2609.09234); treinar
+com **latência de câmara injetada** (33–100 ms — treinar a 0 e voar com latência real é instabilidade
+garantida); deteção do ponto por threshold de cor + centróide chega (reprojection error <1 px = «bom»);
+watchdog **100–300 ms** (sem deteção → `v_ref = 0` = pairar; 3 falhas → fallback para o teclado); taxas da
+cascata na literatura: FC 500–1000 Hz · voo 50 Hz · tracker 25–30 Hz (= taxa da câmara).
+
+Cada IA tem a sua taxa, latência medida e estado (a correr / sem política / erro) — o painel RPi 5 mostra
+o **orçamento multi-IA** (soma das latências por período de 20 ms, semáforo) e o site mostra as IAs
+individualmente. Os resultados do treino da IA-2 e a validação do detetor↔projeção ficam nas secções
+seguintes.
+
+### IA-2 «seguimento» — resultado do treino (2026-10-12)
+
+Ponto-alvo (corpo mocap `ponto`, esfera emissiva — o modelo sem `com_alvo` é IDÊNTICO) → detetor
+clássico (projeção↔detetor provada: **0,708 px** de erro médio, <1 px) → **tracker PPO (MLP 64-64, obs
+17D** com propriocepção e latência de 116 ms injetada) → `v_ref` (±1,0/±0,7, contrato r11) → **IA-voo
+congelada** (ONNX, 65 µs) → FC. Treino: 2 seeds × 1,5 M passos, currículo parado→0,3→0,8 m/s com gates
+por estágio (60/80/550 px — pisos medidos 37–40 / 47,5 / 452 px).
+
+**Avaliação com trajetórias nunca vistas** (círculo, oito, aleatório — seed 0 promovido
+`out/real_1950_seguimento_final/`):
+
+| trajetória | erro de seguimento | centragem | FOV | sobrevivência |
+|---|---|---|---|---|
+| círculo | **0,195 m** | 376 px | 95 % | 100 % |
+| oito | 1,401 m | 219 px | 100 % | 100 % |
+| aleatório | 0,674 m | 263 px | 97 % | 100 % |
+
+Contexto honesto (revisão adversarial confirmou os números, 5 episódios/trajetória): a literatura
+medida cita 0,6–1,5 m de erro de seguimento para alvos móveis — a **média das 3 trajetórias é 0,94 m**
+(dentro da faixa). O tracker **segue BEM em trajetórias suaves** (círculo: 0,15 m de erro de DISTÂNCIA
+mantida, p90 0,33) e **segue à distância nas agressivas** («oito», com inversões: 1,68 m, máx 2,71) —
+são coisas diferentes e o relatório separa-as. ‖Δv_ref‖: médio 0,40–0,47 (ok) mas **máx 2,0–2,7 m/s**
+(inversões quase totais do comando num passo — limite de variação é melhoria futura) e a FFT do v_ref
+tem pico a **1,62 Hz** (24× a média, junto à banda do laço interior; sobressinal do teste de passo 0,55
+< 1, amortecido — sem instabilidade provada, mas a assinatura está registada). ARMADILHA DE MÉTRICA
+apontada pela revisão: o seed 1 reprovado tem erro de distância MELHOR que o promovido (0,64 vs 0,94 m)
+— só o FOV (perder o alvo: 5 % vs 95–100 %) discrimina; por isso a nota de qualidade é **FOV ∧
+distância**, nunca o erro de distância sozinho. A
+centragem (220–375 px) tem piso do erro composto da IA interior — a 0,8 m/s medimos 452 px de piso COM
+feedforward perfeito, por isso a centragem não é nota de qualidade nesse regime; o que conta é **não
+perder o alvo de vista** (FOV 95–100 % ✓). O elo mais fraco é a **distância mantida** (0,5–1,9 m; a
+recompensa de centrar domina a de distância — melhoria futura documentada).
+
+**Cascata provada no runner** (as duas IAs em simultâneo, telemetria `multi_ia`): IA-voo a 50 Hz (p50
+637 µs, p99 1180 µs) + IA-seguimento a 25 Hz (p50 325 µs, p99 639 µs) — `a_correr`, com contas e
+watchdog (sem tracker → `sem_politica` + v_ref do WASDQE; NaN → falha + fallback; 3 falhas → `erro`).
+A auto-descoberta do runner escolhe o tracker promovido e o picker de voo EXCLUI `*seguimento*` (sem
+isso, a IA-2 era escolhida como política de voo — bug achado pela verificação fim-a-fim, corrigido).
+
 ## Resultados medidos
 
 Máquina: **i9-14900HX** (32 threads), CachyOS x86-64, Python 3.13.15, MuJoCo 3.15.0, torch 2.14.1+cpu,
@@ -740,6 +918,164 @@ Achados operacionais: **`lr 3e-4` oscila** (16/16 ↔ 12/16 entre checkpoints, p
 **`lr 1e-4`/`2e-4` é estável**; **polir SEM vento degrada** (16/16 → 13/16 em 200 k passos — a política
 "esquece" a rejeição de vento), logo o vento tem de ficar no treino; e o `--retomar` do SB3 precisa de
 `reset_num_timesteps=False` (senão o `learn()` reinicia o contador e retreina tudo de zero).
+
+### Retreino da planta 1950 mm — primeiro resultado e AJUSTE (2026-10-11)
+
+A pesquisa de suficiência (`pesquisas/relatorio-treino-rl-suficiencia.md`) recomendava 5–8 M passos de
+hover e 8–12 M de controlo de voo para a planta nova (J ×11). O primeiro retreino seguiu-a à letra —
+**2 seeds × 8 M passos `--comandos`** (`out/reprovado_real_1950_comando_s0/s1 (renomeados com prefixo `reprovado_` para o picker do site não os carregar)`) — e o resultado foi **NEGATIVO,
+com um achado medido**:
+
+- as políticas **colapsaram no atrator «sentar no chão»**: no teste de hover com `v_ref = 0` o drone fica
+  a **z ≈ 0,13 m** (o alvo é 1 m) e comandos W não o descolam (um seed capota) — o MESMO atrator já
+  documentado neste projeto para treino de comando a partir do zero (2026-10-10);
+- o **currículo de vento nunca avançou** («estágio 1/4, teto 0 m/s»): o gate `frac_xy_z ≥ 0,5` (5 cm,
+  alvo fixo) é inatingível quando a referência se MOVE — e, mais importante, a estagnação era
+  SÍNTOMA do colapso (o drone sentado nunca cumpre o gate), não a causa;
+- a avaliação `avaliar_real.py` media contra `env.alvo_z` (alvo FIXO) em modo comando — métrica errada
+  para referência em movimento (corrigida: modo comando detetado pelo `_n_ator`, métricas de seguimento).
+
+**O AJUSTE** (receita provada neste projeto + a pesquisa): **clássico → `transferir_politica.py` →
+afinar em comando** — o treino de hover (obs clássica) voa rápido nesta planta (o FC fecha a malha de
+taxa), a transferência carrega os pesos para a obs de comando e o fine-tune aprende o seguimento SEM
+cair no atrator. Isto CONTRADIZ a recomendação genérica da pesquisa ("treinar de raiz" com a planta
+nova) — a evidência medida deste laboratório vence: o atrator existe, está documentado e reproduziu-se
+na planta 1950. **Prova decisiva do diagnóstico** (rollout medido): a política clássica da planta 650
+(`out/real_endurance15_rajadas/final.zip`) voa a planta NOVA 1950 sem nada de novo — z médio 0,935 m,
+assenta a 0,98–1,00 m, ‖xy‖ 0,015 m. Ou seja: **a planta é perfeitamente voável; o que falha é o
+arranque do zero nesta dinâmica** (J ×11 + T/W 2,6 tornam a descoberta da descolagem muito mais cara em
+exploração). O arranque do zero (2×3 M clássico) foi PARADO a ~1 M passos com o mesmo atrator e deu
+lugar ao **warm-start** — `--retomar` da política que voa + fine-tune na planta nova (exatamente a
+comparação «warm-start vs raiz» que a pesquisa mandava testar; aqui o warm-start ganhou por evidência).
+A seguir: transferência para a obs de comando (`transferir_politica.py`) e fine-tune de comando — desta
+vez a partir de uma política que VOА, que é o que evita o atrator «sentar no chão».
+
+### Resultado do retreino 1950 (2026-10-11, pipeline completo)
+
+| etapa | o que correu | resultado medido |
+|---|---|---|
+| hover **warm-start** (2 seeds × 3 M, `--retomar` da política 650 que voa) | currículo de vento + DR | **100 % de sobrevivência** no-distribuição **E OOD** · ‖xy‖ **7,5 cm** nominal / 12–14 cm OOD · frac_xy_z 81–91 % · currículo **4/4 (vento 3 m/s)** desde cedo |
+| transferência (`transferir_politica.py`) | 42 → 48 dims, novas entradas a zero | validação **exata** (64 estados sem comando → ações idênticas, max|Δ| = 0) |
+| **fine-tune comando** (2 seeds × 2 M, `--sem-curriculo --vento-max 3` + `--vento-dinamico rajadas`) | seguimento WASDQE com referência em movimento | **100 % de sobrevivência em TODAS as 14 condições** (incl. OOD: vento 5 m/s + rajadas) · ‖xy‖ 0,255/0,271 m nominal e 0,371/0,450 m OOD (rastreio da referência em movimento) · seed 0 promovido |
+
+Política final: **`out/real_1950_voo_final/final.zip`** (seed 0 do fine-tune, com `avaliacao_real.json` ao
+lado) — é a que o `sim_site.py` carrega sozinho. Os runs reprovados do arranque do zero ficaram como
+evidência com o prefixo `reprovado_` (o picker do site não os escolhe).
+
+NOTA de leitura: em MODO COMANDO as colunas «≤5 cm / ≤10 cm» do `avaliar_real` medem contra o alvo FIXO
+(`env.alvo_z`) e são informativas apenas — a métrica que interessa é o **‖xy‖ de rastreio** da referência
+em movimento (e a sobrevivência). Os runs de arranque do zero (`--comandos` sem transferência) caíram no
+atrator «sentar no chão» — ver a secção anterior.
+
+## Mecanismo MULTI-IA de bordo (2026-10-11) — `multi_ia.py`
+
+Várias IAs a correr EM SIMULTÂNEO, cada uma no seu ritmo, com estado no site e orçamento de CPU no
+painel RPi 5. A arquitetura decidida (ATIVIDADE B) — e a decisão mais importante é uma SUBTRAÇÃO:
+
+| peça | papel | taxa | estado |
+|---|---|---|---|
+| **FC H7** (`fc.py`, determinístico — **NÃO é IA**) | ESTABILIDADE (PID de taxa) | 500 Hz | não se substitui por IA: o hardware real tem FC dedicado que fecha as taxas mesmo que a RPi 5 falhe |
+| **IA-1 «voo»** (`out/real_1950_voo_final/final.zip`) | `v_ref` → ação `ctbr` | 50 Hz | `a_correr` |
+| **IA-2 «seguimento»** (outra frente; slot pronto) | ponto na imagem → `v_ref` | 25 Hz (taxa da câmara) | `sem_politica` sem rede — o mecanismo corre MESMO ASSIM |
+| site WASDQE (contrato r11) | `v_ref` de fallback | 50 Hz | nunca falta controlo |
+
+```
+câmara (25 Hz) → [IA-2 seguimento] ─v_ref─┐
+                                          ├→ [IA-1 voo] (50 Hz) ─ação→ [FC H7 500 Hz] → motores
+site WASDQE ────────────v_ref (fallback)──┘
+```
+
+**Watchdog/fail-safe** (testado em `teste_multi_ia.py`, 25/25): IA-2 ausente/`sem_politica`/em falha →
+o `v_ref` vem do WASDQE do site (o bloco `voo` continua a funcionar); IA-1 a falhar → **ação neutra
+`ctbr = [0,0,0,0]`** (pairagem + taxas zero) + aviso — o FC mantém o drone; estados por IA
+(`a_correr`/`sem_politica`/`fallback`/`erro`, com `sem_politica` e `erro` pegajosos) sempre visíveis.
+
+**Contrato público**: `acao = cascata.passo(t, obs)` e `estado = cascata.estado()` — a telemetria
+publica a chave aditiva `"multi_ia"` (IAS com nome/papel/taxa/latências p50/p99/estado, fonte do
+`v_ref`, aviso, e o FC marcado como não-IA) e `/api/state`/`/api/sim` levam-na ao site (MECANISMO
+ESCOLHIDO: pela telemetria, como o `fpv` — sem ficheiro extra). O painel RPi 5 ganha `rpi5.multi_ia`
+com o **semáforo** OK/ATENCAO/ERRO (p99 da soma das IAs contra o período de 20 ms; o FC não entra na
+conta). No site: bloco «Multi-IA» (testids `multi-ia-*`) que diz honestamente quando só há UMA IA —
+e que a estabilidade é do FC.
+
+**Observação do tracker** (contrato do TREINO, `env_seguimento.py`): a obs da IA-2 vem SEMPRE do
+builder do treino — `ObservacaoSeguimento` chama `env_seguimento._observacao` (OBS_DIM=17:
+`[u_n, v_n, escala, flag, v_ref(3), erro_px(2), v̂/2, ω/2, roll/π, pitch/π]`) e a ação vira `v_ref`
+com a **escala do treino** `a·(1, 1, 0,7)` (envelope r11 ±1,0/±0,7 m/s; o canal `v_ref` da obs é a
+AÇÃO CRUA). Sem ponto em `env` (`ponto_alvo is None`) o caso é o `visivel: False` do treino. Fixos da
+revisão crítica de 2026-10-12, todos provados no `teste_multi_ia.py` §5: (1) obs == builder do treino
+(max|Δ| = 0); (2) escala do z exata (ação 0,2 → v_ref_z 0,14 m/s); (3) ações NaN/Inf nunca se propagam
+(contam falha); (4) envelope do CONTRATO (±1,0/±0,7 — o clip ±2 era violável); (5) falhas
+CONSECUTIVAS (o sucesso zera a contagem); (6) histerese de reengate (3 sucessos seguidos antes de o
+tracker voltar a mandar — sem isto alterna-se tracker↔fallback: chattering). Auto-descoberta de
+`out/real_1950_seguimento_*/final.zip` ou `--seguimento-model` (o env é criado com `com_alvo=True`
+quando há tracker — o ponto-alvo do treino).
+
+
+## Avaliação OOD — fora do currículo de treino (2026-10-11)
+
+A pesquisa de suficiência do treino (`pesquisas/relatorio-treino-rl-suficiencia.md`) exige avaliação
+**fora da distribuição de treino** — o currículo de vento vai a 3 m/s e as políticas só viram 0–3 m/s.
+O `avaliar_real.py` ganhou o bloco **OOD** (`--apenas-ood` corre só ele; as condições marcadas `ood`):
+
+| condição OOD | o que testa |
+|---|---|
+| vento 4 m/s · vento 5 m/s (teto do contrato) | generalização de vento além do currículo |
+| vento 5 m/s + rajadas (até +3 m/s) | OOD + perturbação dinâmica |
+| SoC 10 % (residual) + vento 3 m/s | tensão em queda + vento |
+| DR + vento 4 m/s | massa ±15 % (via DR) + OOD |
+
+Os **comandos extremos** (WASDQE aos limites) cobrem-se no `teste_controle_voo.py`; a **massa ±15 %**
+cobre-se pelo DR (`aleatorizar=True` sorteia peças/massas).
+
+**Políticas `--comandos` (obs 48) são detetadas automaticamente** (pelo `_n_ator` do ator, o mesmo
+detector do `sim_view` — nunca por flag): o env passa a modo comando com perfis de referência aleatórios
+e as métricas passam a ser de **SEGUIMENTO** da referência em movimento (o cabeçalho diz «MODO COMANDO»).
+Sem a deteção, avaliar uma política `--comandos` rebentava no `predict` (obs 48 vs 42) — reparado em
+2026-10-11 e provado com a `out/real_voo_r1/final.zip` (5/5 OOD, 100 % de sobrevivência, ‖xy‖ 0,34 m —
+política da planta 650 avaliada na 1950, o que explica o rastreio fraco). O relatório passa a ter um **resumo por
+grupo** (NO DISTRIBUIÇÃO vs OOD) — o veredito de generalização. Primeira prova do arreio (com a política
+antiga, ainda da planta 650 mm): 100 % de sobrevivência nas 5 condições OOD, ‖xy‖ 0,20 m em médio, e a
+degradação honesta no SoC 10 % (|Δz| 0,41 m) — números do `avaliar_real.py --apenas-ood`.
+
+## IA nº 2 — SEGUIMENTO VISUAL («ver o ponto e seguir», 2026-10-12)
+
+Cascata multi-IA (o dono autorizou e desenhou): **ponto-alvo → detetor → IA-seguimento (esta) → `v_ref`
+→ IA-voo (`out/real_1950_voo_final/final.zip`, CONGELADA) → FC → física**. A estabilidade NÃO é IA — é o
+FC (malha de taxa; o FC H7 no drone real).
+
+| peça | ficheiro | o que é |
+|---|---|---|
+| ponto-alvo | `lab/drone_rpi/modelo.py` (`com_alvo=True`) | corpo mocap `ponto`, esfera emissiva, **sem massa/colisão** (cenário; sem `com_alvo` o modelo é IDÊNTICO — 287/287 e 141/141 confirmados) |
+| trajetórias | `env_real.py` (`definir_trajetoria_ponto`) | `parado`/`aleatorio`/`circulo`/`oito` a **0,3–0,8 m/s**, começando à frente do drone, contínuas (sem teleports) |
+| percepção | `visao.py` | **projeção exata** do ponto (`_cam_projection` do MuJoCo) no treino; detetor clássico (threshold da esfera brilhante) no deploy — a honestidade prova-se: render real → detetor → **erro médio 0,71 px · máx 0,98 px** vs projeção |
+| tracker | `env_seguimento.py` | obs 17D (u,v norm · escala aparente · visível · v_ref · erro px · **propriocepção** v̂/ω/roll/pitch — sem ela a sobrevivência cai de 97 % para 4 % na literatura) com **latência de 116 ms injetada**; ação = `v_ref` ±1,0/±0,7 (contrato r11, saturador sempre ativo); recompensa: −‖(u,v)‖ −|d−1,5 m| −0,05‖Δv_ref‖ + sobrevivência **−5 por passo com o ponto fora do FOV**; episódios 10 s |
+| treino | `train_seguimento.py` | PPO MLP 64-64, 2 seeds × 1,5 M passos, currículo **parado → 0,3 m/s → 0,8 m/s** (gate: FOV ≥95 % e centragem ≤30 px); piloto em **ONNX** no loop (65 µs vs 2 ms em torch — 67 → 313 passos/s medidos) |
+| avaliação | `env_seguimento.avaliar_seguimento` | trajetórias **nunca vistas** (círculo, oito, aleatório): erro de seguimento (m), centragem (px), % FOV, ‖Δv_ref‖ (oscilação) |
+| provas | `teste_seguimento.py` | 5/5: projeção×detetor <2 px · modelo sem `com_alvo` idêntico · mocap move-se por `data.mocap_pos` · v_ref saturado ao envelope · ações da IA-voo idênticas com tracker neutro |
+
+## Limites de movimento
+
+> ⚠ **Riscos conhecidos da planta 1950 mm** (revisão adversarial de 2026-10-11): (i) o τ_m do MODELO é
+> 55,8 ms e o de uma hélice 15″ real anda nos 0,1–0,2 s — a simulação é 2–3× mais ágil que o hardware e a
+> política pode parecer mais rápida do que será no ar; (ii) o acelerador de pairagem fica a 63 % (duty
+> 56,4 %) — menos margem para rajadas; (iii) o gate do currículo de vento (≥50 % dos passos a ≤5 cm) pode
+> ESTAGNAR nos degraus 2–3 m/s com o drift ×3,6 e T/W 2,62; (iv) a flexão dos braços (44 Hz vs prop
+> passing 46–51 Hz) não está modelada (corpo rígido). — SEM caixa (2026-10-11, pedido do dono)
+
+> «remova o limite do quanto posso me movimentar, quero poder andar por um espaço maior»
+
+Os limites ANTIGOS eram uma **caixa de trabalho de 4 m em xy** (`VOO_XY_MAX = 4.0` — a referência
+saturava e o `v_ref` zerava na borda), **teto de referência 2,75 m** (`VOO_Z_MAX`) e **terminação por
+subida a 3 m** (`Z_TETO`). Agora: **xy = ±25 m** (a ARENA: o chão texturado da cena é 50×50 m — o limite
+passa a ser o cenário, não uma caixa; o plano do MuJoCo é infinito, mas a cena visível tem 50×50 m),
+**z de referência até 25 m** e **terminação por subida apenas a 30 m** (`Z_TETO` = o céu — só apanha um
+voo absurdo). O **piso mantém-se** (`VOO_Z_MIN = 0.25` m: o chão é um limite REAL) e as **velocidades
+não mudam** (`VOO_VEL` 1,0 m/s, `VOO_SUBIDA` 0,7 m/s — semântica do contrato, não espaço): com a planta
+×3 a menos agilidade, o rastreio a altas velocidades pode degradar, mas o dono pediu LIBERDADE de
+espaço e as políticas continuam a comandar as mesmas velocidades. Valido em `teste_controle_voo.py`
+(parede/teto/piso provados pelas constantes: saturação em ±25 m e z ∈ [0,25; 25] m) e nos limiares de
+`termina()` do `run.py` (teto = `Z_TETO`).
 
 ### Controle de voo (r11) — WASDQE com rajadas corrigidas (verificado, 2026-10-10)
 

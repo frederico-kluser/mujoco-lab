@@ -272,6 +272,36 @@ class Consumidor:
         return float(self.potencia.get(perfil, self.potencia.get("voo", 0.0)))
 
 
+@dataclass(frozen=True)
+class Camera:
+    """Módulo de câmara CSI (o que "transmite para o Raspberry") montado à frente do drone.
+
+    Só o HARDWARE físico vive aqui (massa, dimensões, sensor, FoV, modos — tudo com fonte no
+    catálogo). O comportamento (pipeline, fps, JPEG, latência, CPU do Pi 5) é do emulador
+    `lab/camera_rpi.py`, que usa ESTES valores — o catálogo é a fonte de verdade das peças.
+    """
+
+    id: str
+    nome: str
+    massa: float              # kg
+    dados: dict = field(default_factory=dict, compare=False)
+
+    @property
+    def dims(self) -> tuple[float, float, float]:
+        """(largura, profundidade, altura COM a lente) em m — a ordem é a do catálogo e do datasheet.
+
+        Na montagem do nariz (`modelo.py`) a placa fica de pé a olhar para +x: a ALTURA com lente (o 3.º
+        valor, 11,5/12,4 mm) é a espessura no eixo ótico (x), a largura vai para y e a profundidade da
+        placa para z.
+        """
+        return tuple(float(v) / 1000.0 for v in self.dados.get("dims_mm", (25.0, 24.0, 11.5)))
+
+    @property
+    def fov_graus(self) -> dict:
+        """FoV publicado (graus): {diag, horizontal, vertical}."""
+        return dict(self.dados.get("fov_graus", {}))
+
+
 # =========================================================================================== build resolvido
 @dataclass
 class Hardware:
@@ -292,6 +322,7 @@ class Hardware:
     atraso_comando: float     # s — RPi→FC/ESC (sensor→inferência→comando)
     v_brownout: float         # V — abaixo disto o BEC/ESC desligam (queda)
     temperatura_ambiente: float  # °C
+    camera: Camera | None = None  # módulo de câmara CSI (opcional; entra no orçamento de massa)
     massa_extra: float = 0.0  # kg — parafusos, abraçadeiras, fita (lastro do orçamento)
     dados: dict = field(default_factory=dict)
     # derivados (preenchidos em __post_init__)
@@ -327,6 +358,8 @@ class Hardware:
             m[c.id] = c.massa
         for papel, s in self.sensores.items():
             m[f"sensor_{papel}"] = float(s.get("massa_g", 0.0)) / 1000.0
+        if self.camera is not None:
+            m["camera"] = self.camera.massa
         return m
 
     @property
@@ -666,10 +699,15 @@ def resolver(build: str | dict | None = None, catalogo: dict | None = None,
     for papel, sid in cfg.get("sensores", {}).items():
         s = _peca(cat, "sensores", sid)
         sensores[papel] = s
+    camera = None
+    if cfg.get("camera"):
+        c = _peca(cat, "cameras", cfg["camera"])
+        camera = Camera(id=c["id"], nome=c.get("modelo", c["id"]),
+                        massa=float(c["massa_g"]) / 1000.0, dados=c)
     return Hardware(
         nome=nome, descricao=cfg.get("descricao", ""), frame=frame,
         motor=_motor(_peca(cat, "motores", cfg["motor"])), helice=_helice(_peca(cat, "helices", cfg["helice"])),
-        bateria=bateria, esc=esc, consumidores=consumidores, sensores=sensores,
+        bateria=bateria, esc=esc, consumidores=consumidores, sensores=sensores, camera=camera,
         arquitetura=cfg.get("arquitetura", "fc"), bec_eficiencia=float(cfg.get("bec_eficiencia", 0.88)),
         r_ligacoes=float(cfg.get("r_ligacoes_mohm", 3.0)) / 1000.0,
         atraso_comando=float(cfg.get("atraso_comando_ms", 8.0)) / 1000.0,

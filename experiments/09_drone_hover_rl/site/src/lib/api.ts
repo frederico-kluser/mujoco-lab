@@ -11,6 +11,7 @@ import {
   lerSim,
   numero,
   type CorpoCamera,
+  type CorpoFpv,
   type CorpoVento,
   type CorpoVentoDinamico,
   type RespostaSim,
@@ -46,7 +47,11 @@ function baseApi(): string {
   return bruto.replace(/\/+$/, "")
 }
 
-function url(caminho: string): string {
+/**
+ * URL completa de uma rota da API (mesma base do `fetch`) — para `<img src>` (ex.: o stream
+ * `/api/fpv.mjpg`) respeitar o mesmo `?api=`/`window.__SIM_API_BASE__` dos pedidos JSON.
+ */
+export function urlApi(caminho: string): string {
   return `${baseApi()}${caminho}`
 }
 
@@ -79,7 +84,7 @@ async function pedirJson(
 ): Promise<unknown> {
   let resposta: Response
   try {
-    resposta = await fetch(url(caminho), {
+    resposta = await fetch(urlApi(caminho), {
       ...init,
       headers: { Accept: "application/json", ...(init?.headers ?? {}) },
       cache: "no-store",
@@ -170,6 +175,26 @@ export async function enviarVentoDinamico(
  */
 export async function enviarCamera(corpo: CorpoCamera): Promise<void> {
   const bruto = await pedirJson("/api/camera", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(corpo),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+}
+
+/**
+ * `POST /api/fpv` (módulo de câmara FPV) — um SUBCONJUNTO de `{ligada, modo}`: só os campos que se
+ * quer mudar. **SEM** `seq` (o servidor incrementa-o a cada pedido; mandá-lo força re-aplicação,
+ * que aqui não é preciso) → 200 `{"ok": true, "fpv": {ligada, modo, seq}}` ou 400 (`null`, chaves
+ * desconhecidas, `modo` inexistente — ou não emulado, como o HDR). A mensagem do 400 chega ao
+ * utilizador como `ErroApi`, como nos restantes POSTs.
+ */
+export async function enviarFpv(corpo: CorpoFpv): Promise<void> {
+  const bruto = await pedirJson("/api/fpv", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(corpo),

@@ -12,6 +12,7 @@ import {
   buscarSim,
   enviarBateria,
   enviarCamera,
+  enviarFpv,
   enviarLoop,
   enviarParar,
   enviarReiniciar,
@@ -32,9 +33,12 @@ import {
   VENTO_DINAMICO_PARADO,
   type CameraEstado,
   type CorpoCamera,
+  type CorpoFpv,
   type CorpoVento,
   type CorpoVentoDinamico,
   type EstadoEpisodio,
+  type FpvEstado,
+  type SimulacaoEstado,
   type LinhaSim,
   type Planta,
   type ResumoEstado,
@@ -76,6 +80,13 @@ export interface SimStream {
   /** Valores por omissão da câmara (`camera_padrao`) — o que o REPOR VISTA envia; `null` se não vier. */
   cameraPadrao: CameraEstado | null
   /**
+   * MÓDULO DE CÂMARA FPV (`fpv` do `/api/sim`, em reforço o do `/api/state`); `null` = sem módulo —
+   * um `null` explícito PROPAGA (o bloco diz «sem módulo», honesto; nunca se retém um módulo que a
+   * API já desmentiu).
+   */
+  fpv: FpvEstado | null
+  simulacao: SimulacaoEstado | null
+  /**
    * Continuidade do BACKEND (`loop` do `/api/sim`, em reforço do `/api/state`): `true` = reinicia
    * sozinho ao terminar, `false` = para no fim. `null` quando nenhuma das respostas o diz — nesse caso
    * quem manda é o estado local otimista do `App`.
@@ -113,6 +124,12 @@ export interface SimStream {
    */
   aplicarCamera: (corpo: CorpoCamera) => Promise<void>
   /**
+   * `POST /api/fpv` (módulo de câmara FPV) — ligar/desligar ou trocar de modo, com um SUBCONJUNTO de
+   * `{ligada, modo}` (sem `seq`: o servidor carimba o dele). Passa pela fila dos controlos e relê o
+   * `/api/sim` no fim, para o ecrã adotar já o estado confirmado pelo módulo.
+   */
+  aplicarFpv: (corpo: CorpoFpv) => Promise<void>
+  /**
    * `POST /api/bateria {acao}` (planta real): `recarregar` fecha o ciclo do pack, `nova` troca de pack.
    * Passa pela fila dos controlos (como os outros POSTs) e relê o `/api/sim` no fim; devolve o que o
    * servidor confirmou (`acao`, `seq`) — o efeito chega depois, na telemetria.
@@ -148,6 +165,8 @@ export function useSim(): SimStream {
     loop: boolean | null
     camera: CameraEstado | null
     cameraPadrao: CameraEstado | null
+    fpv: FpvEstado | null
+    simulacao: SimulacaoEstado | null
     planta: Planta | null
     voo: VooEstado | null
   }>({
@@ -166,6 +185,9 @@ export function useSim(): SimStream {
     // mostra «—», honestamente, em vez de fingir uma pose.
     camera: null,
     cameraPadrao: null,
+    // Câmara FPV: `null` = sem módulo (ou backend ainda sem a chave) → o bloco diz «sem módulo».
+    fpv: null,
+    simulacao: null,
     // Planta: `null` até alguma resposta a anunciar (o site comporta-se como cf2 até lá).
     planta: null,
     // Controlo de voo: `null` até alguma resposta publicar o bloco (backend antigo).
@@ -234,6 +256,10 @@ export function useSim(): SimStream {
           dados.cameraPublicada
         ),
         cameraPadrao: dados.cameraPadrao ?? anterior.cameraPadrao,
+        // CÂMARA FPV: o `fpv` do `/api/sim` propaga-se tal e qual — inclusive o `null` explícito
+        // (sem módulo: o bloco diz-o em vez de reter um módulo que a API já desmentiu).
+        fpv: dados.fpv,
+        simulacao: dados.simulacao,
         // Como o rpi5: um backend que ainda não publique `planta` não apaga o que já se sabia.
         planta: dados.planta ?? anterior.planta,
         // CONTROLO DE VOO: o bloco publicado manda (inclusive `eco: null`, honesto — política sem
@@ -344,6 +370,14 @@ export function useSim(): SimStream {
             cameraPadrao: dados.cameraPadrao,
           }))
         }
+        // Câmara FPV (reforço do `/api/sim`, que é a fonte principal e propaga o `null`): só se
+        // escreve quando o resumo publica um módulo — um resumo sem `fpv` não apaga o que se sabe.
+        if (dados.fpv !== null) {
+          setCabecalho((anterior) => ({ ...anterior, fpv: dados.fpv }))
+        }
+        if (dados.simulacao !== null) {
+          setCabecalho((anterior) => ({ ...anterior, simulacao: dados.simulacao }))
+        }
       } catch {
         /* o resumo é acessório: a falta dele não derruba a página */
       }
@@ -452,6 +486,19 @@ export function useSim(): SimStream {
   )
 
   /**
+   * `POST /api/fpv` (módulo de câmara FPV) — ligar/desligar/trocar de modo pela fila dos controlos e
+   * com releitura imediata do `/api/sim`, para o ecrã adotar o estado confirmado sem esperar o
+   * próximo ciclo do polling. O corpo é um SUBCONJUNTO de `{ligada, modo}` (sem `seq`).
+   */
+  const aplicarFpv = useCallback(
+    async (corpo: CorpoFpv) => {
+      await encadear(() => enviarFpv(corpo))
+      await pollAgora()
+    },
+    [encadear, pollAgora]
+  )
+
+  /**
    * `POST /api/bateria` (planta real) — pela fila, como os restantes controlos (a ordem dos cliques é a
    * ordem das escritas no controlo), e com releitura imediata do `/api/sim`. Uma falha da releitura não
    * desmente o POST que já foi aceite: o resultado do servidor devolve-se na mesma.
@@ -477,6 +524,8 @@ export function useSim(): SimStream {
     rpi5: cabecalho.rpi5,
     camera: cabecalho.camera,
     cameraPadrao: cabecalho.cameraPadrao,
+    fpv: cabecalho.fpv,
+    simulacao: cabecalho.simulacao,
     loop: cabecalho.loop ?? resumo?.loop ?? null,
     planta: cabecalho.planta ?? resumo?.planta ?? null,
     voo: cabecalho.voo ?? resumo?.voo ?? null,
@@ -490,6 +539,7 @@ export function useSim(): SimStream {
     pararTudo,
     aplicarVentoDinamico,
     aplicarCamera,
+    aplicarFpv,
     aplicarBateria,
     definirLoop,
     atualizar: pollAgora,

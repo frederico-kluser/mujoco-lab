@@ -36,19 +36,55 @@ fabricante: acelerador, tensão, corrente, rpm, binário, empuxo). Depois: `run.
 treino novo** — o `train.py` grava o `hardware.json` (peças + derivados + domain randomization) ao lado de cada
 política, porque uma política só vale para as peças com que treinou.
 
-## Os builds (2026-10-10, números derivados do catálogo)
+## Os builds (2026-10-11, números derivados do catálogo)
+
+> **2026-10-11 — o módulo de câmara FPV entrou no orçamento**: todos os builds ganharam a **Raspberry Pi
+> Camera Module 3 Wide** (Sony IMX708, 4 g, `componentes.json` → `cameras`), montada **à frente** do
+> drone e ligada ao RPi 5 por CSI-2. Os números das tabelas são DEPOIS da câmara; antes o build ativo era
+> 1663,6 g · 133,2 W · 99,0 min (a câmara custa 4 g e ~0,4 min de autonomia).
+>
+> **2026-10-11 — WHEELBASE ×3 no build ativo (650 → 1950 mm, frame `diy_tubo_carbono_1950`)**, pedido do
+> dono para ganhar estabilidade. Só o `endurance_15pol_p50b` migra (os outros builds mantêm os frames de
+> 650/750 mm como alternativas do catálogo). Tubos **25×23 mm** (16 mm seria flexível demais a ~850 mm de
+> braço), frame+pernas **800 g** (faixa da pesquisa 750–850 g, fórmula no catálogo). O que a mudança faz
+> (medições do modelo + `pesquisas/relatorio-bracos-3x-estabilidade.md`):
+>
+> | grandeza | 650 mm | 1950 mm | fator |
+> |---|---|---|---|
+> | J (roll/pitch/yaw) 0,0218/0,0230/0,0429 → 0,2343/0,2355/0,4674 kg·m² = ×10,75/×10,25/×10,91
+> | J guinada (MEDIDO) | 0,0218 kg·m² | 0,234 kg·m² | ×10,7 |
+> | torque roll/pitch (τ = L·ΔT) | τ | 3τ | ×3 |
+> | aceleração angular máx. (τ/J) | α | ≈0,26 α | **÷3,7** |
+> | aceleração de GUINada (o par das hélices não escala com L) | αψ | ≈0,09 αψ | **÷10–12** |
+> | ganhos do FC (MEDIDOS: `kp = 1/(α·4ζ²·tm)`, derivados DA PLANTA) | — | roll ×4,05 · pitch ×3,87 · yaw ×12,35 | retuning **automático** (pesquisa esperava ×3,5–4 e ×10–11) |
+> | massa total | 1668 g | **2183 g** | +31 % (pesquisa: 2150–2250 ✓) |
+> | pairagem | 2742 rpm | **3137 rpm** | +14 % (pesquisa ~3150 ✓) |
+> | potência de pairagem | 133,6 W | **198,1 W** | +48 % (pesquisa 190–206 W ✓) |
+> | autonomia (modelo) | 98,6 min | **65,8 min** | −33 % (pesquisa 64–70 min ✓) |
+> | T/W | 3,43 | **2,62** | (pesquisa 2,5–2,7 ✓) |
+>
+> **Estabilidade vs agilidade**: atitude mais "pesada" (J ×11) ⇒ menos sensível a ruído/assimetrias e
+> menos twitchy, mas ~3,7× mais lenta em roll/pitch e ~10× em guinada — e a **deriva lateral em vento piora**
+> (área frontal dos braços ×4,7 vs massa +31 %: drift ×3,6). "Mais estável" = mais calmo, não mais
+> resistente a vento. O `VOO_VEL` mantém-se 1,0 m/s (o dono pediu LIBERDADE de espaço, não menos
+> velocidade) — a planta nova é menos ágil e o rastreio a altas velocidades pode degradar.
+> **Riscos ditos** (não modelados): (1) o **1.º modo de flexão dos braços (~35–45 Hz) colide com o prop
+> passing (46–51 Hz)** — o simulador assume CORPO RÍGIDO; (2) o download mútuo cai (rotores a 3,6 D) e o
+> ground effect enfraquece — o `perda_download` mantém-se 5 % até medir (a pesquisa sugere −2 a −4 %);
+> (3) políticas treinadas no 650 ficam FORA da planta (retreino à parte); (4) o FC retuning é automático,
+> mas a banda útil continua limitada pela constante de tempo do motor (τm ≈ 56 ms, inalterada).
 
 | build | massa | pack | Wh | pairagem | g/W | acelerador | T/W | autonomia (modelo) |
 |---|---|---|---|---|---|---|---|---|
-| **`endurance_15pol_p50b`** (ATIVO) | 1664 g | 871 g | 216 | 133,2 W | 12,5 | 53,2 % | 3,43 | **99,0 min** |
-| `endurance_15pol_semisolido` | 1593 g | 800 g | 266 | 125,1 W | 12,7 | 50,7 % | 3,59 | 127,6 min |
-| `endurance_15pol_tarot` (frame comercial 750 g) | 2129 g | 871 g | 216 | 197,0 W | 10,8 | 62,8 % | 2,68 | 66,2 min |
-| `endurance_16pol_m50lt` | 1660 g | 855 g | 218 | 131,6 W | 12,6 | 48,0 % | 3,67 | 97,9 min |
-| `endurance_17pol_4s` (MN5006 KV450 + P17×5.8, 4S3P) | 1935 g | 871 g | 216 | 147,0 W | 13,2 | 45,8 % | 5,48 | 89,2 min |
-| `pesado_18pol_6s3p` (MN5006 KV300 + P18×6.1) | 2386 g | 1298 g | 324 | 181,8 W | 13,1 | 42,7 % | 5,78 | 108,9 min |
-| `independente_mn4006_mf1302` (ensaio Tyto) | 1704 g | 871 g | 216 | 148,0 W | 11,5 | 56,3 % | 3,86 | 88,8 min |
-| `lipo_15pol_mn4006_4s` (LiPo Tattu 4S 10 Ah) | 1793 g | 940 g | 148 | 140,3 W | 12,8 | 63,1 % | 2,67 | 63,3 min |
-| `x500_13pol_p45b` (Holybro X500 V2) | 1931 g | 837 g | 194 | 216,1 W | 8,9 | 77,7 % | 1,95 | 54,0 min |
+| **`endurance_15pol_p50b`** (ATIVO, wheelbase ×3) | 2183 g | 871 g | 216 | 198,1 W | 11,0 | 63,0 % | 2,62 | **65,8 min** |
+| `endurance_15pol_semisolido` | 1597 g | 800 g | 266 | 125,5 W | 12,7 | 50,7 % | 3,58 | 127,2 min |
+| `endurance_15pol_tarot` (frame comercial 750 g) | 2133 g | 871 g | 216 | 197,6 W | 10,8 | 62,9 % | 2,68 | 66,0 min |
+| `endurance_16pol_m50lt` | 1664 g | 855 g | 218 | 132,0 W | 12,6 | 48,0 % | 3,66 | 97,6 min |
+| `endurance_17pol_4s` (MN5006 KV450 + P17×5.8, 4S3P) | 1939 g | 871 g | 216 | 147,4 W | 13,2 | 45,8 % | 5,47 | 89,0 min |
+| `pesado_18pol_6s3p` (MN5006 KV300 + P18×6.1) | 2390 g | 1298 g | 324 | 182,2 W | 13,1 | 42,7 % | 5,77 | 108,6 min |
+| `independente_mn4006_mf1302` (ensaio Tyto) | 1708 g | 871 g | 216 | 148,5 W | 11,5 | 56,4 % | 3,85 | 88,5 min |
+| `lipo_15pol_mn4006_4s` (LiPo Tattu 4S 10 Ah) | 1797 g | 940 g | 148 | 140,7 W | 12,8 | 63,2 % | 2,66 | 63,1 min |
+| `x500_13pol_p45b` (Holybro X500 V2) | 1935 g | 837 g | 194 | 216,8 W | 8,9 | 77,8 % | 1,94 | 53,8 min |
 | `compacto_12pol_mn2806` | 1497 g | 443 g | 108 | 162,8 W | 9,2 | 60,2 % | 2,95 | 39,3 min |
 | `referencia_5pol` (o 5″ do plano) | 533 g | 184 g | 22 | 106,0 W | 5,0 | 30,1 % | 11,5 | 12,6 min |
 
@@ -72,14 +108,15 @@ motores e hélices, Molicel P50B em 6S):
 
 | pack | massa total | pack | Wh | pairagem | g/W | T/W | autonomia |
 |---|---|---|---|---|---|---|---|
-| 6S1P | 1228 g | 435 g | 108 | 86,7 W | 14,2 | 4,65 | 75,6 min |
-| **6S2P** (ativo) | 1664 g | 871 g | 216 | 133,2 W | 12,5 | 3,43 | **99,0 min** |
-| 6S3P | 2099 g | 1306 g | 324 | 187,0 W | 11,2 | 2,72 | 105,8 min |
-| 6S4P | 2534 g | 1741 g | 432 | 247,6 W | 10,2 | 2,25 | 106,4 min |
-| 6S5P | 2970 g | 2176 g | 540 | 314,6 W | 9,4 | 1,92 | 104,6 min (T/W < 2) |
+| 6S1P | 1747 g | 435 g | 108 | 143,0 W | 12,2 | 3,27 | 45,0 min |
+| **6S2P** (ativo) | 2183 g | 871 g | 216 | 198,1 W | 11,0 | 2,62 | **65,8 min** |
+| 6S3P | 2618 g | 1306 g | 324 | 260,0 W | 10,1 | 2,18 | 75,4 min |
+| 6S4P | 3053 g | 1741 g | 432 | 328,1 W | 9,3 | 1,87 | 79,7 min (T/W < 2) |
+| 6S5P | 3488 g | 2176 g | 540 | 402,2 W | 8,7 | 1,64 | 78,5 min (T/W < 2) |
 
-Cada grama de bateria pede mais empuxo (g/W cai): a partir de 2P quase não se ganha autonomia e perde-se
-margem de controlo — o 6S2P é o ponto doce (o mesmo vale para o LG M50LT: 74 → 98 → 105 → 106 min).
+Cada grama de bateria pede mais empuxo (g/W cai): com o frame ×3, o 6S2P ainda cumpre a meta
+de 1 h (65,8 min) mas o 6S3P passa à frente em autonomia (75,4 min) com T/W 2,18 — a escolha
+depois do ×3 é entre autonomia e margem de controlo (antes o 6S2P era o ponto doce).
 
 ## O build ativo: `endurance_15pol_p50b`
 
@@ -89,15 +126,20 @@ margem de controlo — o 6S2P é o ponto doce (o mesmo vale para o LG M50LT: 74 
 | Hélice ×4 | **T-Motor P15×5 CF** | 21 g; da tabela: **kf = 5,22×10⁻⁵ N/(rad/s)²**, **kq = 1,058×10⁻⁶ N·m/(rad/s)²** (9,84×10⁻⁷ da tabela +7,5 % de realismo; C_T ≈ 0,080 e C_P ≈ 0,025 — verificados 0,079–0,081 / 0,024–0,026) |
 | ESC ×4 | **T-Motor AIR 40A 6S** | 26 g cada (o recomendado pela T-Motor; um 4-em-1 de ~15 g pouparia ~90 g) |
 | Bateria | **6S2P Molicel P50B** (12 × 21700) | 10 Ah, 216 Wh, 871 g (248 Wh/kg), DCIR medido 15 mΩ/célula (About:Energy) → R₀ do pack 45 mΩ, 750 ciclos até 80 % |
-| Frame | **DIY X 650 mm** (tubo de carbono 16 mm + placas 1,5 mm) | 235 g + 50 g de pernas, **massa ESTIMADA** pela densidade do carbono — pesar o frame montado e corrigir; braços finos ⇒ download 5 % (NASA) |
+| Frame | **DIY X 1950 mm** (tubo de carbono 25×23 mm + placas 1,5 mm — wheelbase ×3, 2026-10-11) | 700 g + 100 g de pernas, **ESTIMADO calibrado em frames reais; as placas ficam em 190–250 g conforme a densidade real do carbono (201 g pela calibração do 650) — PESAR e corrigir** (faixa 750–850 g; braço ≈100 g vs 106 g do Tarot X8); tubo de 16 mm seria flexível demais (1.º modo ~44 Hz vs prop passing 46–51 Hz); download 5 % (NASA) |
 | Computador | **Raspberry Pi 5** + dissipador | 52 g, 5 W em voo (2,7 idle / 8,8 pico) |
 | FC | H7 30×30 (Betaflight/ArduPilot) | 8 g, 0,6 W — faz a malha de taxa (o Linux não serve de FC primário) |
 | Sensores | BMI088 (IMU) · VL53L1X (ToF) · PMW3901 (fluxo ótico) · INA226 (V/I) | ≈ 3 g, ≈ 0,12 W — o mínimo para a pairagem ser OBSERVÁVEL sem GPS (plano §7 A) |
+| Câmara | **Raspberry Pi Camera Module 3 Wide** (Sony IMX708) | 4 g, 11,9 MP, FoV 120° diag (102°×67°), vídeo 1080p50/720p100/480p120, PDAF 5 cm–∞ — **montada à frente**, CSI-2 para o RPi 5 (comportamento emulado em `lab/camera_rpi.py`) |
 
-Orçamento: frame 235 + pernas 50 + motores 212 + hélices 84 + ESC 104 + bateria 871 + RPi 5 52 + FC 8 +
-cablagem/BEC 30 + sensores 3 + diversos 15 = **1664 g**. Pairagem a 21,6 V: 2739 rpm, ciclo útil 48,4 %
-(acelerador 53,2 %), 126,7 W nos motores + 6,5 W de eletrónica = **133,2 W (12,5 g/W)**; motor+ESC η ≈ 0,79
-(verificado: 0,80 a 50 % nesta combinação). Rotor: J = 1,62×10⁻⁴ kg·m² ⇒ **τ ≈ 58 ms**.
+Orçamento: frame 700 + pernas 100 + motores 212 + hélices 84 + ESC 104 + bateria 871 + RPi 5 52 + FC 8 +
+cablagem/BEC 30 + sensores 3 + **câmara 4** + diversos 15 = **2183 g**. Pairagem a 21,6 V: 3137 rpm,
+ciclo útil 50,5 % (acelerador 63,0 %), 191,6 W nos motores + 6,5 W de eletrónica = **198,1 W (11,0 g/W)**;
+motor+ESC η ≈ 0,79 (verificado: 0,80 a 50 % nesta combinação). Rotor: J = 1,62×10⁻⁴ kg·m² ⇒ **τ ≈ 56 ms**.
+Inércias de ATITUDE do corpo (MEDIDAS no modelo compilado): Jxx 0,467 · Jyy 0,236 · Jzz 0,234 kg·m²
+(×10,9/×10,2/×10,7 face ao frame de 650 mm). O FC deriva os ganhos destes números a cada build
+(`fc.py`: `kp = 1/(α·4ζ²·tm)` com `α = 4·a·dT/du / J`) — o retuning do wheelbase ×3 é AUTOMÁTICO
+(kp roll ×4,05 · pitch ×3,87 · yaw ×12,35, medidos 650→1950).
 
 **Limite de rotação** (sob a corrente de pairagem; decai com a descarga e com o desgaste):
 

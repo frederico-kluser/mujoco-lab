@@ -1,0 +1,56 @@
+# Frente GTA V / Rockstar RAGE — candidatos a "mundo visual + colisões" para o MuJoCo Lab
+
+## GTA V — modding single-player (RAGE)
+
+- **ENGINE**: RAGE (Rockstar Advanced Game Engine). Duas edições PC: **Legacy** e **Enhanced** (desde 2025, executável próprio `GTA5_Enhanced.exe`, formatos de assets alterados).
+- **MODDING — FÁCIL** (ecossistema maduro, 10+ anos): **ScriptHookV** (natives em plugins `.asi`; fecha o jogo ao entrar no GTA Online → só single-player), **ScriptHookVDotNet (SHVDN)** (scripts C#/.NET com API rica — `World.CreateVehicle`, `Camera`, `Native.Function.Call`), **Menyoo** (trainer + *Object Spooner* para spawn/editor de objetos), **CodeWalker** (explorador/editor de RPF/YMAP/YBN), **OpenIV** (sem suporte oficial ao Enhanced — substitutos: OpenRPF/CodeWalker), **LemonUI** (UI). Comunidade muito ativa (gta5-mods, gtaforums, Nexus, GitHub). Risco: atualizações do jogo quebram temporariamente o ScriptHookV; mods antigos podem não correr no Enhanced.
+- **FÍSICA EXTERNA — possível por override cinemático, NÃO por substituir o solver**: não há hook para desligar o solver do RAGE, mas natives permitem comandar entidades a cada tick: `SET_ENTITY_COORDS(_NO_OFFSET)`, `SET_ENTITY_VELOCITY`, `FREEZE_ENTITY_POSITION` (tira a entidade da física do mundo), `SET_ENTITY_COMPLETELY_DISABLE_COLLISION`, `DETACH_ENTITY`, `APPLY_FORCE_TO_ENTITY`. Padrão de integração: processo externo MuJoCo (Python) ⇄ script C#/ASI no jogo via **named pipe / TCP / ZeroMQ** (o DeepGTAV usa ZeroMQ) — MuJoCo calcula, o jogo só *desenha* as poses. Custos: ~1 canal IPC + sincronismo por tick (fácil, dezenas de linhas). Limitações: contacto/colisão dos atuadores deixa de ser resolvido pelo jogo (tem de ser resolvido no MuJoCo → ver colisões); peds/veículos do tráfego continuam com física própria; animação de peds pode "lutar" contra o override; `handling.meta` (editável via OpenIV/CodeWalker) só afina a física nativa, não a substitui.
+- **COLISÕES/CENÁRIO — bom**: o mundo está em RPF: `.ytyp` (archetypes), `.ymap` (colocação de entidades), **`.ybn` (malha de colisão)**, `.ydr` (modelos). O **CodeWalker** explora/edita tudo isso (incl. editor de YBN no roadmap) e o **Sollumz** (Blender) importa/edita colisões. Raycasts pela API de script (`START_SHAPE_TEST_*`/`World.Raycast` no SHVDN). Spawn de objetos com colisão em runtime (Menyoo Spooner, natives) e mapas custom em YMAP/DLC. Exportar `.ybn` → malha MuJoCo é trabalho extra (não confirmado: pipeline pronto de conversão YBN→OBJ/MJCF).
+- **VISUAL/CV — excelente, com provas académicas**: **DeepGTAV** (GitHub) extrai ground truth por tick — `frame`, `bbox2d`, imagens de segmentação, LiDAR, pose da câmara — e envia por ZeroMQ a um cliente Python. Datasets derivados validados: PreSIL (bboxes/depth/point clouds), GTA5 (segmentação), GTASynth (SLAM), HRSD (RGB-D); paper de 2025 (arXiv 2502.12303) usa GTA V para VPR/SLAM e confirma que dados sintéticos substituem/complementam reais. Câmara livre/"freecam" (ex.: Simple Camera), FOV e resolução configuráveis, captura em 4K via DSR. Limitações: **sem modo headless oficial (não confirmado)** — captura em janela; qualidade de segmentação da água/artefatos conhecidos.
+- **AUTOMAÇÃO — boa**: natives de hora/clima (`SET_CLOCK_TIME`, tipos de clima), densidade de tráfego/peds, tasks de peds (seguir, entrar em veículos), teleporte, cenários montados por script. Determinismo: o motor não é determinístico entre runs; para validação de IA o recomendável é comandar poses (MuJoCo) e usar o jogo só como renderizador — nesse modo a reprodução é fiel.
+- **LINUX**: nativo **Windows-only**; roda em **Proton/Wine** (tutoriais Steam Deck/Lutris com ScriptHookV+SHVDN; o SHVDN exige .NET Framework 4.8 no prefix). BattlEye só afeta o online. Não confirmado: estabilidade de captura/leitura sob Proton no CachyOS.
+- **CUSTO/LEGAL**: compra do jogo (≈20–40 € em saldos). Política da Rockstar (Mod Guidelines, set/2026 + artigo oficial "PC Single-Player Mods"): mods single-player **não comerciais** permitidos; desde 2026 há restrições novas (mods de história/missões, importar assets entre jogos, portes não oficiais, monetização) — secundárias falam em restrição também a "novos mapas"; **não confirmado** como isso se aplica a mapas privados de investigação (a página oficial não foi extraível). Sem risco de ban em single-player; nunca usar GTA Online.
+- **COMUNIDADE**: muito ativa e resiliente (gta5-mods, gtaforums, Nexus, SHVDN no GitHub).
+
+## FiveM / Cfx.re (plataforma RAGE "autorizada")
+
+- **ENGINE**: GTA V/RAGE + camada Cfx.re (**OneSync**, cliente+servidor). Propriedade da Rockstar desde ago/2023; após o fecho do alt:V (fev/2026) é a **única plataforma autorizada** de multiplayer moddado.
+- **MODDING — FÁCIL/MÉDIO**: *resources* em **Lua/JS/C#**, documentação própria (docs.fivem.net), stream de veículos (`handling.meta`, `.yft/.ytd`), state bags, natives completas. Excelente para orquestração cliente-servidor. Exige aceitar a *Platform License Agreement* (atualizada 10/09/2026, condicionada às Mod Guidelines).
+- **FÍSICA EXTERNA — mesma técnica, com camada de rede**: a física de um veículo corre no *client dono* da entidade; um resource pode impor `SetEntityCoords`/`SetEntityVelocity`/`FreezeEntityPosition` por tick (cinemática MuJoCo via socket/ZeroMQ entre o Python e o resource). Custo: +1 camada (rede/ownership) vs single-player; para máquina única é baixo. Limitações: sem substituição do solver; sincronismo/ownership em rede introduz jitter; tuning fino só via `handling.meta`.
+- **COLISÕES/CENÁRIO**: idêntico ao single-player (YBN/YMAP, CodeWalker); spawn de objetos e mapas via natives/resources; raycasts idem.
+- **VISUAL/CV — bom e "API oficial"**: **screenshot-basic** (recurso oficial Cfx.re) — `requestScreenshot`/`requestScreenshotUpload` (jpg/png/webp) e `requestClientScreenshot` no servidor; câmara livre por natives; ground truth posicional igualmente acessível. Nota: repositório sem commits desde 2022 (**não confirmado** se mantido). Permite orquestrar geração de datasets por servidor (loop automático).
+- **AUTOMAÇÃO — excelente**: servidor autoritativo para hora/clima (ex.: qb-weathersync), densidade de tráfego/peds, cenários repetíveis por resource, comandos; suporta **múltiplos clientes** (testes multi-agente, cenários com vários atores). Determinismo não garantido pela rede, mas montagem de cenários é scriptável.
+- **LINUX**: **servidor** FiveM roda nativamente em Linux; **cliente é Windows-only** (pedido aberto por suporte nativo, 2025; não confirmado se funciona sob Proton).
+- **CUSTO/LEGAL**: precisa do GTA V PC + conta Rockstar/FiveM; software gratuito. Uso interno de investigação de baixo risco; distribuição/monetização sujeita às guidelines 2026. Não usa GTA Online → sem bans.
+- **COMUNIDADE**: enorme (forum Cfx, docs, milhares de resources).
+
+### Tradeoffs (física MuJoCo + validação de IA visual)
+
+- **A favor do GTA V single-player**: caminho mais curto (SHVDN + pipe → poses), DeepGTAV/datasets prontos como prova de conceito de CV, sem rede, custo único, sem contas. Contra: sem headless, updates quebram mods, Enhanced divide ferramentas (OpenIV), tudo por override cinemático.
+- **A favor do FiveM**: orquestração por servidor (cenários determinísticos-repetíveis, geração de dados em loop, multi-agente), screenshot API estável, plataforma legalmente "autorizada". Contra: complexidade de resources/rede, cliente Windows-only, licença.
+- **Ambos**: a física do jogo **não se desliga** — a integração real é "MuJoCo manda, RAGE desenha". Para colisões reais dos atuadores com o cenário, o MuJoCo precisa das malhas: extrair `.ybn` (CodeWalker) e converter para geom de colisão MuJoCo (pipeline a construir; **não confirmado** existir pronto). Alternativa de menor esforço: usar as colisões do jogo apenas para validação visual e deixar o MuJoCo livre num plano/chão importado.
+- **Conformidade com a regra do dono** ("simulador sempre físico, sem teleporte"): o teleporte por tick aqui é sincronização de *renderização* para um agente externo — a física continua toda no MuJoCo (`mj_step`); usar só em modo visualização/validação e deixar claro isso nos experimentos.
+
+### Fontes
+
+- https://www.dev-c.com/gtav/scripthookv — ScriptHookV: natives em `.asi`, não funciona no GTA Online.
+- https://github.com/scripthookvdotnet/scripthookvdotnet/wiki/Getting-Started — SHVDN: scripts C#/.NET sobre o ScriptHookV.
+- https://nitanmarcel.github.io/shvdn-docs.github.io/class_g_t_a_1_1_camera.html — API de câmara/veículos do SHVDN (`World.CreateVehicle`, `Camera.InterpTo`).
+- https://github.com/dexyfex/CodeWalker — formatos do mundo RAGE (`.ytyp/.ymap/.ybn`), edição de mapas e colisões.
+- https://www.gta5-mods.com/tools/mapeditor-2-ymap-converter — Menyoo/Map Editor → YMAP (com crashes reportados; CodeWalker mais estável).
+- https://gtaforums.com/topic/859962-v-menyoo-pc-object-spooner-tutorial — Menyoo Object Spooner: spawn/editor de objetos.
+- https://github.com/Loled69/gta-Source/blob/main/commands_entity.sch — natives de override de física (`FREEZE_ENTITY_POSITION`, `SET_ENTITY_VELOCITY`, `SET_ENTITY_COMPLETELY_DISABLE_COLLISION`).
+- https://github.com/David0tt/DeepGTAV — extração de ground truth (frames, bboxes, segmentação, LiDAR) por ZeroMQ; captura livre via "freecam".
+- https://arxiv.org/html/2502.12303v1 — GTA V para dados sintéticos (VPR/SLAM) e relação com PreSIL/GTA5/GTASynth/HRSD.
+- https://github.com/citizenfx/screenshot-basic — captura de ecrã no FiveM (jpg/png/webp; API cliente/servidor; sem commits desde 2022).
+- https://docs.fivem.net/docs/game-references/ (referenciado via fivemdocs.com/reference/natives) — natives FiveM (entidades, câmara, mundo).
+- https://fly-serv.com/en/blog/fivem-drift-config-handling-meta-resources — no FiveM a física corre na máquina que *dona* a entidade.
+- https://support.rockstargames.com/articles/5NVOAYjcTomO8v6SX2k76k/pc-single-player-mods — política oficial de mods single-player (Terms + Mod Guidelines + FiveM PLA).
+- https://gtaintel.com/news/rockstar-mod-guidelines-explained-gta-6 — análise das Mod Guidelines 2026 (FiveM como única plataforma autorizada; PLA de 10/09/2026).
+- https://hwbusters.com/news/the-rockstar-mod-guidelines-ban-story-mods-and-console-ports-and-pc-still-doesnt-have-gta-6 — restrições 2026 (story mods, portes, comercial).
+- https://www.gta5-mods.com/tools/openiv-fix-for-gta-5-enhanced / https://www.gta.com (G2A guide) — OpenIV sem suporte oficial ao Enhanced; CodeWalker/OpenRPF como alternativa.
+- https://www.youtube.com/watch?v=Cf8u18ZWdvU — modding de GTA V Legacy em Linux/Steam Deck via Lutris/Proton (ScriptHookV+SHVDN).
+- https://forum.cfx.re/t/native-linux-support-for-fivem-it-s-time/5330614 — cliente FiveM Windows-only; servidor Linux; GTA V via Wine/DXVK.
+- https://www.videogameschronicle.com/news/rockstar-acquires-gta-5-roleplay-devs-cfx-re — Rockstar adquire Cfx.re (ago/2023).
+
+**Incertezas marcadas**: modo headless do GTA V (não confirmado); suporte do ScriptHookV/SHVDN ao Enhanced sob Proton (não confirmado); manutenção do screenshot-basic (não confirmado); alcance das restrições de "novos mapas" das Mod Guidelines 2026 a uso interno de investigação (não confirmado — página oficial não extraível); existência de pipeline pronto YBN→MuJoCo (não confirmado).

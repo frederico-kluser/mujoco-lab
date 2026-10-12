@@ -52,7 +52,6 @@ import {
   fmtGraus,
   fmtParams,
   PARAMS_DINAMICOS_PADRAO,
-  ROTULO_MODO,
   VENTO_LIMITES,
   type CorpoVento,
   type CorpoVentoDinamico,
@@ -83,12 +82,124 @@ const SUPERFICIE_VENTO: Record<EstadoBotao, string> = {
   a_enviar: "bg-secondary text-secondary-foreground",
   ok: "bg-primary text-primary-foreground",
   erro: "bg-destructive/15 text-destructive",
-  // modo em vigor no servidor (o botão é um interruptor: clicar outra vez desliga)
+  // modo ativo no servidor (o botão é um interruptor: clicar outra vez desliga)
   ativo: "bg-primary text-primary-foreground ring-2 ring-ring",
 }
 
 /** Passos de decisão por segundo (o mesmo 50 Hz do contrato do RPi 5). */
 const PASSOS_POR_SEGUNDO = 50
+
+// <rajadas-ux:puro>
+// REGIÃO PURA do painel dinâmico (léxico + estado + rajada) — sem React nem JSX, para
+// `site/testes/rajadas-ux.mts` a extrair e executar tal e qual (Node type-stripping). Não mover nem
+// misturar com código de UI: os testes ancoram nos marcadores acima/abaixo.
+//
+// Avaliação de UX em `pesquisas/ux-rajadas-avaliacao.json` (achados 1–5): o estado do sistema passa a
+// ser a PRIMEIRA coisa do painel, com um léxico ÚNICO (achado 3) — os mesmos rótulos do segmented
+// toggle, da faixa de estado e dos botões instantâneos; os nomes técnicos (`rajada_agora`, `aleatoria`)
+// ficam só nos `title`/tooltip.
+
+/** LÉXICO ÚNICO do painel dinâmico: os rótulos EXATOS usados em toggle, faixa de estado e botões. */
+export const ROTULOS_MODO_ESTADO = {
+  parado: "PARADO",
+  rajadas: "RAJADAS",
+  aleatoria: "ALEATÓRIA",
+  dryden: "DRYDEN",
+  rajada_agora: "RAJADA AGORA",
+  frente: "FRENTE AGORA",
+} as const
+
+/** Os 3 estados EXAUSTIVOS da faixa: nada a acontecer · modo armado · rajada a bater agora. */
+export type EstadoFaixa = "parado" | "a_correr" | "rajada"
+
+/** Limiar de deteção de rajada em curso (m/s): |‖vento_vec‖ − vel_base| acima disto há envelope ≠ 0. */
+export const LIMIAR_RAJADA_M_S = 0.05
+
+/**
+ * Intensidade da rajada que está a bater AGORA (m/s): `|‖vento_vec‖ − vel_base|`, com o vento real da
+ * telemetria (`total`) e o vento BASE comandado (`base`). `0` quando não há rajada visível.
+ *
+ * Limite honesto (dito, não escondido): é uma diferença de MÓDULOS — uma rajada quase perpendicular ao
+ * vento base subestima o envelope (a soma vetorial tem módulo perto do base); nas geometrias normais
+ * (proa/cauda) mede o que o operador quer saber. Sem dados de telemetria (`total === null`) o chamador
+ * não deve usar este número — não há rajada a inventar.
+ */
+export function intensidadeRajada(total: number, base: number): number {
+  return Math.abs(total - base)
+}
+
+/**
+ * Mapeamento modo → estado da faixa (parado · a_correr · rajada), SEMPRE a partir do que a física faz:
+ * `modoTelemetria` é o `vento_modo` real da última amostra e `intensidade` o desvio medido em m/s.
+ *
+ * Regras (as 3 primeiras são o que o operador pergunta — «está a rolar ou só armado?»):
+ *  1. `rajada_agora` na telemetria → `rajada` / RAJADA AGORA (o instantâneo está a bater);
+ *  2. intensidade > 0,05 m/s → `rajada` / o MODO de origem (RAJADAS · ALEATÓRIA · DRYDEN quando há modo
+ *     contínuo — é o que responde a «está no modo aleatório ou não?» —, RAJADA AGORA caso contrário);
+ *  3. modo contínuo armado → `a_correr` / o rótulo do toggle (RAJADAS · ALEATÓRIA · DRYDEN);
+ *  4. `frente` na telemetria (degrau mantido) → `a_correr` / FRENTE AGORA;
+ *  5. caso contrário → `parado` / PARADO.
+ */
+export function estadoFaixa(entrada: {
+  modoContinuo: "nenhum" | "rajadas" | "aleatoria" | "dryden"
+  modoTelemetria: string
+  intensidade: number
+}): { estado: EstadoFaixa; modo: string; intensidade: number } {
+  const { modoContinuo, modoTelemetria, intensidade } = entrada
+  const rotuloContinuo =
+    modoContinuo === "nenhum"
+      ? null
+      : (ROTULOS_MODO_ESTADO[modoContinuo] as string)
+  if (modoTelemetria === "rajada_agora") {
+    return { estado: "rajada", modo: ROTULOS_MODO_ESTADO.rajada_agora, intensidade }
+  }
+  if (intensidade > LIMIAR_RAJADA_M_S) {
+    return {
+      estado: "rajada",
+      modo: rotuloContinuo ??
+        (modoTelemetria === "frente"
+          ? ROTULOS_MODO_ESTADO.frente
+          : ROTULOS_MODO_ESTADO.rajada_agora),
+      intensidade,
+    }
+  }
+  if (rotuloContinuo) return { estado: "a_correr", modo: rotuloContinuo, intensidade }
+  if (modoTelemetria === "frente") {
+    return { estado: "a_correr", modo: ROTULOS_MODO_ESTADO.frente, intensidade }
+  }
+  return { estado: "parado", modo: ROTULOS_MODO_ESTADO.parado, intensidade }
+}
+// </rajadas-ux:puro>
+
+/**
+ * Params do modo ativo em LINGUAGEM NATURAL (achado 5 — chunking): uma linha com unidades, sem o
+ * monoespaço de `params {p: 0.40, duracao: 25, u_max: 3.0}`. Os valores são os do SERVIDOR tal e qual —
+ * casas suficientes para o valor ser exacto (p tem passo 0,005; segundos = passos/50) e nunca mais.
+ * Sem params em vigor (modo nunca ligado) a linha diz-o em vez de mostrar zeros inventados.
+ */
+function resumoParamsDinamicos(
+  modo: ModoVentoDinamico,
+  params: Record<string, number>
+): string {
+  const seg = (passos: number) =>
+    // segundos a 1 casa quando o valor cabe (0,5 s), a 2 quando o passo o exige (0,52 s)
+    `${fmt(passos / PASSOS_POR_SEGUNDO, (passos / PASSOS_POR_SEGUNDO) * 10 === Math.round((passos / PASSOS_POR_SEGUNDO) * 10) ? 1 : 2)} s`
+  const dur = (passos: number) => `${seg(passos)} (${Math.round(passos)} passos)`
+  const p = (v: number) => fmt(v, v * 100 === Math.round(v * 100) ? 2 : 3)
+  if (modo === "rajadas" && params.p !== undefined && params.duracao !== undefined)
+    return `p ${p(params.p)} por passo · rajadas de ${dur(params.duracao)}${params.u_max !== undefined ? ` até ${fmt(params.u_max, 1)} m/s` : ""}`
+  if (modo === "aleatoria" && params.p !== undefined && params.duracao !== undefined)
+    return `p ${p(params.p)} por passo · rajadas de ${dur(params.duracao)} · direção e força sorteadas`
+  if (modo === "dryden" && params.sigma !== undefined)
+    return `turbulência σ ${fmt(params.sigma, 2)} · L ${fmt(params.L, 1)} m · v_min ${fmt(params.v_min, 1)} m/s`
+  if (modo === "frente" && params.vel !== undefined)
+    return `degrau para ${fmt(params.vel, 2)} m/s · ${fmtGraus(params.azimute)} · ${fmtGraus(params.elevacao)}`
+  if (modo === "rajada_agora" && params.u !== undefined)
+    return `rajada de ${fmt(params.u, 2)} m/s${params.duracao !== undefined ? ` por ${dur(params.duracao)}` : ""}`
+  if (Object.keys(params).length === 0)
+    return `${ROTULOS_MODO_ESTADO.parado} · sem parâmetros em vigor — escolhe um modo para os aplicar`
+  return fmtParams(params) // fallback cru (params que o painel não conhece): nunca se escondem
+}
 
 interface LinhaSliderProps {
   id: string
@@ -254,6 +365,12 @@ interface DinamicoProps {
   dinamico: VentoDinamico
   /** Modo que a TELEMETRIA reporta na última linha (é o que a física está a fazer). */
   modoTelemetria: ModoVentoDinamico
+  /**
+   * Vento REAL agora, para a faixa de estado distinguir «armado» de «a bater» (achados 1+2 da avaliação
+   * de UX): `total` = ‖vento_vec‖ da telemetria (`null` sem telemetria — nunca se inventa rajada),
+   * `base` = o vento base comandado e `modo` = o `vento_modo` real. Preenchido pelo `ControlosVento`.
+   */
+  ventoAgora: { total: number | null; base: number; modo: string }
   ligado: boolean
   fase: FaseVento
   emCurso: AlvoDinamico | null
@@ -273,13 +390,13 @@ interface DinamicoProps {
 }
 
 /**
- * Sub-painel do vento dinâmico (ronda 10): um modo CONTÍNUO (rajadas, rajadas aleatórias ou turbulência
- * Dryden), dois instantâneos (RAJADA AGORA, FRENTE AGORA) e o reset `{"modo":"nenhum","ativo":false}`.
+ * Sub-painel do vento dinâmico (ronda 10): um modo CONTÍNUO (RAJADAS, ALEATÓRIA ou DRYDEN), dois instantâneos (RAJADA AGORA, FRENTE AGORA) e o reset `{"modo":"nenhum","ativo":false}`.
  * Com um modo contínuo ativo, editar os params reenvia-os (live-apply com debounce, sem reiniciar nada).
  */
 function Dinamico({
   dinamico,
   modoTelemetria,
+  ventoAgora,
   ligado,
   fase,
   emCurso,
@@ -323,6 +440,26 @@ function Dinamico({
   const frenteAtiva = dinamico.ativo && dinamico.modo === "frente"
   const ocupado = emCurso !== null
   const desativado = !ligado || ocupado
+
+  // FAIXA DE ESTADO (avaliação `pesquisas/ux-rajadas-avaliacao.json`, achados 1+2): o estado vem SEMPRE
+  // da física — `modoTelemetria` (o `vento_modo` real) e o desvio do vento real face ao base. Sem
+  // telemetria (`total === null`) não há intensidade a mostrar e a rajada só se afirma se a telemetria
+  // disser `rajada_agora`: nunca se inventa uma rajada que a física não tem.
+  const intensidade =
+    ventoAgora.total === null
+      ? 0
+      : intensidadeRajada(ventoAgora.total, ventoAgora.base)
+  const faixa = estadoFaixa({
+    modoContinuo,
+    modoTelemetria: modoTelemetria || ventoAgora.modo,
+    intensidade,
+  })
+  // Instantâneos em curso (comando a caminho ou já na física): é aí que o progresso da duração
+  // COMANDADA aparece (não é medição — é o que foi pedido ao servidor).
+  const rajadaInstantanea = rajadaEmCurso || emCurso === "rajada"
+  const frenteInstantanea = frenteAtiva || emCurso === "frente"
+  const duracaoRajadaS = Math.round(duracaoRajada) / PASSOS_POR_SEGUNDO
+  const ativo = modoContinuo !== "nenhum" || rajadaEmCurso || frenteAtiva
 
   const paramsRajadas = { p, duracao: Math.round(duracaoRajadas), u_max: uMax }
   // `aleatoria` só leva p e duração: a força sai de U[0, 5] m/s e a direção de [0, 360) × ±90° no env.
@@ -385,7 +522,7 @@ function Dinamico({
 
   /**
    * LIVE-APPLY dos params do modo CONTÍNUO ativo (rajadas · aleatórias · Dryden): editar um campo
-   * reenvia o modo em vigor com os valores atuais, com debounce — a física acompanha sem cliques. Só
+   * reenvia o modo ativo com os valores atuais, com debounce — a física acompanha sem cliques. Só
    * corre com um modo ativo e ligação viva (com PARADO os valores ficam guardados e vão no POST da
    * troca de modo) e nunca repete a mesma assinatura, para o eco da telemetria não gerar um ciclo.
    *
@@ -436,7 +573,7 @@ function Dinamico({
         enviarRef.current(
           { modo: modoContinuo, ativo: true, params },
           "params",
-          `${ROTULO_MODO[modoContinuo]} em curso: parâmetros aplicados (${descreverParams(modoContinuo, params)})`
+          `${ROTULOS_MODO_ESTADO[modoContinuo]} em curso: parâmetros aplicados (${descreverParams(modoContinuo, params)})`
         )
       },
       ATRASO_PARAMS_MS,
@@ -469,7 +606,7 @@ function Dinamico({
       onEnviar(
         { modo: "rajadas", ativo: true, params: paramsRajadas },
         "modo",
-        `rajadas contínuas ligadas (p=${fmt(p, 3)}, duração=${Math.round(duracaoRajadas)} passos, u_max=${fmt(uMax, 1)} m/s)`
+        `${ROTULOS_MODO_ESTADO.rajadas} ligadas (${resumoParamsDinamicos("rajadas", paramsRajadas)})`
       )
       registarEnvio("rajadas", paramsRajadas)
       return
@@ -478,7 +615,7 @@ function Dinamico({
       onEnviar(
         { modo: "aleatoria", ativo: true, params: paramsAleatoria },
         "modo",
-        `rajadas aleatórias ligadas (p=${fmt(p, 3)}, duração=${Math.round(duracaoRajadas)} passos; direção e força sorteadas a cada rajada: 0–5 m/s, 0–360°, ±90°, misturadas com o vento base pelo envelope)`
+        `${ROTULOS_MODO_ESTADO.aleatoria} ligadas (${resumoParamsDinamicos("aleatoria", paramsAleatoria)}; direção e força sorteadas a cada rajada: 0–5 m/s, 0–360°, ±90°, misturadas com o vento base pelo envelope)`
       )
       registarEnvio("aleatoria", paramsAleatoria)
       return
@@ -486,7 +623,7 @@ function Dinamico({
     onEnviar(
       { modo: "dryden", ativo: true, params: paramsDryden },
       "modo",
-      `turbulência Dryden ligada (σ=${fmt(sigma, 2)}, L=${fmt(comprimento, 1)}, v_min=${fmt(vMin, 1)} m/s)`
+      `${ROTULOS_MODO_ESTADO.dryden} ligada (${resumoParamsDinamicos("dryden", paramsDryden)})`
     )
     registarEnvio("dryden", paramsDryden)
   }
@@ -495,6 +632,9 @@ function Dinamico({
     <section
       aria-label="Vento dinâmico"
       data-testid="painel-dinamico"
+      // `data-ativo` (achado 4): styling/estado de destaque quando há dinâmica a correr — é a
+      // salvaguarda anti-esquecimento dentro do painel (o selo global na barra crítica vem depois).
+      data-ativo={ativo ? "sim" : "nao"}
       className="flex flex-col gap-3 rounded-lg border border-border/70 bg-muted/20 p-3"
     >
       <div className="flex items-center gap-1.5">
@@ -502,38 +642,144 @@ function Dinamico({
         <h4 className="text-[0.7rem] tracking-wide uppercase">
           vento dinâmico
         </h4>
+      </div>
+
+      {/*
+        FAIXA DE ESTADO (avaliação `pesquisas/ux-rajadas-avaliacao.json`, achados 1+2 = os críticos): o
+        ESTADO do sistema é a primeira coisa do painel, sticky, em linguagem de operador e com os MESMOS
+        rótulos do segmented toggle (achado 3 — léxico único). 3 estados EXAUSTIVOS:
+          · PARADO (cinza, ponto parado) — sem modo contínuo e sem instantâneo;
+          · A CORRER — <MODO> (primário, ponto pulsante) — modo ARMADO (as rajadas são sorteadas por p);
+          · RAJADA EM CURSO +X,X m/s (âmbar) — há rajada a bater AGORA (telemetria: `rajada_agora` ou
+            |‖vento_vec‖ − base| > 0,05 m/s), com o modo de origem ao lado.
+        `sticky top-0` + fundo sólido (achado 4): com o modo ativo o estado não pode passar despercebido
+        nem desaparecer com o scroll dentro do painel.
+      */}
+      <div
+        data-testid="dinamico-faixa-estado"
+        data-estado={faixa.estado}
+        data-modo={faixa.modo}
+        role="status"
+        className={`sticky top-0 z-10 -mx-3 -mt-3 flex flex-wrap items-center gap-2 rounded-t-lg border-b px-3 py-2 text-[0.85rem] font-medium ${
+          faixa.estado === "parado"
+            ? "border-border/70 bg-background text-muted-foreground"
+            : faixa.estado === "a_correr"
+              ? "border-primary/40 bg-background text-primary"
+              : "border-amber-500/50 bg-background text-amber-600 dark:text-amber-400"
+        }`}
+      >
+        <motion.span
+          aria-hidden="true"
+          className={`size-2 shrink-0 rounded-full ${
+            faixa.estado === "parado"
+              ? "bg-muted-foreground"
+              : faixa.estado === "a_correr"
+                ? "bg-primary"
+                : "bg-amber-500"
+          }`}
+          animate={
+            faixa.estado === "parado"
+              ? { opacity: 1 }
+              : faixa.estado === "a_correr"
+                ? { opacity: [1, 0.25, 1] }
+                : { scale: [1, 1.35, 1] }
+          }
+          transition={
+            faixa.estado === "parado"
+              ? { duration: 0.2 }
+              : faixa.estado === "a_correr"
+                ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" }
+                : { duration: 0.7, repeat: Infinity, ease: "easeInOut" }
+          }
+        />
+        <span data-testid="dinamico-faixa-texto">
+          {faixa.estado === "parado"
+            ? ROTULOS_MODO_ESTADO.parado
+            : faixa.estado === "a_correr"
+              ? `A CORRER — ${faixa.modo}`
+              : ventoAgora.total === null
+                ? "RAJADA EM CURSO"
+                : `RAJADA EM CURSO +${fmt(faixa.intensidade, 1)} m/s`}
+        </span>
+        {/* O selo de modo (o antigo `estado-dinamico`) continua a existir: rótulo do modo ativo, com
+            o nome técnico só no tooltip (achado 3). */}
         <span
           data-testid="estado-dinamico"
+          title={`modo técnico: ${
+            modoTelemetria || (faixa.estado === "parado" ? "nenhum" : dinamico.modo)
+          }`}
           className={`ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[0.6rem] ${
-            dinamico.ativo
-              ? "bg-primary/10 text-primary"
-              : "bg-muted text-muted-foreground"
+            faixa.estado === "parado"
+              ? "bg-muted text-muted-foreground"
+              : faixa.estado === "a_correr"
+                ? "bg-primary/10 text-primary"
+                : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
           }`}
         >
-          <motion.span
-            aria-hidden="true"
-            className={`size-1.5 rounded-full ${dinamico.ativo ? "bg-primary" : "bg-muted-foreground"}`}
-            animate={
-              dinamico.ativo ? { opacity: [1, 0.25, 1] } : { opacity: 1 }
-            }
-            transition={
-              dinamico.ativo
-                ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" }
-                : { duration: 0.2 }
-            }
-          />
-          {dinamico.ativo ? "ativo" : "inativo"}
+          {faixa.modo}
         </span>
       </div>
 
-      <p className="text-[0.65rem] text-muted-foreground">
-        modo em vigor:{" "}
-        <span className="text-foreground">{ROTULO_MODO[dinamico.modo]}</span>
-        {dinamico.ativo ? "" : " · sem dinâmica"} · params{" "}
-        <span className="font-mono">{fmtParams(dinamico.params)}</span> · a
-        física muda no passo seguinte,{" "}
-        <span className="text-foreground">sem reiniciar o episódio</span>
-      </p>
+      {/*
+        PROGRESSO dos instantâneos (achado 1): enquanto a rajada/frente estão a bater, o painel mostra o
+        que está a acontecer e por quanto tempo — a DURAÇÃO COMANDADA (o valor pedido ao servidor,
+        `duracaoRajada` passos a 50 Hz), rotulada como tal para nunca fingir que é uma medição.
+      */}
+      {rajadaInstantanea || frenteInstantanea ? (
+        <div
+          data-testid="dinamico-progresso"
+          data-tipo={rajadaInstantanea ? "rajada" : "frente"}
+          role="status"
+          className="flex flex-col gap-1 rounded-md border border-border/70 bg-muted/30 px-2 py-1.5"
+        >
+          <div className="flex flex-wrap items-baseline gap-1.5 text-[0.75rem]">
+            <span className="font-medium">
+              {rajadaInstantanea
+                ? `RAJADA AGORA · ~${fmt(duracaoRajadaS, 1)} s`
+                : `${ROTULOS_MODO_ESTADO.frente} · degrau mantido até nova ordem`}
+            </span>
+            <span
+              className="text-[0.65rem] text-muted-foreground"
+              title={`o valor pedido ao servidor: ${Math.round(duracaoRajada)} passos de decisão a 50 Hz`}
+            >
+              duração comandada ({Math.round(duracaoRajada)} passos a 50 Hz)
+            </span>
+          </div>
+          {rajadaInstantanea ? (
+            <div
+              aria-hidden="true"
+              className="h-1 w-full overflow-hidden rounded-full bg-muted"
+            >
+              <motion.div
+                key={`${faixa.modo}-${Math.round(duracaoRajada)}`}
+                className="h-full rounded-full bg-amber-500"
+                initial={{ width: "0%" }}
+                animate={{ width: "100%" }}
+                transition={{ duration: duracaoRajadaS, ease: "linear" }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/*
+        PARAMS em 2 linhas com unidades naturais (achado 5): nada de `params {p: 0.40, ...}` em
+        monoespaço — «p 0,40 por passo · rajadas de 0,5 s (25 passos) até 3,0 m/s» e a nota única. Os
+        valores vêm do servidor tal e qual (sem arredondar para "ficar bonito": p a 2 casas e 3 quando o
+        passo de 0,005 o exige; segundos a 1 casa e 2 idem) e o cru fica no `title`.
+      */}
+      <div
+        data-testid="dinamico-params-resumo"
+        title={`params em vigor: ${fmtParams(dinamico.params)}`}
+        className="flex flex-col gap-0.5"
+      >
+        <p className="text-[0.7rem] text-muted-foreground">
+          {resumoParamsDinamicos(dinamico.modo, dinamico.params)}
+        </p>
+        <p className="text-[0.65rem] text-muted-foreground">
+          aplica-se sem reiniciar o episódio
+        </p>
+      </div>
 
       <SegmentedToggle
         value={modoContinuo}
@@ -541,10 +787,20 @@ function Dinamico({
         ariaLabel="modo dinâmico contínuo"
         className="w-full"
       >
-        <SegmentedToggleOption value="nenhum">PARADO</SegmentedToggleOption>
-        <SegmentedToggleOption value="rajadas">RAJADAS</SegmentedToggleOption>
-        <SegmentedToggleOption value="aleatoria">ALEATÓRIA</SegmentedToggleOption>
-        <SegmentedToggleOption value="dryden">DRYDEN</SegmentedToggleOption>
+        {/* Rótulos = ROTULOS_MODO_ESTADO (léxico único do painel, achado 3): os MESMOS da faixa de
+            estado; o nome técnico fica no `title`. */}
+        <SegmentedToggleOption value="nenhum">
+          {ROTULOS_MODO_ESTADO.parado}
+        </SegmentedToggleOption>
+        <SegmentedToggleOption value="rajadas">
+          {ROTULOS_MODO_ESTADO.rajadas}
+        </SegmentedToggleOption>
+        <SegmentedToggleOption value="aleatoria">
+          {ROTULOS_MODO_ESTADO.aleatoria}
+        </SegmentedToggleOption>
+        <SegmentedToggleOption value="dryden">
+          {ROTULOS_MODO_ESTADO.dryden}
+        </SegmentedToggleOption>
       </SegmentedToggle>
 
       <p className="text-[0.6rem] text-muted-foreground">
@@ -734,7 +990,7 @@ function Dinamico({
             ]
           }
           feedback={fase === "erro" && emCurso === null ? "shake" : "pop"}
-          announce={rajadaEmCurso ? "rajada em curso" : undefined}
+          announce={rajadaEmCurso ? "RAJADA EM CURSO" : undefined}
           aria-label="rajada agora"
           icon={
             emCurso === "rajada" ? (
@@ -750,7 +1006,7 @@ function Dinamico({
             ? "A ENVIAR…"
             : rajadaEmCurso
               ? "RAJADA EM CURSO"
-              : "RAJADA AGORA"}
+              : ROTULOS_MODO_ESTADO.rajada_agora}
         </MultiStateButton>
 
         <MultiStateButton
@@ -783,7 +1039,7 @@ function Dinamico({
             ]
           }
           feedback="pop"
-          announce={frenteAtiva ? "frente em vigor" : undefined}
+          announce={frenteAtiva ? "FRENTE AGORA ativa — clica para desligar" : undefined}
           aria-label="frente agora"
           icon={
             emCurso === "frente" ? (
@@ -797,9 +1053,7 @@ function Dinamico({
         >
           {emCurso === "frente"
             ? "A ENVIAR…"
-            : frenteAtiva
-              ? "FRENTE EM VIGOR"
-              : "FRENTE AGORA"}
+            : ROTULOS_MODO_ESTADO.frente}
         </MultiStateButton>
 
         <Button
@@ -904,6 +1158,14 @@ export function ControlosVento({
   // alarme vermelho. Com `loop` ligado o episódio seguinte arranca sozinho e não há marca nenhuma.
   const semReinicio = estado === "episodio_terminado" && !loop
   const selecao: CorpoVento = { vel: forca, azimute, elevacao }
+  // Vento REAL agora, para a faixa de estado do `Dinamico` distinguir «armado» de «a bater»: `total` é
+  // ‖vento_vec‖ da telemetria (`null` sem telemetria — não há rajada a inventar), `base` o vento base
+  // comandado e `modo` o `vento_modo` real. Tudo já chegava a este componente (App.tsx intacto).
+  const ventoAgora: { total: number | null; base: number; modo: string } = {
+    total: vec === null ? null : Math.hypot(vec[0], vec[1], vec[2]),
+    base: vento.vel,
+    modo: modoTelemetria,
+  }
 
   return (
     <Card
@@ -1018,6 +1280,7 @@ export function ControlosVento({
         <Dinamico
           dinamico={dinamico}
           modoTelemetria={modoTelemetria}
+          ventoAgora={ventoAgora}
           ligado={ligado}
           fase={faseDinamico}
           emCurso={emCurso}

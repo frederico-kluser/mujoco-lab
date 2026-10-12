@@ -110,6 +110,30 @@ terceira-pessoa como jogos»). O bloco manda só no ORBITAR/zoom:
     alvo:[x,y,z]}` (a 19.ª chave; `alvo` = o `lookat` REAL = drone+offset) ou `null`;
   · REPOR VISTA = enviar os valores de `CAM_PADRAO` como um comando normal (não há mecanismos extra).
 
+MÓDULO DE CÂMARA FPV (campo `"fpv"` do controlo + `lab/camera_rpi.py`) — a câmara que o DRONE vê, montada
+NA FRENTE do corpo (`<camera fpv>`, a olhar para +x) e transmitida para o site. Isto NÃO é a câmara da
+janela 3D (o bloco `camera` acima): é o MÓDULO REAL emulado — Camera Module 3/3 Wide (Sony IMX708) com os
+mesmos modos, fps, megapixels, FoV por modo, JPEG (qualidade 50 por omissão) e latência do hardware real
+(`lab/camera_rpi.py`, com as fontes). O que o runner faz:
+
+  · THREAD PRÓPRIA (`cam_rpi.correr_cadencia`): captura ao ritmo do modo ao relógio de parede (o cristal
+    do sensor corre em tempo real — a pausa e o `--fator-tempo` não o mudam) e renderiza a cena ATUAL;
+  · o ESTADO chega por `modulo.apontar(env.data)` a cada passo de decisão (cópia de µs, feita na thread
+    do simulador — a thread da câmara nunca toca no `MjData` a correr);
+  · cada quadro só fica disponível `latencia_modelada()` ms depois da captura (a latência REAL do
+    pipeline sensor→site, reproduzida; ver `lab/camera_rpi.latencia_modelada`) e é escrito
+    ATOMICAMENTE em `out/fpv/quadro.jpg` (só o ÚLTIMO quadro, como o buffer do exemplo web-streaming do
+    picamera2) com o estado em `out/fpv/estado.json` — é daí que o `sim_site.py` serve o stream MJPEG;
+  · controlo no ficheiro: `"fpv": {"ligada": bool, "modo": str, "seq": int}` — bloco COMPLETO (`ligada`
+    e `modo`, como a `camera`), `seq` do servidor, aplicado 1x por mudança de assinatura; `modo` é um id
+    da tabela real de modos (ex. `1080p50`); um modo sem emulação (o HDR) é recusado com aviso e o modo
+    em vigor fica;
+  · telemetria: chave ADITIVA `"fpv"` = {ligada, modo, saida, fps_nominal, fps_medido, bytes_medio,
+    bitrate_mbps, quadros, latencia_ms, cpu_nucleos (modelo Pi 5), host_ms (medido NESTA máquina)} —
+    honesta: os números medidos e os de modelo nunca se misturam;
+  · SEM o módulo (modelo sem câmara `fpv`, `--sem-fpv`) tudo isto é ignorado sem erro e a telemetria
+    publica `"fpv": null` — nunca se inventa uma câmara.
+
 SEM REINÍCIO POR OMISSÃO (pedido do dono, 2026-10-09): `loop` nasce DESLIGADO, por isso um arranque sem
 `--com-loop` corre SEM REINÍCIO — no fim do episódio a física continua a integrar (`env.step` a 50 Hz) no
 estado em que ficou, para sempre (se caiu, fica onde a física o deixou; se pairava, continua a pairar), com a
@@ -155,8 +179,9 @@ sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 
 # Ordem intencional (por isso o I001 fica desligado nesta linha): o `mjkit` define MUJOCO_GL=egl ANTES de
 # `import mujoco`. O viewer (GLFW) não depende disso — ver o cabeçalho do `lab/mjkit.py`.
-from lab import mjkit  # noqa: F401, I001
+from lab import mjkit  # noqa: I001
 from lab import crazyflie as cf
+from lab import camera_rpi as cam_rpi
 from env import VOO_TECLAS, HoverEnv
 from env_real import OBS_ATOR_DIM, OBS_ATOR_DIM_COMANDO, DroneRealEnv
 
@@ -210,6 +235,14 @@ CAM_CORPO = "cf2"                # nome do corpo do drone no cf2.xml (acesso por
 PASTA_BATERIA = _AQUI / "out" / "bateria"   # estado PERSISTENTE de cada pack (desgaste + carga) — planta real
 ACOES_BATERIA = ("recarregar", "nova")      # comando `bateria` do controlo: fecha o ciclo / troca de pack
 CAM_OFFSET = (0.0, 0.0, 0.0)     # m — SOMADO elemento a elemento a body(CAM_CORPO).xpos (frame MUNDO)
+# MÓDULO DE CÂMARA FPV (`lab/camera_rpi`): pasta do stream (o `sim_site.py` serve-a) e nomes dos
+# ficheiros — `quadro.jpg` é SEMPRE o último quadro já disponível (com a latência do modelo cumprida),
+# escrito atomicamente; `estado.json` é o estado completo do módulo (configuração + medições).
+FPV_OMISSAO = _AQUI / "out" / "fpv"
+FPV_QUADRO, FPV_ESTADO = "quadro.jpg", "estado.json"
+# O SEGUNDO módulo (fonte `simulacao`: a vista 3ª-pessoa da simulação) partilha a pasta e o
+# padrão atómico do FPV — mesmo módulo emulado, mesma cadência/latência, só a FONTE muda.
+FPV_QUADRO_SIM, FPV_ESTADO_SIM = "quadro_sim.jpg", "estado_sim.json"
 
 
 # ---------------------------------------------------------------------------------------------- controlo
@@ -253,6 +286,25 @@ class Camera:
 
 
 @dataclass
+class Fpv:
+    """Bloco `"fpv"` do controlo: `{ligada, modo, seq}` — o MÓDULO DE CÂMARA de bordo (CSI → Raspberry).
+
+    Não confundir com o bloco `camera` (a vista da janela 3D): este comanda o MÓDULO REAL emulado
+    (`lab/camera_rpi`) — a alimentação/streaming (`ligada`, como um módulo desligado) e o MODO (um id da
+    tabela real de modos do IMX708). `seq` é do SERVIDOR, incrementado a cada comando, e entra na
+    assinatura: o runner aplica o bloco UMA VEZ por mudança de assinatura (como a `camera`).
+    """
+
+    ligada: bool = True
+    modo: str = cam_rpi.OMISSAO_MODO
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        """Assinatura estável do bloco (`seq` + valores): só uma MUDANÇA dela (re)aplica o módulo."""
+        return json.dumps({"ligada": self.ligada, "modo": self.modo, "seq": self.seq}, sort_keys=True)
+
+
+@dataclass
 class Voo:
     """Bloco `"voo"` do controlo (contrato r11): `{ativo, teclas, seq}` — o CONTROLE DE VOO do site.
 
@@ -284,6 +336,7 @@ class Registo:
     loop: bool | None = None         # None = campo ausente: não mexe no modo
     dinamico: Dinamico | None = None  # None = campo ausente: não mexe no vento dinâmico
     camera: Camera | None = None     # None = campo ausente: não mexe na câmara
+    fpv: Fpv | None = None           # None = campo ausente: não mexe no módulo de câmara FPV
     voo: "Voo | None" = None         # None = campo ausente: não mexe no controle de voo
 
 
@@ -377,13 +430,13 @@ def _ler_dinamico(bruto) -> Dinamico | None:
     if bruto is None:
         return None
     if not isinstance(bruto, dict):
-        raise ValueError("`dinamico` tem de ser um objeto JSON {modo, params, ativo}")  # noqa: TRY004
+        raise ValueError("`dinamico` tem de ser um objeto JSON {modo, params, ativo}")
     modo = bruto.get("modo", "nenhum")
     if modo not in MODOS_DINAMICOS:
         raise ValueError(f"`dinamico.modo` tem de ser um de {MODOS_DINAMICOS} (recebido {modo!r})")
     params = bruto.get("params") or {}
     if not isinstance(params, dict):
-        raise ValueError("`dinamico.params` tem de ser um objeto JSON")  # noqa: TRY004
+        raise ValueError("`dinamico.params` tem de ser um objeto JSON")
     ativo = _booleano(bruto, "ativo")
     seq = bruto.get("seq")
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int)):
@@ -410,7 +463,7 @@ def _ler_camera(bruto) -> Camera | None:
     if bruto is None:
         return None
     if not isinstance(bruto, dict):
-        raise ValueError("`camera` tem de ser um objeto JSON {azimute, elevacao, distancia}")  # noqa: TRY004
+        raise ValueError("`camera` tem de ser um objeto JSON {azimute, elevacao, distancia}")
     faltam = [campo for campo in ("azimute", "elevacao", "distancia") if campo not in bruto]
     if faltam:
         raise ValueError(f"`camera` tem de trazer os campos {sorted(faltam)} (bloco completo)")
@@ -428,6 +481,36 @@ def _ler_camera(bruto) -> Camera | None:
     return Camera(azimute, elevacao, distancia, seq)
 
 
+def _ler_fpv(bruto) -> Fpv | None:
+    """`"fpv"` do controlo → `Fpv` validado (`None` se o campo não vier).
+
+    Bloco COMPLETO como a `camera`: `ligada` (booleano) e `modo` (id de `cam_rpi.MODOS`) são obrigatórios
+    e `seq` inteiro ≥ 0 opcional (entra na assinatura). Chaves DESCONHECIDAS ignoram-se em silêncio (um
+    ficheiro velho não rebenta); um modo que exista no hardware mas não seja emulado (o HDR) ou um id
+    desconhecido → `ValueError` (o modo em vigor fica, como nas outras validações).
+    """
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`fpv` tem de ser um objeto JSON {ligada, modo}")
+    faltam = [campo for campo in ("ligada", "modo") if campo not in bruto]
+    if faltam:
+        raise ValueError(f"`fpv` tem de trazer os campos {sorted(faltam)} (bloco completo)")
+    ligada = _booleano(bruto, "ligada")
+    if ligada is None:
+        raise ValueError(f"`fpv.ligada` tem de ser booleano (recebido {bruto.get('ligada')!r})")
+    modo = bruto.get("modo")
+    if not isinstance(modo, str) or modo not in cam_rpi.MODOS:
+        raise ValueError(f"`fpv.modo` tem de ser um dos {sorted(cam_rpi.MODOS)} (recebido {modo!r})")
+    if not cam_rpi.MODOS[modo].emulado:
+        raise ValueError(f"`fpv.modo` {modo!r} existe no hardware mas NÃO é emulado "
+                         f"({cam_rpi.MODOS[modo].nota})")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`fpv.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return Fpv(bool(ligada), modo, seq)
+
+
 def _ler_voo(bruto) -> Voo | None:
     """`"voo"` do controlo → `Voo` validado (`None` se o campo não vier) — contrato r11.
 
@@ -439,7 +522,7 @@ def _ler_voo(bruto) -> Voo | None:
     if bruto is None:
         return None
     if not isinstance(bruto, dict):
-        raise ValueError("`voo` tem de ser um objeto JSON {ativo, teclas}")  # noqa: TRY004
+        raise ValueError("`voo` tem de ser um objeto JSON {ativo, teclas}")
     teclas_bruto = bruto.get("teclas") or {}
     if not isinstance(teclas_bruto, dict):
         raise ValueError("`voo.teclas` tem de ser um objeto JSON {w,a,s,d,q,e}")
@@ -470,7 +553,7 @@ def ler_registo(dados) -> Registo:
     das faixas é `ValueError` e o vento anterior fica em vigor.
     """
     if not isinstance(dados, dict):
-        raise ValueError("o ficheiro não é um objeto JSON")  # noqa: TRY004  (conteúdo, não um tipo errado)
+        raise ValueError("o ficheiro não é um objeto JSON")
     vel = _numero(dados, "vel", 0.0)
     if not 0.0 <= vel <= VEL_MAX:
         raise ValueError(f"`vel` tem de estar em [0, {VEL_MAX}] m/s (recebido {vel!r})")
@@ -484,7 +567,8 @@ def ler_registo(dados) -> Registo:
         reiniciar = int(reiniciar)
     return Registo(vel, azimute, elevacao, True if ativo is None else ativo, reiniciar,
                    _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")),
-                   _ler_camera(dados.get("camera")), _ler_voo(dados.get("voo")))
+                   _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
+                   _ler_voo(dados.get("voo")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -617,6 +701,14 @@ class Controlo:
         self.voo: Voo | None = None             # último bloco `voo` APLICADO (controle de voo, contrato r11)
         self._assinatura_voo: str | None = None
         self.n_voos = 0                         # aplicações de controle de voo (contador de auditoria)
+        self.modulo_fpv = None                  # `ModuloCamera` da FONTE `camera` (o de bordo); None: ignora
+        self.escrever_estado_fpv = None         # grava o `estado.json` do stream (ver `ligar_fpv`)
+        self.alvo_simulacao: dict | None = None  # {"alvo": [x,y,z]} do seguimento (thread do simulador)
+        self.modulo_simulacao = None            # `ModuloCamera` da FONTE `simulacao` (vista da simulação)
+        self.escrever_estado_simulacao = None   # grava o `estado_sim.json` (ver `ligar_fpv`)
+        self.fpv: Fpv | None = None             # último bloco `fpv` APLICADO (módulo de câmara de bordo)
+        self._assinatura_fpv: str | None = None
+        self.n_fpvs = 0                         # aplicações do módulo FPV (contador de auditoria)
         self._assinatura: tuple[int, int] | None = None
         self._avisos: set[str] = set()
         self.bateria_seq: int | None = None     # `seq` do último comando de bateria visto (linha de base)
@@ -642,6 +734,36 @@ class Controlo:
         publica `"camera": null`, que é a verdade.
         """
         self.cam = cam
+
+    def ligar_fpv(self, modulo, escrever_estado=None, simulacao=None,
+                  escrever_estado_simulacao=None) -> None:
+        """Liga os MÓDULOS DE CÂMARA (`lab/camera_rpi.ModuloCamera`; `None` = sem módulo).
+
+        São DOIS, e o bloco `fpv` do controlo manda nos DOIS (mesmo modo, mesma ligagem — é o mesmo
+        módulo emulado, só a FONTE da imagem muda): `modulo` é a fonte `camera` (o módulo de bordo, com
+        custo de Pi 5) e `simulacao` a fonte `simulacao` (a vista 3ª-pessoa, sem custo de Pi). Sem
+        módulos (modelo sem câmara, `--sem-fpv`) o bloco nunca é aplicado — e a telemetria publica
+        `"fpv": null` e `"simulacao": null`, que é a verdade.
+        `escrever_estado`/`escrever_estado_simulacao` (opcionais) gravam o `estado*.json` do stream
+        correspondente — chamados a cada aplicação do bloco, porque uma MUDANÇA de estado (ex. desligar)
+        não produz quadros novos e o estado ficaria velho.
+        """
+        self.modulo_fpv = modulo
+        self.escrever_estado_fpv = escrever_estado
+        self.modulo_simulacao = simulacao
+        self.escrever_estado_simulacao = escrever_estado_simulacao
+
+    def camera_em_vigor(self) -> dict:
+        """`{azimute, elevacao, distancia}` do bloco `camera` em vigor (contrato v2) ou `CAM_PADRAO`.
+
+        É o que a vista da SIMULAÇÃO (fonte `simulacao`) usa para orbitar/zoomar: assim o widget de
+        câmara do site comanda a vista da simulação mesmo SEM viewer (`--sem-janela` — é para isso que
+        serve «fazer tudo pelo site»). Não confundir com `self.camera` (o último bloco APLICADO ao
+        `viewer.cam`, que só existe com janela); aqui lê-se o REGISTO em vigor, que existe sempre.
+        """
+        registo = self.ultimo
+        bloco = registo.camera if registo is not None else None
+        return bloco.valores() if bloco is not None else dict(CAM_PADRAO)
 
     def aplicar_padrao(self) -> None:
         """Aplica `CAM_PADRAO` (orbitar/zoom) ao `viewer.cam` (o default EXPLÍCITO do arranque) e conta-o.
@@ -735,6 +857,7 @@ class Controlo:
         self._aplica_base(env, registo)
         self._aplica_dinamico(env, registo.dinamico)
         self._aplica_camera(registo)                     # apresentação: 1x por mudança de assinatura
+        self._aplica_fpv(registo)                        # módulo de câmara FPV: 1x por mudança de assinatura
         self._aplica_voo(env, registo.voo)               # controle de voo: estado das teclas (contrato r11)
         self.n_ventos += 1                               # o controlo está APLICADO (contador de auditoria)
         print(f"[sim] vento -> {registo.vel:.2f} m/s @ {registo.azimute:.1f} deg"
@@ -829,6 +952,39 @@ class Controlo:
         self.n_cameras += 1
         print(f"[sim] camera (3a pessoa) -> az {bloco.azimute:.1f} deg, elev {bloco.elevacao:.1f} deg, "
               f"distancia {bloco.distancia:.2f} m (seq {bloco.seq}) — alvo segue o drone", flush=True)
+
+    def _aplica_fpv(self, registo: Registo) -> None:
+        """Aplica o bloco `fpv` ao MÓDULO DE CÂMARA (ligar/desligar + modo) 1x por mudança de assinatura.
+
+        Reescrever o ficheiro com o MESMO bloco (ex. uma mudança de vento que reescreva tudo) não toca no
+        módulo; um `seq` novo com os mesmos valores RE-APLICA (contrato do servidor). Sem módulo
+        (`ligar_fpv(None)`) ignora sem erro — a telemetria publica `"fpv": null` e nada se inventa. Um erro
+        de aplicação (ex. modo recusado pelo módulo) não mata o ciclo: aviso e o estado em vigor fica.
+        """
+        bloco = registo.fpv
+        alvos = [(self.modulo_fpv, self.escrever_estado_fpv),
+                 (self.modulo_simulacao, self.escrever_estado_simulacao)]
+        if bloco is None or all(modulo is None for modulo, _ in alvos):
+            return
+        assinatura = bloco.assinatura()
+        if assinatura == self._assinatura_fpv:
+            return
+        self._assinatura_fpv = assinatura
+        try:
+            estados = [modulo.ligar(bloco.ligada, bloco.modo) for modulo, _ in alvos
+                       if modulo is not None]     # o bloco manda nos DOIS (mesmo módulo emulado)
+        except ValueError as erro:
+            self._aviso(f"bloco `fpv` não aplicado ({erro}) — os módulos ficam como estavam")
+            return
+        estado = estados[0]
+        self.fpv = bloco
+        self.n_fpvs += 1
+        for _, escrever in alvos:
+            if escrever is not None:
+                escrever()                            # estado novo SEM quadro por vir (ex. desligado)
+        print(f"[sim] fpv ({estado['modulo']}) -> {'ligada' if bloco.ligada else 'DESLIGADA'} · "
+              f"modo {bloco.modo} ({estado['saida'][0]}x{estado['saida'][1]} @ {estado['fps_nominal']:g} fps"
+              f", seq {bloco.seq})", flush=True)
 
     def _aplica_voo(self, env: HoverEnv, voo: Voo | None) -> None:
         """Aplica o bloco `voo` (contrato r11) em `env.definir_comando_teclas` — ESTADO, 1x por mudança.
@@ -1210,6 +1366,19 @@ def aplicar_camera(cam, valores: dict) -> None:
     cam.distance = float(valores["distancia"])
 
 
+def alvo_do_drone(data) -> list[float]:
+    """`body(CAM_CORPO).xpos + CAM_OFFSET` — o ALVO do seguimento 3ª-pessoa, sem precisar de viewer.
+
+    É a MESMA fórmula do `seguir_drone` (o alvo é sempre o drone, no mesmo referencial e sem lag) —
+    aqui para quem precisa do alvo SEM viewer: a vista da SIMULAÇÃO (fonte `simulacao` do módulo de
+    câmara) consome-a a cada captura. Leitura feita na thread do simulador; quem consome recebe uma
+    lista nova. A escrita de texto é propositalmente própria (as mutações do `teste_camera.py` §4
+    cortam linhas do `seguir_drone`; partilhar o texto arrastava a vista da simulação para o corte).
+    """
+    xpos = data.body(CAM_CORPO).xpos
+    return [float(xpos[i]) + float(CAM_OFFSET[i]) for i in range(3)]
+
+
 def seguir_drone(cam, data) -> list[float] | None:
     """`cam.lookat = data.body(CAM_CORPO).xpos + CAM_OFFSET` — ALVO SEMPRE NO DRONE, a cada frame.
 
@@ -1245,6 +1414,27 @@ def camera_real(cam) -> dict | None:
     return {"azimute": round(float(cam.azimuth), PRECISAO), "elevacao": round(float(cam.elevation), PRECISAO),
             "distancia": round(float(cam.distance), PRECISAO),
             "alvo": [round(float(alvo[i]), PRECISAO) for i in range(3)]}
+
+
+def fpv_amostra(modulo) -> dict | None:
+    """Chave aditiva `"fpv"`/`"simulacao"` da telemetria: o essencial do módulo (ou `null` sem módulo).
+
+    Serve para os DOIS módulos — mesma forma compacta e estável nos dois: o estado do módulo, o modo, a
+    saída, a taxa NOMINAL e a MEDIDA, os bytes/bitrate reais e os custos. `cpu_nucleos` é o MODELO do
+    Pi 5 e `host_ms` o MEDIDO nesta máquina, sempre separados — e na fonte `simulacao` (a vista da
+    simulação, que NÃO é hardware de bordo) `cpu_nucleos` vem `null`: não há custo de Pi para uma vista
+    do simulador, só o `host_ms` medido. A configuração completa (com as fontes e as etapas do custo)
+    fica em `out/fpv/estado*.json` e na API — nunca numa linha de telemetria.
+    """
+    if modulo is None:
+        return None
+    e = modulo.estado()
+    return {"ligada": e["ligada"], "modo": e["modo"], "saida": e["saida"],
+            "fps_nominal": e["fps_nominal"], "fps_medido": e["fps_medido"],
+            "bytes_medio": e["bytes_medio"], "bitrate_mbps": e["bitrate_mbps"],
+            "quadros": e["quadros"],
+            "latencia_ms": ((e.get("latencia_modelada_ms") or {}).get("total_ms")),
+            "cpu_nucleos": (e["custo_pi5"] or {}).get("total_nucleos"), "host_ms": e["host_ms"]["total"]}
 
 
 def _vetor_vento(vel: float, azimute_graus: float, elevacao_graus: float) -> np.ndarray:
@@ -1312,7 +1502,101 @@ class Estado:
     info: dict | None = None
 
 
-def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None = None) -> dict:
+
+# ------------------------------------------------------------------ mecanismo multi-IA (multi_ia.py)
+def multi_ia_amostra(politica) -> dict | None:
+    """Estado do orquestrador multi-IA para a telemetria (chave `"multi_ia"`) — `None` sem cascata."""
+    return politica.estado_multi_ia() if hasattr(politica, "estado_multi_ia") else None
+
+
+class PoliticaCascata:
+    """Adapta a cascata multi-IA à interface `predict(obs, deterministic)` que o runner usa.
+
+    É assim que os DOIS ciclos (`correr` e `correr_com_janela`) correm a cascata sem qualquer outra
+    alteração: a cascata decide o que fazer (IA-2 «seguimento» a 25 Hz → `v_ref`; IA-1 «voo» a 50 Hz →
+    ação) e devolve a AÇÃO. `.policy` e `.observation_space` são os do PPO de baixo (a `Sonda` e o
+    `ambiente_para` continuam a ver a política real). COMPORTAMENTO GARANTIDO: sem IA-2 (ou com ela
+    neutra) as ações são IDÊNTICAS às da IA-1 sozinha — provado no `teste_multi_ia.py` §1.
+    """
+
+    def __init__(self, cascata, politica_base):
+        self.cascata = cascata
+        self.politica = politica_base
+        self.policy = getattr(politica_base, "policy", politica_base)
+        self.observation_space = getattr(politica_base, "observation_space", None)
+        self.action_space = getattr(politica_base, "action_space", None)
+
+    def predict(self, obs, deterministic: bool = True):
+        acao = self.cascata.passo(time.perf_counter(), obs, deterministico=bool(deterministic))
+        return np.asarray(acao, dtype=float).reshape(-1), None
+
+    def estado_multi_ia(self) -> dict:
+        return self.cascata.estado()
+
+
+def descobrir_seguimento(out: Path) -> Path | None:
+    """Auto-descoberta da IA-2 «seguimento»: `out/real_1950_seguimento_final/final.zip` (o PROMOVIDO).
+
+    Só na ausência dele cai no mais recente de `real_1950_seguimento_*/final.zip`. Por que não só mtime:
+    os runs de treino (`_s0`, `_s1`) ficam candidatos e um `touch` tardio promoveria silenciosamente a
+    política péssima (medido: seed 1 com FOV 5 % em círculos) — a promoção é uma DECISÃO, não um mtime.
+    """
+    promovido = out / "real_1950_seguimento_final" / "final.zip"
+    if promovido.is_file():
+        return promovido
+    candidatos = sorted(out.glob("real_1950_seguimento_*/final.zip"),
+                        key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    return candidatos[0] if candidatos else None
+
+
+def montar_multi_ia(args, politica, env, caminho_seg=None):
+    """A cascata multi-IA: IA-1 = a política em uso; IA-2 = `--seguimento-model` ou a auto-descoberta.
+
+    Sem IA-2 o mecanismo corre MESMO ASSIM (estado honesto `sem_politica` na telemetria/site e o
+    `v_ref` do WASDQE segue — a regra do watchdog). Só se embrulha a política quando ela existe.
+    A obs da IA-2 vem do BUILDER DO TREINO (`ObservacaoSeguimento` → `env_seguimento._observacao`) e a
+    ação vira `v_ref` com a ESCALA DO TREINO (`definir_acao`: a·(1,1,0,7), envelope r11).
+    """
+    try:
+        from multi_ia import (
+            IA,
+            TAXA_IA_SEGUIMENTO_HZ,
+            TAXA_IA_VOO_HZ,
+            CascataMultiIA,
+            ObservacaoSeguimento,
+            configurar_escalas_v_ref,
+        )
+    except (ImportError, ModuleNotFoundError) as erro:
+        print(f"[sim] multi_ia indisponível ({erro}) — o runner segue com a política direta", flush=True)
+        return None
+    if politica is None:
+        return None
+    configurar_escalas_v_ref(getattr(env, "VOO_VEL", 1.0) or 1.0, getattr(env, "VOO_SUBIDA", 0.7) or 0.7)
+    ia_voo = IA(nome="voo", papel="v_ref → ação (50 Hz)", taxa_hz=TAXA_IA_VOO_HZ, politica=politica)
+    # `--sem-seguimento` é uma DECISÃO, não ausência: o fallback de auto-descoberta não a pode reverter
+    caminho_seg = (None if getattr(args, "sem_seguimento", False) else
+                   (caminho_seg or getattr(args, "seguimento_model", None)
+                    or descobrir_seguimento(Path(__file__).resolve().parent / "out")))
+    ia_seg = None
+    if caminho_seg is not None:
+        try:
+            politica_seg = carregar_politica(Path(caminho_seg))
+            obs_seg = ObservacaoSeguimento(env)          # builder do TREINO (nunca placeholder)
+            ia_seg = IA(nome="seguimento", papel="ponto na imagem → v_ref (25 Hz)",
+                        taxa_hz=TAXA_IA_SEGUIMENTO_HZ, politica=politica_seg,
+                        obs_de=obs_seg, conversor_acao=obs_seg.definir_acao)
+            print(f"[sim] multi-IA: IA-2 «seguimento» carregada de {_relativo(Path(caminho_seg))}",
+                  flush=True)
+        except (SystemExit, OSError, ValueError, RuntimeError, KeyError) as erro:
+            print(f"[sim] multi-IA: sem IA-2 «seguimento» ({erro}) — o v_ref vem do WASDQE", flush=True)
+    if ia_seg is None:
+        print("[sim] multi-IA: só a IA-1 «voo» (a estabilidade é do FC, não é IA) — o v_ref vem do "
+              "WASDQE do site", flush=True)
+    return CascataMultiIA(ia_voo=ia_voo, ia_seguimento=ia_seg)
+
+
+def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None = None,
+            fpv=None, simulacao=None, multi_ia=None) -> dict:
     """Uma linha de telemetria com as chaves (e a ordem) do contrato.
 
     `ctrl` é o comando FÍSICO que a ação produziu — `data.ctrl` = [empuxo N, mx, my, mz N·m], escrito pelo
@@ -1355,6 +1639,9 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "h1": _lista(est.h1, _tamanho(est.h1) if real else 64),
         "h2": _lista(est.h2, _tamanho(est.h2) if real else 64),
         "camera": camera_real(cam),                 # 19.ª chave: câmara REAL da janela (null sem viewer)
+        "fpv": fpv_amostra(fpv),                    # aditivo: módulo de câmara de bordo (null sem módulo)
+        "simulacao": fpv_amostra(simulacao),        # aditivo: vista 3ª-pessoa da simulação (null sem módulo)
+        "multi_ia": multi_ia,                      # aditivo: estado do mecanismo multi-IA (null sem cascata)
         "planta": "real" if real else "cf2",        # aditivo: o site escolhe os blocos/rótulos certos
         "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
         "voo": info.get("voo"),                     # aditivo: controle de voo (contrato r11; null = fora do modo)
@@ -1431,6 +1718,117 @@ def _reiniciar(env: HoverEnv, est: Estado, sonda: Sonda, seed: int, ep: int | No
         est.ep = ep
 
 
+def escrever_atomico(caminho: Path, dados: bytes) -> None:
+    """Escreve `dados` em `caminho` de forma atómica (tmp único + `os.replace`, como o controlo)."""
+    caminho = Path(caminho)
+    temporario = nome_temporario(caminho)
+    temporario.write_bytes(dados)
+    os.replace(temporario, caminho)
+
+
+def montar_fpv(env, args, controlo: Controlo):
+    """`(fpv, simulacao, parar, threads)` — os DOIS módulos de câmara; `(None, None, None, [])` sem eles.
+
+    São DOIS `lab/camera_rpi.ModuloCamera` — o MESMO módulo emulado (mesma cadência, modos, JPEG e
+    latência do hardware real), só a FONTE da imagem muda:
+
+    · `fpv` (fonte `camera`): o MÓDULO DE CÂMARA FPV de bordo, a `<camera fpv>` montada NA FRENTE do
+      drone (peça REAL do build em uso quando a planta é a real — `env.hw.camera`; no cf2 é a câmara de
+      apresentação, sem massa). Escreve `quadro.jpg` + `estado.json`;
+    · `simulacao` (fonte `simulacao`): a vista 3ª-pessoa da SIMULAÇÃO, com `camera_livre` a construir a
+      `MjvCamera` a cada captura — `lookat` no drone (a MESMA expressão do `seguir_drone`) + os ângulos
+      do bloco `camera` do controlo em vigor (ou `CAM_PADRAO`), por isso o widget de câmara do site
+      comanda a vista mesmo SEM janela. Escreve `quadro_sim.jpg` + `estado_sim.json`. NÃO é hardware de
+      bordo: sem custo de Pi 5 (o `estado()` do módulo trata disso, com `nota_fonte`).
+
+    O bloco `fpv` do controlo manda nos DOIS (mesmo modo/ligação) e `--sem-fpv` desliga OS DOIS — a
+    telemetria publica então `"fpv": null` e `"simulacao": null`, sem inventar nada.
+    """
+    if getattr(args, "sem_fpv", False):
+        return None, None, None, []
+    import mujoco  # tardio: o `mjkit` (import do topo) já pôs MUJOCO_GL=egl ANTES deste `import`
+    modulo_id = cam_rpi.OMISSAO_MODULO
+    hw = getattr(env, "hw", None)
+    if hw is not None and getattr(hw, "camera", None) is not None:
+        modulo_id = cam_rpi.modulo_da_peca(hw.camera.id)      # a peça REAL do build em uso
+    pasta = Path(getattr(args, "fpv", None) or FPV_OMISSAO)
+    pasta.mkdir(parents=True, exist_ok=True)
+    parar = threading.Event()
+    threads: list[threading.Thread] = []
+    feitos: dict = {}
+
+    # alvo do seguimento 3ª-pessoa: calculado na THREAD DO SIMULADOR (em `publica`) e consumido aqui —
+    # a thread da câmara nunca toca no `MjData` a correr (só no seu snapshot, dentro do módulo)
+    alvo_sim = {"alvo": alvo_do_drone(env.data)}
+
+    def camera_simulacao():
+        """`MjvCamera` livre 3ª-pessoa, reconstruída a cada captura (sem viewer, controlada pelo site)."""
+        cam_livre = mujoco.MjvCamera()
+        mujoco.mjv_defaultFreeCamera(env.model, cam_livre)
+        alvo = alvo_sim["alvo"]
+        for i in range(3):
+            cam_livre.lookat[i] = float(alvo[i])
+        valores = controlo.camera_em_vigor()       # azimute/elevacao/distancia do bloco `camera`
+        cam_livre.azimuth = float(valores["azimute"])
+        cam_livre.elevation = float(valores["elevacao"])
+        cam_livre.distance = float(valores["distancia"])
+        return cam_livre
+
+    def montar_um(nome: str, fonte: str, camera: str, quadro_nome: str, estado_nome: str,
+                  camera_livre=None):
+        try:
+            # `com_latencia` só para a fonte de HARDWARE (a vista da simulação não tem pipeline de Pi
+            # nenhum — entregar com a latência do modelo seria aplicar atraso de hardware onde não o há)
+            modulo = cam_rpi.ModuloCamera(env.model, camera, modo=cam_rpi.OMISSAO_MODO,
+                                          modulo=modulo_id, camera_livre=camera_livre,
+                                          com_latencia=camera_livre is None)
+        except ValueError as erro:
+            print(f"[sim] {nome} sem módulo ({erro}) — o stream fica desligado e a telemetria publica "
+                  f"\"{fonte}\": null", flush=True)
+            return None
+
+        def estado_json(quadro=None) -> bytes:
+            estado = modulo.estado()
+            estado["pasta"] = str(pasta)
+            if quadro is not None:
+                ultimo["q"] = quadro
+            q = ultimo["q"]
+            if q is not None:                        # mantém a info do último quadro entre escritas
+                estado.update({"quadro": q.seq, "largura": q.largura, "altura": q.altura,
+                               "bytes_quadro": q.bytes, "t_captura": q.t_captura,
+                               "t_disponivel": q.t_disponivel})
+            return json.dumps(estado, ensure_ascii=False).encode("utf-8")
+
+        def entregar(quadro) -> None:
+            """Último quadro disponível + estado (atómico): é daqui que o site bebe a imagem."""
+            escrever_atomico(pasta / quadro_nome, quadro.jpeg)
+            escrever_atomico(pasta / estado_nome, estado_json(quadro))
+
+        ultimo = {"q": None}
+        escrever_atomico(pasta / estado_nome, estado_json())   # estado inicial (ainda sem quadro)
+        thread = threading.Thread(target=cam_rpi.correr_cadencia,
+                                  args=(modulo, parar.is_set, entregar), daemon=True, name=nome)
+        thread.start()
+        threads.append(thread)
+        feitos[nome] = (modulo, lambda: escrever_atomico(pasta / estado_nome, estado_json()))
+        e = modulo.estado()
+        print(f"[sim] {nome}: {e['modulo']} · fonte {e['fonte']} · modo {modulo.modo} · "
+              f"{e['saida'][0]}x{e['saida'][1]} @ {e['fps_nominal']:g} fps · "
+              f"stream em {pasta / quadro_nome}", flush=True)
+        return modulo
+
+    fpv = montar_um("FPV", "fpv", "fpv", FPV_QUADRO, FPV_ESTADO)
+    simulacao = montar_um("FPV simulacao", "simulacao", "simulacao", FPV_QUADRO_SIM, FPV_ESTADO_SIM,
+                          camera_livre=camera_simulacao)
+    if fpv is None and simulacao is None:
+        return None, None, None, []
+    controlo.ligar_fpv(fpv, escrever_estado=(feitos.get("FPV") or (None, None))[1],
+                       simulacao=simulacao,
+                       escrever_estado_simulacao=(feitos.get("FPV simulacao") or (None, None))[1])
+    controlo.alvo_simulacao = alvo_sim     # atualizado pela thread do simulador (ver `publica`)
+    return fpv, simulacao, parar, threads
+
+
 def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, sonda: Sonda, args,
           viewer=None, teclas: Teclas | None = None, gestor: GestorBateria | None = None) -> int:
     """Ciclo principal (serve a janela e o modo `--sem-janela`): passos de decisão a 50 Hz com o ritmo de
@@ -1469,10 +1867,29 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     # de cada render a partir do wrench comandado — no-op se o modelo não tiver as hélices (`--sem-helices`).
     helices = cf.Helices(env.model)
 
+    # MÓDULO DE CÂMARA FPV (`lab/camera_rpi`): thread própria com a cadência do modo; o ESTADO do
+    # simulador chega por `apontar` (em `publica`, a cada passo de decisão) e os quadros saem com a
+    # latência do modelo cumprida, escritos atomicamente em `out/fpv/` (o `sim_site` serve o stream).
+    # Sem módulo (modelo sem a câmara `fpv`, `--sem-fpv`) fica tudo a `None` e a telemetria publica
+    # `"fpv": null` — nunca se inventa uma câmara.
+    modulo, modulo_sim, parar_fpv, threads_fpv = montar_fpv(env, args, controlo)
+
     def publica() -> dict:
-        """Linha de telemetria com o seguimento 3.ª-pessoa já atualizado (`camera.alvo` = drone+offset)."""
+        """Linha de telemetria com o seguimento 3.ª-pessoa já atualizado (`camera.alvo` = drone+offset).
+
+        Chamada a CADA passo de decisão (o `talvez_amostra` só decide se a ESCREVE) e em cada evento —
+        por isso é também aqui que o módulo FPV aponta o estado do simulador (50 Hz, a thread da câmara
+        captura ao seu próprio ritmo a partir daqui).
+        """
         seguir_drone(cam, env.data)
-        return amostra(env, est, cam, gestor)
+        if modulo is not None:
+            modulo.apontar(env.data)
+        if modulo_sim is not None:
+            modulo_sim.apontar(env.data)
+        if controlo.alvo_simulacao is not None:
+            controlo.alvo_simulacao["alvo"] = alvo_do_drone(env.data)  # thread do simulador: sem corrida
+        return amostra(env, est, cam, gestor, fpv=modulo, simulacao=modulo_sim,
+                       multi_ia=multi_ia_amostra(politica))
 
     telemetria.escrever(publica())                              # linha de evento do arranque
     print(f"[sim] rollout: ep 1 comecou (seed {args.seed}, vento {_vento_polar(env)[0]:.2f} m/s); "
@@ -1599,6 +2016,10 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
         if args.max_segundos and time.perf_counter() - t_ini >= args.max_segundos:
             print("[sim] --max-segundos atingido", flush=True)
             break
+    if parar_fpv is not None:                          # as threads das câmaras fecham os seus contextos GL
+        parar_fpv.set()
+        for thread_fpv in threads_fpv:
+            thread_fpv.join(timeout=2.0)
     print(f"[sim] fim: {telemetria.n_linhas} linhas de telemetria em {telemetria.caminho}", flush=True)
     return 0
 
@@ -1691,15 +2112,18 @@ def _modelo_validado(out: Path) -> tuple[Path, str] | None:
 def modelo_real_por_omissao(out: Path) -> tuple[Path, str] | None:
     """Política da PLANTA REAL (o drone do dono) — tem precedência: `out/real_*/{final,best_model}.zip` com o
     `hardware.json` ao lado (as peças com que foi treinada), o mais recente; `None` se ainda não há."""
+    # EXCLUI as políticas de SEGUIMENTO (IA-2): `real_1950_seguimento_*` são trackers (obs 17D) e nunca a
+    # política de VOO — sem esta exclusão o picker principal escolhia a IA-2 como voo e o env caía num
+    # HoverEnv sem estimador (medido em 2026-10-12: a cascata rebentava no 1.º passo)
     candidatos = [p for p in list(out.glob("real_*/final.zip")) + list(out.glob("real_*/best_model.zip"))
-                  if (p.parent / "hardware.json").is_file()]
+                  if (p.parent / "hardware.json").is_file() and "seguimento" not in p.parent.name]
     melhor = _mais_recente(p for p in candidatos if p.name == "final.zip") or _mais_recente(candidatos)
     if melhor is None:
         return None
     return melhor, f"planta REAL ({melhor.parent.name}/{melhor.name} + hardware.json)"
 
 
-def ambiente_para(politica, caminho: Path, sem_helices: bool = False):
+def ambiente_para(politica, caminho: Path, sem_helices: bool = False, com_alvo: bool = False):
     """(env, gestor) certos para a política: planta REAL se for o ator-crítico assimétrico (`_n_ator`),
     com o build/modo de ação do `hardware.json` do modelo; senão o `HoverEnv` histórico do Crazyflie.
 
@@ -1717,7 +2141,7 @@ def ambiente_para(politica, caminho: Path, sem_helices: bool = False):
         print(f"[sim] peças da política: {motivo}", flush=True)
         comando = int(getattr(politica.policy, "_n_ator", OBS_ATOR_DIM)) == OBS_ATOR_DIM_COMANDO
         env = DroneRealEnv(build=build, modo_acao=dados.get("modo_acao", "ctbr"), aleatorizar=False,
-                           comando=comando)
+                           comando=comando, com_alvo=com_alvo)   # com_alvo: ponto-alvo da IA-2
         CAM_CORPO = "drone"
         CAM_PADRAO = camera_padrao_do_modelo(env.model)
         print(f"[sim] planta real · modo comando (contrato r11): "
@@ -1871,6 +2295,17 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                    help="sai (exit 0) quando o episódio N acabar; 0 = sem limite (padrão: 0)")
     p.add_argument("--truncar-telemetria", action="store_true",
                    help="começa a telemetria do zero (por omissão o ficheiro é continuado, em modo append)")
+    p.add_argument("--sem-seguimento", action="store_true",
+                   help="desliga a IA-2 «seguimento» MESMO havendo política descoberta (o slot fica "
+                        "`sem_politica` e o v_ref vem do WASDQE)")
+    p.add_argument("--seguimento-model", type=Path, default=None, metavar="ZIP",
+                   help="política da IA-2 «seguimento» (out/real_1950_seguimento_*/final.zip; por omissão auto-descobre)")
+    p.add_argument("--fpv", type=Path, default=FPV_OMISSAO, metavar="PASTA",
+                   help="pasta do stream do módulo de câmara FPV (quadro.jpg + estado.json; por "
+                        "omissão out/fpv)")
+    p.add_argument("--sem-fpv", action="store_true",
+                   help="não monta os módulos de câmara — nem o FPV nem o da simulação (a telemetria "
+                        "publica \"fpv\": null e \"simulacao\": null)")
     return p.parse_args(argv)
 
 
@@ -1884,7 +2319,11 @@ def main(argv=None) -> int:
     if not caminho.is_file():
         raise SystemExit(f"[sim] modelo inexistente: {caminho}")
     politica = carregar_politica(caminho)
-    env, gestor = ambiente_para(politica, caminho, args.sem_helices)   # planta real ou cf2, pela política
+    # a IA-2 precisa do ponto-alvo (`com_alvo=True`) — descobre-se ANTES de criar o env
+    caminho_seg = (None if args.sem_seguimento else
+                   (args.seguimento_model or descobrir_seguimento(Path(__file__).resolve().parent / "out")))
+    env, gestor = ambiente_para(politica, caminho, args.sem_helices,
+                               com_alvo=caminho_seg is not None)   # planta real ou cf2
     # ARRANQUE AUTORITATIVO (pedido do dono, 2026-10-09): quem decide o `loop` é o CLI — `--com-loop` liga o
     # contínuo, a omissão e o `--sem-loop` arrancam SEM REINÍCIO — e o ficheiro de controlo é corrigido para
     # dizer o mesmo (o site mostra o estado verdadeiro; semântica sticky: depois só o `POST /api/loop` muda).
@@ -1898,6 +2337,9 @@ def main(argv=None) -> int:
     controlo = Controlo(args.controlo)
     telemetria = Telemetria(args.telemetria, truncar=args.truncar_telemetria)
     sonda = Sonda(politica.policy)
+    cascata = montar_multi_ia(args, politica, env, caminho_seg=caminho_seg)
+    if cascata is not None:
+        politica = PoliticaCascata(cascata, politica)   # predict() passa a correr as IAs
     modo = "--sem-janela (sem viewer)" if args.sem_janela else (
         "janela limpa (show_left_ui=False, show_right_ui=False, sem set_texts/set_figures)")
     ritmo = f"{args.fator_tempo:g}x o tempo real" if args.fator_tempo > 0 else "sem travao (o mais rapido)"

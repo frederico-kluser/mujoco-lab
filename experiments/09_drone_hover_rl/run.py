@@ -75,6 +75,7 @@ from env import (  # (ambiente em validação)
     VENTO_ELEV_MAX,
     YAW_ALVO,
     Z_TERMINA,
+    Z_TETO,
     HoverEnv,
     atitude,
     bonus_no_alvo,
@@ -364,13 +365,16 @@ def checa_recompensa(v: Validador) -> None:
     v.check("step: Δa (ação anterior = +1 → atual 0) → r == +1,0 − 0,05 (taxa de ação)",
             abs(r - 0.95) < ALVO_TOLERANCIA, f"r = {r:+.9f} · esperado +0,950000000 · ‖Δa‖ = 1")
 
+    # os limiares vêm das CONSTANTES (o teto passou de 3 m para 30 m = o céu em 2026-10-11, pedido do
+    # dono: «quero andar por um espaço maior»; o piso/capotamento mantêm-se)
     lim_t = [("z = 0,005 m (limiar) → False", termina(0.005, 0.0, 0.0), False),
              ("z = 0,0049 m → True", termina(0.0049, 0.0, 0.0), True),
-             ("z = 3,0 m (teto) → False", termina(3.0, 0.0, 0.0), False),
-             ("z = 3,001 m → True", termina(3.001, 0.0, 0.0), True),
+             (f"z = {Z_TETO:g} m (teto) → False", termina(Z_TETO, 0.0, 0.0), False),
+             (f"z = {Z_TETO + 0.001:g} m → True", termina(Z_TETO + 0.001, 0.0, 0.0), True),
              ("roll = π/2 (limiar) → False", termina(1.0, np.pi / 2, 0.0), False),
              ("roll = π/2 + 1e-6 → True", termina(1.0, np.pi / 2 + 1e-6, 0.0), True)]
-    v.check("limiares de `termina()` (mantidos do contrato v1)", all(obtido == exp for _, obtido, exp in lim_t),
+    v.check("limiares de `termina()` (constantes do contrato; teto = Z_TETO = o céu)",
+            all(obtido == exp for _, obtido, exp in lim_t),
             " · ".join(f"{nome}: {obtido}" for nome, obtido, _ in lim_t))
 
     print("  (c) terminação (o −100 entra no passo em que `terminated=True`):")
@@ -382,8 +386,8 @@ def checa_recompensa(v: Validador) -> None:
         if term:
             break
     base = recompensa_base(e_sub, (0.0, 0.0, 0.0, 0.0))   # Δa = 0 (ação constante)
-    v.check("subida a=+1 → terminated por z > 3,0 m, r = fórmula − 100",
-            term and info["z"] > 3.0 and abs(r - (base - 100.0)) < ALVO_TOLERANCIA_EXATA and abs((base - r) - 100.0) < 1e-9,
+    v.check(f"subida a=+1 → terminated por z > {Z_TETO:g} m (o céu), r = fórmula − 100",
+            term and info["z"] > Z_TETO and abs(r - (base - 100.0)) < ALVO_TOLERANCIA_EXATA and abs((base - r) - 100.0) < 1e-9,
             f"terminou no passo {k} (t={e_sub.data.time:.2f} s) com z = {info['z']:.4f} m · r = {r:.6f} · "
             f"fórmula = {base:.6f} · penalidade = {base - r:.6f}")
 
@@ -434,7 +438,7 @@ def checa_fisica(v: Validador) -> None:
         _, _, term_s, _, info_s = e.step([1.0, 0.0, 0.0, 0.0])
     v.check("a=[+1,0,0,0] → sobe (Δz > 0 em 0,5 s) e não termina antes do teto",
             info_s["z"] > 1.0 and not term_s,
-            f"Δz = {info_s['z'] - 1.0:+.4f} m em 0,5 s · z = {info_s['z']:.4f} m (teto 3,0 m) · "
+            f"Δz = {info_s['z'] - 1.0:+.4f} m em 0,5 s · z = {info_s['z']:.4f} m (teto {Z_TETO:g} m) · "
             f"a = (thrust_max−mg)/m − g = {(e.thrust_max - e.mg) / e.massa - e.gravidade:+.2f} m/s²")
 
     e.reset(seed=0)

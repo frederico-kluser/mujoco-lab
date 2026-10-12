@@ -190,6 +190,7 @@ class DroneRealEnv(HoverEnv):
     metadata = {"render_modes": []}  # noqa: RUF012
 
     def __init__(self, build: str | dict | None = None, alvo_z: float = 1.0, decimation: int = 10,
+                 com_alvo: bool = False,
                  episodio_s: float = 10.0, modo_acao: str = "ctbr", aleatorizar: bool = False,
                  flags_aero: dr.FlagsAero | None = None,
                  vento: tuple[float, float, float] | None = None,
@@ -218,7 +219,13 @@ class DroneRealEnv(HoverEnv):
         self.helices = False
         self.soc0 = float(soc0)
 
-        self.model, self.data = dr.carregar(self.hw)
+        # `com_alvo` (IA de seguimento visual): corpo MOCAP `ponto` (esfera brilhante, sem massa e sem
+        # colisão) — a física do drone não muda um átomo (mocap é cinemático, como o alvo do template
+        # `arm`); sem `com_alvo` o modelo é IDÊNTICO ao de sempre (run.py/valida_real intactos)
+        self.model, self.data = dr.carregar(self.hw, com_alvo=com_alvo)
+        self.com_alvo = bool(com_alvo)
+        self.ponto_alvo = np.array([2.0, 0.0, 1.0]) if com_alvo else None
+        self.ponto_alvo_vel = np.zeros(3)
         self.corpo = self.model.body("drone").id
         self.dt = float(self.model.opt.timestep)
         self.dt_decisao = self.dt * self.decimation
@@ -416,6 +423,14 @@ class DroneRealEnv(HoverEnv):
         else:
             self.model.opt.wind[:] = 0.0
             self._base_vento[:] = 0.0
+        if getattr(self, "com_alvo", False):
+            self.ponto_alvo = np.array([2.0, 0.0, 1.0], dtype=float)   # À FRENTE do drone (desenho do dono)
+            self.ponto_alvo_vel = np.zeros(3)
+            self.ponto_t = 0.0
+            self.definir_trajetoria_ponto(getattr(self, "ponto_modo", "parado"),
+                                          vel=getattr(self, "ponto_vel", 0.5))
+            from lab import camera_rpi as _cam
+            _cam.posicionar_ponto(self.model, self.data, self.ponto_alvo)
         self.passos = 0
         self.acao_anterior = np.zeros(4, dtype=np.float32)
         self._cmd_ativo = np.zeros(4)
@@ -484,7 +499,67 @@ class DroneRealEnv(HoverEnv):
     def aplicar_acao(self, acao):
         return self.acao_para_ctrl(acao)
 
+    # ---------------------------------------------------------------- ponto-alvo (IA de seguimento visual)
+    def definir_trajetoria_ponto(self, modo: str, vel: float = 0.5, raio: float = 1.5) -> None:
+        """Trajetória do ponto-alvo mocap: `parado` | `aleatorio` | `circulo` | `oito` (0,3–0,8 m/s).
+
+        O ponto é CENÁRIO (corpo mocap `ponto`, sem massa/colisão — como o alvo do template `arm`): move-se
+        cinemáticamente por `data.mocap_pos` e a física do drone não sente nada. `vel` fora de
+        [0.3, 0.8] m/s é CLAMPADO à banda do desenho (o dono fixou 0,3–0,8 m/s).
+        """
+        if not self.com_alvo:
+            raise RuntimeError("esta instância não foi construída com `com_alvo=True`")
+        if modo not in ("parado", "aleatorio", "circulo", "oito"):
+            raise ValueError(f"trajetória desconhecida: {modo!r}")
+        self.ponto_modo = modo
+        self.ponto_vel = float(np.clip(vel, 0.0, 0.8))
+        self.ponto_raio = float(raio)
+        self.ponto_t = 0.0
+        # o círculo/oito PARTEM da posição atual do ponto (continuidade: nada de teleports no cenário)
+        if modo == "circulo":
+            self.ponto_centro = self.ponto_alvo - np.array([self.ponto_raio, 0.0, 0.0])
+        else:
+            self.ponto_centro = self.ponto_alvo.copy()
+        self.ponto_alvo_vel = np.zeros(3)
+
+    def _ponto_passo(self) -> None:
+        """Avança o ponto-alvo (1× por `step`) e escreve o mocap — só com `com_alvo=True`."""
+        if not getattr(self, "com_alvo", False):
+            return
+        dt = self.dt_decisao
+        self.ponto_t += dt
+        modo = getattr(self, "ponto_modo", "parado")
+        pos = self.ponto_alvo
+        if modo == "parado":
+            pass
+        elif modo == "aleatorio":
+            if not hasattr(self, "_ponto_rng"):
+                self._ponto_rng = np.random.default_rng()
+            if self.ponto_t % 1.0 < dt or not np.any(self.ponto_alvo_vel):   # novo rumo ~1 s
+                ang = float(self._ponto_rng.uniform(0.0, 2 * math.pi))
+                z = float(self._ponto_rng.uniform(-0.15, 0.15))
+                v = self.ponto_vel if self.ponto_vel > 0 else 0.5
+                self.ponto_alvo_vel = np.array([v * math.cos(ang), v * math.sin(ang), v * z])
+            pos = pos + self.ponto_alvo_vel * dt
+            pos[2] = float(np.clip(pos[2], 0.6, 1.6))
+            pos[0] = float(np.clip(pos[0], -20.0, 20.0)); pos[1] = float(np.clip(pos[1], -20.0, 20.0))
+        elif modo == "circulo":
+            v = self.ponto_vel or 0.5
+            w = v / max(self.ponto_raio, 0.1)
+            pos = self.ponto_centro + self.ponto_raio * np.array(
+                [math.cos(w * self.ponto_t), math.sin(w * self.ponto_t), 0.0])
+        elif modo == "oito":
+            v = self.ponto_vel or 0.5
+            w = v / max(self.ponto_raio, 0.1)
+            a = self.ponto_raio
+            pos = self.ponto_centro + np.array(
+                [a * math.sin(w * self.ponto_t), a * math.sin(w * self.ponto_t) * math.cos(w * self.ponto_t), 0.0])
+        self.ponto_alvo = np.asarray(pos, dtype=float)
+        from lab import camera_rpi as _cam
+        _cam.posicionar_ponto(self.model, self.data, self.ponto_alvo)
+
     def step(self, acao):
+        self._ponto_passo()                       # cenário mocap antes da física (com_alvo=True)
         a = self._acao_valida(acao)
         delta_a = a - self.acao_anterior.astype(float)
         if self.comando:
@@ -552,6 +627,20 @@ class DroneRealEnv(HoverEnv):
         if self.comando:
             out.update(erro_xy=d_xy, erro_z=dz, erro_v=float(np.linalg.norm(v - self.v_ref)))
         return out
+
+    def definir_v_ref(self, vec) -> None:
+        """Comando direto de velocidade (m/s) — a interface do GUIA VISUAL (IA exterior) e do runner.
+
+        O `v_ref` é CLAMPADO ao envelope do contrato r11 (±VOO_VEL em xy, ±VOO_SUBIDA em z) ANTES de
+        entrar: a IA exterior só pode pedir o que a interior garante (armadilha 1 da pesquisa: o
+        exterior explora as falhas da interior — o saturador é sempre ativo).
+        """
+        v = np.asarray(vec, dtype=float).reshape(3)
+        self._v_ref_externo = np.array([float(np.clip(v[0], -VOO_VEL, VOO_VEL)),
+                                        float(np.clip(v[1], -VOO_VEL, VOO_VEL)),
+                                        float(np.clip(v[2], -VOO_SUBIDA, VOO_SUBIDA))])
+        self.v_ref = self._v_ref_externo.copy()
+        self.comando = True
 
     def observacao(self, d: dict | None = None) -> np.ndarray:
         """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).

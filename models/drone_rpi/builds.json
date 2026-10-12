@@ -2,8 +2,8 @@
   "ativo": "endurance_15pol_p50b",
   "builds": {
     "endurance_15pol_p50b": {
-      "descricao": "META 1 h: 15″ (T-Motor MN4004 KV300 + P15x5) em frame DIY de tubo de carbono 650 mm, 6S2P Molicel P50B (Li-ion 21700)",
-      "frame": "diy_tubo_carbono_650",
+      "descricao": "META 1 h: 15″ (T-Motor MN4004 KV300 + P15x5) em frame DIY de tubo de carbono 1950 mm (wheelbase ×3, estabilidade), 6S2P Molicel P50B (Li-ion 21700)",
+      "frame": "diy_tubo_carbono_1950",
       "motor": "tmotor_mn4004_kv300",
       "helice": "tmotor_p15x5",
       "bateria": {
@@ -36,7 +36,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "endurance_15pol_semisolido": {
       "descricao": "Igual ao endurance_15pol_p50b com o pack semi-sólido Tattu 6S 12 Ah (800 g, 266 Wh, dados só do fabricante)",
@@ -73,7 +74,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "endurance_15pol_tarot": {
       "descricao": "15″ com frame COMERCIAL Tarot 650 Sport (750 g): MN4004 KV300 + P15x5, 6S2P Molicel P50B",
@@ -110,7 +112,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "endurance_16pol_m50lt": {
       "descricao": "16″ (MN4004 KV300 + P16x5.4) no frame DIY 650 mm, 6S2P LG M50LT (célula de energia, ≤7,2 A/célula)",
@@ -147,7 +150,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "x500_13pol_p45b": {
       "descricao": "Frame comercial Holybro X500 V2 (610 g) com 13″ (MN4004 KV300 + P13x4.4), 6S2P Molicel P45B",
@@ -184,7 +188,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 45
+      "meta_autonomia_min": 45,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "compacto_12pol_mn2806": {
       "descricao": "Compacto: X500 V2 com MN2806 KV400 + P12x4, 6S1P Molicel P50B",
@@ -221,7 +226,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 25
+      "meta_autonomia_min": 25,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "lipo_15pol_mn4006_4s": {
       "descricao": "LiPo de referência: 15″ (MN4006 KV380 + P15x5) no frame DIY, Tattu G-Tech 4S 10000 mAh 25C",
@@ -258,7 +264,8 @@
       "v_brownout": 7.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 30
+      "meta_autonomia_min": 30,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "referencia_5pol": {
       "descricao": "O quad 5″ de referência do plano (2306 + 5×4.3 + LiPo 4S 1500) — só para comparação",
@@ -289,7 +296,8 @@
       "v_brownout": 6.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 5,
-      "meta_autonomia_min": 10
+      "meta_autonomia_min": 10,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "endurance_17pol_4s": {
       "descricao": "4S: 17″ (MN5006 KV450 + P17x5.8) em frame DIY 750 mm, 4S3P Molicel P50B",
@@ -326,7 +334,8 @@
       "v_brownout": 7.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "pesado_18pol_6s3p": {
       "descricao": "Pesado/carga: 18″ (MN5006 KV300 + P18x6.1) em frame DIY 750 mm, 6S3P Molicel P50B",
@@ -363,7 +372,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     },
     "independente_mn4006_mf1302": {
       "descricao": "Medição INDEPENDENTE: MN4006 KV380 + MF1302 (Tyto) no frame DIY 650 mm, 6S2P Molicel P50B",
@@ -400,7 +410,8 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60
+      "meta_autonomia_min": 60,
+      "camera": "raspberry_camera_module_3_wide"
     }
   }
 }

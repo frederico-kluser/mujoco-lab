@@ -174,7 +174,9 @@ ESCALA_GIRO = 10.0        # rad/s  → [9:12]  ω/10 rad·s⁻¹
 # ----------------------------------------------------------------------------------------- física/limites
 THRUST_MAX_REAL = 0.589   # N — datasheet CF2.1: 4 × 15 gf ≈ 0,589 N (T/W ≈ 2,2); o upstream usa 0,35 N "arbitrário"
 Z_TERMINA = 0.005         # m — "caiu": o CM em repouso fica a ≈0,0125 m, logo este limiar só apanha impactos
-Z_TETO = 3.0              # m — teto do episódio (subiu demais)
+Z_TETO = 30.0             # m — teto do episódio (subiu demais) = o CÉU da cena (pedido do
+#                            dono, 2026-10-11: «remova o limite de quanto posso movimentar»;
+#                            antes eram 3 m — a terminação por subida só apanha um voo absurdo)
 TILT_MAX = np.pi / 2      # rad — capotou
 PENALIDADE_TERMINAL = 100.0
 # faixa VÁLIDA do alvo (validada no __init__): abaixo de ALVO_Z_MIN o bónus sairia de GRAÇA — o drone em
@@ -231,9 +233,14 @@ VENTO_DINAMICO_U_MAX_PADRAO = 3.0  # m/s — teto do modo (amplitude da rajada/f
 #  integra-o; ver o docstring do módulo. Por omissão `comando=False` e NADA muda em relação ao v2b/v3-real.)
 VOO_VEL = 1.0             # m/s — velocidade horizontal comandada (WASD; diagonais normalizadas para isto)
 VOO_SUBIDA = 0.7          # m/s — velocidade vertical comandada (Q = +z, E = −z)
-VOO_Z_MIN = 0.25          # m — piso da referência de altitude (abaixo o bónus sairia de graça pousado)
-VOO_Z_MAX = 2.75          # m — teto da referência de altitude (o teto de terminação é z > 3 m)
-VOO_XY_MAX = 4.0          # m — caixa de trabalho em xy: a referência integra e satura aqui (v_ref zera na borda)
+VOO_Z_MIN = 0.25          # m — piso da referência de altitude (abaixo o bónus sairia de graça pousado);
+#                            MANTIDO (o chão é um limite REAL da cena, não uma caixa)
+VOO_Z_MAX = 25.0          # m — teto da referência de altitude (o teto de terminação é z > Z_TETO = 30 m)
+VOO_XY_MAX = 25.0         # m — limite horizontal: a ARENA (chão texturado 50×50 m = ±25 m), não uma caixa
+#                            de 4 m (pedido do dono, 2026-10-11). A referência integra e satura aqui
+#                            (v_ref zera na borda) — antes 4,0 m. O plano do MuJoCo é infinito; o limite
+#                            honesto é o da cena visível. VOO_VEL/VOO_SUBIDA NÃO mudam (semântica do
+#                            contrato, não espaço) — as políticas continuam a comandar as mesmas velocidades.
 VOO_TOL_V = 0.10          # m/s — tolerância ‖v − v_ref‖ do bónus "seguindo" (ESTRITA)
 VOO_TECLAS = ("w", "a", "s", "d", "q", "e")   # as 6 teclas do contrato (ordem canónica do bloco `voo`)
 # perfis de comando do TREINO (`comandos_aleatorios=True`): segmentos retangulares amostrados no reset
@@ -605,8 +612,11 @@ class HoverEnv(gym.Env):
         self.render_mode = render_mode          # NÃO há render: o parâmetro existe só por compatibilidade Gymnasium
         self.vento_dinamico = valida_vento_dinamico(vento_dinamico)   # dict normalizado (ou None → nada muda)
 
-        # modelo do menagerie + sensores da camada lab/ (keyframe `hover`: z=0,1 m e ctrl = peso)
-        self.model, self.data = cf.carregar(helices=helices)
+        # modelo do menagerie + sensores da camada lab/ (keyframe `hover`: z=0,1 m e ctrl = peso).
+        # `fpv=True` monta a CÂMARA FPV no nariz (apresentação: sem massa nem contacto — a câmara REAL
+        # com massa é a do drone do dono, `lab/drone_rpi/modelo.py`): sem ela o stream do módulo de
+        # câmara não existia nesta planta e o site mostrava "sem módulo" com a funcionalidade toda lá.
+        self.model, self.data = cf.carregar(helices=helices, fpv=True)
         self.helices = bool(helices)                          # só apresentação (ver `cf.Helices`)
         self.dt = float(self.model.opt.timestep)              # 0.002 s (500 Hz, RK4)
         self.dt_decisao = self.dt * self.decimation           # 0.02 s (50 Hz)
@@ -976,6 +986,7 @@ class HoverEnv(gym.Env):
         """
         if not self.comando:
             raise RuntimeError("esta instância não está em modo comando (`comando=True` no construtor)")
+        self._v_ref_externo = None            # o comando manual/das teclas limpa o direto (último vence)
         self._teclas = {tecla: bool(val) for tecla, val in zip(VOO_TECLAS, (w, a, s, d, q, e))}
         self._voo_ativo = bool(ativo)
         self._plano = []
@@ -1028,8 +1039,13 @@ class HoverEnv(gym.Env):
         self.v_ref = plano[0][1].copy()
 
     def _passo_comando(self) -> None:
-        """Avança o comando do passo de decisão que começa e integra `p_ref` (1× por `step`)."""
-        if self.comandos_aleatorios and self._plano:
+        """Avança o comando do passo de decisão que começa e integra `p_ref` (1× por `step`).
+
+        PRIORIDADE: comando DIRETO (`definir_v_ref` — o guia visual) > perfis aleatórios > teclas.
+        """
+        if getattr(self, "_v_ref_externo", None) is not None:
+            self.v_ref = self._v_ref_externo
+        elif self.comandos_aleatorios and self._plano:
             self._plano_restante -= 1
             if self._plano_restante <= 0 and self._plano_i + 1 < len(self._plano):
                 self._plano_i += 1

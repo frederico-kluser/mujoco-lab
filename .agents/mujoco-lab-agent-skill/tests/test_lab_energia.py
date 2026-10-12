@@ -81,9 +81,10 @@ def test_retrocompatibilidade_posicional(nome):
     assinatura = inspect.signature(_lab(nome).carregar)
     esperado = ["cena", "sensores", "keyframe"] + (["momentos"] if nome == "crazyflie" else []) + ["energia"]
     # Os parâmetros ANTIGOS mantêm nome, ordem e predefinição; params novos só podem entrar NO FIM
-    # (`crazyflie` ganhou `helices` em 2026-10-09 — animação visual, desligada por omissão).
+    # (`crazyflie` ganhou `helices` em 2026-10-09 — animação visual — e `fpv` em 2026-10-11 — a câmara
+    # FPV montada no nariz; os dois desligados por omissão).
     assert list(assinatura.parameters)[: len(esperado)] == esperado
-    assert list(assinatura.parameters)[len(esperado):] == (["helices"] if nome == "crazyflie" else [])
+    assert list(assinatura.parameters)[len(esperado):] == (["helices", "fpv"] if nome == "crazyflie" else [])
     assert assinatura.parameters["energia"].default is True
     for extra in list(assinatura.parameters)[len(esperado):]:
         assert assinatura.parameters[extra].default is False

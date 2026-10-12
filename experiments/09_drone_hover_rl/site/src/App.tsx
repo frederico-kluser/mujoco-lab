@@ -31,6 +31,7 @@ import {
 } from "@/components/sim/seccoes"
 import { Cabecalho } from "@/components/sim/cabecalho"
 import { ControlosCamera } from "@/components/sim/camera"
+import { ROTULOS_MODO_ESTADO } from "@/components/sim/controlos"
 import { ControloVoo } from "@/components/sim/controlo-voo"
 import { Curvas, ValoresAtuais } from "@/components/sim/curvas"
 import {
@@ -39,6 +40,7 @@ import {
   type AlvoDinamico,
   type FaseVento,
 } from "@/components/sim/controlos"
+import { PainelFpv } from "@/components/sim/fpv"
 import { PainelAct, TabelaObs } from "@/components/sim/observacoes"
 import { PilhaAvisos, useAvisos } from "@/components/sim/avisos"
 import { IndicadorBateria, PainelBateria } from "@/components/sim/bateria"
@@ -68,6 +70,7 @@ import {
   modoAcaoReal,
   plantaEmVigor,
   type CorpoCamera,
+  type CorpoFpv,
   type CorpoVento,
   type CorpoVentoDinamico,
   type Hardware,
@@ -319,6 +322,16 @@ export function App() {
   )
 
   /**
+   * `POST /api/fpv` (módulo de câmara FPV) — LIGAR/DESLIGAR e seletor de modo do bloco «Câmara FPV»;
+   * aqui só se passa pela fila de escritas do `use-sim`, que relê o `/api/sim` para o ecrã adotar o
+   * estado confirmado. As rejeições viram aviso no próprio bloco (padrão do `camera.tsx`).
+   */
+  const enviarFpv = useCallback(
+    (corpo: CorpoFpv) => sim.aplicarFpv(corpo),
+    [sim]
+  )
+
+  /**
    * `POST /api/bateria` (planta real) — RECARREGAR/PACK NOVO do bloco «Bateria». O estado do pedido e os
    * avisos vivem no próprio bloco; aqui só se passa pela fila de escritas do `use-sim`.
    */
@@ -465,9 +478,29 @@ export function App() {
             erro={sim.erro}
             fim={ultima?.fim ?? null}
             indicador={
-              real ? (
-                <IndicadorBateria bateria={sim.ultima?.bateria ?? null} />
-              ) : undefined
+              <>
+                {real ? (
+                  <IndicadorBateria bateria={sim.ultima?.bateria ?? null} />
+                ) : null}
+                {/* SALVAGUARDA anti-esquecimento (avaliação ux-rajadas, achado 4): com vento dinâmico
+                    ATIVO o selo vive na barra crítica — sempre visível, em qualquer secção — e um
+                    clique salta para o painel. Sem dinâmica não há selo nenhum (não polui). */}
+                {sim.ventoDinamico.ativo ? (
+                  <button
+                    type="button"
+                    data-testid="selo-rajadas-ativas"
+                    data-modo={sim.ventoDinamico.modo}
+                    onClick={() => escolher("vento")}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-[0.7rem] font-medium text-destructive hover:bg-destructive/20"
+                    title="vento dinâmico ATIVO — clique para abrir o painel (PARAR fica lá)"
+                  >
+                    <span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-destructive" />
+                    {ROTULOS_MODO_ESTADO[sim.ventoDinamico.modo as keyof typeof ROTULOS_MODO_ESTADO] ??
+                      sim.ventoDinamico.modo}{" "}
+                    a correr
+                  </button>
+                ) : null}
+              </>
             }
           />
         </div>
@@ -534,6 +567,15 @@ export function App() {
                 />
               ) : null}
             </div>
+            {/* BLOCO «CÂMARA FPV» — imagem ao vivo da câmara de bordo + custo (também em «Tudo»),
+                em destaque depois da câmara da janela 3D e antes das curvas. */}
+            <PainelFpv
+              fpv={sim.fpv}
+              simulacao={sim.simulacao}
+              ligado={sim.ligacao === "ligado"}
+              onEnviar={enviarFpv}
+              onAviso={notificar}
+            />
             <Curvas linhas={sim.linhas} zAlvo={ALVO_Z} grande />
           </BlocoSecao>
 

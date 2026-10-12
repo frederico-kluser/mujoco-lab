@@ -39,7 +39,7 @@ from lab.drone_rpi import componentes as comp
 
 COALA = _RAIZ / ".agents" / "mujoco-lab-agent-skill" / "scripts" / "coala.py"
 XML_ATIVO = comp.PASTA_MODELO / "drone_rpi.xml"
-GRUPOS = ("motores", "helices", "celulas", "frames", "esc", "eletronica", "sensores")
+GRUPOS = ("motores", "helices", "celulas", "frames", "esc", "eletronica", "sensores", "cameras")
 
 
 def _nome(peca: dict) -> str:
@@ -62,6 +62,12 @@ def cmd_listar(_args) -> int:
                          f"{p['ciclos_80']} ciclos→80 %")
             elif g == "frames":
                 extra = f"{p['wheelbase_mm']} mm · {p['massa_g']} g · hélice ≤ {p['helice_max_pol']}″"
+            elif g == "cameras":
+                fov = p.get("fov_graus", {})
+                extra = (f"{p.get('sensor', '?')} · {p.get('mp', '?')} MP · FoV {fov.get('diag', '?')}° diag · "
+                         f"{p['massa_g']} g · vídeo {', '.join(p.get('modos_video', []))}")
+            elif g == "sensores":
+                extra = f"{p.get('tipo', '?')} · {p.get('massa_g', 0)} g"
             print(f"  {pid:28s} {_nome(p):40s} {extra}")
     print(f"\nBUILDS (ativo = {builds['ativo']})")
     for nome, b in builds["builds"].items():
@@ -91,6 +97,13 @@ def cmd_mostrar(args) -> int:
           f"{b.energia_wh:.0f} Wh · {1000 * b.massa:.0f} g ({b.densidade_wh_kg:.0f} Wh/kg) · R₀ {1000 * b.r0:.1f} mΩ")
     print(f"  frame   {_nome(hw.frame.dados)} · wheelbase {1000 * hw.frame.wheelbase:.0f} mm · arquitetura "
           f"{hw.arquitetura} · J rotor {hw.j_rotor:.2e} kg·m²")
+    if hw.camera is not None:
+        from lab import camera_rpi as cam_rpi
+        mid = cam_rpi.modulo_da_peca(hw.camera.id)
+        fov = cam_rpi.fov_modo(mid, cam_rpi.OMISSAO_MODO)
+        print(f"  camera  {_nome(hw.camera.dados)} · {hw.camera.dados.get('mp', '?')} MP · montada à frente · "
+              f"FoV {fov['horizontal']:.0f}°×{fov['vertical']:.0f}° no modo {cam_rpi.OMISSAO_MODO} · "
+              f"{1000 * hw.camera.massa:.0f} g · vídeo {', '.join(hw.camera.dados.get('modos_video', []))}")
     print("  massa   " + " + ".join(f"{k} {v:.0f}" for k, v in r["massas_g"].items()) +
           f" = {r['massa_total_g']:.0f} g")
     ph = r["pairagem_v_nominal"]

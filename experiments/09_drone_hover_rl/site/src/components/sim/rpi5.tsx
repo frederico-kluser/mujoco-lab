@@ -27,12 +27,15 @@ import rpi5Url from "@/assets/rpi5.webp"
 import { AnimatedNumber } from "@/components/motion-ui/animated-number"
 import { ProgressBar } from "@/components/motion-ui/progress-bar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CustoEtapaFpv } from "@/components/sim/fpv"
 import {
   budgetMs,
   fmt,
   fmtInteiro,
   fmtLatencia,
   pctDoBudget,
+  type FpvEstado,
+  type MultiIaCusto,
   type Rpi5,
   type TipoFonteRpi5,
 } from "@/lib/sim"
@@ -168,6 +171,111 @@ function Especificacao({ icone, rotulo, valor, testid }: EspecificacaoProps) {
   )
 }
 
+/** `[largura×altura]` como texto; `null` → «—» (nunca `undefined` no DOM). */
+function parTexto(par: readonly [number, number] | null): string {
+  return par === null ? "—" : `${fmtInteiro(par[0])}×${fmtInteiro(par[1])}`
+}
+
+/**
+ * SECÇÃO «Câmara (módulo Pi)» — o módulo de câmara FPV como consumidor de CPU do SoC, SÓ quando o
+ * backend publica `rpi5.camera`. Os números do PROCESSADOR são MODELO (`lab/camera_rpi.custo_cpu`,
+ * com as faixas e fontes de cada etapa) e dizem-se como tal; o `host_ms` medido vive no bloco FPV.
+ */
+function CameraModuloPi({ camera }: { camera: FpvEstado | null }) {
+  if (camera === null) return null
+  const lat = camera.latencia
+  const custo = camera.custoPi5
+  const h264 = custo?.comparacaoH264 ?? null
+  return (
+    <section
+      className="flex flex-col gap-2 border-t border-border pt-3"
+      data-testid="rpi5-camera"
+    >
+      <h3 className="text-xs font-medium">
+        Câmara (módulo Pi)
+        <span className="ml-1.5 text-[0.7rem] font-normal text-muted-foreground">
+          maior consumidor de CPU do SoC — repartido à parte da inferência
+        </span>
+      </h3>
+      <dl className="grid grid-cols-3 gap-x-3 gap-y-1 font-mono text-[0.65rem]">
+        <dt className="text-muted-foreground">módulo · modo</dt>
+        <dd className="col-span-2 text-right" data-testid="rpi5-camera-modo">
+          {`${ouTraco(camera.modulo)} · ${ouTraco(camera.modoRotulo ?? camera.modo)}`}
+        </dd>
+        <dt className="text-muted-foreground">sensor → saída</dt>
+        <dd className="col-span-2 text-right" data-testid="rpi5-camera-saida">
+          {`${parTexto(camera.sensor)} → ${parTexto(camera.saida)}`}
+        </dd>
+        <dt className="text-muted-foreground">MP sensor → saída</dt>
+        <dd className="col-span-2 text-right tabular-nums" data-testid="rpi5-camera-mp">
+          {`${fmt(camera.mpSensor, 2)} → ${fmt(camera.mpSaida, 2)} MP`}
+        </dd>
+        <dt className="text-muted-foreground">fps nominal</dt>
+        <dd
+          className="col-span-2 text-right tabular-nums"
+          data-testid="rpi5-camera-fps-nominal"
+        >
+          {fmt(camera.fpsNominal, 2)}
+        </dd>
+        <dt className="text-muted-foreground">fps medido</dt>
+        <dd
+          className="col-span-2 text-right tabular-nums"
+          data-testid="rpi5-camera-fps-medido"
+        >
+          {fmt(camera.fpsMedido, 2)}
+        </dd>
+        <dt className="text-muted-foreground">latência (modelo)</dt>
+        <dd
+          className="col-span-2 text-right tabular-nums"
+          data-testid="rpi5-camera-latencia"
+        >
+          {`${fmt(lat?.totalMs ?? null, 1)} ms${
+            lat?.faixaPublicadaMs == null
+              ? ""
+              : ` · faixa publicada ${fmt(lat.faixaPublicadaMs[0], 0)}–${fmt(lat.faixaPublicadaMs[1], 0)} ms`
+          }`}
+        </dd>
+      </dl>
+      <ul className="flex flex-col gap-0.5" data-testid="rpi5-camera-etapas">
+        {custo?.etapas.length ? (
+          custo.etapas.map((etapa) => (
+            <CustoEtapaFpv
+              key={etapa.id}
+              etapa={etapa}
+              testid={`rpi5-camera-etapa-${etapa.id}`}
+            />
+          ))
+        ) : (
+          <li className="font-mono text-[0.65rem] text-muted-foreground">
+            — (sem modelo de custo publicado)
+          </li>
+        )}
+      </ul>
+      <p
+        className="font-mono text-[0.65rem] tabular-nums"
+        data-testid="rpi5-camera-total"
+      >
+        total {custo?.totalPctNucleo == null ? "—" : `${fmt(custo.totalPctNucleo, 1)} %`} de
+        1 núcleo A76 = {custo?.totalNucleos == null ? "—" : `${fmt(custo.totalNucleos, 3)} núcleos`}
+      </p>
+      <p
+        className="text-[0.6rem] leading-snug text-muted-foreground"
+        data-testid="rpi5-camera-nota"
+      >
+        o JPEG é SOFTWARE no Pi 5 (não tem encoder JPEG nem H.264 hardware) —
+        por isso a codificação é a etapa dominante do modelo.
+        {h264
+          ? ` Comparação (só nota, não usada): ${ouTraco(h264.rotulo)} — ${ouTraco(
+              h264.pct1080p30
+            )} de 1 núcleo @1080p30 · ${ouTraco(h264.pct1080p50)} @1080p50${
+              h264.fonte ? ` (fonte: ${h264.fonte})` : ""
+            }.`
+          : ""}
+      </p>
+    </section>
+  )
+}
+
 interface PainelRpi5Props {
   rpi5: Rpi5 | null
   /** `false` quando a API está em baixo (os medidores ficam a "—" e diz-se porquê). */
@@ -177,6 +285,91 @@ interface PainelRpi5Props {
    * sem elas a frase não as afirma (antes estava fixo em 16→64→64→4, errado na planta real).
    */
   dimsRede?: string | null
+}
+
+
+/**
+ * SECÇÃO «Multi-IA» — as IAs de bordo a correr EM SIMULTÂNEO, cada uma no seu ritmo (o mecanismo é o
+ * `multi_ia.py`). Quando só há UMA IA diz-se isso honestamente — e que a ESTABILIDADE é do FC H7
+ * (determinístico, não é IA; ver o docstring do `multi_ia.py`). Sem cascata (`multiIa === null`) a
+ * secção diz «sem multi-IA» e não se inventa nada.
+ */
+function MultiIa({ multiIa }: { multiIa: MultiIaCusto | null }) {
+  const total =
+    multiIa === null
+      ? "—"
+      : multiIa.p50Us === null && multiIa.p99Us === null
+        ? "sem dados"
+        : `p50 ${fmt(multiIa.p50Us, 0)} µs · p99 ${fmt(multiIa.p99Us, 0)} µs`
+  const pct = multiIa?.pctP99 ?? null
+  const ativas = (multiIa?.ias ?? []).filter((ia) => ia.ativo).length
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-border pt-3" data-testid="multi-ia">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-foreground">Multi-IA (mecanismo de bordo)</h3>
+        <span
+          className="rounded-full bg-muted px-2 py-0.5 text-[0.68rem] tabular-nums"
+          data-testid="multi-ia-semaforo"
+          data-semaforo={multiIa?.semaforo ?? "sem dados"}
+        >
+          {multiIa === null ? "sem multi-IA" : (multiIa.semaforo ?? "sem dados")}
+        </span>
+      </div>
+      {multiIa === null ? (
+        <p className="text-[0.68rem] text-muted-foreground">
+          sem mecanismo multi-IA neste run (o controlo é a política única + o FC).
+        </p>
+      ) : (
+        <>
+          <dl className="grid grid-cols-2 gap-x-3 text-[0.72rem]">
+            <dt className="text-muted-foreground">latência das IAs (50 Hz)</dt>
+            <dd className="col-span-2 text-right tabular-nums sm:col-span-1" data-testid="multi-ia-total">
+              {total}
+              {pct === null ? "" : ` · ${fmt(pct, 1)}% do período de ${fmt(multiIa.periodoUs ?? 20000, 0)} µs`}
+            </dd>
+            <dt className="text-muted-foreground">v_ref em vigor</dt>
+            <dd className="col-span-2 text-right sm:col-span-1" data-testid="multi-ia-fonte">
+              {multiIa.vRefFonte === "seguimento" ? "IA-2 «seguimento»" : "WASDQE do site"}
+            </dd>
+          </dl>
+          <ul className="flex flex-col gap-0.5" data-testid="multi-ia-lista">
+            {multiIa.ias.map((ia) => (
+              <li
+                key={ia.nome ?? "?"}
+                className="flex items-center justify-between gap-2 text-[0.7rem]"
+                data-testid={`multi-ia-ia-${ia.nome ?? "desconhecida"}`}
+                data-estado={ia.estado ?? "?"}
+              >
+                <span className="truncate">
+                  <span className="font-medium">{ia.nome ?? "—"}</span>
+                  <span className="text-muted-foreground"> · {ia.papel ?? "—"}</span>
+                </span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">
+                  {ouTraco(ia.taxaHz === null ? null : `${fmt(ia.taxaHz, 0)} Hz`)} ·{" "}
+                  {ia.p50Us === null ? "—" : `p50 ${fmt(ia.p50Us, 0)}`} /{" "}
+                  {ia.p99Us === null ? "—" : `p99 ${fmt(ia.p99Us, 0)} µs`} · {ia.estado ?? "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {ativas === 1 ? (
+            <p className="text-[0.68rem] text-muted-foreground" data-testid="multi-ia-so-uma">
+              só há UMA IA a correr — a estabilidade é do FC H7 (determinístico, não é IA).
+            </p>
+          ) : null}
+          <p className="text-[0.68rem] text-muted-foreground" data-testid="multi-ia-fc">
+            FC: {multiIa.fc?.papel ?? "estabilidade"} · {fmt(multiIa.fc?.taxaHz ?? 500, 0)} Hz —{" "}
+            {multiIa.fc?.nota ?? "determinístico, fora das IAs"}
+          </p>
+          {multiIa.aviso ? (
+            <p className="text-[0.68rem] text-destructive" data-testid="multi-ia-aviso">
+              {multiIa.aviso}
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  )
 }
 
 export function PainelRpi5({ rpi5, ligado, dimsRede = null }: PainelRpi5Props) {
@@ -381,6 +574,40 @@ export function PainelRpi5({ rpi5, ligado, dimsRede = null }: PainelRpi5Props) {
           <dd className="col-span-2 text-right" data-testid="rpi5-nucleos">
             {`${espec?.nucleos == null ? "—" : fmt(espec.nucleos, 0)} · ${ouTraco(espec?.npu ?? null)}`}
           </dd>
+          <dt className="text-muted-foreground">
+            inferência · núcleos (MEDIDO)
+          </dt>
+          <dd
+            className="col-span-2 text-right tabular-nums"
+            data-testid="rpi5-uso-inferencia"
+            title="CPU ocupado pela inferência da política — medido (p50 × decisões/s)"
+          >
+            {uso?.inferenciaNucleos == null
+              ? "—"
+              : `${fmt(uso.inferenciaNucleos, 4)} núcleos`}
+          </dd>
+          <dt className="text-muted-foreground">câmara · núcleos (MODELO)</dt>
+          <dd
+            className="col-span-2 text-right tabular-nums"
+            data-testid="rpi5-uso-camera"
+            title="CPU do módulo de câmara FPV — MODELO (custo_pi5.total_nucleos), com as faixas na secção da câmara"
+          >
+            {uso?.cameraNucleos == null
+              ? "—"
+              : `${fmt(uso.cameraNucleos, 3)} núcleos`}
+          </dd>
+          <dt className="text-muted-foreground">
+            total · núcleos (medido+modelo)
+          </dt>
+          <dd
+            className="col-span-2 text-right tabular-nums"
+            data-testid="rpi5-uso-total"
+            title="inferência (MEDIDA) + câmara (MODELO): os dois nunca se confundem"
+          >
+            {uso?.nucleosTotal == null
+              ? "—"
+              : `${fmt(uso.nucleosTotal, 3)} núcleos`}
+          </dd>
           <dt className="text-muted-foreground">estado do hardware</dt>
           <dd className="col-span-2 text-right" data-testid="rpi5-hardware">
             {hardware?.throttled || hardware?.tempC != null
@@ -395,6 +622,10 @@ export function PainelRpi5({ rpi5, ligado, dimsRede = null }: PainelRpi5Props) {
               : "sem hardware"}
           </dd>
         </dl>
+
+        {/* CÂMARA (módulo Pi) — só quando o backend publica `rpi5.camera` (sem módulo não há secção). */}
+        <CameraModuloPi camera={rpi5?.camera ?? null} />
+        <MultiIa multiIa={rpi5?.multiIa ?? null} />
 
         <p
           className="border-t border-border/70 pt-2 text-[0.6rem] leading-snug text-muted-foreground"

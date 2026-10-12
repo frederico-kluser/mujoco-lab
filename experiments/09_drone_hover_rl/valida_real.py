@@ -85,9 +85,54 @@ def checa_catalogo(v: Validador) -> None:
                 f"|ipos| = {float(np.abs(model.body_ipos[corpo]).max()):.1e} m")
         mujoco.mj_forward(model, data)
         sites = np.array([data.site_xpos[model.site(f"r{i}").id] for i in range(1, 5)])
-        dist = np.hypot(sites[:, 0] - data.xpos[corpo, 0], sites[:, 1] - data.xpos[corpo, 1])
+        # O "centro" é o do QUADRADO DOS ROTORES (a geometria do frame), não o CM: um payload
+        # assimétrico (ex. a câmara no nariz) desloca o CM uns décimos de mm e o raio medido do CM
+        # já não é igual nos 4 rotores — aqui valida-se a geometria e o desvio do CM aparece no
+        # detalhe (é física real do payload, não erro de montagem).
+        centro = sites[:, :2].mean(axis=0)
+        dist = np.hypot(sites[:, 0] - centro[0], sites[:, 1] - centro[1])
+        desvio_cm = float(np.hypot(data.xpos[corpo, 0] - centro[0], data.xpos[corpo, 1] - centro[1]))
         v.check(f"A3[{nome}] centro→rotor = wheelbase/2", float(np.abs(dist - hw.braco).max()) < 1e-9,
                 f"{dist.round(4)} m vs {hw.braco:.4f} m")
+        # GUARDA do CM (a que o A3 antigo fazia sem querer, medindo do CM): o payload assimétrico
+        # (câmara no nariz) desloca o CM uns décimos de mm — e um erro de massa num payload longe do
+        # centro desloca-o MILÍMETROS. 1 mm de teto é generoso para o payload atual e apanha isso.
+        v.check(f"A3a[{nome}] CM centrado (payload ≤ 1 mm do centro dos rotores)", desvio_cm < 1e-3,
+                f"desvio do CM = {1000 * desvio_cm:.3f} mm em +x (câmara/pack fora do centro)")
+        if hw.camera is not None:
+            from lab import camera_rpi as cam_rpi
+            cid = model.camera("fpv").id
+            pos = data.cam_xpos[cid] - data.xpos[corpo]
+            m3 = np.asarray(data.cam_xmat[cid]).reshape(3, 3)
+            frente = -m3[:, 2]
+            # Geometria COMPILED (sem repetir fórmulas do modelo.py): o geom do módulo tem de passar a
+            # face dianteira da placa central, ficar na linha central (y≈0) e a lente 1 mm à frente da
+            # face do próprio módulo — e a massa do geom tem de ser a da PEÇA do catálogo.
+            gid = model.geom("camera").id
+            pgid = model.geom("placa").id
+            x_geom = float(model.geom_pos[gid, 0])
+            meia_esp = float(model.geom_size[gid, 0])          # meia-espessura do módulo no eixo ótico
+            face_placa = float(model.geom_pos[pgid, 0] + model.geom_size[pgid, 0])
+            x_lente = float(pos[0])
+            fovy_esperado = cam_rpi.fovy_graus(cam_rpi.modulo_da_peca(hw.camera.id), cam_rpi.OMISSAO_MODO)
+            v.check(f"A3b[{nome}] câmara fpv no NARIZ (módulo além da placa, lente à frente, y=0) e a "
+                    f"olhar para +x",
+                    x_geom > face_placa and abs(float(model.geom_pos[gid, 1])) < 1e-9
+                    and 0.0 < x_lente - (x_geom + meia_esp) <= 0.005
+                    and float(frente[0]) > 0.999 and float(np.abs(frente[1:]).max()) < 1e-6,
+                    f"geom x={x_geom:.4f} (face da placa {face_placa:.4f}) · lente x={x_lente:.4f} "
+                    f"({1000 * (x_lente - x_geom - meia_esp):.1f} mm à frente do módulo) · "
+                    f"y={model.geom_pos[gid, 1]:.1e} · visão={frente.round(3)}")
+            v.check(f"A3c[{nome}] fovy da câmara = FoV do módulo (modo {cam_rpi.OMISSAO_MODO})",
+                    abs(float(model.cam_fovy[cid]) - fovy_esperado) < 1e-9,
+                    f"fovy={model.cam_fovy[cid]:.6f}° vs {fovy_esperado:.6f}° (GRAUS sempre, 3.15)")
+            # a massa da câmara entra no modelo SÓ ela: o mesmo build sem a peça difere exactamente nela
+            from dataclasses import replace as _sem_peca
+            sem_camera = dr.modelo.carregar(_sem_peca(hw, camera=None))[0]
+            so_camera = m_mod - float(sem_camera.body_mass.sum())
+            v.check(f"A3d[{nome}] a câmara entra no modelo com a massa da peça (e só ela)",
+                    abs(so_camera - hw.camera.massa) < 1e-9,
+                    f"{1000 * so_camera:.3f} g vs {1000 * hw.camera.massa:.3f} g (diferença de modelos)")
         h = hw.helice
         if hw.origem_kf_kq.startswith("C_T"):
             kf = h.ct * RHO_AR * h.diametro ** 4 / (4 * math.pi ** 2)
@@ -370,9 +415,19 @@ def checa_aero(v: Validador, hw) -> None:
     s = ((raio / (4 * 0.5 * d_hel)) ** 2 + raio ** 2 * (0.5 * d_hel) / math.sqrt((dvz ** 2 + 4 * (0.5 * d_hel) ** 2) ** 3)
          + 0.5 * raio ** 2 * (0.5 * d_hel) / math.sqrt((2 * dvz ** 2 + 4 * (0.5 * d_hel) ** 2) ** 3)
          + 2 * raio ** 2 * (0.5 * d_hel) * 2.0 / math.sqrt((bop ** 2 + 4 * (0.5 * d_hel) ** 2) ** 3))
-    v.check("D1 efeito de solo (Sanchez-Cuevas 2017): +≥15 % a 0,5·D, ≈1 a 5 m, fórmula exata",
-            g05 >= 1.15 and abs(g5 - 1.0) < 2e-3 and _rel(g05, 1 / (1 - s)) < 1e-12,
-            f"0,5 D: ×{g05:.3f} · 1,75 D: ×{g175:.3f} · 5 m: ×{g5:.4f} (D = {d_hel:.3f} m)")
+    # O piso físico do ganho a 0,5·D é o do ROTOR ISOLADO (o termo solo da fórmula); os termos de
+    # interferência mútua (vizinhos/opostos) só ADICIONAM — e desaparecem com o espaçamento. O teto
+    # antigo (≥1,15) era o do frame 650 (rotores a 1,21 D de separação, interferência forte); com o
+    # wheelbase ×3 (rotores a ~3,6 D) a interferência cai e o ganho aproxima-se do rotor isolado — o que
+    # a pesquisa prevê ("ground effect mais fraco e quadrático a >3 D"). Por isso o que se valida aqui é
+    # a FÓRMULA exata + o piso do rotor isolado + a monotonia do decaimento, em QUALQUER geometria.
+    k_isolado = 1.0 / (1.0 - (raio / (4 * 0.5 * d_hel)) ** 2)
+    v.check("D1 efeito de solo (Sanchez-Cuevas 2017): fórmula exata, ≥ rotor isolado a 0,5·D, ≈1 a 5 m",
+            g05 >= k_isolado - 1e-12 and g05 >= g175 >= g5 and abs(g5 - 1.0) < 2e-3
+            and _rel(g05, 1 / (1 - s)) < 1e-12,
+            f"0,5 D: ×{g05:.3f} (rotor isolado ×{k_isolado:.3f}, interferência "
+            f"{100 * (g05 / k_isolado - 1):.1f} %) · 1,75 D: ×{g175:.3f} · 5 m: ×{g5:.4f} · "
+            f"D = {d_hel:.3f} m · separação vizinhos = {dvz / d_hel:.1f} D")
     # D1b: o MESMO efeito medido na planta MuJoCo (rotores a ω fixo a duas alturas)
     def empuxo_a(altura: float) -> float:
         model, data, pl = _planta(hw, dra.FlagsAero(True, False, False, False, False, False))

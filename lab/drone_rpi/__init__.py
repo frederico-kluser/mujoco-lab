@@ -46,11 +46,11 @@ def hardware(build: str | dict | None = None) -> Hardware:
     return resolver(build)
 
 
-def carregar(hw: Hardware | str | None = None) -> tuple[mujoco.MjModel, mujoco.MjData]:
+def carregar(hw: Hardware | str | None = None, com_alvo: bool = False) -> tuple[mujoco.MjModel, mujoco.MjData]:
     """(model, data) gerados das peças do build (o drone nasce a 0,3 m; pouse-o pela física)."""
     if not isinstance(hw, Hardware):
         hw = resolver(hw)
-    return modelo.carregar(hw)
+    return modelo.carregar(hw, com_alvo=com_alvo)
 
 
 # --------------------------------------------------------------------------------------- definir_*

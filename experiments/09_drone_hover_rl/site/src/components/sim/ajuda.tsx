@@ -240,6 +240,48 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
     ],
   },
   {
+    id: "fpv",
+    titulo: "Câmara FPV (stream ao vivo da câmara de bordo)",
+    onde: "secção «Operação» (e «Tudo»), bloco «Câmara FPV»",
+    itens: [
+      {
+        rotulo: "o que é",
+        texto:
+          "A imagem da câmara de BORDO do drone (a Pi Camera Module 3 Wide apontada para a frente, emulada no MuJoCo com os modos reais de resolução/fps/FoV), servida como stream MJPEG direto para o site. Não confundir com o bloco «Câmara da janela 3D», que comanda de onde se OLHA o drone — este mostra o que a câmara do drone VÊ.",
+      },
+      {
+        rotulo: "imagem ao vivo",
+        texto:
+          "O <img> pinta cada quadro JPEG assim que ele chega (GET /api/fpv.mjpg; os headers de sequência/temperatura de cada parte não chegam ao browser, é normal). Com o módulo DESLIGADO a imagem fica parada no último quadro e a etiqueta diz-o; sem módulo nenhum o bloco diz «sem módulo de câmara» e nem mostra imagem — nada é inventado.",
+      },
+      {
+        rotulo: "LIGAR / DESSLIGAR · modo",
+        texto:
+          "O botão manda POST /api/fpv {ligada} e o seletor manda {modo} — só os modos EMULADOS (1080p50, 720p100, 480p120 e os nativos 2304×1296@56, 1536×864@120, 4608×2592@14). O HDR existe no hardware mas não é reproduzido e o backend recusa-o. Depois de cada envio o site relê o estado e adota o que o servidor confirmou; uma recusa (400) aparece como aviso com a mensagem do backend.",
+      },
+      {
+        rotulo: "estatísticas (o que cada número é)",
+        texto:
+          "Modo em vigor e resolução/MP de saída e do sensor; fps NOMINAL (do modo) e MEDIDO (o que o pipeline está mesmo a fazer); qualidade JPEG, bytes médios e bitrate (MEDIDOS, dos quadros reais); nº de quadros desde o arranque. O que não vier mostra «—» — nunca há números inventados.",
+      },
+      {
+        rotulo: "latência de modelo · faixa publicada",
+        texto:
+          "A latência captura→site é MODELO: soma de estágios com origem declarada (sensor+leitura, fila de buffers, ISP, codificação, transporte, apresentação — ISP e codificação medidos, fila e rede ASSUMIDOS) e é esta soma que a entrega do stream reproduz. A «faixa publicada» (150–300 ms para MJPEG 1080p em Pi) é da comunidade/documentação e vem tal e qual, para comparação.",
+      },
+      {
+        rotulo: "custo no Pi 5 (MODELO) e «medido no PC»",
+        texto:
+          "O custo do Pi 5 por etapa (aquisição CSI, controlo ISP, cópias, codificação JPEG, transporte) é MODELO, em % de 1 núcleo Cortex-A76, escalado pela taxa de píxeis do modo, com a faixa e a fonte de cada etapa — o Pi 5 não tem encoder JPEG hardware, o JPEG é software e é ele que domina. O «medido no PC» é o custo REAL do pipeline NESTA máquina (render/isp/jpeg/total) e nunca se mistura com o modelo.",
+      },
+      {
+        rotulo: "modelo vs medido (a regra de honestidade)",
+        texto:
+          "MEDIDO: fps medido, bytes, bitrate, quadros e o «medido no PC». MODELO: a latência e todo o custo do Pi 5 (com as faixas). PUBLICADO: as faixas da comunidade/documentação. Cada número é mostrado com a etiqueta que lhe pertence; quando falta, mostra «—».",
+      },
+    ],
+  },
+  {
     id: "controlo-voo",
     titulo: "Controlo de voo (teclas WASD/QE)",
     onde: "secção «Operação» (e «Tudo»), por baixo dos valores atuais",
@@ -553,6 +595,21 @@ export const SECOES_AJUDA: SeccaoAjuda[] = [
         rotulo: "specs do alvo",
         texto:
           "CPU, RAM, orçamento por decisão e núcleos/NPU do alvo, como o backend os anuncia. Tudo isto atualiza com o polling (2,9 Hz), sem recarregar a página.",
+      },
+      {
+        rotulo: "secção «Câmara (módulo Pi)»",
+        texto:
+          "Aparece quando há módulo de câmara FPV: o modo em vigor (sensor → saída, MP, fps nominal/medido) e o que ele custa ao PROCESSADOR do Pi 5 — uma linha por etapa (aquisição CSI, controlo ISP, cópias, codificação JPEG, transporte) com a faixa do modelo, mais o total em % de 1 núcleo A76 e em núcleos. É MODELO (âncoras com faixas, escaladas pela taxa de píxeis), não medição.",
+      },
+      {
+        rotulo: "JPEG software e a comparação H.264",
+        texto:
+          "O Pi 5 não tem encoder JPEG (nem H.264) hardware: o JPEG corre em software e é a etapa dominante — daí a nota da secção da câmara. A comparação com H.264 (x264 software) serve só para ver a alternativa que NÃO se usa (com os números e a fonte do backend).",
+      },
+      {
+        rotulo: "linha de uso: inferência + câmara",
+        texto:
+          "Os núcleos de CPU repartem-se em «inferência (MEDIDO)» — p50 do benchmark × decisões/s reais — e «câmara (MODELO)» — o total do modelo da câmara; o «total (medido+modelo)» soma os dois dizendo o que é o quê. Sem benchmark (ou sem câmara) o campo fica «—».",
       },
     ],
   },

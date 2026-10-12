@@ -1,0 +1,102 @@
+{
+  "interface_type": "dashboard",
+  "interface_type_note": "sub-painel de controlo «Vento dinâmico» (rajadas) dentro do dashboard de simulação do 09_drone_hover_rl; avaliado isoladamente, que é a parte que o dono apontou",
+  "overall_score": 61,
+  "band": "fair",
+  "findings": [
+    {
+      "id": "finding-1",
+      "principle": {
+        "code": "F.1.1.03",
+        "slug": "mental-model",
+        "title": "Mental Model",
+        "part": "part-1"
+      },
+      "severity": "critical",
+      "message": "O estado do sistema não permite construir o modelo mental de quando as rajadas REALMENTE acontecem. O painel mostra uma seleção de modo (PARADO/RAJADAS/ALEATÓRIA/DRYDEN) e um selo minúsculo «ativo/inativo», mas os modos contínuos disparam rajadas ALEATÓRIAS no tempo (probabilidade p por passo) e nada indica quando uma rajada está a bater agora versus quando o modo está apenas ARMADO e silencioso. O dono descreve exatamente isto: «não está claro quando roda quando está sem, se está no modo aleatório ou não» — sem o modelo mental certo, qualquer medição com rajadas fica contaminada por um estado que o operador não consegue afirmar.",
+      "remediation": "Estado SEMPRE visível em 3 níveis: (1) banner «VENTO DINÂMICO: PARADO» quando nenhum modo está ativo; (2) «A CORRER — ALEATÓRIA (armado; rajadas sorteadas por p)» com o ponto pulsante; (3) «RAJADA EM CURSO +X,X m/s» enquanto o envelope dinâmico for ≠ 0 (derivado da telemetria: ‖vento_vec‖ − ‖vento base‖ > 0,05 m/s), com barra de progresso do tempo restante nos instantâneos RAJADA/FRENTE AGORA (duração comandada × 20 ms). Resultado medido: em 3 s o operador diz se há rajadas a acontecer e em que modo, sem ler parâmetros.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-2",
+      "principle": {
+        "code": "D.2.1.02",
+        "slug": "visual-hierarchy",
+        "title": "Visual Hierarchy",
+        "part": "part-3"
+      },
+      "severity": "warning",
+      "message": "A hierarquia visual inverte a importância: os CONTROLOS (segmented toggle, sliders de p/duração/u_max, botões) dominam o painel enquanto o ESTADO (o que está a acontecer à física) vive num selo de 0,7 rem com um ponto de 6 px. O operador olha primeiro para o que pode clicar e não para o que está a correr — agravado por «params {p: 0.4, ...}» em monoespaçado a competir com o estado.",
+      "remediation": "Subir o estado para o topo do painel como faixa de largura total (texto ≥ 0,85 rem, contraste AA, cor de estado: cinza=parado, primário=a correr, âmbar=rajada em curso) e descer os parâmetros para uma linha secundária plegável. Resultado medido: o teste de 3 segundos («o que está a correr?\") passa sem procurar.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-3",
+      "principle": {
+        "code": "C.1.1.01",
+        "slug": "consistency-and-standards",
+        "title": "Consistency and Standards",
+        "part": "part-2"
+      },
+      "severity": "warning",
+      "message": "Três vocabulários para o mesmo estado: o toggle diz «ALEATÓRIA» e o selo diz «modo em vigor: rajadas aleatórias»; o toggle diz «PARADO» e o selo diz «inativo · sem dinâmica»; os botões instantâneos usam «RAJADA AGORA» enquanto a telemetria diz «rajada_agora». Cada nome diferente força um mapeamento mental novo (reconhecimento → recordação) e é o que torna incerto «se está no modo aleatório ou não».",
+      "remediation": "Um único léxico por todo o painel (rótulos curtos do toggle usados em todo o lado: PARADO · RAJADAS · ALEATÓRIA · DRYDEN · RAJADA AGORA · FRENTE AGORA), com o nome técnico (rajada_agora) só no tooltip/ajuda. Resultado medido: zero divergências de rótulo entre toggle, banner e avisos (auditoria de strings).",
+      "business_impact": null
+    },
+    {
+      "id": "finding-4",
+      "principle": {
+        "code": "C.1.4.01",
+        "slug": "error-prevention",
+        "title": "Error Prevention",
+        "part": "part-2"
+      },
+      "severity": "warning",
+      "message": "Não há prevenção do erro mais caro deste painel: esquecer o modo dinâmico ligado e correr uma série de experiências com rajadas a contaminar os dados. O estado «ativo» não é persistente à vista (o painel pode ficar abaixo da dobra na secção «Vento»), não há aviso no topo global quando há dinâmica ativa e o PARAR está longe do indicador. O projeto já tem a mecânica certa (PARAR VENTO fiel); falta a salvaguarda visual.",
+      "remediation": "Quando `dinamico.ativo` (ou `rajada_em_curso`) mostrar um selo persistente NA BARRA CRÍTICA global («rajadas ALEATÓRIA a correr») que clica e salta para o painel, mais um estado de destaque no próprio painel. Resultado medido: em modo ativo, o estado é visível em qualquer secção (teste de DOM na barra fixa).",
+      "business_impact": null
+    },
+    {
+      "id": "finding-5",
+      "principle": {
+        "code": "F.1.1.02",
+        "slug": "cognitive-load",
+        "title": "Cognitive Load",
+        "part": "part-1"
+      },
+      "severity": "suggestion",
+      "message": "O painel mostra `params {p: 0.40, duracao: 25, u_max: 3.0}` em monoespaçado sem unidades nem significado operacional (p = probabilidade por O quê? duração em passos a 50 Hz = 0,5 s), e ainda o texto «a sem reiniciar o episódio». São 4 unidades de informação para o mesmo facto (modo, params, semântica, eco) sem chunking.",
+      "remediation": "Agrupar em 2 linhas: (a) estado/modo com unidades naturais («p 0,40 por passo · rajadas de 0,5 s até 3,0 m/s»); (b) nota única «aplica-se sem reiniciar o episódio». Mostrar duração em SEGUNDOS com os passos entre parênteses.",
+      "business_impact": null
+    }
+  ],
+  "strengths": [
+    {
+      "principle": {
+        "code": "C.1.1.01",
+        "slug": "consistency-and-standards",
+        "title": "Consistency and Standards"
+      },
+      "message": "O `apply-suprimido` é um padrão exemplar de honestidade: quando uma edição não chega ao servidor (outro cliente parou o modo), o painel diz-o em vez de mostrar um valor que a física não tem."
+    },
+    {
+      "principle": {
+        "code": "C.1.4.01",
+        "slug": "error-prevention",
+        "title": "Error Prevention"
+      },
+      "message": "O PARAR é fiel e testado (nenhuma rajada sobrevive ao clique) e os botões instantâneos têm `announce` («rajada em curso») para leitores de ecrã — a base para o estado exposto está certa."
+    },
+    {
+      "principle": {
+        "code": "F.2.2.03",
+        "slug": "hicks-law",
+        "title": "Hick's Law"
+      },
+      "message": "A escolha de modos contínuos está bem cortada (4 opções no segmented toggle) e os instantâneos separados dos contínuos — a árvore de decisão do operador é curta."
+    }
+  ],
+  "priority_fixes": ["finding-1", "finding-2", "finding-4", "finding-3", "finding-5"],
+  "api_enriched": false,
+  "api_note": "Install the uxuiprinciples API key for enriched findings with citations and business impact data. See uxuiprinciples.com/en/checkout"
+}

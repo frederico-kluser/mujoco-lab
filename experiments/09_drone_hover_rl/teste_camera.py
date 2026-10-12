@@ -157,11 +157,12 @@ TOL_CAM = 1e-9            # colagem exacta do seguimento (mesma expressão aritm
 TOL_REPOUSO = 2e-3        # comparações cruzadas em repouso (telemetria arredondada a 6 casas + folga)
 LIMIAR_MOV = 0.25         # m — deslocamento mínimo do drone para a janela de movimento ser prova de movimento
 # Contrato da linha de telemetria: as 19 chaves do contrato v2, por esta ordem (`camera` é a 19.ª), e depois só
-# chaves ADITIVAS — `planta` e `fim` (2026-10-10), `voo` (contrato r11 do controle de voo, 2026-10-10) e, na
-# planta real, os blocos de bordo e a `verdade`.
+# chaves ADITIVAS — `planta` e `fim` (2026-10-10), `voo` (contrato r11 do controle de voo, 2026-10-10), `fpv`
+# (módulo de câmara de bordo, 2026-10-11) e, na planta real, os blocos de bordo e a `verdade`.
 CHAVES_CONTRATO = ("t", "estado", "loop", "ep", "passo", "retorno", "z", "dist_xy", "yaw_err", "vento_vel",
                    "vento_azim", "vento_vec", "vento_modo", "obs", "act", "ctrl", "h1", "h2", "camera")
-CHAVES_ADITIVAS = {"planta", "fim", "voo", "bateria", "motores", "potencia", "aero", "estimador", "verdade"}
+CHAVES_ADITIVAS = {"planta", "fim", "voo", "fpv", "simulacao", "bateria", "motores", "potencia",
+                   "aero", "estimador", "verdade"}
 
 
 def _chaves_ok(linha: dict) -> bool:
@@ -701,7 +702,11 @@ class Ciclo:
         if controlo_inicial is not None:
             self.controlo_caminho.write_text(json.dumps(controlo_inicial) + "\n", encoding="utf-8")
         self.env = modulo_env.HoverEnv()
-        self.args = sim_view.analisar_argumentos(["--sem-janela", "--fator-tempo", "0", "--sem-loop"])
+        # `--sem-fpv`: este teste valida o CONTRATO da câmara 3D — os módulos FPV/simulação
+        # (suíte própria: `teste_fpv.py`) ficam de fora e o cenário não fica refém da carga
+        # dos renders (com os dois streams a 1080p50 o «drone parado» apanhava-se a deslizar)
+        self.args = sim_view.analisar_argumentos(["--sem-janela", "--fator-tempo", "0",
+                                                   "--sem-loop", "--sem-fpv"])
         self.controlo = sim_view.Controlo(self.controlo_caminho)
         self.telemetria = sim_view.Telemetria(self.telemetria_caminho, truncar=True)
         self.politica = PoliticaAcao()

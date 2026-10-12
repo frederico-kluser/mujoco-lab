@@ -1,6 +1,6 @@
 {
   "versao": 2,
-  "atualizado": "2026-10-10",
+  "atualizado": "2026-10-11",
   "nota": "Peças REAIS do drone do dono. Cada número tem a sua origem em `fontes` e o grau de confiança em `confianca`: 'fabricante' (declarado pelo fabricante, não medido por terceiros), 'medido' (laboratório/teste independente), 'estimado' (engenharia, a confirmar por SysID). As tabelas de ensaio dos motores são as do fabricante (banco de ensaio, fonte de tensão estável) e são OTIMISTAS face ao voo real (caso ArduPilot: MN4006+15″ voou 36 min contra 50–55 previstos pela tabela; corrente real +29 %) — o modelo acrescenta a perda por download do frame (NASA: 5–15 %), a queda de tensão da bateria e os consumos de bordo. Conteúdo web citado como evidência (untrusted).",
   "motores": {
     "tmotor_mn4004_kv300": {
@@ -1565,7 +1565,27 @@
         "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400",
         "https://rotorcraft.arc.nasa.gov/Publications/files/72-2016-374.pdf"
       ],
-      "nota": "Braços finos de tubo: perda por download ~5 % (NASA, SUI Endurance 15″). Pesar o frame montado e corrigir aqui."
+      "nota": "Braços finos de tubo: perda por download ~5 % (NASA, SUI Endurance 15″). Pesar o frame montado e corrigir aqui. `placa_mm` = 208 = 0,16×650 (a fórmula do modelo.py), aqui explícito para o 1950 poder mantê-la.",
+      "placa_mm": 208
+    },
+    "diy_tubo_carbono_1950": {
+      "fabricante": "DIY",
+      "modelo": "X 1950 mm de tubo de carbono 25×23 mm + placas 1,5 mm (wheelbase ×3 do 650)",
+      "wheelbase_mm": 1950,
+      "placa_mm": 208,
+      "massa_g": 700,
+      "helice_max_pol": 16,
+      "massa_pernas_g": 100,
+      "altura_pernas_mm": 120,
+      "perda_download": 0.05,
+      "confianca": "estimado (calibrado em frames reais) — FÓRMULA (pesquisas/relatorio-bracos-3x-estabilidade.md): tubos de 25×23 mm a 3× o comprimento do 650 (4 × 850 mm ≈ 400 g; ~100 g/braço, calibrado no braço do Tarot X8 de 106 g) + placas ~200×200 mm ≈ 225 g (faixa 190–250; as do 650 eram 130×130 = 78 g) + abraçadeiras/suportes de motor/parafusos 75 g CONSTANTES (os do 650) = 700 g; pernas ×2 = 100 g (mais robustas) → frame+pernas 800 g = centro da faixa 750–850 g. ⚠ tubo de 16 mm seria FLEXÍVEL demais a ~850 mm de braço (1.º modo de flexão ~44 Hz, colide com o prop passing 46–51 Hz) — por isso 25×23 mm. PESAR o frame montado e corrigir aqui.",
+      "fontes": [
+        "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400",
+        "https://rotorcraft.arc.nasa.gov/Publications/files/72-2016-374.pdf",
+        "https://www.tarotrc.com/ (Tarot X8 1050 mm: 2,25–2,7 kg, braço 106 g — calibração)",
+        "pesquisas/relatorio-bracos-3x-estabilidade.md"
+      ],
+      "nota": "Wheelbase ×3 (650 → 1950 mm) para ganhar ESTABILIDADE — efeitos medidos/calculados na pesquisa: J roll/pitch ×11,5 (0,0375 → 0,40–0,46 kg·m²), torque ×3, aceleração angular ÷3,7, GUINADA ÷10–12 (o par das hélices não escala com L), massa total ~2150–2250 g, pairagem ~3150 rpm, potência ~190–206 W (∝m^1,5), autonomia ~64–70 min, T/W ~2,5–2,7, download mútuo −2 a −4 % (rotores isolados a 3,6 D), ground effect mais fraco, deriva lateral em vento ×3,6 (área frontal dos braços ×4,7). RISCO: 1.º modo de flexão dos braços 35–45 Hz colide com o prop passing 46–51 Hz — o simulador assume CORPO RÍGIDO (dito, não modelado). `placa_mm` mantém-se ~208 mm (placas ~200×200, as do 650 eram 130×130); `helice_max_pol` e `perda_download` mantêm-se (mesma classe de braço; menos download mútuo justificaria −2 a −4 % mas mantém-se 5 % até medir)."
     },
     "tarot_650_sport": {
       "fabricante": "Tarot",
@@ -1830,6 +1850,226 @@
       "fontes": [
         "https://www.ti.com/product/INA226"
       ]
+    }
+  },
+  "cameras": {
+    "raspberry_camera_module_3": {
+      "fabricante": "Raspberry Pi",
+      "tipo": "modulo_camera_csi",
+      "massa_g": 4,
+      "dims_mm": [
+        25,
+        24,
+        11.5
+      ],
+      "sensor": "Sony IMX708",
+      "resolucao_px": [
+        4608,
+        2592
+      ],
+      "mp": 11.9,
+      "pixel_um": 1.4,
+      "optico": "1/2.43\" (7,4 mm de diagonal)",
+      "fov_graus": {
+        "diag": 75,
+        "horizontal": 66,
+        "vertical": 41
+      },
+      "lente": {
+        "focal_mm": 4.74,
+        "f_stop": 1.8,
+        "foco": "PDAF motorizado",
+        "foco_min_m": 0.1
+      },
+      "interface": "MIPI CSI-2 (FPC 15 pinos; o Raspberry Pi 5 exige adaptador 22->15 pinos)",
+      "formato_sensor": "RAW10 (SRGGB10_CSI2P)",
+      "exposicao_max_s": 112,
+      "modos_sensor": [
+        {
+          "id": "4608x2592",
+          "resolucao_px": [
+            4608,
+            2592
+          ],
+          "fps": 14.35,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "remosaic 12 MP, FOV completo (crop (0,0)/4608x2592)"
+        },
+        {
+          "id": "2304x1296",
+          "resolucao_px": [
+            2304,
+            1296
+          ],
+          "fps": 56.03,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "2x2 binning, FOV completo; 56,03 fps é o MAXIMO (30,00 fps por omissão do vblank)"
+        },
+        {
+          "id": "1536x864",
+          "resolucao_px": [
+            1536,
+            864
+          ],
+          "fps": 120.13,
+          "crop_px": [
+            768,
+            432,
+            3072,
+            1728
+          ],
+          "nota": "2x2 binning do recorte central 3072x1728 = 2/3 do FOV (crop (768,432)/3072x1728)"
+        },
+        {
+          "id": "2304x1296_hdr",
+          "resolucao_px": [
+            2304,
+            1296
+          ],
+          "fps": 30.0,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "HDR (merge multi-exposicao) ate 3 MP — o emulador NAO reproduz o merge HDR"
+        }
+      ],
+      "modos_video": [
+        "1080p50",
+        "720p100",
+        "480p120"
+      ],
+      "potencia_w": null,
+      "nota_potencia": "consumo do modulo nao modelado — nao ha numero nas fontes usadas",
+      "confianca": "fabricante (product brief + tabela oficial de hardware + driver imx708)",
+      "fontes": [
+        "https://datasheets.raspberrypi.com/camera/camera-module-3-product-brief.pdf",
+        "https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/accessories/camera/hardware_specification.adoc",
+        "https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/media/i2c/imx708.c",
+        "https://github.com/raspberrypi/rpicam-apps/issues/533"
+      ],
+      "modelo": "Camera Module 3 (Sony IMX708, standard 75 deg)"
+    },
+    "raspberry_camera_module_3_wide": {
+      "fabricante": "Raspberry Pi",
+      "tipo": "modulo_camera_csi",
+      "massa_g": 4,
+      "dims_mm": [
+        25,
+        24,
+        12.4
+      ],
+      "sensor": "Sony IMX708",
+      "resolucao_px": [
+        4608,
+        2592
+      ],
+      "mp": 11.9,
+      "pixel_um": 1.4,
+      "optico": "1/2.43\" (7,4 mm de diagonal)",
+      "fov_graus": {
+        "diag": 120,
+        "horizontal": 102,
+        "vertical": 67
+      },
+      "lente": {
+        "focal_mm": 2.75,
+        "f_stop": 2.2,
+        "foco": "PDAF motorizado",
+        "foco_min_m": 0.05
+      },
+      "interface": "MIPI CSI-2 (FPC 15 pinos; o Raspberry Pi 5 exige adaptador 22->15 pinos)",
+      "formato_sensor": "RAW10 (SRGGB10_CSI2P)",
+      "exposicao_max_s": 112,
+      "modos_sensor": [
+        {
+          "id": "4608x2592",
+          "resolucao_px": [
+            4608,
+            2592
+          ],
+          "fps": 14.35,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "remosaic 12 MP, FOV completo (crop (0,0)/4608x2592)"
+        },
+        {
+          "id": "2304x1296",
+          "resolucao_px": [
+            2304,
+            1296
+          ],
+          "fps": 56.03,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "2x2 binning, FOV completo; 56,03 fps é o MAXIMO (30,00 fps por omissão do vblank)"
+        },
+        {
+          "id": "1536x864",
+          "resolucao_px": [
+            1536,
+            864
+          ],
+          "fps": 120.13,
+          "crop_px": [
+            768,
+            432,
+            3072,
+            1728
+          ],
+          "nota": "2x2 binning do recorte central 3072x1728 = 2/3 do FOV (crop (768,432)/3072x1728)"
+        },
+        {
+          "id": "2304x1296_hdr",
+          "resolucao_px": [
+            2304,
+            1296
+          ],
+          "fps": 30.0,
+          "crop_px": [
+            0,
+            0,
+            4608,
+            2592
+          ],
+          "nota": "HDR (merge multi-exposicao) ate 3 MP — o emulador NAO reproduz o merge HDR"
+        }
+      ],
+      "modos_video": [
+        "1080p50",
+        "720p100",
+        "480p120"
+      ],
+      "potencia_w": null,
+      "nota_potencia": "consumo do modulo nao modelado — nao ha numero nas fontes usadas",
+      "confianca": "fabricante (product brief + tabela oficial de hardware + driver imx708)",
+      "fontes": [
+        "https://datasheets.raspberrypi.com/camera/camera-module-3-product-brief.pdf",
+        "https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/accessories/camera/hardware_specification.adoc",
+        "https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/media/i2c/imx708.c",
+        "https://github.com/raspberrypi/rpicam-apps/issues/533"
+      ],
+      "modelo": "Camera Module 3 Wide (Sony IMX708, wide 120 deg)"
     }
   },
   "correcao_tabelas": {

@@ -383,6 +383,7 @@ deixa de ser de milissegundos e o defeito é determinístico. Os controlos corre
 | `loop` | `true` = **CONTÍNUO** (o runner reinicia sozinho no fim do episódio, ep+1); `false` = **SEM REINÍCIO** (a física continua no estado em que ficou — não congela — e só um REINICIAR recomeça); **campo ausente = não mexe** (um ficheiro antigo só com vento continua válido). É **STICKY** e o **padrão é `false`** (2026-10-09): o ARRANQUE é autoritativo e **corrige o ficheiro** — sem flag (ou com `--sem-loop`) um `loop: true` velho passa a `false`, e com `--com-loop` um `loop: false` velho passa a `true` — preservando vento, dinâmica e o contador `reiniciar`; depois do arranque, quem o muda é só o `POST /api/loop`. Escritas parciais nunca lhe tocam |
 | `camera` | bloco **`{"azimute", "elevacao", "distancia", "seq"}`** — o comando de ORBITAR/zoom da câmara 3D (só apresentação: **nunca** toca na física nem nos outros campos). **SEM `alvo`** (contrato v2: o alvo é SEMPRE o drone — o `seguir_drone` escreve o `lookat = body(CAM_CORPO).xpos + CAM_OFFSET` a cada frame, §4.4). Faixas: `azimute` finito (normalizado **mod 360**), `elevacao` ∈ [−90, 90]°, `distancia` ∈ ]0, 20] m (a UI usa 0,1–10); `seq` inteiro ≥ 0, **incrementado a cada comando** pelo servidor (como o `dinamico.seq`) — a assinatura do bloco (`seq`+valores) é o que faz o runner **(re)aplicar UMA vez** os 3 valores ao `viewer.cam` (§4.4). Bloco ausente = não mexe na câmara; bloco com campos em falta/fora de faixa → o registo é ignorado com aviso (como o `dinamico`); **chaves desconhecidas** (ex. o `alvo` de ficheiros v1) são **ignoradas em silêncio** — ficheiros velhos não rebentam (o `POST /api/camera` é que as recusa com 400: a assimetria é intencional). O bloco é sempre COMPLETO (os 3 valores): quem o escreve é o `POST /api/camera` (que completa os campos **ausentes** a partir do bloco em vigor e carimba o `seq`; um campo **presente com valor `null`** é recusado com **400** — `null` não é «ausente») ou a mão |
 | `voo` | bloco **`{"ativo", "teclas": {"w","a","s","d","q","e"}, "seq"}`** — o CONTROLE DE VOO (contrato r11, §4.5): o **estado** das 6 teclas WASDQE, escrito COMPLETO a cada keydown/keyup do site. `W = +x (frente)`, `S = −x`, `A = +y (esquerda)`, `D = −y (direita)`, `Q = subir`, `E = descer` (frame **mundo**, yaw alvo 0); diagonais normalizadas para 1,0 m/s, `|vz| = 0,7 m/s`; `ativo: false` (ou teclas soltas) ⇒ `v_ref = 0` = o drone **segura posição**. `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor; o runner aplica o bloco em `env.definir_comando_teclas` UMA vez por mudança de assinatura. Bloco ausente = não mexe no comando; teclas em falta valem `false`; chaves desconhecidas **ignoradas em silêncio** no ficheiro (o `POST /api/voo` é que as recusa com 400). Só faz efeito com **política `--comandos`** (modo comando detetado pela observação da política): com política clássica o runner ignora o bloco com aviso e a telemetria publica `"voo": null` — o site mostra o painel como **indisponível** em vez de fingir que pilota |
+| `fpv` | bloco **`{"ligada", "modo", "seq"}`** — o MÓDULO DE CÂMARA FPV de bordo (§4.6): `ligada` booleana (a alimentação/streaming do módulo) e `modo` = id de um modo EMULADO da tabela real (`1080p50` por omissão, `720p100`, `480p120`, `2304x1296p56`, `1536x864p120`, `4608x2592p14`; o HDR existe no hardware mas **não é emulado** e é recusado). `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor. Bloco COMPLETO (`ligada` + `modo`) — quem o escreve é o `POST /api/fpv` (que completa o que não vem a partir do bloco em vigor e carimba o `seq`) ou a mão; o runner aplica UMA vez por mudança de assinatura. Bloco ausente = não mexe no módulo; chaves desconhecidas ignoradas em silêncio no ficheiro (o POST recusa-as com 400) |
 | `t` | carimbo de tempo da escrita (informativo; o site e o runner carimbam-no quando escrevem) |
 
 Todas as escritas são **atrónicas** (ficheiro temporário + `os.replace`), portanto o runner nunca lê um
@@ -400,7 +401,9 @@ nenhuma rajada ativa nem pendente e o vento aplicado é exatamente o vento base 
 ### 4.2 `out/sim_telemetria.jsonl` — o runner escreve, o site lê
 
 Uma linha JSON por amostra (**15 campos** + os aditivos `loop`, `vento_modo`, `ctrl` e `camera` =
-**19 chaves**): **~10 Hz sempre** (com o episódio a correr ou já terminado — não há batimento lento); e
+**19 chaves**, e depois mais aditivos: `planta`, `fim`, `voo`, **`fpv`** (módulo de câmara de bordo) e, na
+planta real, os blocos de bordo e a `verdade`): **~10 Hz sempre** (com o episódio a correr ou já terminado
+— não há batimento lento); e
 **uma linha imediata** no instante em que o episódio termina e em cada REINICIAR.
 
 | campo | significado |
@@ -419,11 +422,12 @@ Uma linha JSON por amostra (**15 campos** + os aditivos `loop`, `vento_modo`, `c
 | `ctrl` | 4 números — o comando **físico** que essa ação produziu: `data.ctrl` = [empuxo N, momento x, momento y, momento z (N·m)]. Invariante: `ctrl == acao_para_ctrl(act)` quando `passo > 0` (ação aplicada); nas linhas de reset (`passo == 0`, `t == 0`) vale `[0,0,0,0]`, porque o `env.reset()` zera o `data.ctrl` e não houve ação nenhuma. É este campo que o site rotula **«ctrl do backend»** (§3.3); sem ele, o site deriva da ação |
 | `h1`, `h2` | 64 + 64 ativações das camadas escondidas (forward hooks nos `nn.Linear`), **na mesma linha** que `obs`/`act`/`ctrl` ⇒ alinhadas |
 | `camera` | **19.ª chave** (sempre no fim): a câmara **REAL** da janela, `{"azimute", "elevacao", "distancia", "alvo": [x,y,z]}` lida de `viewer.cam` — inclui arrastos do rato feitos entre comandos. O `alvo` é o **`lookat` real = drone+offset** (escrito pelo `seguir_drone` a cada frame, §4.4 — sem lag). **`null` sem viewer** (`--sem-janela`, testes): sem dados não se inventa câmara (é o que sai em `camera_atual` na API) |
+| `fpv` | aditivo (2026-10-11): o **MÓDULO DE CÂMARA FPV de bordo** (§4.6), compacto — `{ligada, modo, saida, fps_nominal, fps_medido, bytes_medio, bitrate_mbps, quadros, latencia_ms, cpu_nucleos, host_ms}`. `cpu_nucleos` é o MODELO do Pi 5 (fontes no `lab/camera_rpi`) e `host_ms` é o MEDIDO nesta máquina — nunca misturados. **`null` sem módulo** (modelo sem câmara ou `--sem-fpv`): nunca se inventa uma câmara. A configuração completa fica em `out/fpv/estado.json` e na API |
 | `voo` | **chave aditiva** (contrato r11, §4.5): o CONTROLE DE VOO em vigor = `{"ativo", "teclas": {w,a,s,d,q,e}, "v_ref": [vx,vy,vz], "p_ref": [x,y,z], "erro_xy", "erro_z", "erro_v", "seguindo"}` — o que se pediu (`v_ref`/`p_ref`, em m/s e m), o que se apanhou (erros: `erro_xy`/`erro_z` em m, `erro_v` = ‖v − v_ref‖ em m/s) e se o drone está a seguir a referência (`seguindo`, os limiares do bónus). **`null` quando a política em uso NÃO tem modo comando** — é o que faz o painel do site ficar honestamente indisponível em vez de fingir que pilota |
 
 Cada linha é escrita com `flush`, para o site ver sem esperar pelo fecho do ficheiro.
 
-### 4.3 A API (9 rotas `/api/*` + os ficheiros do site, JSON, local — a 9.ª, `POST /api/bateria`, é da planta real: §7)
+### 4.3 A API (14 rotas `/api/*` + os ficheiros do site, JSON, local — `POST /api/bateria` é da planta real: §7; as 4 do módulo FPV são da §4.6)
 
 | rota | resposta |
 |---|---|
@@ -436,6 +440,27 @@ Cada linha é escrita com `flush`, para o site ver sem esperar pelo fecho do fic
 | `POST /api/loop` | `{"ativo": bool}` → liga/desliga o contínuo (`false` = SEM REINÍCIO: a física continua no fim do episódio; só um REINICIAR recomeça) e responde `{"ok": true, "loop": bool}`. É a única forma de mudar o `loop` depois do arranque |
 | `POST /api/camera` | `{"azimute","elevacao","distancia"}` (qualquer subconjunto; **SEM `alvo`** — a câmara é TERCEIRA-PESSOA e o alvo é sempre o drone — e **SEM `seq`**: o **servidor** incrementa-o a cada pedido, como o `dinamico.seq`; o alias **`distandia`** é aceite e mapeado para `distancia`, mas os dois juntos → 400) → orbita/zooma a câmara da janela 3D (só apresentação) e responde `{"ok": true, "camera": {…, "seq": n}}`. Faixas: azimute finito (mod 360), elevacao [−90,90]°, distancia ]0,20] m; fora → **400** com o motivo. **Regras de validação exatas**: campo **presente com valor `null` → 400** (`null` não é «ausente»: só a AUSÊNCIA do campo completa do bloco em vigor); **chave desconhecida** (incl. o `alvo` do contrato v1) → **400** (`camera` tem chaves desconhecidas […]); **`{}` e `{"seq": n}` são ACEITES com 200** (decisão v2: subconjunto vazio é um «toque» que mantém os valores e carimba `seq` novo, e o `seq` do corpo é um aviso do cliente **IGNORADO** — o servidor carimba sempre o seu; aceitar `{"seq": …}` deixa reenviar um bloco lido tal e qual). Escreve o bloco por merge (`escrever_controlo`): **nunca** toca em `loop`/`reiniciar`/vento/dinâmica. O runner aplica-o ao `viewer.cam` **1x por mudança de assinatura** (só os 3 valores — o `lookat` é do `seguir_drone`) e sem viewer ignora sem erro |
 | `GET /` e `/assets/...` | o site (`site/dist/`); qualquer caminho desconhecido cai no `index.html`; path traversal → **404** |
+| `GET /api/fpv.mjpg` | **stream MJPEG** do módulo de câmara FPV (§4.6): `multipart/x-mixed-replace`, partes `image/jpeg`, `Cache-Control: no-cache`; só o ÚLTIMO quadro (clientes lentos perdem frames em vez de acumular atraso); cada parte traz `X-Fpv-Seq`/`X-Fpv-Captura-Ms` |
+| `GET /api/fpv.jpg` | o último quadro como imagem única (404 sem quadro) |
+| `GET /api/fpv/estado` | `{"fpv": <estado do módulo>}` ou `{"fpv": null}` sem módulo |
+| `POST /api/fpv` | `{"ligada"?, "modo"?}` (subconjunto; `seq` do servidor; `modo` = id EMULADO da tabela real; modo HDR/nada/chave desconhecida → **400**) → `{ok, fpv: {ligada, modo, seq}}`; escreve o bloco `fpv` por merge (nunca toca nos outros campos) |
+| `GET /api/simulacao.mjpg` | **stream MJPEG** da CÂMARA DA SIMULAÇÃO (vista 3.ª-pessoa; mesmo padrão multipart do FPV, `X-Simulacao-Seq`) — a segunda fonte do bloco «Câmara FPV» do site |
+| `GET /api/simulacao.jpg` | o último quadro da simulação (404 sem quadro) |
+| `GET /api/simulacao/estado` | estado do módulo da simulação (com `estado_velho`); `custo_pi5: null` — não é hardware de bordo |
+
+> **`multi_ia`** (mecanismo multi-IA de bordo, `multi_ia.py`): a telemetria publica a chave aditiva
+> `"multi_ia"` = `{ias: [{nome, papel, taxa_hz, ativo, estado, n_inferencias, latencia: {p50_us,
+> p99_us, …}, ultima_obs, ultima_acao}], v_ref_fonte, aviso, fc, latencia_total_us, periodo_us}` —
+> `/api/state` publica-a em `multi_ia` e o custo no painel em `rpi5.multi_ia` (semáforo
+> OK/ATENCAO/ERRO: p99 da soma das IAs vs o período de 20 ms; o FC 500 Hz NÃO é IA e não entra na
+> conta). MECANISMO ESCOLHIDO: via TELEMETRIA (como o `fpv`) — sem ficheiro extra. `null` quando não
+> há cascata (nada se inventa).
+
+> **Honestidade da fonte `simulacao`**: entrega **imediata** (sem a latência do pipeline Pi — não é
+> hardware de bordo, e aplicar-lhe o atraso de um módulo Pi seria mentir) e `custo_pi5: null`; só o
+> `host_ms` medido se aplica. **Orçamento de host**: os DOIS streams a 1080p50 não sustentam 50 fps cada
+> num host carregado (27–46 fps medidos; ~43 a PC livre) — é contenção de CPU/GPU do PC, não do módulo
+> (a fidelidade ±10 % da taxa prova-se com o módulo isolado; ver `teste_fpv.py` §3).
 
 `camera_padrao` = os valores da constante `CAM_PADRAO` = `{azimute, elevacao, distancia}` (**SEM `alvo`** —
 o alvo é sempre o drone; §4.4) — o **REPOR VISTA** do site manda-os como um comando normal de
@@ -499,8 +524,13 @@ não ir mais lento nem a favor: respeitar a movimentação proposta sem sofrer a
 `D = −y (direita)`, `Q = subir (+z)`, `E = descer (−z)`. As teclas comandam o **`v_ref`** (velocidade
 proposta em m/s): diagonais horizontais normalizadas para **1,0 m/s**, `|vz| = 0,7 m/s`, sem teclas →
 `v_ref = 0` = **segurar posição**. O env integra o `v_ref` na referência de POSIÇÃO `p_ref` a cada passo
-de decisão (50 Hz) e satura na caixa de trabalho `xy ±4 m`, `z ∈ [0,25; 2,75]` m — na borda a componente
-que bate fica com `v_ref = 0` (a referência não empurra contra a parede). O **REINICIAR** repõe
+de decisão (50 Hz) e satura em **`xy ±25 m`** (a ARENA de 50×50 m) e **`z ∈ [0,25; 25]` m** — na borda a
+componente que bate fica com `v_ref = 0` (a referência não empurra contra o limite). **Limites de
+movimento (2026-10-11, pedido do dono «quero andar por um espaço maior»)**: antes era uma caixa de
+**xy ±4 m** com teto de referência **2,75 m** e terminação por subida a **3 m**; agora a caixa desapareceu
+(o limite é o cenário: chão texturado 50×50 m), o teto de referência vai a **25 m** e a terminação por
+subida só a **30 m** (`Z_TETO` = o céu). O **piso mantém-se 0,25 m** (o chão é real) e as velocidades
+**não mudam** (`VOO_VEL` 1,0 m/s, `VOO_SUBIDA` 0,7 m/s — semântica do contrato). O **REINICIAR** repõe
 `p_ref = (0, 0, 1)` e o comando em vigor volta a ser aplicado (as teclas continuam pressionadas).
 
 **O que a política faz dele** (só com política `--comandos`, treinada com `train.py --comandos`): segue a
@@ -520,12 +550,39 @@ aplicados, erros, `seguindo`). O painel do site acende os keycaps **ao instante*
 vários clientes). Com política **clássica** o runner ignora o bloco com aviso e o eco vem `null` — o
 painel diz «modo comando indisponível: esta política não foi treinada com `--comandos`».
 
+### 4.6 Módulo de câmara FPV (2026-10-11) — a câmara de bordo, à frente do drone (+ a câmara da SIMULAÇÃO, trocável no site)
+
+A câmara que o **drone vê** (não a da janela 3D): um **módulo de câmara Raspberry Pi emulado**
+(`lab/camera_rpi.py` — Camera Module 3/3 Wide, Sony IMX708) montado **na frente do corpo** (`<camera
+fpv>`, a olhar para +x) e ligado ao RPi 5 por CSI-2. Reproduz a experiência do hardware real: os mesmos
+**modos de sensor** (4608×2592@14,35 · 2304×1296@56,03 · 1536×864@120,13, com os crops → FoV certo por
+modo), os mesmos **modos de vídeo** (1080p50 · 720p100 · 480p120), os mesmos **megapixels** (sensor
+11,9 MP; saída por modo), **JPEG qualidade 50** (o default do `rpicam-vid`) e a **latência de pipeline**
+(116 ms a 1080p50, faixa publicada 150–300 ms a 1080p30) — **cumprida na entrega** (cada quadro só fica
+disponível `latencia_modelada()` ms depois da captura). O modo **HDR** existe no hardware mas **não é
+emulado** (recusa-se com erro — nunca se finge).
+
+**Fluxo**: thread própria captura ao ritmo do modo (relógio de parede — a pausa e o `--fator-tempo` não o
+mudam) → render na proporção da janela de recorte → JPEG q50 → `out/fpv/quadro.jpg` + `out/fpv/estado.json`
+(atómico, só o último quadro) → `GET /api/fpv.mjpg` para o site. A CPU do Pi 5 é MODELO por etapa
+(aquisição CSI 0–3 % · controlo do ISP 8–12 % · cópias 8–15 % · **JPEG software 50–80 %** · transporte ~5 %
+de 1 núcleo A76 a 1080p50 = 0,94 núcleo — o **Pi 5 não tem encoder hardware**; faixas e fontes em
+`pesquisas/relatorio-pipeline-camera-rpi5-custo-cpu.md`) e o painel RPi 5 mostra-a SEPARADA da inferência
+(`camera_nucleos`/`nucleos_total`), lado a lado com o `host_ms` MEDIDO nesta máquina.
+
+**No site** (bloco «Câmara FPV», secção Operação/Tudo): imagem ao vivo, com SELETOR DE FONTE **FPV (bordo) | Simulação (3.ª pessoa)** que troca o `<img>` entre `/api/fpv.mjpg` e /api/simulacao.mjpg (o widget de câmara do site comanda a vista da simulação mesmo sem viewer) (`<img src="/api/fpv.mjpg">`),
+modo + resolução/MP de saída e do sensor, fps nominal e medido, qualidade/bytes/bitrate reais, latência
+de modelo (com a faixa publicada), nº de quadros, custo do Pi 5 por etapa (com as faixas) e o medido no
+PC; controlos **LIGAR/DESLIGAR** e **seletor de modo** (`POST /api/fpv`). Estados honestos: «sem módulo»
+quando a API traz `null`, «módulo desligado» quando `ligada: false` (a imagem fica parada, não se inventa
+nada). Sem módulo (modelo sem câmara ou `--sem-fpv`) tudo isto desaparece sem erro.
+
 ## 5. Interfaces alternativas (o resto do experimento)
 
 | peça | para quê | como |
 |---|---|---|
 | **`sim_site.py`** | ⭐ **o comando normal**: janela limpa + site (este documento) | `uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py` |
-| **`sim_view.py`** | só a janela limpa (e telemetria), sem site; a animação das hélices desliga-se com `--sem-helices` | `… sim_view.py [--sem-helices] [--fator-tempo 0.5] [--sem-janela --max-segundos 20] [--com-loop/--sem-loop]` |
+| **`sim_view.py`** | só a janela limpa (e telemetria), sem site; a animação das hélices desliga-se com `--sem-helices` | `… sim_view.py [--seguimento-model ZIP | auto-descobre out/real_1950_seguimento_*] [--sem-helices] [--fator-tempo 0.5] [--sem-janela --max-segundos 20] [--com-loop/--sem-loop]` |
 | **`view.py`** | viewer **alternativo** com HUD de 8 linhas e teclas de vento (para depurar a rede sem site): `ESPAÇO` pausa · `R` reinicia · `[` `]` força ±0,5 m/s · `,` `.` azimute ±15° · `v` vento 0 · `Q`/`Esc` fecha | `… view.py [--model …] [--vento-inicial 3,90] [--sem-janela]` |
 | **`dashboard.py`** | gestão de **TREINO** num site próprio (▶ Treinar, ■ Parar, curvas multi-run, rede ao vivo, painel de vento, log) — auditoria UX 41 → **88/100** | `… dashboard.py --port 8765 --out out` |
 | **`net_probe.py`** | sonda: corre a política e grava a rede em JSONL (é o que o dashboard usa); modo **sem-loop** por omissão | `… net_probe.py --model …zip --out net.jsonl --interval 0.05 [--loop/--sem-loop]` |
@@ -587,7 +644,7 @@ só o comando de bateria a muda:
   uma vez (o do arranque é linha de base, nunca se repete); `recarregar` fecha o ciclo e aplica o desgaste
   (ΔSoH pela profundidade, C-rate e temperatura do ciclo) e põe o pack a 100 %; `nova` = pack novo (SoH 100 %);
 - API: **`POST /api/bateria`** `{"acao": "recarregar"|"nova"}` → 200 `{"ok": true, "bateria": {"acao", "seq"}}`
-  (o `seq` é do servidor) · 400 com o motivo para outra ação. São agora **9 rotas** `/api/*` (2 GET + 7 POST).
+  (o `seq` é do servidor) · 400 com o motivo para outra ação. São agora **14 rotas** `/api/*` (5 GET + 9 POST).
 - `GET /api/state` e `GET /api/sim` trazem `"planta": "real"|"cf2"`; o `/api/state` traz ainda `"hardware"`
   (build, peças, massa, T/W, pairagem W e g/W, autonomia estimada, origem do kf/kq, DR) lido do `hardware.json`.
 

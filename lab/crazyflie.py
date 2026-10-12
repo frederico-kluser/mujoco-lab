@@ -46,6 +46,7 @@ MOTORES = ("body_thrust", "x_moment", "y_moment", "z_moment")
 # posições dos rotores no plano do corpo (m), medidas na malha das hélices (cf2_0.obj):
 # 4 hélices a ±0,0325 m → raio 0,0457 m → diagonal motor-a-motor ≈ 92 mm ✔ (datasheet CF2.0)
 POS_ROTORES = ((0.0325, 0.0325), (0.0325, -0.0325), (-0.0325, 0.0325), (-0.0325, -0.0325))  # (FL, FR, RL, RR)
+POS_FPV = (0.058, 0.0, 0.010)   # lente da câmara FPV no NARIZ (+x), sobre o deck (ver `carregar(fpv=True)`)
 GIRO = (1.0, -1.0, -1.0, 1.0)  # hélices em pares CW/CCW (diagonais giram igual) — sinal do momento de guinada
 KM = 0.016                    # m: razão momento-de-reatção/empuxo do rotor (parâmetro livre — ajuste ao seu hardware)
 
@@ -72,7 +73,7 @@ LIMIAR_PARAGEM = 1e-2         # rad/s: abaixo disto a hélice fica PARADA (ω = 
 # ----------------------------------------------------------------------------------------------- carga
 def carregar(cena: bool = True, sensores: bool = True, keyframe: str = "hover",
              momentos: str = "fisico", energia: bool = True,
-             helices: bool = False) -> tuple[mujoco.MjModel, mujoco.MjData]:
+             helices: bool = False, fpv: bool = False) -> tuple[mujoco.MjModel, mujoco.MjData]:
     """Carrega o modelo (intocado em disco) e prepara a camada do laboratório.
 
     · `sensores=True` acrescenta `posicao`/`vel` via MjSpec;
@@ -87,9 +88,13 @@ def carregar(cena: bool = True, sensores: bool = True, keyframe: str = "hover",
     · `helices=True` (desligado por omissão: o RL e o deploy não mudam) divide a malha `cf2_0` nas 4 hélices
       visuais `helice_1..4` — SÓ apresentação, para animar com `Helices` (ver o fim deste módulo: massa,
       inércia, contactos e resultados físicos ficam IDÊNTICOS).
+    · `fpv=True` (desligado por omissão) monta a CÂMARA FPV (`camera_rpi`) no nariz do cf2, a olhar para
+      +x — SÓ apresentação (sem massa nem contacto; o módulo de câmara REAL é do drone do dono, com massa
+      no orçamento do build — ver `lab/drone_rpi/modelo.py`). É esta câmara que alimenta o stream FPV
+      do site (`lab/camera_rpi.ModuloCamera`).
     Devolve (model, data) já no keyframe `hover` (posição de cruzeiro, empuxo = peso)."""
     caminho = CENA if cena else MODELO
-    if not sensores and not helices:
+    if not sensores and not helices and not fpv:
         model, data = mjkit.load(caminho, energy_flag=energia)
     else:
         spec = mujoco.MjSpec.from_file(str(caminho))
@@ -97,6 +102,10 @@ def carregar(cena: bool = True, sensores: bool = True, keyframe: str = "hover",
             _adiciona_sensores(spec)
         if helices:
             preparar_helices(spec)
+        if fpv:
+            from . import camera_rpi as cam_rpi
+            cam_rpi.preparar_framebuffer(spec)
+            cam_rpi.add_camera_fpv(spec.body("cf2"), POS_FPV, cam_rpi.fovy_graus(), nome="fpv")
         model = spec.compile()
         if energia:
             model.opt.enableflags |= mujoco.mjtEnableBit.mjENBL_ENERGY

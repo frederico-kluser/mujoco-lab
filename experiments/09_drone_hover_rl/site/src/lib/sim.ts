@@ -132,6 +132,10 @@ export interface RespostaSim {
    * que `null`)? `false` = backend que ainda não publica a câmara (aí retém-se o que já se sabia).
    */
   cameraPublicada: boolean
+  /** MÓDULO DE CÂMARA FPV (`fpv`); `null` = sem módulo (ou backend que ainda não o publica). */
+  fpv: FpvEstado | null
+  /** VISTA 3ª-PESSOA DA SIMULAÇÃO (`simulacao`); `null` = sem módulo. Não é hardware de bordo. */
+  simulacao: SimulacaoEstado | null
   /** Planta anunciada pelo servidor (`planta`); `null` se a resposta não a trouxer. */
   planta: Planta | null
   /** Controlo de voo (contrato r11); `null` quando a resposta não publica o bloco. */
@@ -161,6 +165,10 @@ export interface ResumoEstado {
   cameraPadrao: CameraEstado | null
   /** Houve informação de câmara na resposta (mesmo que `null`)? Ver `RespostaSim.cameraPublicada`. */
   cameraPublicada: boolean
+  /** MÓDULO DE CÂMARA FPV (`fpv`); `null` = sem módulo (ou resumo que ainda não o publica). */
+  fpv: FpvEstado | null
+  /** VISTA 3ª-PESSOA DA SIMULAÇÃO (`simulacao`); `null` = sem módulo. */
+  simulacao: SimulacaoEstado | null
   /** Planta anunciada pelo `/api/state` (`planta`); `null` se não vier. */
   planta: Planta | null
   /** Peças reais do modelo em uso (`hardware`, só na planta real); `null` se não vier. */
@@ -341,6 +349,8 @@ export function lerSim(bruto: unknown): RespostaSim {
     cameraPadrao: lerCamera(o.camera_padrao),
     cameraPublicada:
       "camera" in o || "camera_atual" in o || "camera_padrao" in o,
+    fpv: lerFpv(o.fpv),
+    simulacao: lerSimulacao(o.simulacao),
     planta: lerPlanta(o.planta),
     voo: lerVooEstado(o.voo),
     linhas,
@@ -396,6 +406,8 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     cameraPadrao: lerCamera(primeiro("camera_padrao")),
     cameraPublicada:
       ["camera", "camera_atual", "camera_padrao"].some((c) => c in o || c in aninhado),
+    fpv: lerFpv(primeiro("fpv")),
+    simulacao: lerSimulacao(primeiro("simulacao")),
     planta: lerPlanta(primeiro("planta")),
     hardware: lerHardware(primeiro("hardware")),
     voo: lerVooEstado(primeiro("voo")),
@@ -815,6 +827,290 @@ export function assinaturaCamera(cam: CorpoCamera): string {
   ])
 }
 
+// --------------------------------------------------------------------------------- câmara FPV
+
+/**
+ * MODOS EMULADOS do módulo de câmara FPV (`lab/camera_rpi.MODOS` — a tabela REAL da Pi Camera Module 3
+ * Wide). O HDR (`2304x1296p30hdr`) existe no hardware mas NÃO é emulado: o backend recusa-o, por isso o
+ * seletor também não o oferece. Os rótulos são os do contrato; quando o estado traz `modo_rotulo` (texto
+ * do backend) é ele que se mostra.
+ */
+export const MODOS_FPV = [
+  { id: "1080p50", rotulo: "1080p50 (FOV completo)" },
+  { id: "720p100", rotulo: "720p100 (FOV recortado 2/3)" },
+  { id: "480p120", rotulo: "480p120 (FOV recortado 2/3)" },
+  { id: "2304x1296p56", rotulo: "2304×1296 @ 56 fps (nativo)" },
+  { id: "1536x864p120", rotulo: "1536×864 @ 120 fps (nativo)" },
+  { id: "4608x2592p14", rotulo: "4608×2592 @ 14 fps (11,9 MP)" },
+] as const
+
+/** Id de um modo emulado do módulo FPV. */
+export type ModoFpv = (typeof MODOS_FPV)[number]["id"]
+
+/**
+ * Corpo de `POST /api/fpv` — um SUBCONJUNTO de `{ligada, modo}`: só os campos que se quer mudar. **SEM**
+ * `seq` (o servidor incrementa-o a cada pedido; mandá-lo força re-aplicação, que aqui não é preciso).
+ */
+export interface CorpoFpv {
+  ligada?: boolean
+  modo?: string
+}
+
+/** Estágios da latência de MODELO captura→site (ms) — soma publicada em `total_ms`. */
+export interface FpvEstagiosMs {
+  sensorLeituraMs: number | null
+  filaBuffersMs: number | null
+  ispMs: number | null
+  codificacaoMs: number | null
+  transporteMs: number | null
+  apresentacaoMs: number | null
+}
+
+/** Latência de MODELO do pipeline (soma de estágios com origem declarada — NUNCA medida). */
+export interface FpvLatencia {
+  estagios: FpvEstagiosMs
+  totalMs: number | null
+  /** Faixa publicada para MJPEG 1080p em Pi `[mín, máx]` (ms); `null` quando não vem. */
+  faixaPublicadaMs: [number, number] | null
+  /** Nota do modelo, tal como o backend a escreve (nunca reescrita pelo site). */
+  nota: string | null
+}
+
+/** Uma etapa do custo de CPU do Pi 5 — MODELO (% de 1 núcleo A76) com faixa, domínio e fonte. */
+export interface FpvEtapaCusto {
+  /** Id tal como o backend o escreve (ex. `codificacao_jpeg`); o rótulo legível é da UI. */
+  id: string
+  /** % de 1 núcleo A76 no modo de referência; `null` quando não vem. */
+  pct: number | null
+  /** Faixa do modelo como TEXTO (ex. «50–80» ou «assumido») — nunca se converte em número. */
+  faixa: string | null
+  /** Que taxa de píxeis escala a etapa (`sensor`/`saida`/`fixo`). */
+  dominio: string | null
+  /** Fonte do número, tal como o backend a escreve. */
+  fonte: string | null
+}
+
+/** Comparação com H.264 (x264 software) que o backend publica — só para nota, não é usado. */
+export interface FpvComparacaoH264 {
+  rotulo: string | null
+  pct1080p30: string | null
+  pct1080p50: string | null
+  fonte: string | null
+}
+
+/** Custo MODELO da câmara no Pi 5 (etapas + total em núcleos) — com as faixas e fontes. */
+export interface FpvCustoPi5 {
+  etapas: FpvEtapaCusto[]
+  totalPctNucleo: number | null
+  totalNucleos: number | null
+  taxaMpS: { sensor: number | null; saida: number | null }
+  comparacaoH264: FpvComparacaoH264 | null
+}
+
+/** Custo REAL do pipeline NESTA máquina (`host_ms`) — MEDIDO, nunca misturado com o modelo do Pi. */
+export interface FpvHostMs {
+  renderMs: number | null
+  ispMs: number | null
+  jpegMs: number | null
+  totalMs: number | null
+  nota: string | null
+}
+
+/**
+ * Estado do MÓDULO DE CÂMARA FPV (`fpv` do `/api/sim`/`/api/state`/`/api/fpv/estado`; o bloco `camera`
+ * do painel RPi 5 é o SUBCONJUNTO do mesmo objeto e lê-se com o mesmo parser).
+ *
+ * `null` = sem módulo de câmara (o backend publica `fpv: null`); dentro do estado, o que faltar ou não
+ * for finito fica `null` e o ecrã mostra «—» — nada é inventado.
+ */
+export interface FpvEstado {
+  /** Módulo ligado a capturar? `null` quando o estado não o diz. */
+  ligada: boolean | null
+  /** Id do modo em vigor (ex. `1080p50`); `null` quando não vem. */
+  modo: string | null
+  /** Rótulo legível do modo tal como o backend o escreve; `null` quando não vem. */
+  modoRotulo: string | null
+  /** Módulo físico emulado (ex. «Pi Camera Module 3 Wide»); `null` quando não vem. */
+  modulo: string | null
+  /** Janela do sensor usada pelo modo `[largura, altura]` (px); `null` quando não vem. */
+  sensor: [number, number] | null
+  /** Imagem de saída `[largura, altura]` (px); `null` quando não vem. */
+  saida: [number, number] | null
+  /** Recorte no sensor `[x, y, largura, altura]` (px); `null` quando não vem. */
+  crop: [number, number, number, number] | null
+  mpSensor: number | null
+  mpSaida: number | null
+  fpsNominal: number | null
+  fpsMedido: number | null
+  jpegQualidade: number | null
+  bytesMedio: number | null
+  bitrateMbps: number | null
+  quadros: number | null
+  fila: number | null
+  latencia: FpvLatencia | null
+  custoPi5: FpvCustoPi5 | null
+  hostMs: FpvHostMs | null
+  /** Idade do estado publicado (s); `null` quando não vem. */
+  idadeEstadoS: number | null
+  /**
+   * `true` quando o estado tem mais de `FPV_ESTADO_VELHO_S` sem escrita do runner (ou o runner morreu):
+   * os números são REAIS mas VELHOS e nunca devem apresentar-se como vivos. `null` quando não vem.
+   */
+  estadoVelho: boolean | null
+  /** FONTE da imagem: `"camera"` (módulo de bordo, com custo de Pi 5) ou `"simulacao"` (vista da
+   *  simulação — NÃO é hardware de bordo: `custoPi5` é `null` e `notaFonte` explica). */
+  fonte: string | null
+  /** Nota honesta da fonte (ex. «vista da simulação — não é hardware de bordo…»); `null` sem nota. */
+  notaFonte: string | null
+}
+
+/**
+ * Estado do módulo da FONTE `simulacao` (a vista 3ª-pessoa da simulação, trocável com a FPV no site).
+ * É o MESMO formato do `FpvEstado` — é o mesmo `lab/camera_rpi.ModuloCamera`, só a fonte da imagem
+ * muda — por isso reutiliza o parser defensivo `lerFpv`.
+ */
+export type SimulacaoEstado = FpvEstado
+
+/** `[a, b]` finitos, ou `null` (nunca `[0, 0]` a fingir de dados que não vieram). */
+function parFinito(bruto: unknown): [number, number] | null {
+  if (!Array.isArray(bruto) || bruto.length < 2) return null
+  const a = numero(bruto[0])
+  const b = numero(bruto[1])
+  return a === null || b === null ? null : [a, b]
+}
+
+/** `[x, y, larg, alt]` finitos, ou `null` (mesma regra do `parFinito`). */
+function quadraFinita(bruto: unknown): [number, number, number, number] | null {
+  if (!Array.isArray(bruto) || bruto.length < 4) return null
+  const v = [numero(bruto[0]), numero(bruto[1]), numero(bruto[2]), numero(bruto[3])]
+  return v.some((n) => n === null)
+    ? null
+    : [v[0] as number, v[1] as number, v[2] as number, v[3] as number]
+}
+
+function lerFpvEstagios(bruto: unknown): FpvEstagiosMs {
+  const e = objeto(bruto)
+  return {
+    sensorLeituraMs: numero(e.sensor_leitura),
+    filaBuffersMs: numero(e.fila_buffers),
+    ispMs: numero(e.isp),
+    codificacaoMs: numero(e.codificacao),
+    transporteMs: numero(e.transporte),
+    apresentacaoMs: numero(e.apresentacao),
+  }
+}
+
+function lerFpvLatencia(bruto: unknown): FpvLatencia | null {
+  if (typeof bruto !== "object" || bruto === null) return null
+  const o = objeto(bruto)
+  return {
+    estagios: lerFpvEstagios(o.estagios_ms),
+    totalMs: numero(o.total_ms),
+    faixaPublicadaMs: parFinito(o.faixa_publicada_ms),
+    nota: texto(o.nota),
+  }
+}
+
+function lerFpvCusto(bruto: unknown): FpvCustoPi5 | null {
+  if (typeof bruto !== "object" || bruto === null) return null
+  const o = objeto(bruto)
+  const etapasBruto = objeto(o.etapas)
+  const etapas: FpvEtapaCusto[] = Object.keys(etapasBruto).map((id) => {
+    const e = objeto(etapasBruto[id])
+    return {
+      id,
+      pct: numero(e.pct),
+      faixa: texto(e.faixa),
+      dominio: texto(e.dominio),
+      fonte: texto(e.fonte),
+    }
+  })
+  const taxa = objeto(o.taxa_mp_s)
+  const h264 = objeto(o.comparacao_h264)
+  return {
+    etapas,
+    totalPctNucleo: numero(o.total_pct_nucleo),
+    totalNucleos: numero(o.total_nucleos),
+    taxaMpS: { sensor: numero(taxa.sensor), saida: numero(taxa.saida) },
+    comparacaoH264:
+      typeof o.comparacao_h264 === "object" && o.comparacao_h264 !== null
+        ? {
+            rotulo: texto(h264.rotulo),
+            pct1080p30: texto(h264.pct_1080p30),
+            pct1080p50: texto(h264.pct_1080p50),
+            fonte: texto(h264.fonte),
+          }
+        : null,
+  }
+}
+
+function lerFpvHostMs(bruto: unknown): FpvHostMs | null {
+  if (typeof bruto !== "object" || bruto === null) return null
+  const o = objeto(bruto)
+  return {
+    renderMs: numero(o.render),
+    ispMs: numero(o.isp),
+    jpegMs: numero(o.jpeg),
+    totalMs: numero(o.total),
+    nota: texto(o.nota),
+  }
+}
+
+/**
+ * Estado do módulo de câmara FPV → `FpvEstado`, ou `null` quando a chave não vem, vem a `null` ou é um
+ * objeto vazio («sem módulo» — nunca se inventa um estado). Os números não finitos viram `null` (o
+ * `numero()` já o faz) e os blocos aninhados ausentes também (`latencia`/`custoPi5`/`hostMs`).
+ */
+export function lerFpv(bruto: unknown): FpvEstado | null {
+  const o = objeto(bruto)
+  // Sem nenhuma chave CONHECIDA não há estado de módulo nenhum (um `{foo: 1}` não vira um
+  // «módulo existe mas tudo null» — é `null`, como a ausência: nunca se inventa um estado).
+  const conhecidas = ["ligada", "modo", "saida", "fps_nominal", "quadros", "custo_pi5"]
+  if (!conhecidas.some((k) => k in o)) return null
+  return {
+    ligada: booleano(o.ligada),
+    modo: texto(o.modo),
+    modoRotulo: texto(o.modo_rotulo),
+    modulo: texto(o.modulo),
+    sensor: parFinito(o.sensor),
+    saida: parFinito(o.saida),
+    crop: quadraFinita(o.crop),
+    mpSensor: numero(o.mp_sensor),
+    mpSaida: numero(o.mp_saida),
+    fpsNominal: numero(o.fps_nominal),
+    fpsMedido: numero(o.fps_medido),
+    jpegQualidade: numero(o.jpeg_qualidade),
+    bytesMedio: numero(o.bytes_medio),
+    bitrateMbps: numero(o.bitrate_mbps),
+    quadros: numero(o.quadros),
+    fila: numero(o.fila),
+    latencia: lerFpvLatencia(o.latencia_modelada_ms),
+    custoPi5: lerFpvCusto(o.custo_pi5),
+    hostMs: lerFpvHostMs(o.host_ms),
+    idadeEstadoS: numero(o.idade_estado_s),
+    estadoVelho: booleano(o.estado_velho),
+    fonte: texto(o.fonte),
+    notaFonte: texto(o.nota_fonte),
+  }
+}
+
+/** `lerFpv` para o módulo da fonte `simulacao` (mesmo formato de estado — ver `SimulacaoEstado`). */
+export function lerSimulacao(bruto: unknown): SimulacaoEstado | null {
+  return lerFpv(bruto)
+}
+
+/** Rótulo legível de uma etapa do custo; ids desconhecidos mostram-se tal e qual (nunca se escondem). */
+export function rotuloEtapaCustoFpv(id: string): string {
+  const rotulos: Record<string, string> = {
+    aquisicao_csi: "aquisição CSI",
+    controlo_isp: "controlo ISP",
+    copias_formato: "cópias de formato",
+    codificacao_jpeg: "JPEG software",
+    transporte_http: "transporte HTTP",
+  }
+  return rotulos[id] ?? id
+}
+
 // ------------------------------------------------------------------------------ Raspberry Pi 5
 
 /**
@@ -855,6 +1151,76 @@ export interface Rpi5Inferencia {
   modeloCoincide: boolean | null
 }
 
+export interface MultiIaIa {
+  nome: string | null
+  papel: string | null
+  taxaHz: number | null
+  estado: string | null
+  ativo: boolean | null
+  nInferencias: number | null
+  p50Us: number | null
+  p99Us: number | null
+}
+
+export interface MultiIaCusto {
+  p50Us: number | null
+  p99Us: number | null
+  periodoUs: number | null
+  fracaoP99: number | null
+  pctP99: number | null
+  semaforo: string | null
+  vRefFonte: string | null
+  aviso: string | null
+  ias: MultiIaIa[]
+  fc: { papel: string | null; taxaHz: number | null; ia: boolean | null; nota: string | null } | null
+  nota: string | null
+}
+
+/**
+ * Custo multi-IA (`rpi5.multi_ia` do backend) → `MultiIaCusto`, ou `null` sem cascata / com lixo.
+ * Padrão do `lerFpv`: só há estado se vier alguma chave CONHECIDA — nunca se inventa uma IA.
+ */
+export function lerMultiIa(bruto: unknown): MultiIaCusto | null {
+  const o = objeto(bruto)
+  const conhecidas = ["ias", "semaforo", "p50_us", "p99_us", "v_ref_fonte", "fc"]
+  if (!conhecidas.some((k) => k in o)) return null
+  const fc = objeto(o.fc)
+  return {
+    p50Us: numero(o.p50_us),
+    p99Us: numero(o.p99_us),
+    periodoUs: numero(o.periodo_us),
+    fracaoP99: numero(o.fracao_p99),
+    pctP99: numero(o.pct_p99),
+    semaforo: texto(o.semaforo),
+    vRefFonte: texto(o.v_ref_fonte),
+    aviso: texto(o.aviso),
+    ias: Array.isArray(o.ias)
+      ? o.ias.map((bruto_ia: unknown) => {
+          const ia = objeto(bruto_ia)
+          return {
+            nome: texto(ia.nome),
+            papel: texto(ia.papel),
+            taxaHz: numero(ia.taxa_hz),
+            estado: texto(ia.estado),
+            ativo: typeof ia.ativo === "boolean" ? ia.ativo : null,
+            nInferencias: numero(ia.n_inferencias),
+            p50Us: numero(objeto(ia.latencia).p50_us),
+            p99Us: numero(objeto(ia.latencia).p99_us),
+          } satisfies MultiIaIa
+        })
+      : [],
+    fc: o.fc && typeof o.fc === "object"
+      ? {
+          papel: texto(fc.papel),
+          taxaHz: numero(fc.taxa_hz),
+          ia: typeof fc.ia === "boolean" ? fc.ia : null,
+          nota: texto(fc.nota),
+        }
+      : null,
+    nota: texto(o.nota),
+  }
+}
+
 export interface Rpi5Uso {
   decisoesS: number | null
   latenciaEstimadaUs: number | null
@@ -865,14 +1231,27 @@ export interface Rpi5Uso {
   gargalo: string | null
   jitterMsStandard: number | null
   jitterUsPreemptRt: number | null
+  /** Núcleos de CPU da inferência — MEDIDO (p50 × decisões/s); `null` sem benchmark. */
+  inferenciaNucleos: number | null
+  /** Núcleos de CPU da câmara FPV — MODELO (`camera.custo_pi5.total_nucleos`); `null` sem câmara. */
+  cameraNucleos: number | null
+  /** Inferência (MEDIDA) + câmara (MODELO) em núcleos; `null` quando falta alguma das duas. */
+  nucleosTotal: number | null
 }
 
 export interface Rpi5 {
   specs: Rpi5Specs
   inferencia: Rpi5Inferencia
   uso: Rpi5Uso
+  /** Custo do mecanismo multi-IA (soma das latências das IAs vs o período de 50 Hz); `null` sem cascata. */
+  multiIa: MultiIaCusto | null
   /** Estado do próprio hardware; `null` = sem Pi 5 ligado (o painel diz «sem hardware»). */
   hardware: Rpi5Hardware | null
+  /**
+   * CÂMARA FPV (módulo Pi) tal como o `rpi5.camera` a publica — o SUBCONJUNTO do estado do módulo que
+   * serve o painel, lido pelo MESMO `lerFpv` (campos ausentes ficam `null`); `null` = sem módulo.
+   */
+  camera: FpvEstado | null
   /** Texto CRU da procedência, tal como o backend o escreve (nunca reescrito pelo site). */
   fonte: string
   tipoFonte: TipoFonteRpi5
@@ -966,8 +1345,13 @@ export function lerRpi5(bruto: unknown): Rpi5 | null {
       gargalo: texto(uso.gargalo),
       jitterMsStandard: numero(uso.jitter_ms_standard),
       jitterUsPreemptRt: numero(uso.jitter_us_preempt_rt),
+      inferenciaNucleos: numero(uso.inferencia_nucleos),
+      cameraNucleos: numero(uso.camera_nucleos),
+      nucleosTotal: numero(uso.nucleos_total),
     },
     hardware: lerHardwareRpi5(o),
+    camera: lerFpv(o.camera),
+    multiIa: lerMultiIa(o.multi_ia),
     fonte: texto(o.fonte) ?? "sem benchmark",
     tipoFonte: tipoFonteRpi5(texto(o.fonte)),
     temBenchmark,

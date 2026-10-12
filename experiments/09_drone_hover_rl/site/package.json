@@ -12,7 +12,10 @@
     "preview": "vite preview",
     "test:camera": "node testes/camera-roundtrip.mts && node testes/camera-gestos.mts",
     "test:planta": "node testes/planta-real.mts",
-    "test:voo": "node testes/voo-teclas.mts"
+    "test:voo": "node testes/voo-teclas.mts",
+    "test:fpv": "node testes/fpv.mts && node testes/simulacao.mts",
+    "test:rajadas": "node testes/rajadas-ux.mts",
+    "test:multi-ia": "node testes/multi-ia.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

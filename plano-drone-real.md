@@ -32,9 +32,13 @@ validado por fórmulas fechadas (`run.py` → `valida_real.py`: **97 checagens d
 | Treino com os dados das peças | `train.py --planta real` grava `hardware.json` (peças + derivados + DR) ao lado da política; `deploy.py` exporta só o ator `(1, 21)` | `avaliar_real.py` (grelha de 9 condições) |
 
 **Decisão do §3 (1 h ⇒ classe ≥ 10″ + Li-ion) — tomada com peças reais**: build ativo
-`endurance_15pol_p50b` = T-Motor **MN4004 KV300** + **P15×5 CF**, **6S2P Molicel P50B** (216 Wh), frame DIY 650 mm,
-RPi 5 + FC H7 + BMI088/VL53L1X/PMW3901/INA226 → **1664 g, 133 W em pairagem (12,5 g/W), T/W 3,4,
-autonomia de pairagem 99 min no modelo** (~80–90 min reais esperados; ver `models/drone_rpi/README.md`).
+`endurance_15pol_p50b` = T-Motor **MN4004 KV300** + **P15×5 CF**, **6S2P Molicel P50B** (216 Wh), frame DIY **1950 mm** (wheelbase ×3, 2026-10-11),
+RPi 5 + FC H7 + BMI088/VL53L1X/PMW3901/INA226 + **câmara Pi Camera Module 3 Wide** → **2183 g, 198,1 W em
+pairagem (11,0 g/W), T/W 2,6, autonomia de pairagem 65,8 min no modelo** (ver `models/drone_rpi/README.md`).
+⚠ **2026-10-11, duas mudanças do dono**: (1) o frame passou a **DIY 1950 mm (wheelbase ×3)** — mais
+estável (J ×10,9) mas menos ágil (guinada ÷10–12; retuning do FC automático) e ~33 % menos autonomia;
+(2) os **limites de movimento abriram**: xy ±25 m (arena), z até 25 m, terminação por subida só a 30 m
+(antes caixa de 4 m / 2,75 m / 3 m). O 6S2P continua a cumprir a meta de 1 h (65,8 min).
 Alternativas no catálogo: semi-sólido Tattu (128 min, só dados do fabricante), 17″ 4S (89 min), frame comercial
 Tarot 650 (66 min), X500 V2 13″ (54 min), o 5″ do plano (13 min).
 
@@ -193,6 +197,8 @@ Com a bateria Li-ion 4S2P 21700 (560 g) chega-se aos **~35 min** — o máximo s
 
 > ✅ **Decisão tomada (§0)**: build `endurance_15pol_p50b` — T-Motor MN4004 KV300 + P15×5, 6S2P
 > Molicel P50B, RPi 5 + FC H7 → 1664 g, 133 W, **99 min de pairagem no modelo** (≥ 60 min pedidos).
+> *(2026-10-11: câmara FPV +4 g → 1668 g/98,6 min; depois wheelbase ×3 (frame 1950 mm) → **2183 g,
+> 198,1 W, 65,8 min** — a meta de 1 h continua cumprida.)*
 
 Com hélices de **10″ e motores de baixo KV** (classe endurance, ~11 g/W a ~0,6 kg), o ponto fixo
 **converge**: `m_bat ≈ 0,25 kg` (Li-ion 21700, 4S1P ≈ 280 g) · **M total ≈ 0,58 kg** · **P ≈ 50 W** ·

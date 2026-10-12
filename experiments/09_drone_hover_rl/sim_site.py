@@ -90,8 +90,13 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
                                     automática pela observação da política; com política clássica o runner
                                     ignora com aviso e o eco `voo` da telemetria fica `null`, honesto).
 
-São 10 rotas `/api/*` no total (2 GET + 8 POST); a 9.ª, `POST /api/bateria`
-`{"acao": "recarregar"|"nova"}`, é da planta REAL (recarregar fecha o ciclo com desgaste; nova = pack novo).
+São 14 rotas `/api/*` no total (5 GET + 9 POST); além das anteriores: `POST /api/bateria`
+`{"acao": "recarregar"|"nova"}` (planta REAL; recarregar fecha o ciclo com desgaste; nova = pack novo) e o
+MÓDULO DE CÂMARA FPV — `GET /api/fpv.mjpg` (stream multipart/x-mixed-replace, o padrão do exemplo web
+streaming do picamera2: SÓ o último quadro, `Cache-Control: no-cache`, partes `image/jpeg` com
+`X-Fpv-Seq`/`X-Fpv-Captura-Ms`), `GET /api/fpv.jpg` (um quadro), `GET /api/fpv/estado` (estado do módulo)
+e `POST /api/fpv` `{"ligada": bool, "modo": str}` (subconjunto; `seq` do servidor; modo = id emulado da
+tabela real de modos — ver `lab/camera_rpi.MODOS`).
 
 O ficheiro de controlo (o site escreve, o runner lê a cada passo de decisão) e a telemetria (o runner
 escreve, o site lê) estão descritos no cabeçalho do `sim_view.py` — o ARRANQUE escreve sempre o `loop`
@@ -122,8 +127,10 @@ import json
 import math
 import mimetypes
 import os
+import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -140,6 +147,20 @@ DIST = _AQUI / "site" / "dist"
 INDEX = DIST / "index.html"
 CONTROLO_OMISSAO = _AQUI / "out" / "controle_vento.json"
 TELEMETRIA_OMISSAO = _AQUI / "out" / "sim_telemetria.jsonl"
+# MÓDULO DE CÂMARA FPV (`lab/camera_rpi`, montado à frente do drone): o runner escreve o ÚLTIMO quadro já
+# disponível (com a latência do modelo cumprida) em `quadro.jpg` + o estado em `estado.json`, ambos de
+# forma atómica; este servidor serve-os como no exemplo "web streaming" do picamera2:
+# `GET /api/fpv.mjpg` = multipart/x-mixed-replace (SÓ o último quadro — clientes lentos perdem frames em
+# vez de acumular atraso, como o buffer do exemplo), `GET /api/fpv.jpg` = um quadro,
+# `GET /api/fpv/estado` = o estado do módulo e `POST /api/fpv` = ligar/desligar + modo (bloco `fpv`).
+FPV_OMISSAO = _AQUI / "out" / "fpv"
+FPV_QUADRO, FPV_ESTADO = "quadro.jpg", "estado.json"
+FPV_QUADRO_SIM, FPV_ESTADO_SIM = "quadro_sim.jpg", "estado_sim.json"   # fonte `simulacao`
+FPV_FRONTEIRA = b"--fpvjpeg"          # boundary do multipart (o padrão do exemplo picamera2)
+FPV_ESPERA_S = 0.005                  # s entre espreitadelas ao ficheiro do quadro no stream
+FPV_ESTADO_VELHO_S = 2.0             # s: sem escrita do runner há isto, o estado é "velho"
+#                               (o `out/fpv` é persistente — um estado de sessão anterior nunca
+#                               pode parecer atual; o resultado leva `estado_velho` e o site mostra)
 
 VEL_MAX, AZIM_MAX, ELEV_MAX = 5.0, 360.0, 90.0     # faixas do contrato (as mesmas do sim_view.py)
 MODOS_DINAMICOS = ("nenhum", "rajadas", "aleatoria", "frente", "dryden", "rajada_agora")   # modos do vento ao vivo
@@ -398,7 +419,7 @@ def resumo_telemetria(caminho: Path) -> dict:
     if not linhas:
         return {"estado": "desconhecido", "ep": 0, "passo": 0, "retorno": 0.0, "linhas": 0, "t": None,
                 "loop": None, "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None,
-                "camera_atual": None, "voo": None}
+                "camera_atual": None, "voo": None, "multi_ia": None}
     ultima = linhas[-1]
     vec = ultima.get("vento_vec")
     loop = ultima.get("loop")
@@ -413,7 +434,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "vento_azim": float(ultima.get("vento_azim", 0.0) or 0.0),
             "vento_modo": str(ultima.get("vento_modo", "nenhum") or "nenhum"),
             "camera_atual": _camera_da_amostra(camera),
-            "voo": voo if isinstance(voo, dict) else None}
+            "voo": voo if isinstance(voo, dict) else None,
+            "multi_ia": (ultima.get("multi_ia") if isinstance(ultima.get("multi_ia"), dict) else None)}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -507,7 +529,61 @@ def _medido(valor, casas: int, divisor: float = 1.0) -> float | None:
     return round(v / divisor, casas) if math.isfinite(v) and v > 0 else None
 
 
-def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dict:
+def _bloco_camera_fpv(fpv: dict | None) -> dict | None:
+    """Bloco `camera` do painel RPi 5 a partir do estado do módulo FPV do runner (`None` sem módulo).
+
+    Traz o que o painel precisa para ser honesto sobre o PROCESSADOR: o modo em uso (resolução, MP, taxa
+    NOMINAL e MEDIDA), os bytes/bitrate reais, a latência de modelo, o custo do Pi 5 por etapa — MODELO,
+    com as faixas e as fontes do `lab/camera_rpi.custo_cpu` — e o que o pipeline custa de facto NESTA
+    máquina (`host_ms`, medido, nunca misturado com o modelo).
+    """
+    if not isinstance(fpv, dict):
+        return None
+    chaves = ("ligada", "modo", "modo_rotulo", "modulo", "sensor", "saida", "crop", "mp_sensor", "mp_saida",
+              "fps_nominal", "fps_medido", "jpeg_qualidade", "bytes_medio", "bitrate_mbps", "quadros",
+              "fila", "latencia_modelada_ms", "custo_pi5", "host_ms", "idade_estado_s", "estado_velho")
+    return {k: fpv.get(k) for k in chaves}
+
+
+def _custo_multi_ia(multi_ia: dict | None) -> dict | None:
+    """Custo multi-IA no RPi 5: a SOMA das latências medidas por IA contra o período de 20 ms (50 Hz).
+
+    `multi_ia` é o estado do orquestrador (`multi_ia.CascataMultiIA.estado()`), que viaja na telemetria
+    (chave `"multi_ia"`). SEM cascata → `None` (o painel mostra «sem multi-IA» — nada se inventa). Com
+    cascata: `p50_us`/`p99_us` da soma das IAs ativas (IA-1 «voo» 50 Hz + IA-2 «seguimento» 25 Hz, se
+    existir) e um SEMÁFORO honesto contra o período de 20 ms:
+      · `OK`       p99 ≤ 50 % do período (10 ms);
+      · `ATENCAO`  p99 ≤ 80 % (16 ms);
+      · `ERRO`     p99 > 80 % — a cascata não cabe no laço de 50 Hz neste hardware.
+    O FC (500 Hz) está FORA desta conta — não é IA e corre no FC H7, não no RPi 5.
+    """
+    if not isinstance(multi_ia, dict):
+        return None
+    total = multi_ia.get("latencia_total_us") or {}
+    p50, p99 = total.get("p50_us"), total.get("p99_us")
+    periodo = float(multi_ia.get("periodo_us") or 20_000.0)
+    fracao = (None if p99 is None else float(p99) / periodo)
+    semaforo = ("sem dados" if fracao is None else
+                "OK" if fracao <= 0.5 else "ATENCAO" if fracao <= 0.8 else "ERRO")
+    ias = multi_ia.get("ias") or []
+    return {"p50_us": p50, "p99_us": p99, "periodo_us": periodo,
+            "fracao_p99": (None if fracao is None else round(fracao, 4)),
+            "pct_p99": (None if fracao is None else round(100.0 * fracao, 2)),
+            "semaforo": semaforo,
+            "v_ref_fonte": multi_ia.get("v_ref_fonte"),
+            "aviso": multi_ia.get("aviso"),
+            "ias": [{"nome": ia.get("nome"), "papel": ia.get("papel"), "taxa_hz": ia.get("taxa_hz"),
+                     "estado": ia.get("estado"), "ativo": ia.get("ativo"),
+                     "n_inferencias": ia.get("n_inferencias"),
+                     "p50_us": (ia.get("latencia") or {}).get("p50_us"),
+                     "p99_us": (ia.get("latencia") or {}).get("p99_us")} for ia in ias],
+            "fc": multi_ia.get("fc"),
+            "nota": "soma das latências p50/p99 das IAs vs o período de 20 ms (50 Hz); o FC (500 Hz) "
+                    "não é IA e não entra nesta conta"}
+
+
+def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None, fpv: dict | None = None,
+               multi_ia: dict | None = None) -> dict:
     """Painel RPi 5: specs fixas + inferência medida (benchmark) + uso calculado AO VIVO.
 
     `uso.fracao_budget = p50_us · decisoes_s / 20000` (a fórmula do contrato: decisões/s reais × latência ÷
@@ -516,29 +592,45 @@ def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dic
     `fonte = "sem benchmark"` e os campos de inferência vêm a `None` — o painel mostra "sem dados".
     `inferencia.modelo_coincide` diz se o modelo MEDIDO é o mesmo que o runner está a carregar (o painel
     estima o custo do que corre, não de outro `.zip`).
+
+    A CÂMARA FPV (`fpv` = estado do módulo, ou `None`) entra à parte em `camera` e em
+    `uso.camera_nucleos`/`uso.nucleos_total`: o módulo de câmara é o maior consumidor de CPU do SoC (o
+    JPEG é software no Pi 5 — ver `lab/camera_rpi`) e o painel mostra-o SEPARADO da inferência, com as
+    faixas/fontes de cada etapa e o medido no host em `host_ms`.
     """
     jitter, publicada = RPI5_SPECS["jitter_so"], RPI5_SPECS["inferencia_publicada"]
+    camera = _bloco_camera_fpv(fpv)
+    custo_multi_ia = _custo_multi_ia(multi_ia)
+    camera_nucleos = None
+    if camera and isinstance(camera.get("custo_pi5"), dict):
+        camera_nucleos = camera["custo_pi5"].get("total_nucleos")
     uso = {"decisoes_s": round(float(decisoes_s), 3), "latencia_estimada_us": None, "fracao_budget": None,
            "pct_budget": None, "pct_cpu_equivalente": None, "nucleos_multi_ia": 1,
            "pct_periodo": None,          # p50 do NOSSO MLP por decisão, em % do período de 20 ms
            "pct_periodo_publicado_cnn": round(100.0 * publicada["fp32_ms"] * 1000.0 / BUDGET_US, 3),
            "jitter_ms_standard": jitter["standard_ms_pior_caso"],
            "jitter_us_preempt_rt": jitter["preempt_rt_us_max"],
+           "camera_nucleos": camera_nucleos,          # MODELO (lab/camera_rpi.custo_cpu), etapas em camera
+           "nucleos_total": None,                     # inferência (medida) + câmara (modelo), quando há
            "gargalo": "jitter do SO a 50 Hz (9,4 ms de pior caso no kernel standard) — a inferência do "
                       "nosso MLP usa <1% do período de 20 ms",
            "nota": "p50 (proxy x86 de 1 core A76) x decisoes/s medidas na telemetria / 20 ms (50 Hz)"}
     if not bench:
         return {"specs": dict(RPI5_SPECS), "inferencia": None, "uso": uso, "fonte": "sem benchmark",
-                "benchmark": str(BENCHMARK_OMISSAO)}
+                "camera": camera, "benchmark": str(BENCHMARK_OMISSAO), "multi_ia": custo_multi_ia}
     b = bench.get("benchmark") or {}
     p50 = float(b.get("p50_us") or 0.0)
     onnx = bench.get("onnx") or {}
     int8 = bench.get("int8") or {}
     fracao = p50 * float(decisoes_s) / BUDGET_US
+    inferencia_nucleos = float(decisoes_s) * p50 / 1e6      # µs de CPU por segundo = fração de 1 núcleo
     uso.update({"latencia_estimada_us": round(p50, 3), "fracao_budget": round(fracao, 6),
                 "pct_budget": round(100.0 * fracao, 3),
                 "pct_cpu_equivalente": round(100.0 * fracao / NUCLEOS_SOC, 3),
-                "pct_periodo": round(100.0 * p50 / BUDGET_US, 4)})
+                "pct_periodo": round(100.0 * p50 / BUDGET_US, 4),
+                "inferencia_nucleos": round(inferencia_nucleos, 4),
+                "nucleos_total": (None if camera_nucleos is None
+                                  else round(inferencia_nucleos + float(camera_nucleos), 3))})
     inferencia = {
         "p50_us": round(p50, 3), "p99_us": round(float(b.get("p99_us") or 0.0), 3),
         "max_us": round(float(b.get("max_us") or 0.0), 3),
@@ -558,7 +650,8 @@ def bloco_rpi5(bench: dict | None, decisoes_s: float, modelo_em_uso=None) -> dic
     modelo_bench = inferencia["modelo"]
     if modelo_em_uso is not None and modelo_bench:
         inferencia["modelo_coincide"] = mesma_coisa(modelo_bench, modelo_em_uso)
-    return {"specs": dict(RPI5_SPECS), "inferencia": inferencia, "uso": uso,
+    return {"specs": dict(RPI5_SPECS), "inferencia": inferencia, "uso": uso, "camera": camera,
+            "multi_ia": custo_multi_ia,
             "fonte": "proxy x86 calibrado (1 núcleo do A76; não é o RPi)", "benchmark": inferencia["json"]}
 
 
@@ -615,7 +708,7 @@ class Servidor:
 
     def __init__(self, controlo: Path, telemetria: Path, host: str, porta: int, verboso: bool = False,
                  filho: subprocess.Popen | None = None, modelo: Path | None = None,
-                 motivo: str = "", memorizados: dict | None = None):
+                 motivo: str = "", memorizados: dict | None = None, fpv: Path | None = None):
         self.controlo = Path(controlo)
         self.telemetria = Path(telemetria)
         self.host = host
@@ -626,8 +719,10 @@ class Servidor:
         self.modelo_motivo = motivo or ""                             # porquê este modelo (auditoria)
         self.memorizados = dict(memorizados or {})                    # `loop`/`reiniciar` efetivos (runtime)
         self.hardware = hardware_do_modelo(self.modelo)               # planta real: peças do modelo em uso
+        self.fpv = Path(fpv) if fpv is not None else FPV_OMISSAO      # pasta do stream da câmara FPV
         self._ritmo = {"t": None, "passo": None, "valor": 0.0}       # decisoes/s medidos entre pedidos
         self._bench = {"t": 0.0, "dados": None}                      # cache do relatório do deploy.py
+        self._fpv_estado: dict = {}        # cache do estado dos módulos (por nome de ficheiro)
 
     def medir_ritmo(self, passo: int) -> float:
         """Decisões/s REAIS medidas na telemetria: Δpasso / Δtempo-de-parede entre pedidos (EMA 0,3).
@@ -643,6 +738,47 @@ class Servidor:
             valor = taxa if amostra["valor"] == 0.0 else 0.7 * amostra["valor"] + 0.3 * max(0.0, taxa)
         amostra.update({"t": agora, "passo": int(passo), "valor": valor})
         return valor
+
+    def simulacao_estado(self, max_idade: float = 0.5) -> dict | None:
+        """Estado do módulo da FONTE `simulacao` (`out/fpv/estado_sim.json`) — ou `None` sem módulo.
+
+        Mesmo contrato e mesmo corte de frescura do `fpv_estado` (o `estado_velho` impede que um estado
+        de sessão anterior pareça atual). É a vista 3ª-pessoa da simulação: **não** entra no custo de Pi
+        do painel (só a `fpv` entra) — o `estado()` do módulo já traz `custo_pi5: null` e a `nota_fonte`.
+        """
+        return self._estado_de_modulo(FPV_ESTADO_SIM, max_idade)
+
+    def fpv_estado(self, max_idade: float = 0.5) -> dict | None:
+        """Estado do MÓDULO DE CÂMARA FPV (`out/fpv/estado.json` do runner; cache de `max_idade` s).
+
+        `None` quando não há módulo (runner sem FPV, ou ainda não escreveu estado) — a API publica
+        `null` e o site mostra «sem módulo», sem inventar nada. O conteúdo é o `estado()` do
+        `lab/camera_rpi.ModuloCamera` (configuração do modo + medições + custos), mais a idade.
+        """
+        return self._estado_de_modulo(FPV_ESTADO, max_idade)
+
+    def _estado_de_modulo(self, nome_estado: str, max_idade: float = 0.5) -> dict | None:
+        """Le o `nome_estado` do módulo (`out/fpv/`) com cache e corte de frescura.
+
+        FRESCURA (honestidade): o `out/fpv` é persistente e por omissão, por isso um estado de uma
+        sessão anterior — runner morto, `--sem-fpv`, planta que não escreve — NUNCA pode parecer atual:
+        passados `FPV_ESTADO_VELHO_S` sem escrita o resultado leva `estado_velho: true` (os números
+        ficam, mas marcados; o site mostra «estado há X s» e não os apresenta como vivos).
+        """
+        cache = self._fpv_estado.setdefault(nome_estado, {"t": 0.0, "dados": None})
+        agora = time.time()
+        if cache["dados"] is None or agora - cache["t"] >= max_idade:
+            dados = None
+            try:
+                bruto = json.loads((self.fpv / nome_estado).read_text(encoding="utf-8"))
+                if isinstance(bruto, dict):
+                    idade = agora - _mtime(self.fpv / nome_estado)
+                    dados = {**bruto, "idade_estado_s": round(idade, 3),
+                             "estado_velho": bool(idade > FPV_ESTADO_VELHO_S)}
+            except (OSError, ValueError):
+                dados = None
+            cache.update({"t": agora, "dados": dados})
+        return cache["dados"]
 
     def benchmark(self, max_idade: float = 5.0) -> dict | None:
         """Relatório do `deploy.py` (cache de `max_idade` s: o painel não relê o JSON a cada pedido).
@@ -704,6 +840,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._api_sim()
             elif rota == "/api/state":
                 self._api_state()
+            elif rota == "/api/fpv.mjpg":
+                self._stream_fpv()
+            elif rota == "/api/fpv.jpg":
+                self._fpv_jpeg()
+            elif rota == "/api/fpv/estado":
+                self._fpv_estado_rota()
+            elif rota == "/api/simulacao.mjpg":
+                self._stream_simulacao()
+            elif rota == "/api/simulacao.jpg":
+                self._simulacao_jpeg()
+            elif rota == "/api/simulacao/estado":
+                self._simulacao_estado_rota()
             elif rota.startswith("/api/"):
                 self._erro(404, f"rota desconhecida: {rota}")
             else:
@@ -733,6 +881,8 @@ class Handler(BaseHTTPRequestHandler):
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
+            "fpv": self.servidor.fpv_estado(),         # módulo de câmara FPV (ou null sem módulo)
+            "simulacao": self.servidor.simulacao_estado(),   # vista 3ª-pessoa da simulação (ou null)
             "modelo": None if self.servidor.modelo is None else str(self.servidor.modelo),
             "modelo_nome": self.servidor.modelo_nome,
             "planta": "real" if self.servidor.hardware else "cf2",
@@ -759,8 +909,12 @@ class Handler(BaseHTTPRequestHandler):
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
             "planta": "real" if self.servidor.hardware else "cf2",
             "hardware": resumo_hardware(self.servidor.hardware),
+            "fpv": self.servidor.fpv_estado(),          # módulo de câmara FPV (ou null sem módulo)
+            "simulacao": self.servidor.simulacao_estado(),   # vista da simulação (NUNCA no custo do Pi)
+            "multi_ia": resumo.get("multi_ia"),     # estado do orquestrador (via TELEMETRIA; null sem cascata)
             "rpi5": bloco_rpi5(self.servidor.benchmark(),
-                               self.servidor.medir_ritmo(resumo["passo"]), self.servidor.modelo),
+                               self.servidor.medir_ritmo(resumo["passo"]), self.servidor.modelo,
+                               self.servidor.fpv_estado(), resumo.get("multi_ia")),
             "modelo": None if self.servidor.modelo is None else str(self.servidor.modelo),
             "modelo_nome": self.servidor.modelo_nome,
             "modelo_motivo": self.servidor.modelo_motivo,
@@ -819,6 +973,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_loop(dados)
             elif rota == "/api/camera":
                 self._post_camera(dados)
+            elif rota == "/api/fpv":
+                self._post_fpv(dados)
             elif rota == "/api/voo":
                 self._post_voo(dados)
             elif rota == "/api/bateria":
@@ -986,6 +1142,116 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[site] camera (3a pessoa): az {cam['azimute']:.1f} deg, elev {cam['elevacao']:+.1f} deg, "
               f"distancia {cam['distancia']:.2f} m (seq {cam['seq']}) — alvo segue o drone", flush=True)
         self._json(200, {"ok": True, "camera": cam})
+
+    # ----------------------------------------------------------------------------------- câmara FPV
+    def _post_fpv(self, dados) -> None:
+        """Liga/desliga o MÓDULO DE CÂMARA FPV e troca o modo: 200/400.
+
+        Mesmo caminho do `_post_camera`: corpo validado (`validar_fpv`) → bloco `fpv` COMPLETO com o
+        `seq` do servidor → escrita atómica no controlo (merge: nunca toca em vento/loop/reiniciar/
+        câmara da janela) → o runner aplica na mudança de assinatura.
+        """
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_fpv(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["fpv"]
+        print(f"[site] fpv (módulo de câmara): {'ligada' if bloco['ligada'] else 'DESLIGADA'} · "
+              f"modo {bloco['modo']} (seq {bloco['seq']})", flush=True)
+        self._json(200, {"ok": True, "fpv": bloco})
+
+    def _stream_fpv(self) -> None:
+        """`GET /api/fpv.mjpg`: stream MJPEG do módulo FPV (fonte `camera`, o de bordo)."""
+        self._stream_mjpeg(FPV_QUADRO, self.servidor.fpv_estado, "Fpv")
+
+    def _stream_simulacao(self) -> None:
+        """`GET /api/simulacao.mjpg`: stream MJPEG do módulo da FONTE `simulacao` (vista 3ª-pessoa)."""
+        self._stream_mjpeg(FPV_QUADRO_SIM, self.servidor.simulacao_estado, "Simulacao")
+
+    def _stream_mjpeg(self, quadro_nome: str, estado, cabecalho: str) -> None:
+        """multipart/x-mixed-replace com o ÚLTIMO quadro do módulo pedido (o padrão picamera2).
+
+        Uma parte `image/jpeg` por quadro, `Cache-Control: no-cache` e SÓ o último quadro conta — um
+        cliente lento perde frames em vez de acumular atraso (é assim que o buffer do exemplo se comporta
+        e é isso que mantém a latência igual à do módulo real; a latência do pipeline é cumprida PELO
+        RUNNER, no ficheiro). Cada parte leva `X-{cabecalho}-Seq` e `X-{cabecalho}-Captura-Ms` (instante
+        da captura, relógio do runner) para quem quiser medir a latência de entrega. O stream vive até o
+        cliente desligar (uma thread do `ThreadingHTTPServer`, como qualquer outro pedido).
+        """
+        pasta = self.servidor.fpv
+        self.send_response(200)
+        self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={FPV_FRONTEIRA.decode()}")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        ultimo = None
+        try:
+            while True:
+                caminho = pasta / quadro_nome
+                try:
+                    st = caminho.stat()
+                    assinatura = (st.st_mtime_ns, st.st_size)
+                    if assinatura != ultimo:
+                        ultimo = assinatura
+                        jpeg = caminho.read_bytes()      # escrita atómica do runner: nunca a meio
+                        if jpeg:
+                            bloco = estado()
+                            seq = "" if not bloco else f"X-{cabecalho}-Seq: {bloco.get('quadro')}\r\n"
+                            captura = "" if not bloco or bloco.get("t_captura") is None else (
+                                f"X-{cabecalho}-Captura-Ms: "
+                                f"{1000.0 * float(bloco['t_captura']):.1f}\r\n")
+                            self.wfile.write(b"\r\n" + FPV_FRONTEIRA + b"\r\n"
+                                             + b"Content-Type: image/jpeg\r\n"
+                                             + f"{seq}{captura}Content-Length: {len(jpeg)}\r\n\r\n".encode()
+                                             + jpeg)
+                            self.wfile.flush()
+                except FileNotFoundError:
+                    pass                            # ainda sem quadros (módulo a arrancar/desligado)
+                # espera com o olho na LIGAÇÃO: um cliente morto torna o socket legível com EOF e a
+                # thread morre aqui (sem isto, módulo desligado + cliente morto = spin eterno por cliente)
+                prontos, _, _ = select.select([self.connection], [], [], FPV_ESPERA_S)
+                if prontos:
+                    try:
+                        if not self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
+                            break                   # EOF: o cliente desligou
+                    except (BlockingIOError, OSError):
+                        break
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass                                    # o cliente desligou: o stream morre com ele
+
+    def _fpv_jpeg(self) -> None:
+        """`GET /api/fpv.jpg`: o último quadro do FPV como imagem única (404 sem quadro)."""
+        self._jpeg_unico(FPV_QUADRO, "do módulo FPV")
+
+    def _simulacao_jpeg(self) -> None:
+        """`GET /api/simulacao.jpg`: o último quadro da vista da simulação (404 sem quadro)."""
+        self._jpeg_unico(FPV_QUADRO_SIM, "da vista da simulação")
+
+    def _jpeg_unico(self, quadro_nome: str, rotulo: str) -> None:
+        """Último quadro de `quadro_nome` como imagem única (ferramentas/testes; 404 sem quadro)."""
+        try:
+            jpeg = (self.servidor.fpv / quadro_nome).read_bytes()
+        except OSError:
+            self._erro(404, f"ainda não há quadro {rotulo} (módulo desligado ou a arrancar)")
+            return
+        if not jpeg:
+            self._erro(404, f"ainda não há quadro {rotulo}")
+            return
+        self._enviar(200, jpeg, "image/jpeg")
+
+    def _fpv_estado_rota(self) -> None:
+        """`GET /api/fpv/estado`: o estado do módulo FPV (`estado.json`) ou `null` sem módulo."""
+        self._json(200, {"fpv": self.servidor.fpv_estado()})
+
+    def _simulacao_estado_rota(self) -> None:
+        """`GET /api/simulacao/estado`: o estado da vista da simulação, ou `null` sem módulo."""
+        self._json(200, {"simulacao": self.servidor.simulacao_estado()})
 
     def _post_voo(self, dados) -> None:
         """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
@@ -1316,6 +1582,53 @@ def validar_camera(dados, atual: dict, padrao: dict | None = None) -> dict:
     return {**atual, "camera": {**bloco, "seq": seq}}
 
 
+FPV_PADRAO = {"ligada": True, "modo": "1080p50"}   # módulo LIGADO no modo de vídeo por omissão do IMX708
+
+
+def validar_fpv(dados, atual: dict) -> dict:
+    """`POST /api/fpv` → controlo novo, com o bloco `fpv` validado (ValueError → 400).
+
+    O corpo é um SUBCONJUNTO de `{ligada, modo}` — o `seq` é do SERVIDOR (incrementado a cada pedido,
+    como na `camera`, e é o que faz o runner re-aplicar valores iguais) e, quando vem no corpo, é
+    IGNORADO. O que **não vem** mantém o valor em vigor (o bloco `fpv` do controlo ou o `FPV_PADRAO`).
+    Chave desconhecida → 400; `null` presente → 400 (como na câmara); `modo` tem de ser um id EMULADO da
+    tabela real de modos (`lab/camera_rpi.MODOS`) — um modo que exista no hardware mas não seja emulado
+    (o HDR) também é 400, com a razão no texto. O bloco escrito é SEMPRE COMPLETO (`ligada` + `modo`:
+    é o contrato do runner, `sim_view._ler_fpv`) e a escrita nunca toca em loop/reiniciar/vento/dinâmico
+    nem na `camera` da janela (merge atómico).
+    """
+    if dados is None:
+        raise ValueError("o corpo tem de ser um objeto JSON {ligada, modo}")
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON {ligada, modo}")  # noqa: TRY004
+    from lab import camera_rpi as cam_rpi  # import tardio: só esta validação precisa do módulo
+    desconhecidas = set(dados) - {"ligada", "modo", "seq"}
+    if desconhecidas:
+        raise ValueError(f"`fpv` tem chaves desconhecidas {sorted(desconhecidas)} — aceita só "
+                         f"{sorted({'ligada', 'modo'})} (o `seq` é do servidor)")
+    for campo in ("ligada", "modo"):
+        if campo in dados and dados[campo] is None:
+            raise ValueError(f"`fpv.{campo}` veio a `null` (nulo) — a ausência completa é que mantém o "
+                             "valor em vigor")
+    anterior = atual.get("fpv") if isinstance(atual.get("fpv"), dict) else {}
+    bloco = dict(FPV_PADRAO if not anterior else {"ligada": bool(anterior.get("ligada", True)),
+                                                  "modo": anterior.get("modo", FPV_PADRAO["modo"])})
+    if "ligada" in dados:
+        if not isinstance(dados["ligada"], bool):
+            raise ValueError(f"`fpv.ligada` tem de ser booleano (recebido {dados['ligada']!r})")
+        bloco["ligada"] = dados["ligada"]
+    if "modo" in dados:
+        modo = dados["modo"]
+        if not isinstance(modo, str) or modo not in cam_rpi.MODOS:
+            raise ValueError(f"`fpv.modo` tem de ser um dos {sorted(cam_rpi.MODOS)} (recebido {modo!r})")
+        if not cam_rpi.MODOS[modo].emulado:
+            raise ValueError(f"`fpv.modo` {modo!r} existe no hardware mas NÃO é emulado "
+                             f"({cam_rpi.MODOS[modo].nota})")
+        bloco["modo"] = modo
+    seq = int(anterior.get("seq", 0) or 0) + 1
+    return {**atual, "fpv": {**bloco, "seq": seq}}
+
+
 class _PedidoInvalido(Exception):
     """Corpo/parâmetros maus → HTTP 400."""
 
@@ -1420,8 +1733,9 @@ def _modelo_validado(out: Path) -> tuple[Path, str] | None:
 def modelo_real_por_omissao(out: Path) -> tuple[Path, str] | None:
     """Política da PLANTA REAL (o drone do dono) — tem precedência (a MESMA regra do `sim_view.py`):
     `out/real_*/{final,best_model}.zip` com o `hardware.json` ao lado, o mais recente."""
+    # as políticas de SEGUIMENTO (IA-2, obs 17D) nunca são a política de VOO — ver sim_view
     candidatos = [p for p in list(out.glob("real_*/final.zip")) + list(out.glob("real_*/best_model.zip"))
-                  if (p.parent / "hardware.json").is_file()]
+                  if (p.parent / "hardware.json").is_file() and "seguimento" not in p.parent.name]
     melhor = _mais_recente(p for p in candidatos if p.name == "final.zip") or _mais_recente(candidatos)
     if melhor is None:
         return None
@@ -1516,7 +1830,7 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
     padrão é SEM REINÍCIO) —, para o runner e o ficheiro de controlo dizerem ambos o que o dono pediu.
     """
     comando = [sys.executable, str(SIM_VIEW), "--controlo", str(args.controlo),
-               "--telemetria", str(args.telemetria)]
+               "--telemetria", str(args.telemetria), "--fpv", str(args.fpv)]
     alvo = modelo if modelo is not None else args.model
     if alvo is not None:
         comando += ["--model", str(alvo)]
@@ -1622,6 +1936,9 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                    help=f"ficheiro de controlo (vento/reiniciar/loop); padrão: {CONTROLO_OMISSAO}")
     p.add_argument("--telemetria", type=Path, default=TELEMETRIA_OMISSAO, metavar="CAMINHO",
                    help=f"ficheiro JSONL de telemetria do runner; padrão: {TELEMETRIA_OMISSAO}")
+    p.add_argument("--fpv", type=Path, default=FPV_OMISSAO, metavar="PASTA",
+                   help="pasta do stream do módulo de câmara FPV (quadro.jpg + estado.json); padrão: "
+                        f"{FPV_OMISSAO}")
     p.add_argument("--fator-tempo", type=float, default=None, metavar="F",
                    help="ritmo do runner (1 = tempo real; 0 = sem travão); por omissão usa o do sim_view.py")
     grupo_loop = p.add_mutually_exclusive_group()
@@ -1679,7 +1996,7 @@ def main(argv=None) -> int:
     print(f"[site] modelo: {modelo} ({motivo})", flush=True)   # diz SEMPRE qual escolheu e porquê
     filho = lancar_runner(args, modelo, token_arranque)
     servidor = Servidor(args.controlo, args.telemetria, args.host, args.port, args.verboso, filho, modelo,
-                        motivo, memorizados)
+                        motivo, memorizados, fpv=args.fpv)
     httpd = abrir_servidor(args.host, args.port, servidor)
     url = f"http://{args.host}:{servidor.porta}/"
     print(f"[site] runner pid {filho.pid} | controlo {args.controlo} | telemetria {args.telemetria}",
