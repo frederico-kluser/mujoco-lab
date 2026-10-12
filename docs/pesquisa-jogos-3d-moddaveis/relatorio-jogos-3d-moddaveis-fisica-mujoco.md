@@ -56,11 +56,11 @@ Para cada candidato, o que importa é responder a 5 perguntas:
 
 ## 1. Frentes pesquisadas (resultados dos subagentes)
 
-6 frentes em paralelo; relatórios completos dos subagentes em `pesquisas/` e `pesquisas/retornos/`
+6 frentes em paralelo; relatórios completos dos subagentes nesta mesma pasta
 (`fronte-gta-v-rage.md`, `relatorio-fronte-unity-bepinex.md`, `jogos-conducao-modding-linux.md`,
 `mundos-visuais-jogos-modding.md`).
 
-### 1.1 GTA V / RAGE (subagente 1 · relatório completo em `retornos/fronte-gta-v-rage.md`)
+### 1.1 GTA V / RAGE (subagente 1 · relatório completo em `fronte-gta-v-rage.md`)
 
 **GTA V single-player (RAGE)** — o candidato "literal" do pedido:
 - **Modding FÁCIL**: ScriptHookV (natives `.asi`; fecha no GTA Online → só SP), ScriptHookVDotNet (C#/.NET:

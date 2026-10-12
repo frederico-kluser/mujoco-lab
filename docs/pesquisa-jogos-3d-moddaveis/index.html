@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="plannotator-theme" content="host">
+<title>Jogos 3D moddáveis como mundo visual para a física MuJoCo — dossiê de escolha</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232b2140'/%3E%3Cpath d='M14 44V22l18-8 18 8v22l-18 8-18-8Z' fill='none' stroke='%23b7a5f5' stroke-width='4' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23e8a33d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============ PLANNOTATOR TOKENS (host-theme opt-in) ============ */
+  :root {
+    --background: oklch(0.97 0.005 260);
+    --foreground: oklch(0.18 0.02 260);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.18 0.02 260);
+    --muted: oklch(0.92 0.01 260);
+    --muted-foreground: oklch(0.40 0.02 260);
+    --primary: oklch(0.50 0.25 280);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.50 0.18 180);
+    --accent: oklch(0.60 0.22 50);
+    --accent-foreground: oklch(0.18 0.02 260);
+    --destructive: oklch(0.50 0.25 25);
+    --success: oklch(0.45 0.20 150);
+    --warning: oklch(0.55 0.18 85);
+    --border: oklch(0.88 0.01 260);
+    --code-bg: oklch(0.92 0.01 260);
+    --ring: oklch(0.50 0.25 280);
+    --radius: 0.625rem;
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    --font-display: ui-serif, Georgia, 'Times New Roman', serif;
+    --primary-dim: color-mix(in oklab, var(--primary) 12%, transparent);
+    --success-dim: color-mix(in oklab, var(--success) 12%, transparent);
+    --warning-dim: color-mix(in oklab, var(--warning) 14%, transparent);
+    --destructive-dim: color-mix(in oklab, var(--destructive) 12%, transparent);
+    --accent-dim: color-mix(in oklab, var(--accent) 12%, transparent);
+    --secondary-dim: color-mix(in oklab, var(--secondary) 12%, transparent);
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: oklch(0.15 0.02 260);
+      --foreground: oklch(0.90 0.01 260);
+      --card: oklch(0.22 0.02 260);
+      --card-foreground: oklch(0.90 0.01 260);
+      --muted: oklch(0.26 0.02 260);
+      --muted-foreground: oklch(0.72 0.02 260);
+      --primary: oklch(0.75 0.18 280);
+      --primary-foreground: oklch(0.15 0.02 260);
+      --accent: oklch(0.70 0.20 60);
+      --border: oklch(0.35 0.02 260);
+      --code-bg: oklch(0.26 0.02 260);
+      --destructive: oklch(0.65 0.20 25);
+      --success: oklch(0.72 0.17 150);
+      --warning: oklch(0.75 0.15 85);
+      color-scheme: dark;
+    }
+  }
+
+  /* ============ BASE ============ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.65;
+    padding: 48px 24px 96px;
+    min-height: 100vh;
+  }
+
+  .container { max-width: 1080px; margin: 0 auto; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate { animation: fadeUp 0.4s ease-out both; animation-delay: calc(var(--i, 0) * 0.05s); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  /* ============ TYPE ============ */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--primary);
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4.5vw, 44px);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 10px 0 16px;
+  }
+  h2 {
+    font-family: var(--font-display);
+    font-size: 27px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 6px;
+  }
+  h3 {
+    font-family: var(--font-sans);
+    font-size: 18px;
+    font-weight: 650;
+    margin: 0 0 8px;
+  }
+  .lede { font-size: 18px; color: var(--muted-foreground); max-width: 68ch; }
+  .section-note { color: var(--muted-foreground); max-width: 72ch; margin-bottom: 22px; }
+  p, li { max-width: 72ch; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+  a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  /* ============ HEADER ============ */
+  header { margin-bottom: 56px; }
+  .prompt-box {
+    margin-top: 26px;
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-left: 4px solid var(--primary);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    max-width: 76ch;
+  }
+  .prompt-box .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    margin-bottom: 6px;
+  }
+  .prompt-box p { font-size: 15px; }
+
+  /* ============ KPI STRIP ============ */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    margin: 36px 0 64px;
+  }
+  .kpi-card {
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+  }
+  .kpi-card__value {
+    font-family: var(--font-mono);
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-card__value--warm { color: var(--accent); }
+  .kpi-card__value--ok { color: var(--success); }
+  .kpi-card__label { font-size: 13px; color: var(--muted-foreground); margin-top: 4px; }
+
+  /* ============ SECTIONS ============ */
+  section { margin-bottom: 72px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .section-num {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary);
+    background: var(--primary-dim);
+    border-radius: 6px;
+    padding: 2px 9px;
+    flex-shrink: 0;
+  }
+
+  /* ============ CARDS / GRIDS ============ */
+  .card-grid { display: grid; gap: 16px; }
+  .card-grid--2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .card-grid--3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+
+  .ve-card {
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+  }
+  .ve-card--hero {
+    background: color-mix(in oklab, var(--primary) 5%, var(--card));
+    border-color: var(--primary);
+  }
+  .ve-card--recessed {
+    background: var(--muted);
+    border-color: transparent;
+  }
+  .ve-card p { font-size: 14.5px; }
+  .ve-card ul { padding-left: 18px; font-size: 14.5px; }
+  .ve-card li { margin: 5px 0; }
+
+  .tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 5px;
+    padding: 2px 8px;
+    margin-right: 6px;
+  }
+  .tag--a { background: var(--success-dim); color: var(--success); }
+  .tag--b { background: var(--warning-dim); color: var(--warning); }
+  .tag--c { background: var(--secondary-dim); color: var(--secondary); }
+  .tag--x { background: var(--destructive-dim); color: var(--destructive); }
+  .tag--mode { background: var(--primary-dim); color: var(--primary); }
+  .tag--warn { background: var(--warning-dim); color: var(--warning); }
+
+  /* ============ COUPLING MODES ============ */
+  .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 20px; }
+  .mode-card { position: relative; overflow: hidden; }
+  .mode-card .letter {
+    font-family: var(--font-display);
+    font-size: 52px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--primary);
+    opacity: 0.28;
+    position: absolute;
+    top: 10px;
+    right: 18px;
+  }
+  .flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0 10px;
+  }
+  .flow .box {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    border: 1.5px solid var(--border);
+    background: var(--background);
+    border-radius: 6px;
+    padding: 5px 10px;
+  }
+  .flow .box--mujoco { border-color: var(--primary); background: var(--primary-dim); color: var(--primary); }
+  .flow .box--game { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+  .flow .arrow { font-family: var(--font-mono); color: var(--muted-foreground); font-size: 13px; }
+
+  /* ============ TABLE ============ */
+  .table-wrap {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--card);
+  }
+  .table-scroll { overflow-x: auto; }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 860px; }
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1.5px solid var(--border);
+    white-space: nowrap;
+  }
+  .data-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .data-table tbody tr:nth-child(even) { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+  .data-table tbody tr:hover { background: var(--primary-dim); }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .data-table .total {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .data-table .total--top { color: var(--success); }
+  .data-table .total--mid { color: var(--warning); }
+  .data-table .total--low { color: var(--muted-foreground); }
+  .data-table .name { font-weight: 600; white-space: nowrap; }
+  .data-table .name small { display: block; font-weight: 400; color: var(--muted-foreground); font-size: 11.5px; }
+
+  .method-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 16px; }
+  .method-item { background: var(--muted); border-radius: var(--radius); padding: 13px 16px; font-size: 13.5px; }
+  .method-item strong { display: block; font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--primary); margin-bottom: 3px; }
+
+  /* ============ PROS/CONS ============ */
+  .proscons { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
+  @media (max-width: 640px) { .proscons { grid-template-columns: 1fr; } }
+  .pc { border-radius: var(--radius); padding: 14px 16px; font-size: 14px; }
+  .pc--pro { background: var(--success-dim); border: 1px solid color-mix(in oklab, var(--success) 30%, transparent); }
+  .pc--con { background: var(--destructive-dim); border: 1px solid color-mix(in oklab, var(--destructive) 30%, transparent); }
+  .pc h4 { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 7px; }
+  .pc--pro h4 { color: var(--success); }
+  .pc--con h4 { color: var(--destructive); }
+  .pc ul { padding-left: 17px; }
+  .pc li { margin: 4px 0; }
+
+  /* ============ TRADEOFFS ============ */
+  .tradeoff {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  @media (max-width: 640px) { .tradeoff { grid-template-columns: 1fr; } }
+  .tradeoff > div { padding: 16px 20px; font-size: 14.5px; }
+  .tradeoff .t-key { background: var(--muted); font-weight: 600; }
+  .tradeoff .t-val { background: var(--card); }
+
+  /* ============ CALLOUT ============ */
+  .callout {
+    background: var(--primary-dim);
+    border: 1.5px solid color-mix(in oklab, var(--primary) 35%, transparent);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+  }
+  .callout--warn {
+    background: var(--warning-dim);
+    border-color: color-mix(in oklab, var(--warning) 40%, transparent);
+  }
+  .callout h3 { margin-bottom: 6px; }
+  .callout p { font-size: 14.5px; }
+
+  /* ============ DETAILS / SOURCES ============ */
+  details {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: 14px 20px;
+    margin-bottom: 10px;
+  }
+  details summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 15px;
+    list-style-position: outside;
+  }
+  details .inner { margin-top: 12px; font-size: 14px; }
+  .src-list { list-style: none; padding: 0; }
+  .src-list li { margin: 8px 0; padding-left: 0; }
+  .src-list .src-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--primary);
+    background: var(--primary-dim);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-right: 8px;
+    white-space: nowrap;
+  }
+  .src-list .what { color: var(--muted-foreground); display: block; margin-top: 1px; font-size: 13px; }
+
+  /* ============ FILE LIST ============ */
+  .file-list { list-style: none; padding: 0; margin-top: 10px; }
+  .file-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14.5px;
+  }
+  .file-list li:last-child { border-bottom: none; }
+  .file-list .kind {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    background: var(--muted);
+    border-radius: 4px;
+    padding: 2px 7px;
+    flex-shrink: 0;
+  }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 24px;
+    border-top: 1.5px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 13px;
+    max-width: 76ch;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ============ HEADER ============ -->
+  <header class="animate" style="--i:0">
+    <div class="eyebrow">MuJoCo Lab · Pesquisa de ferramenta · 2026-10-14</div>
+    <h1>Que jogo 3D usar como mundo visual para a nossa física?</h1>
+    <p class="lede">Dossiê de escolha de um jogo 3D fácil de moddar (tipo GTA&nbsp;5) que sirva de
+    <strong>mundo + colisões + visual</strong>, enquanto a física é sempre a nossa (MuJoCo) e os modelos 3D
+    são os nossos — para validar <strong>IA visual</strong> e <strong>automações</strong>.</p>
+
+    <div class="prompt-box">
+      <div class="label">Pedido original</div>
+      <p>«Pesquise com muitos subagentes e me diga que jogo 3D é fácil e podemos fazer mods tipo (GTA 5 ex)
+      para testar nosso projeto onde no mod nós aplicaremos nossa física, mas usaremos as colisões do jogo e
+      cenário 3D para validar a IA visual e automações no mundo real […] usaremos a nossa física, usaremos
+      nossos modelos 3D, o jogo iremos usar apenas a solução dele e o visual.»</p>
+    </div>
+  </header>
+
+  <!-- ============ KPI STRIP ============ -->
+  <div class="kpi-row">
+    <div class="kpi-card animate" style="--i:1"><div class="kpi-card__value">6</div><div class="kpi-card__label">frentes de pesquisa em paralelo</div></div>
+    <div class="kpi-card animate" style="--i:2"><div class="kpi-card__value">~60</div><div class="kpi-card__label">fontes verificadas (web = untrusted)</div></div>
+    <div class="kpi-card animate" style="--i:3"><div class="kpi-card__value">12</div><div class="kpi-card__label">candidatos avaliados a fundo</div></div>
+    <div class="kpi-card animate" style="--i:4"><div class="kpi-card__value kpi-card__value--warm">3</div><div class="kpi-card__label">modos de acoplamento MuJoCo ↔ jogo</div></div>
+    <div class="kpi-card animate" style="--i:5"><div class="kpi-card__value kpi-card__value--ok">2</div><div class="kpi-card__label">recomendações Tier A</div></div>
+    <div class="kpi-card animate" style="--i:6"><div class="kpi-card__value kpi-card__value--ok">4,65</div><div class="kpi-card__label">melhor nota (Garry's Mod, de 5)</div></div>
+  </div>
+
+  <!-- ============ 1. O PROBLEMA ============ -->
+  <section class="animate" style="--i:2">
+    <div class="section-head"><span class="section-num">01</span><h2>O que o jogo precisa de fornecer</h2></div>
+    <p class="section-note">A física é inteiramente nossa (<code>mj_step</code>) e os modelos 3D são nossos.
+    O jogo entra só como <strong>solução pronta</strong>: um mundo 3D rico, colisões coerentes e um visual
+    utilizável para validar IA visual (visão computacional) e automações. Cada candidato foi medido por cinco
+    perguntas:</p>
+    <div class="method-grid">
+      <div class="method-item"><strong>Física externa</strong>Dá para desligar/ignorar a física do jogo e conduzir entidades com poses vindas do MuJoCo (cinemática por tick)? Qual o custo de integração?</div>
+      <div class="method-item"><strong>Colisões / cenário</strong>Dá para extrair ou consultar a geometria de colisão do mundo (malhas, raycasts) para alimentar o MuJoCo com contacto real?</div>
+      <div class="method-item"><strong>Visual / CV</strong>Câmara livre, captura de ecrã/vídeo, FOV/resolução e — decisivo — ground-truth para rotular dados automaticamente.</div>
+      <div class="method-item"><strong>Automação</strong>Scripting do mundo (tráfego, clima, NPCs), determinismo/replay, execução headless para gerar dados em lote.</div>
+      <div class="method-item"><strong>Plataforma / legal</strong>Roda nesta máquina Linux (nativo ou Proton), custo, EULA permite mods, comunidade viva em 2025–2026.</div>
+    </div>
+  </section>
+
+  <!-- ============ 2. MODOS DE ACOPLAMENTO ============ -->
+  <section class="animate" style="--i:3">
+    <div class="section-head"><span class="section-num">02</span><h2>Os 3 modos de acoplamento MuJoCo ↔ jogo</h2></div>
+    <p class="section-note">A escolha do jogo depende do modo de acoplamento. Os três convivem: um projeto pode
+    começar no modo C e evoluir para B/A.</p>
+
+    <div class="mode-grid">
+      <div class="ve-card mode-card">
+        <div class="letter">A</div>
+        <h3>Física mestre</h3>
+        <div class="flow">
+          <span class="box box--mujoco">mj_step()</span>
+          <span class="arrow">→ poses</span>
+          <span class="box box--game">mod do jogo</span>
+          <span class="arrow">→ render</span>
+        </div>
+        <p>O MuJoCo simula tudo; a cada tick o mod escreve posição/orientação das entidades no jogo
+        (override cinemático). O jogo só desenha — máxima fidelidade física. Exige um hook fiável de pose por
+        entidade.</p>
+      </div>
+
+      <div class="ve-card mode-card">
+        <div class="letter">B</div>
+        <h3>Contato híbrido</h3>
+        <div class="flow">
+          <span class="box box--game">colisões do jogo</span>
+          <span class="arrow">→ geoms</span>
+          <span class="box box--mujoco">mj_step()</span>
+          <span class="arrow">→ poses</span>
+          <span class="box box--game">jogo</span>
+        </div>
+        <p>As colisões/raycasts reais do cenário entram como geoms no MuJoCo (ou como queries por tick).
+        O contacto é resolvido pelo NOSSO solver — o melhor dos dois mundos. Exige API de raycast ou exportação
+        de malhas.</p>
+      </div>
+
+      <div class="ve-card mode-card">
+        <div class="letter">C</div>
+        <h3>Mundo só visual</h3>
+        <div class="flow">
+          <span class="box box--game">jogo corre sozinho</span>
+          <span class="arrow">→</span>
+          <span class="box">imagens + ground truth</span>
+          <span class="arrow">→</span>
+          <span class="box">treino/validação CV</span>
+        </div>
+        <p>O jogo gera imagens rotuladas (poses, bboxes, semântica, profundidade) para treinar e diagnosticar
+        modelos de visão. Sem acoplamento físico — o modo mais fácil de todos e com provas académicas.</p>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:22px">
+      <h3>Regra do laboratório mantida: «simulador sempre físico»</h3>
+      <p>Em todos os modos, <strong>o MuJoCo é o único simulador físico</strong>: tudo passa por
+      <code>mj_step</code>. O jogo recebe poses como sincronização de renderização (como o URLab faz com
+      <em>mocap coupling</em>) — <strong>não há teleporte de estado físico</strong>. No modo B, as colisões do
+      cenário entram como geoms e o contacto é resolvido pelo MuJoCo, não pelo jogo.</p>
+    </div>
+
+    <div class="ve-card ve-card--recessed" style="margin-top:16px">
+      <h3>Arquitetura de referência (já existe em código)</h3>
+      <ul>
+        <li><strong>Unreal Robotics Lab (URLab)</strong> — plugin C++ open-source (Apache&nbsp;2.0) para UE&nbsp;5.7 que embute o MuJoCo como backend de física e deixa o Unreal só com o rendering; acoplamento cinemático <em>one-way (mocap)</em>, record &amp; replay determinístico. Prova de que o padrão funciona.</li>
+        <li><strong>MuJoCo Unity Plugin</strong> (oficial) — mesma filosofia: MuJoCo gere a física, a engine renderiza e acede aos dados geométricos.</li>
+        <li><strong>DeepGTAV</strong> + datasets académicos (PreSIL, GTA5-seg, GTASynth, HRSD) — o GTA V já foi usado como fonte de ground-truth para ML; o paper <em>From Gaming to Research</em> (arXiv 2502.12303) mostra dados sintéticos comparáveis a reais em SLAM/VPR.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 3. TABELA-MÃE ============ -->
+  <section class="animate" style="--i:4">
+    <div class="section-head"><span class="section-num">03</span><h2>Tabela-mãe — 12 candidatos avaliados</h2></div>
+    <p class="section-note">Notas 0–5 por eixo (5 = pronto e documentado hoje · 4 = esforço pequeno ·
+    3 = exequível com engenharia própria relevante · 2 = frágil/não confirmado · 1 = impraticável).
+    Tudo o que as fontes marcaram «não confirmado» conta como ≤ 3 nesse eixo — incerteza não vira ponto.
+    Nota final = soma ponderada.</p>
+
+    <div class="table-wrap">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Candidato</th>
+              <th style="text-align:center">Física ext.<br>(25 %)</th>
+              <th style="text-align:center">Colisões<br>(20 %)</th>
+              <th style="text-align:center">Visual/CV<br>(20 %)</th>
+              <th style="text-align:center">Automação<br>(15 %)</th>
+              <th style="text-align:center">Modding<br>(10 %)</th>
+              <th style="text-align:center">Linux/custo<br>(10 %)</th>
+              <th style="text-align:center">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Garry's Mod <small>Source 1 · GLua · Linux nativo</small></td>
+              <td class="num">5</td><td class="num">5</td><td class="num">4</td><td class="num">4</td><td class="num">5</td><td class="num">5</td>
+              <td class="total total--top">4,65</td>
+            </tr>
+            <tr>
+              <td class="name">CARLA <small>UE 4.26/5.5 · simulador de condução</small></td>
+              <td class="num">5</td><td class="num">3</td><td class="num">5</td><td class="num">5</td><td class="num">4</td><td class="num">4</td>
+              <td class="total total--top">4,40</td>
+            </tr>
+            <tr>
+              <td class="name">Luanti (ex-Minetest) <small>C++ open-source · Lua nativo</small></td>
+              <td class="num">5</td><td class="num">4</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="num">5</td>
+              <td class="total total--top">4,05</td>
+            </tr>
+            <tr>
+              <td class="name">GTA V (single-player) <small>RAGE · ScriptHookV/SHVDN</small></td>
+              <td class="num">4</td><td class="num">3</td><td class="num">5</td><td class="num">4</td><td class="num">5</td><td class="num">2</td>
+              <td class="total total--mid">3,90</td>
+            </tr>
+            <tr>
+              <td class="name">FiveM <small>plataforma RAGE autorizada · Lua/JS/C#</small></td>
+              <td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="num">5</td><td class="num">4</td><td class="num">2</td>
+              <td class="total total--mid">3,75</td>
+            </tr>
+            <tr>
+              <td class="name">BeamNG.tech + BeamNGpy <small>motor próprio · Python</small></td>
+              <td class="num">2</td><td class="num">3</td><td class="num">5</td><td class="num">5</td><td class="num">4</td><td class="num">3</td>
+              <td class="total total--mid">3,55</td>
+            </tr>
+            <tr>
+              <td class="name">URLab (UE 5.7 + MuJoCo) <small>plugin alpha · Apache 2.0</small></td>
+              <td class="num">5</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">2</td><td class="num">4</td>
+              <td class="total total--mid">3,50</td>
+            </tr>
+            <tr>
+              <td class="name">Half-Life 2 / Source SDK 2013 <small>C++ aberto · licença não-comercial</small></td>
+              <td class="num">4</td><td class="num">5</td><td class="num">3</td><td class="num">3</td><td class="num">2</td><td class="num">2</td>
+              <td class="total total--mid">3,45</td>
+            </tr>
+            <tr>
+              <td class="name">Teardown <small>Unity + física voxel · Lua</small></td>
+              <td class="num">3</td><td class="num">4</td><td class="num">4</td><td class="num">2</td><td class="num">4</td><td class="num">3</td>
+              <td class="total total--low">3,35</td>
+            </tr>
+            <tr>
+              <td class="name">Kerbal Space Program 1 <small>Unity · C# (Harmony, CKAN)</small></td>
+              <td class="num">4</td><td class="num">3</td><td class="num">3</td><td class="num">2</td><td class="num">4</td><td class="num">4</td>
+              <td class="total total--low">3,30</td>
+            </tr>
+            <tr>
+              <td class="name">Minecraft Java <small>Java · Fabric/Forge</small></td>
+              <td class="num">3</td><td class="num">4</td><td class="num">2</td><td class="num">3</td><td class="num">5</td><td class="num">3</td>
+              <td class="total total--low">3,20</td>
+            </tr>
+            <tr>
+              <td class="name">Euro Truck Simulator 2 / ATS <small>Prism3D · SDK de telemetria</small></td>
+              <td class="num">2</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="num">4</td><td class="num">5</td>
+              <td class="total total--low">3,00</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <details style="margin-top:16px">
+      <summary>Descartados (e porquê)</summary>
+      <div class="inner">
+        <p><span class="tag tag--x">descartado</span><strong>s&amp;box</strong> — <em>developer preview</em>, API instável, Linux imaturo, exportação de colisões não documentada. Reavaliar quando amadurecer.</p>
+        <p><span class="tag tag--x">descartado</span><strong>KSP 2</strong> (estúdio Intercept encerrado em 2024), <strong>AirSim</strong> (repo morto 2022; Project AirSim morto 2023 — só forks), <strong>LGSVL/SVL</strong> (sunset 2022) — projetos abandonados.</p>
+        <p><span class="tag tag--x">descartado</span><strong>Assetto Corsa EVO</strong> — SDK v1 (jun/2026) só de carros, sem editor de pistas; cedo demais.</p>
+        <p><span class="tag tag--x">descartado</span><strong>Watch Dogs 2, Skyrim/Fallout 4, Saints Row, Just Cause 2/3-MP</strong> — mundos bonitos mas engines fechadas: câmara livre existe, controlo cinemático externo e exportação de colisões frágeis/não confirmados, sem headless.</p>
+        <p><span class="tag tag--x">descartado</span><strong>Mafia DE, Sleeping Dogs</strong> (sem ferramentas de modding relevantes), <strong>Roblox</strong> (plataforma fechada, extração contra ToS), <strong>Automation</strong> (só gerador de carros → BeamNG), <strong>Flatland</strong> (2D).</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 4. TIER A ============ -->
+  <section class="animate" style="--i:5">
+    <div class="section-head"><span class="section-num">04</span><h2>Tier A — começar por estes</h2></div>
+
+    <div class="ve-card ve-card--hero" style="margin-bottom:18px">
+      <span class="tag tag--a">Tier A · #1</span>
+      <span class="tag tag--mode">Modos B + A</span>
+      <h3 style="margin-top:10px">Garry's Mod — o melhor custo-benefício para provar o pipeline completo</h3>
+      <p>É o único candidato onde os três requisitos estão <strong>prontos e documentados hoje</strong>,
+      em Linux nativo, por ~10&nbsp;€.</p>
+      <div class="proscons">
+        <div class="pc pc--pro">
+          <h4>Prós</h4>
+          <ul>
+            <li><strong>Física externa limpa</strong>: <code>PhysObj:EnableMotion(false)</code> neutraliza a VPhysics de vez (é assim que a Physics Gun congela objetos) + <code>SetPos/SetAngles</code> por tick = o MuJoCo conduz sem lutar contra o solver.</li>
+            <li><strong>Colisões reais exportáveis</strong>: <code>GetMesh()</code>/<code>GetMeshConvexes()</code> devolvem a malha convexa usada pela física → geoms MuJoCo (modo B).</li>
+            <li><strong>CV pronto</strong>: <code>render.RenderView</code> + render targets a resolução arbitrária + <code>render.Capture</code> (PNG/JPEG); ground-truth de poses/AABBs grátis via Lua.</li>
+            <li><strong>Modding fácil</strong>: addons Lua com hot-reload, wiki completa, 20 anos de comunidade; IPC por TCP localhost ou <code>gmsv_chttp</code>/<code>gmsv_websocket</code>.</li>
+            <li><strong>Linux NATIVO</strong> (ProtonDB "Native") + servidor dedicado headless via SteamCMD.</li>
+          </ul>
+        </div>
+        <div class="pc pc--con">
+          <h4>Contras</h4>
+          <ul>
+            <li>Visual Source 1 antigo — menos "rua real" para treinar CV de condução.</li>
+            <li>Captura de CV exige cliente com GPU (o render headless não está confirmado).</li>
+            <li>O tick do servidor limita a frequência de sincronismo: ótimo para datasets, curto para controlo fechado rápido.</li>
+            <li>Assets de outros jogos Source exigem esses jogos.</li>
+            <li>Quirks conhecidos na captura (skybox, alfa com fog — issue Facepunch #2571), contornáveis.</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>Como usar</strong>: modo B (colisões do jogo → geoms MuJoCo, contacto resolvido no nosso solver)
+      com passeio em modo A (poses do <code>mj_step</code> escritas por tick) para a visualização.</p>
+    </div>
+
+    <div class="ve-card ve-card--hero">
+      <span class="tag tag--a">Tier A · #2</span>
+      <span class="tag tag--mode">Modo A + C</span>
+      <h3 style="margin-top:10px">GTA V (single-player) — o mundo tipo GTA, quando o visual realista importar</h3>
+      <p>O candidato "literal" do pedido: mundo urbano rico pronto + ecossistema de ferramentas maduro + o
+      <strong>único com literatura académica provada</strong> para validar IA visual.</p>
+      <div class="proscons">
+        <div class="pc pc--pro">
+          <h4>Prós</h4>
+          <ul>
+            <li><strong>Ground-truth provado</strong>: DeepGTAV extrai por tick bboxes, segmentação, LiDAR e pose de câmara (via ZeroMQ); datasets PreSIL/GTA5-seg/GTASynth/HRSD; arXiv 2502.12303 mostra dados sintéticos comparáveis a reais em SLAM/VPR.</li>
+            <li><strong>Modding fácil</strong>: ScriptHookV, ScriptHookVDotNet (C#/.NET), Menyoo (Object Spooner), CodeWalker (YMAP/YBN), Sollumz (Blender); comunidade enorme.</li>
+            <li><strong>Física externa viável</strong>: natives <code>SET_ENTITY_COORDS(_NO_OFFSET)</code>, <code>SET_ENTITY_VELOCITY</code>, <code>FREEZE_ENTITY_POSITION</code> por tick — o MuJoCo calcula, o RAGE desenha.</li>
+            <li><strong>Colisões/cenário acessíveis</strong>: <code>.ybn</code> explora/edita no CodeWalker, importáveis no Blender via Sollumz; raycasts por natives.</li>
+            <li>Automação rica: hora/clima, densidade de tráfego/peds, tasks, teleporte, cenários por script.</li>
+          </ul>
+        </div>
+        <div class="pc pc--con">
+          <h4>Contras</h4>
+          <ul>
+            <li><strong>Windows-only</strong>: roda em Proton/Wine (SHVDN + .NET 4.8 no prefix), mas a estabilidade sob Proton <strong>não está confirmada</strong>.</li>
+            <li>O solver RAGE <strong>não se desliga</strong>: é override cinemático por cima (suficiente — a física é nossa — mas não é limpo como no GMod).</li>
+            <li>Pipeline <code>.ybn</code> → geoms MuJoCo <strong>por construir</strong> (não existe pronto).</li>
+            <li>Sem headless oficial (não confirmado) — captura em janela.</li>
+            <li>Updates do jogo quebram temporariamente o ScriptHookV; OpenIV não suporta a edição Enhanced.</li>
+            <li>Mod Guidelines Rockstar 2026: SP não-comercial permitido, mas restrições novas (story, mapas, monetização) com aplicação a investigação interna não confirmada.</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>Como usar</strong>: modo A (MuJoCo manda, RAGE desenha) + modo C para gerar datasets de CV.
+      Nunca usar GTA Online (risco de ban; o ScriptHookV fecha o jogo lá).</p>
+    </div>
+  </section>
+
+  <!-- ============ 5. TIER B ============ -->
+  <section class="animate" style="--i:6">
+    <div class="section-head"><span class="section-num">05</span><h2>Tier B — fortes em pontos específicos</h2></div>
+    <div class="card-grid card-grid--2">
+      <div class="ve-card">
+        <span class="tag tag--b">Tier B</span>
+        <h3 style="margin-top:8px">CARLA 0.9.16</h3>
+        <p>Para <strong>ground-truth pronto + determinismo + headless</strong>. Tick síncrono onde o cliente
+        impõe pose (física externa = caminho oficial, com precedente Project Chrono), sensores CV prontos
+        (seg/instance/depth/optical flow/bboxes), Cosmos Transfer1 + NuRec + SimReady USD para datasets,
+        Traffic Manager, Docker headless. MIT (sobre UE EULA); a RTX 4070 8 GB serve (apertada no ramo UE5).</p>
+        <p><em>Contra</em>: mundo de simulador (estradas/cidades, sem "vida" tipo GTA); build UE pesado;
+        export de geometria do mapa não confirmado.</p>
+      </div>
+
+      <div class="ve-card">
+        <span class="tag tag--b">Tier B</span>
+        <h3 style="margin-top:8px">BeamNG.tech + BeamNGpy</h3>
+        <p>Para <strong>veículos + sensores CV prontos</strong>: câmara com RGB + profundidade + anotações
+        ground-truth por píxel (classe/instância), LiDAR, teleporte de veículo por pose, AI traffic com regras
+        de trânsito, import dos vossos modelos (Blender → <code>.dae</code> com collider). Build nativa Linux
+        desde jan/2026 (Vulkan).</p>
+        <p><em>Contra</em>: condução cinemática externa não é modo nativo (teleporte pose-a-pose com a física
+        do jogo sempre ativa; neutralizá-la não confirmado); BeamNGpy exige <strong>BeamNG.tech</strong> (grátis
+        académico com registo) e o binário Linux nativo do <code>.tech</code> <strong>não está confirmado</strong>
+        — verificar antes de decidir.</p>
+      </div>
+
+      <div class="ve-card">
+        <span class="tag tag--b">Tier B</span>
+        <h3 style="margin-top:8px">FiveM</h3>
+        <p>Para <strong>orquestração</strong>: cenários repetíveis por <em>resource</em>, screenshot API
+        (<code>screenshot-basic</code>), servidor autoritativo (hora/clima/tráfego), multi-cliente para testes
+        multi-agente, servidor roda em Linux. Mesmo override cinemático do GTA V, com camada de rede/ownership.</p>
+        <p><em>Contra</em>: cliente Windows-only; Platform License Agreement 2026 sob as Mod Guidelines;
+        <code>screenshot-basic</code> sem commits desde 2022 (manutenção não confirmada).</p>
+      </div>
+
+      <div class="ve-card">
+        <span class="tag tag--b">Tier B</span>
+        <h3 style="margin-top:8px">URLab (Unreal Robotics Lab)</h3>
+        <p><strong>É literalmente a arquitetura do projeto</strong>: MuJoCo mestre + UE 5.7 render,
+        <em>one-way kinematic coupling (mocap)</em>, record &amp; replay determinístico, CoACD para colisões,
+        bridge Python, Apache 2.0. Serve de referência de design para o vosso acoplamento.</p>
+        <p><em>Contra</em>: alpha jovem (ICRA 2026, ~65 forks), exige desenvolvimento de plugin UE, e o cenário
+        tem de ser montado (não vem um "GTA pronto"); evitar UE 5.8 (regressões Vulkan/Linux).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. TIER C ============ -->
+  <section class="animate" style="--i:7">
+    <div class="section-head"><span class="section-num">06</span><h2>Tier C — nicho, só com motivo forte</h2></div>
+    <div class="card-grid card-grid--3">
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">Teardown</h3>
+        <p>Câmara programática (<code>SetCameraTransform</code>) e raycasts (<code>QueryRaycast</code>,
+        <code>GetShapeMaterialAtPosition</code>) <strong>confirmados</strong> na API Lua; visual voxel de topo.
+        Bom para validar pipelines de câmara/contacto. <em>Contra</em>: mapas pequenos, sem cidade; Proton.</p>
+      </div>
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">Luanti</h3>
+        <p>O único com o <strong>motor aberto</strong> (dá para sincronizar MuJoCo ↔ mundo a fundo), Lua
+        nativo, export OBJ (Meshport), headless nativo, grátis. <em>Contra</em>: visual voxel simples = fraco
+        para validar IA visual realista.</p>
+      </div>
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">HL2 / Source SDK</h3>
+        <p>Melhor extração de colisões da lista (<code>VBSPINFO</code> → <code>LUMP_PHYSCOLLIDE</code>,
+        BSPSource → VMF) se precisarem do cenário em MuJoCo com precisão. <em>Contra</em>: iteração lenta
+        (C++/Hammer/Wine) e licença Source 1 SDK <strong>não-comercial</strong>.</p>
+      </div>
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">KSP 1</h3>
+        <p>Precedente cinemático real (mod PhysicsHold torna rigidbodies cinemáticos), modding C# maduro,
+        Linux nativo. <em>Contra</em>: sem headless, mundo espacial (não urbano), docs da API desapareceram.</p>
+      </div>
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">Minecraft Java</h3>
+        <p>Export de mundos para OBJ/USD (Mineways, jmc2obj) + MCprep no Blender; comunidade gigante; já há
+        datasets de CV. <em>Contra</em>: visual blocky; EULA restritiva (não confirmado).</p>
+      </div>
+      <div class="ve-card ve-card--recessed">
+        <span class="tag tag--c">Tier C</span>
+        <h3 style="margin-top:8px">ETS2 / ATS</h3>
+        <p>Linux nativo (Deck Verified), SDK de telemetria oficial + injeção de inputs, tráfego AI denso,
+        mundo rico de estradas/cidades. <em>Contra</em>: sem sensores CV, sem export de colisões direto.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 7. TRADEOFFS ============ -->
+  <section class="animate" style="--i:8">
+    <div class="section-head"><span class="section-num">07</span><h2>Tradeoffs transversais — o que cada escolha paga</h2></div>
+
+    <div class="tradeoff">
+      <div class="t-key">Mundo rico AAA × controlo</div>
+      <div class="t-val">Jogos AAA dão ruas/interiores/tráfego orgânicos a custo zero, mas a integração física externa é sempre "por cima" (override por tick). Simuladores dão APIs oficiais e ground truth, mas mundos estéreis e curva alta. <strong>GMod fica no meio-termo</strong>: controlo de simulador com um mundo pronto de sandbox.</div>
+    </div>
+    <div class="tradeoff">
+      <div class="t-key">Desligar a física do jogo</div>
+      <div class="t-val">Só o GMod (<code>EnableMotion(false)</code>) e engines abertas (Luanti) o fazem de vez; no GTA/BeamNG a física nativa continua a correr e há que neutralizá-la caso a caso (freeze/collision off). Como a física de verdade é a nossa, basta o jogo não "empurrar" os corpos — exequível em todos os Tier A/B.</div>
+    </div>
+    <div class="tradeoff">
+      <div class="t-key">Colisões do cenário no mj_step</div>
+      <div class="t-val">Grátis no GMod (<code>GetMesh*</code>) e parcial no HL2 (lumps); no GTA é trabalho novo (YBN → geom); no CARLA/BeamNG usa-se raycast em vez de exportar malha — bom para contacto simples, não para contactos detalhados.</div>
+    </div>
+    <div class="tradeoff">
+      <div class="t-key">Ground truth de CV</div>
+      <div class="t-val">GTA (DeepGTAV + 4 datasets) e BeamNG (anotações por píxel) ganham; GMod dá poses/AABBs "de graça" mas sem semântica pronta; CARLA dá tudo pronto (seg/instance/depth/flow).</div>
+    </div>
+    <div class="tradeoff">
+      <div class="t-key">Linux nesta máquina (RTX 4070 8 GB)</div>
+      <div class="t-val"><strong>Nativo</strong>: GMod, CARLA, Luanti, ETS2, Unturned. <strong>Proton</strong>: GTA V (não confirmado estável), BeamNG.drive (nativo desde jan/2026; .tech não confirmado). <strong>Windows-only</strong>: cliente FiveM. <strong>Fora</strong>: Isaac Sim (requisitos oficiais apontam RTX 4080 mínimo / 32 GB RAM).</div>
+    </div>
+    <div class="tradeoff">
+      <div class="t-key">Legal / licenças</div>
+      <div class="t-val">Source 1 SDK não-comercial (HL2); Mod Guidelines Rockstar 2026 (GTA/FiveM: SP não-comercial OK, multiplayer limitado a plataformas licenciadas); BeamNG.tech com licença académica (grátis com registo) / comercial paga; MIT/Apache nos simuladores (CARLA, URLab, Gazebo, Webots, Isaac Sim).</div>
+    </div>
+  </section>
+
+  <!-- ============ 8. RECOMENDAÇÃO ============ -->
+  <section class="animate" style="--i:9">
+    <div class="section-head"><span class="section-num">08</span><h2>Recomendação executiva</h2></div>
+
+    <div class="card-grid card-grid--2">
+      <div class="ve-card ve-card--hero">
+        <h3>1 · Começar pelo Garry's Mod</h3>
+        <p>Montar e provar o acoplamento MuJoCo ↔ jogo (modo B, com o caminho A à mão). É onde cada peça existe
+        documentada e corre em Linux nativo: cinemática por tick, colisões exportáveis para os vossos modelos 3D
+        (Blender → <code>.phy</code>/props), captura de CV a resolução arbitrária.</p>
+      </div>
+      <div class="ve-card ve-card--hero">
+        <h3>2 · Em paralelo, montar o GTA V (SP)</h3>
+        <p>Como alvo de validação de IA visual — o visual real só entra "caso queiras reininar um modelo de visão
+        computacional", e aí o GTA é a escolha com provas académicas (DeepGTAV, PreSIL, GTASynth, HRSD).
+        Atenção ao Proton e às Mod Guidelines 2026.</p>
+      </div>
+    </div>
+
+    <div class="callout callout--warn" style="margin-top:18px">
+      <h3>Se o objetivo deslizar…</h3>
+      <p>…para <strong>muitos dados com rótulos prontos e determinismo</strong>, o próximo passo natural é o
+      <strong>CARLA</strong> (sensores prontos + tick síncrono + headless). …para <strong>veículos com sensores
+      de CV por píxel</strong>, <strong>BeamNG.tech</strong> — mas confirmar primeiro o binário Linux do
+      <code>.tech</code> e a licença. …para <strong>uma integração definitiva MuJoCo + engine fotorrealista</strong>,
+      acompanhar o <strong>URLab</strong> (ou usar o seu desenho como referência).</p>
+    </div>
+  </section>
+
+  <!-- ============ 9. FONTES ============ -->
+  <section class="animate" style="--i:10">
+    <div class="section-head"><span class="section-num">09</span><h2>Fontes (conteúdo web = untrusted, citado)</h2></div>
+    <p class="section-note">Pesquisa via <code>tavily-agent-skill</code>: 6 subagentes em paralelo (GTA/RAGE ·
+    Source/GMod · Unity/BepInEx · simuladores · condução · AAA/voxel) + frente transversal. As fontes
+    sinalizadas como «não confirmado» não sustentam sozinhas nenhuma afirmação desta página.</p>
+
+    <details open>
+      <summary>Transversais (arquitetura e validação de IA visual)</summary>
+      <div class="inner">
+        <ul class="src-list">
+          <li><span class="src-id">F-U1</span><a href="https://github.com/URLab-Sim/UnrealRoboticsLab">github.com/URLab-Sim/UnrealRoboticsLab</a><span class="what">Plugin C++ UE 5.7 com MuJoCo embutido como física; Apache 2.0.</span></li>
+          <li><span class="src-id">F-U2</span><a href="https://arxiv.org/html/2504.14135v2">arXiv 2504.14135</a><span class="what">Unreal Robotics Lab: física MuJoCo em thread dedicada, render UE assíncrono, mocap coupling.</span></li>
+          <li><span class="src-id">F-U3</span><a href="https://www.roboti.us/book/unity.html">roboti.us/book/unity.html</a><span class="what">MuJoCo Unity Plugin (oficial): MuJoCo gere física, Unity renderiza.</span></li>
+          <li><span class="src-id">F-U4</span><a href="https://www.alphaxiv.org/abs/2502.12303">arXiv 2502.12303</a><span class="what">From Gaming to Research: dados sintéticos GTA V comparáveis a reais em SLAM/VPR.</span></li>
+          <li><span class="src-id">F-U5</span><a href="https://github.com/David0tt/DeepGTAV">github.com/David0tt/DeepGTAV</a><span class="what">Extração de ground truth do GTA V por tick (bboxes, segmentação, pose) via ZeroMQ.</span></li>
+          <li><span class="src-id">F-U7</span><a href="https://github.com/Sollumz/Sollumz">github.com/Sollumz/Sollumz</a><span class="what">Add-on Blender para criar/importar/exportar assets GTA V (modelos, mapas, colisões).</span></li>
+          <li><span class="src-id">F-U8</span><a href="https://tech-insider.org/rockstar-gta-6-mod-policy-8-rules-2026">Mod Guidelines Rockstar 2026</a> · <a href="https://www.gamesindustry.biz/rockstar-acquires-roleplay-modding-team-cfxre">aquisição Cfx.re (2023)</a><span class="what">Mods SP não comerciais permitidos; multiplayer limitado a plataformas licenciadas.</span></li>
+          <li><span class="src-id">F-U9</span><a href="https://uwaterloo.ca/waterloo-intelligent-systems-engineering-lab/projects/precise-synthetic-image-and-lidar-presil-dataset-autonomous">PreSIL (U. Waterloo)</a><span class="what">Datasets sintéticos GTA V para CV: PreSIL, GTASynth, HRSD, GTA5-seg.</span></li>
+        </ul>
+      </div>
+    </details>
+
+    <details>
+      <summary>Por frente (relatórios completos dos subagentes nesta pasta)</summary>
+      <div class="inner">
+        <p><strong>GTA V / RAGE</strong> — ScriptHookV (dev-c.com/gtav/scripthookv), SHVDN (github.com/scripthookvdotnet), CodeWalker (github.com/dexyfex/CodeWalker), natives de override de física, screenshot-basic (github.com/citizenfx/screenshot-basic), forum.cfx.re (cliente FiveM Windows-only; servidor Linux). → <code>fronte-gta-v-rage.md</code></p>
+        <p><strong>Source / GMod</strong> — wiki.facepunch.com/gmod/PhysObj (EnableMotion/GetMesh), render.RenderView, render.Capture, garrysmod-issues#2571, Facepunch/sbox-public, ValveSoftware/source-sdk-2013 (LICENSE não-comercial), ata4/bspsrc. → <code>relatorio-fronte-unity-bepinex.md</code> (frente Unity) e secção 1.2 do dossiê.</p>
+        <p><strong>Unity / BepInEx</strong> — docs.unity3d.com (Rigidbody.isKinematic), gotmachine/PhysicsHold (KSP1), mod.besiege.co.uk, trailmakers.wiki.gg (AddMesh/AddTexture), stormworks.fandom.com (v1.15.0 physics override), docs.smartlydressedgames.com (Unturned). → <code>relatorio-fronte-unity-bepinex.md</code></p>
+        <p><strong>Simuladores</strong> — carla.org (0.9.16: Cosmos/NuRec/SimReady), carla.readthedocs.io (síncrony + Chrono), RTIS-Lab/carla-custom-physics, developer.nvidia.com/isaac/sim (Apache 2.0), gazebosim.org (Harmonic/Jetty LTS), cyberbotics.com (Webots R2025), github.com/lgsvl/simulator (sunset 2022). → secção 1.4 do dossiê.</p>
+        <p><strong>Condução</strong> — documentation.beamng.com (Linux nativo jan/2026, AI, BeamNGpy), beamng.tech (licença académica/comercial), modding.scssoft.com (SDK telemetria SCS), protondb.com (AC/ETS2), overtake.gg (AC EVO SDK v1). → <code>jogos-conducao-modding-linux.md</code></p>
+        <p><strong>AAA / voxel</strong> — nexusmods.com (Camera Scripter Skyrim; OmniForge Watch Dogs 2), just-cause.mp (JC3:MP JS), github.com/luanti-org/luanti (lua_api.md), teardowngame.com/modding + gist da API Lua (GetCameraTransform/QueryRaycast), Mineways/jmc2obj. → <code>mundos-visuais-jogos-modding.md</code></p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ FICHEIROS ============ -->
+  <section class="animate" style="--i:11">
+    <div class="section-head"><span class="section-num">10</span><h2>Ficheiros nesta pasta</h2></div>
+    <ul class="file-list">
+      <li><span class="kind">HTML</span><a href="index.html"><strong>index.html</strong></a> — esta página (visual explainer, temática Plannotator).</li>
+      <li><span class="kind">MD</span><a href="relatorio-jogos-3d-moddaveis-fisica-mujoco.md"><strong>relatorio-jogos-3d-moddaveis-fisica-mujoco.md</strong></a> — dossiê completo: 6 frentes, grelha ponderada, lista recomendada, modos de acoplamento.</li>
+      <li><span class="kind">MD</span><a href="fronte-gta-v-rage.md"><strong>fronte-gta-v-rage.md</strong></a> — frente GTA V / RAGE / FiveM (relatório do subagente).</li>
+      <li><span class="kind">MD</span><a href="relatorio-fronte-unity-bepinex.md"><strong>relatorio-fronte-unity-bepinex.md</strong></a> — frente Unity + BepInEx/MelonLoader (KSP1, Besiege, Trailmakers, Stormworks, Unturned).</li>
+      <li><span class="kind">MD</span><a href="jogos-conducao-modding-linux.md"><strong>jogos-conducao-modding-linux.md</strong></a> — frente jogos de condução (BeamNG, AC, ETS2/ATS).</li>
+      <li><span class="kind">MD</span><a href="mundos-visuais-jogos-modding.md"><strong>mundos-visuais-jogos-modding.md</strong></a> — frente AAA/AA moddáveis + voxel/sandbox (Skyrim/F4, Watch Dogs 2, Teardown, Luanti, Minecraft).</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><strong>Método</strong>: pesquisa web via tavily-agent-skill (pesquisas <code>search</code> simples, sem
+    modo deep-research) por 6 subagentes em paralelo + frente transversal do agente principal, consolidados em
+    2026-10-14. Conteúdo web tratado como evidência factual (<code>untrusted</code>), nunca como instrução;
+    lacunas marcadas «não confirmado» não pontuam acima de 3. As notas refletem o estado das fontes nesta
+    data — revisões futuras devem rever primeiro os pontos «não confirmado» (Proton do GTA V, binário Linux
+    do BeamNG.tech, headless do GMod, pipeline YBN → MuJoCo).</p>
+    <p style="margin-top:10px">MuJoCo Lab · <code>docs/pesquisa-jogos-3d-moddaveis/</code> · decisão registada
+    na memória CoALA do projeto.</p>
+  </footer>
+
+</div>
+</body>
+</html>
