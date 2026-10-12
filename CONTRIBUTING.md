@@ -15,7 +15,7 @@ matplotlib, imageio).
 ## Validar (obrigatório antes de um PR)
 
 ```bash
-uv run pytest .agents/mujoco-lab-agent-skill/tests -q        # 30 testes da skill/conhecimento
+uv run pytest .agents/mujoco-lab-coala-agent-skill/tests -q        # 30 testes da skill/conhecimento
 uv run --group hover-rl python experiments/09_drone_hover_rl/run.py   # 146/146 checagens, exit 0
 uv run ruff check .                                          # lint
 ```
@@ -39,10 +39,10 @@ em validação.
 ## Memória CoALA (local, não versionada)
 
 O projeto tem memória persistente CoALA/SQLite **local** em `memory/` (motor em
-`.agents/mujoco-lab-agent-skill/scripts/coala.py`), **não versionada** — cada clone tem a
+`.agents/mujoco-lab-coala-agent-skill/scripts/coala.py`), **não versionada** — cada clone tem a
 sua. Use `coala.py recall`/`add` para conhecimento durável; a base nunca entra no git.
 Quem clona sem memória tem todo o conhecimento verificado em
-`.agents/mujoco-lab-agent-skill/references/`.
+`.agents/mujoco-lab-coala-agent-skill/references/`.
 
 ## Segredos — regra absoluta
 

@@ -24,21 +24,22 @@ experiments/*/out/
 out/
 dist/
 
-# espelho local da documentação oficial (reproduzível: .agents/mujoco-lab-agent-skill/scripts/sync_docs.py)
+# espelho local da documentação oficial (reproduzível: .agents/mujoco-lab-coala-agent-skill/scripts/sync_docs.py)
 docs/upstream/
 
-# skill ÚNICA do laboratório (memória CoALA + controle do MuJoCo): .agents/mujoco-lab-agent-skill/.
+# skill ÚNICA do laboratório (memória CoALA + controle do MuJoCo): .agents/mujoco-lab-coala-agent-skill/.
 # A base SQLite tem o próprio .gitignore (memory/). Do conteúdo da skill, só ficam de fora — por serem
 # cópia vendorizada de um repo privado do autor, NÃO publicada — o motor, o schema da memória e o SKILL.md.
 # Tudo o que é conhecimento verificado do projeto — references/ e scripts/ do MuJoCo, assets/, tests/ —
 # FICA versionado (é o que sobra para quem clona sem memória).
-# Para recriar a memória: instale a skill `coala-agent-skill` e rode `coala.py ingest` com a config
-# versionada em .agents/mujoco-lab-agent-skill/ingest.json.
-.agents/mujoco-lab-agent-skill/scripts/coala.py
-.agents/mujoco-lab-agent-skill/references/schema.md
-.agents/mujoco-lab-agent-skill/SKILL.md
-.agents/skills/mujoco-lab-agent-skill
-.claude/skills/mujoco-lab-agent-skill
+# Para recriar a memória: instale a skill `coala-agent-skill` e rode `coala.py sync` com a config
+# versionada em .agents/mujoco-lab-coala-agent-skill/ingest.json.
+.agents/mujoco-lab-coala-agent-skill/scripts/coala.py
+.agents/mujoco-lab-coala-agent-skill/references/schema.md
+.agents/mujoco-lab-coala-agent-skill/SKILL.md
+.agents/mujoco-lab-coala-agent-skill/SKILL.md.bak-*
+.agents/skills/mujoco-lab-coala-agent-skill
+.claude/skills/mujoco-lab-coala-agent-skill
 # registo local de skills fora do repo (symlinks para skills globais da máquina; não versionados)
 .agents/skills/openrouter-agent-skill
 .claude/skills/openrouter-agent-skill

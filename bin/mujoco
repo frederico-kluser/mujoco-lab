@@ -370,7 +370,7 @@ def main(argumentos: list[str]) -> None:
     if not experimentos:
         erro(
             "não há nenhum experimento em experiments/",
-            "cria um com `python3 .agents/mujoco-lab-agent-skill/scripts/new_experiment.py <nome>`",
+            "cria um com `python3 .agents/mujoco-lab-coala-agent-skill/scripts/new_experiment.py <nome>`",
         )
     if consulta is not None:
         experimento = encontrar_experimento(experimentos, consulta)
