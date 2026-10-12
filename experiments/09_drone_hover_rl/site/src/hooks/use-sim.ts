@@ -12,6 +12,7 @@ import {
   buscarSim,
   enviarBateria,
   enviarCamera,
+  enviarControlador,
   enviarFpv,
   enviarLoop,
   enviarParar,
@@ -21,6 +22,7 @@ import {
   type AcaoBateria,
   type RespostaBateria,
 } from "@/lib/api"
+import type { ControladorEstado } from "@/lib/controlador"
 import {
   definirLeitorEstadoDinamico,
   invalidarEnviosDinamicos,
@@ -104,6 +106,12 @@ export interface SimStream {
    * comando) e propaga-se para o painel dizer «indisponível».
    */
   voo: VooEstado | null
+  /**
+   * SELETOR DE CONTROLADOR (contrato r12) tal como o `/api/sim` o publica (em reforço do
+   * `/api/state`): `modo` em vigor × `pedido`, com o estado honesto da troca (`trocando`/`erro` +
+   * `motivo`). `null` = backend que ainda não publica o bloco.
+   */
+  controlador: ControladorEstado | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -137,6 +145,12 @@ export interface SimStream {
   aplicarBateria: (acao: AcaoBateria) => Promise<RespostaBateria>
   definirLoop: (ativo: boolean) => Promise<void>
   /**
+   * `POST /api/controlador {"modo"}` (contrato r12) — o SELETOR: troca RL ↔ clássico ao vivo. A troca
+   * reinicia o EPISÓDIO (calibração do giroscópio) e o bloco `controlador` diz `trocando` + `motivo`
+   * enquanto o eco não apanha o pedido. Passa pela fila dos controlos e relê o `/api/sim` no fim.
+   */
+  definirControlador: (modo: "rl" | "classico") => Promise<void>
+  /**
    * Relê o `/api/sim` AGORA (sem esperar o próximo ciclo): usado pelo painel quando um comando foi
    * suprimido por estar velho e pelas mensagens de outra aba, para o ecrã mostrar já o estado do servidor.
    */
@@ -169,6 +183,7 @@ export function useSim(): SimStream {
     simulacao: SimulacaoEstado | null
     planta: Planta | null
     voo: VooEstado | null
+    controlador: ControladorEstado | null
   }>({
     estado: "a_correr",
     ep: 0,
@@ -192,6 +207,8 @@ export function useSim(): SimStream {
     planta: null,
     // Controlo de voo: `null` até alguma resposta publicar o bloco (backend antigo).
     voo: null,
+    // Seletor de controlador (r12): `null` até alguma resposta publicar o bloco.
+    controlador: null,
   })
   const [resumo, setResumo] = useState<ResumoEstado | null>(null)
   const [ligacao, setLigacao] = useState<Ligacao>("a_ligar")
@@ -265,6 +282,9 @@ export function useSim(): SimStream {
         // CONTROLO DE VOO: o bloco publicado manda (inclusive `eco: null`, honesto — política sem
         // modo comando); só uma resposta sem bloco nenhum retém o anterior.
         voo: dados.voo ?? anterior.voo,
+        // SELETOR (r12): a mesma regra — um bloco publicado (inclusive `estado: "trocando"`/`"erro"`)
+        // manda; só respostas sem bloco retêm o anterior.
+        controlador: dados.controlador ?? anterior.controlador,
       }))
       if (dados.linhas.length === 0) return
       setLinhas((anteriores) => {
@@ -351,6 +371,10 @@ export function useSim(): SimStream {
         // Controlo de voo (reforço do `/api/sim`): só escreve quando o resumo publica o bloco.
         if (dados.voo !== null) {
           setCabecalho((anterior) => ({ ...anterior, voo: dados.voo }))
+        }
+        // Seletor de controlador (reforço do `/api/sim`): só escreve quando o resumo publica o bloco.
+        if (dados.controlador !== null) {
+          setCabecalho((anterior) => ({ ...anterior, controlador: dados.controlador }))
         }
         // Câmara (reforço do `/api/sim`, como o rpi5): o `/api/state` também publica
         // `camera_atual`/`camera_padrao` — a MESMA fusão honesta do `/api/sim` (o `null` explícito
@@ -453,6 +477,20 @@ export function useSim(): SimStream {
     [encadear, pollAgora]
   )
 
+  /**
+   * `POST /api/controlador` (contrato r12) — o SELETOR RL ↔ clássico, pela fila dos controlos e com
+   * releitura imediata do `/api/sim`. O efeito NÃO é instantâneo: o runner troca no passo seguinte e
+   * a troca reinicia o episódio — o bloco `controlador` mostra `trocando` + `motivo` até o eco
+   * apanhar o pedido (é o painel que o diz, honestamente).
+   */
+  const definirControlador = useCallback(
+    async (modo: "rl" | "classico") => {
+      await encadear(() => enviarControlador(modo))
+      await pollAgora().catch(() => undefined)
+    },
+    [encadear, pollAgora]
+  )
+
   /** Última linha do histórico (valor atual das curvas e do mostrador de vento). */
   const ultima = linhas.length > 0 ? linhas[linhas.length - 1] : null
 
@@ -529,6 +567,7 @@ export function useSim(): SimStream {
     loop: cabecalho.loop ?? resumo?.loop ?? null,
     planta: cabecalho.planta ?? resumo?.planta ?? null,
     voo: cabecalho.voo ?? resumo?.voo ?? null,
+    controlador: cabecalho.controlador ?? resumo?.controlador ?? null,
     resumo,
     ligacao,
     erro,
@@ -542,6 +581,7 @@ export function useSim(): SimStream {
     aplicarFpv,
     aplicarBateria,
     definirLoop,
+    definirControlador,
     atualizar: pollAgora,
   }
 }

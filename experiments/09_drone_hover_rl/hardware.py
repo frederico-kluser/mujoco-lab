@@ -37,7 +37,7 @@ sys.path[:0] = [str(_RAIZ)]
 from lab import drone_rpi as dr
 from lab.drone_rpi import componentes as comp
 
-COALA = _RAIZ / ".agents" / "mujoco-lab-agent-skill" / "scripts" / "coala.py"
+COALA = _RAIZ / ".agents" / "mujoco-lab-coala-agent-skill" / "scripts" / "coala.py"
 XML_ATIVO = comp.PASTA_MODELO / "drone_rpi.xml"
 GRUPOS = ("motores", "helices", "celulas", "frames", "esc", "eletronica", "sensores", "cameras")
 
@@ -100,9 +100,11 @@ def cmd_mostrar(args) -> int:
     if hw.camera is not None:
         from lab import camera_rpi as cam_rpi
         mid = cam_rpi.modulo_da_peca(hw.camera.id)
-        fov = cam_rpi.fov_modo(mid, cam_rpi.OMISSAO_MODO)
-        print(f"  camera  {_nome(hw.camera.dados)} · {hw.camera.dados.get('mp', '?')} MP · montada à frente · "
-              f"FoV {fov['horizontal']:.0f}°×{fov['vertical']:.0f}° no modo {cam_rpi.OMISSAO_MODO} · "
+        modo = cam_rpi.modo_omissao(mid)               # 1080p50 na Pi Camera, QVGA30 na Vision Shield (Arduino)
+        fov = cam_rpi.fov_modo(mid, modo)
+        mono = " · monocromática" if cam_rpi.modos_do_modulo(mid)[modo].mono else ""
+        print(f"  camera  {_nome(hw.camera.dados)} · {hw.camera.dados.get('mp', '?')} MP{mono} · montada à frente · "
+              f"FoV {fov['horizontal']:.0f}°×{fov['vertical']:.0f}° no modo {modo} · "
               f"{1000 * hw.camera.massa:.0f} g · vídeo {', '.join(hw.camera.dados.get('modos_video', []))}")
     print("  massa   " + " + ".join(f"{k} {v:.0f}" for k, v in r["massas_g"].items()) +
           f" = {r['massa_total_g']:.0f} g")
@@ -281,7 +283,7 @@ def cmd_xml(args) -> int:
     destino = Path(args.saida) if args.saida else XML_ATIVO
     dr.exportar_xml(hw, destino)
     print(f"MJCF do build '{hw.nome}' em {destino} — inspecione com "
-          f"`.venv/bin/python .agents/mujoco-lab-agent-skill/scripts/inspect_model.py {destino}`")
+          f"`.venv/bin/python .agents/mujoco-lab-coala-agent-skill/scripts/inspect_model.py {destino}`")
     return 0
 
 

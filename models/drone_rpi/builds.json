@@ -39,6 +39,43 @@
       "meta_autonomia_min": 60,
       "camera": "raspberry_camera_module_3_wide"
     },
+    "endurance_15pol_arduino": {
+      "descricao": "Igual ao endurance_15pol_p50b (frame DIY 1950 mm, MN4004 KV300 + P15×5, 6S2P Molicel P50B, AIR 40A, BMI088/VL53L1X/PMW3901/INA226) com o COMPUTADOR DE BORDO trocado: Arduino Portenta H7 + Portenta Vision Shield Rev 2 (HM0360, câmara monocromática 640×480) em vez de RPi 5 + FC H7 + Pi Camera Module 3 Wide — laço de voo de 500 Hz no núcleo M4 e visão no M7 (recomendação da pesquisa de 2026-10-12: inferência, a validar em placa). O Portenta não tem IMU: mantém o BMI088 externo",
+      "frame": "diy_tubo_carbono_1950",
+      "motor": "tmotor_mn4004_kv300",
+      "helice": "tmotor_p15x5",
+      "bateria": {
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 2,
+        "massa_extra_g": 45,
+        "dims_mm": [
+          142,
+          70,
+          44
+        ]
+      },
+      "esc": "tmotor_air40a",
+      "eletronica": [
+        "arduino_portenta_h7",
+        "cablagem"
+      ],
+      "sensores": {
+        "imu": "bmi088",
+        "tof": "vl53l1x",
+        "fluxo": "pmw3901",
+        "monitor": "ina226"
+      },
+      "arquitetura": "arduino",
+      "bec_eficiencia": 0.88,
+      "r_ligacoes_mohm": 4,
+      "atraso_comando_ms": 8,
+      "v_brownout": 9.0,
+      "temperatura_ambiente_c": 25,
+      "massa_extra_g": 15,
+      "meta_autonomia_min": 60,
+      "camera": "portenta_vision_shield_hm0360"
+    },
     "endurance_15pol_semisolido": {
       "descricao": "Igual ao endurance_15pol_p50b com o pack semi-sólido Tattu 6S 12 Ah (800 g, 266 Wh, dados só do fabricante)",
       "frame": "diy_tubo_carbono_650",

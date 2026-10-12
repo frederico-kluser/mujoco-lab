@@ -77,6 +77,7 @@ política, porque uma política só vale para as peças com que treinou.
 | build | massa | pack | Wh | pairagem | g/W | acelerador | T/W | autonomia (modelo) |
 |---|---|---|---|---|---|---|---|---|
 | **`endurance_15pol_p50b`** (ATIVO, wheelbase ×3) | 2183 g | 871 g | 216 | 198,1 W | 11,0 | 63,0 % | 2,62 | **65,8 min** |
+| `endurance_15pol_arduino` (o p50b com **Portenta H7 + Vision Shield** em vez de RPi 5 + FC + Pi Camera; NÃO é o ativo) | 2137 g | 871 g | 216 | 186,7 W | 11,4 | 62,1 % | 2,67 | 70,0 min |
 | `endurance_15pol_semisolido` | 1597 g | 800 g | 266 | 125,5 W | 12,7 | 50,7 % | 3,58 | 127,2 min |
 | `endurance_15pol_tarot` (frame comercial 750 g) | 2133 g | 871 g | 216 | 197,6 W | 10,8 | 62,9 % | 2,68 | 66,0 min |
 | `endurance_16pol_m50lt` | 1664 g | 855 g | 218 | 132,0 W | 12,6 | 48,0 % | 3,66 | 97,6 min |
@@ -90,6 +91,13 @@ política, porque uma política só vale para as peças com que treinou.
 
 "autonomia (modelo)" = pairagem em ar parado até à tensão de pouso (Li-ion 3,0 V/célula sob carga; LiPo 3,5 V;
 semi-sólido 2,88 V do fabricante), com download do frame, queda de tensão, BEC e eletrónica de bordo.
+
+**Computador de bordo Arduino (2026-10-12)**: o catálogo tem `eletronica.arduino_portenta_h7` (+ `arduino_nicla_vision` e
+`arduino_giga_r1`, só para comparação) e `cameras.portenta_vision_shield_hm0360` / `_hm01b0` (câmaras MONOCROMÁTICAS de
+8 bit, DVP → DCMI, sem CSI-2). Os números vêm das fichas oficiais da Arduino/Himax; o que não tem número oficial (massa do
+Portenta, lente/FoV das shields) está em `estimado` com a razão e a fonte. O build `endurance_15pol_arduino` troca só o
+computador/câmara do p50b (o Portenta não tem IMU: fica o BMI088). Detalhe e ressalvas: secção «Computador de bordo Arduino»
+de `experiments/09_drone_hover_rl/README.md`; prova: `teste_arduino_catalogo.py`.
 
 **Realismo — o que o modelo já desconta e o que não.** A pesquisa profunda (2026-10-10, 104 agentes,
 verificação adversarial com 3 votos) confirmou: (1) os ensaios INDEPENDENTES ficam **6–9 % abaixo** das tabelas

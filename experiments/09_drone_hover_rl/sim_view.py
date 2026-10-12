@@ -134,6 +134,37 @@ mesmos modos, fps, megapixels, FoV por modo, JPEG (qualidade 50 por omissão) e 
   · SEM o módulo (modelo sem câmara `fpv`, `--sem-fpv`) tudo isto é ignorado sem erro e a telemetria
     publica `"fpv": null` — nunca se inventa uma câmara.
 
+SELETOR DE CONTROLADOR (contrato r12, 2026-10-12 — aditivo sobre o r11): DOIS caminhos de controlo, trocáveis
+AO VIVO pelo `POST /api/controlador` (campo `"controlador": {"modo", "seq"}` do ficheiro de controlo) ou pela
+flag `--controlador rl|classico` no arranque (PADRÃO `rl`, para não mudar o comportamento atual):
+  · `rl`       — a POLÍTICA de sempre (`politica.predict` → `env.step`, contrato r11; yaw FIXO, yaw alvo 0);
+  · `classico` — a CASCATA CLÁSSICA do firmware C++ (`firmware/nucleo/`) via ctypes (`sitl.py` compila a .so
+    e expõe `NucleoCpp`; os MESMOS adaptadores do `sitl.DroneRealEnvNucleo` modo `cascata` —
+    `_AdaptadorCascata`/`_AdaptadorEstimador` — passam a comandar o env EM USO: estimador clássico → cascata →
+    laço de taxa → mistura, tudo no C++, que vê só os sensores). DECISÃO DOCUMENTADA: preferiu-se o C++ via
+    ctypes (é o código que voa no Arduino), mas SEM trocar de env em runtime — o viewer da janela 3D e os
+    módulos de câmara FPV ficam ligados aos `model`/`data` do env criado no arranque e não há API para os
+    religar; instalar o núcleo no env em uso reproduz o `DroneRealEnvNucleo(modo_nucleo="cascata")` ao bit
+    (mesma `config_de_hardware`, mesmos adaptadores, mesma calibração) sem apagar a janela. A TROCA reinicia
+    o EPISÓDIO (calibração do giroscópio no chão — 1 s de motores em idle — e arma a cascata; é o que o
+    `DroneRealEnvNucleo.reset` faz) e o estado é honesto: o bloco `"controlador"` da telemetria publica
+    `estado: "trocando"` + `motivo` enquanto isso (o `/api/state` mostra `trocando` sempre que o pedido ≠ o
+    eco) e `estado: "erro"` + `motivo` quando a troca é recusada (ex. planta cf2: a cascata é da planta real).
+    Só a planta REAL em modo `ctbr` aceita o modo clássico; no cf2 o pedido é recusado honestamente e a
+    política continua a voar. O núcleo é criado UMA vez e reutilizado nas trocas seguintes.
+
+O bloco `"voo"` (contrato r12) ganha três campos OPCIONAIS (ausência = defaults; o servidor escreve o bloco
+completo): `"yaw_taxa"` (rad/s, ±YAW_TAXA_MAX — teclas Z/C do site mandam ±YAW_TAXA_TECLA), `"yaw_alvo"`
+(rumo absoluto DESDE O ARMAR em rad, `null` = sem alvo — a tecla X manda o `rumo` atual da telemetria) e
+`"segui_alvo"` (bool — tecla V = «olhar», o IBVS do núcleo segue o círculo com a câmara mono). No modo
+CLÁSSICO o WASDQE passa a ser RELATIVO AO RUMO (o comando da cascata é no referencial do rumo; a mesma
+`teclas_para_velocidade` do r11 serve, e o `v_ref` do eco volta ao mundo pela rotação `v_ref_mundo`) e a
+prioridade é `segui_alvo` > `yaw_alvo` > `yaw_taxa` > velocidade. No modo RL os campos de yaw são ACEITES e
+validados mas NÃO aplicados (a política r11 mantém o rumo fixo) — o eco `"controlador"` mostra-os a zero e o
+site diz «yaw livre só no modo clássico», honestamente. Telemetria aditiva: chave `"controlador"` =
+`{modo, fonte, yaw_taxa, yaw_alvo, segui_alvo, v_ref_fonte, pedido, estado, motivo, rumo, olhar}` — nada muda
+nas chaves existentes (`olhar` = alvo na imagem em px do IBVS, ou `null`; `rumo` = ψ desde o armar, rad).
+
 SEM REINÍCIO POR OMISSÃO (pedido do dono, 2026-10-09): `loop` nasce DESLIGADO, por isso um arranque sem
 `--com-loop` corre SEM REINÍCIO — no fim do episódio a física continua a integrar (`env.step` a 50 Hz) no
 estado em que ficou, para sempre (se caiu, fica onde a física o deixou; se pairava, continua a pairar), com a
@@ -182,7 +213,7 @@ sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 from lab import mjkit  # noqa: I001
 from lab import crazyflie as cf
 from lab import camera_rpi as cam_rpi
-from env import VOO_TECLAS, HoverEnv
+from env import VOO_TECLAS, HoverEnv, teclas_para_velocidade
 from env_real import OBS_ATOR_DIM, OBS_ATOR_DIM_COMANDO, DroneRealEnv
 
 import numpy as np
@@ -199,6 +230,12 @@ CONTROLO_INICIAL = {"vel": 0.0, "azimute": 0.0, "elevacao": 0.0, "ativo": False,
 # ainda diz o que o site escreveu no arranque» de «alguém o mudou depois» (um `POST /api/loop`, que vence).
 CAMPO_ARRANQUE = "loop_arranque"
 ENV_LOOP_ARRANQUE = "DRONE_LOOP_ARRANQUE"
+# Handshake GÉMEO do `loop` para o SELETOR DE CONTROLADOR (r12): o site escreve o modo inicial no ficheiro
+# antes de lançar o runner, carimba-o com um token (`CAMPO_ARRANQUE_CONTROLADOR`) e passa-o no ambiente
+# (`ENV_CONTROLADOR_ARRANQUE`); o `POST /api/controlador` limpa o carimbo. É o que impede o `fixar_controlador`
+# (que corre quando o runner já demorou segundos a importar o torch) de reverter um pedido legítimo do dono.
+CAMPO_ARRANQUE_CONTROLADOR = "controlador_arranque"
+ENV_CONTROLADOR_ARRANQUE = "DRONE_CONTROLADOR_ARRANQUE"
 FATOR_TEMPO_OMISSAO = 1.0        # 1 = tempo real; 0 = sem travão (o mais rápido possível); 2 = 2x mais rápido
 PERIODO_AMOSTRA = 0.1            # s — cadência da telemetria a correr (~10 Hz)
 PERIODO_OCIO = 0.02              # s — ritmo do ciclo quando não há física (pausa): 1 passo de decisão
@@ -243,6 +280,19 @@ FPV_QUADRO, FPV_ESTADO = "quadro.jpg", "estado.json"
 # O SEGUNDO módulo (fonte `simulacao`: a vista 3ª-pessoa da simulação) partilha a pasta e o
 # padrão atómico do FPV — mesmo módulo emulado, mesma cadência/latência, só a FONTE muda.
 FPV_QUADRO_SIM, FPV_ESTADO_SIM = "quadro_sim.jpg", "estado_sim.json"
+# SELETOR DE CONTROLADOR (contrato r12): `rl` = política de sempre · `classico` = cascata clássica C++
+# (núcleo do firmware via ctypes, `sitl.NucleoCpp`) no env em uso. O arranque decide (`--controlador`) e o
+# `POST /api/controlador` muda depois (bloco `"controlador": {"modo", "seq"}` do ficheiro de controlo).
+MODOS_CONTROLADOR = ("rl", "classico")
+CONTROLADOR_OMISSAO = "rl"        # padrão: não mudar o comportamento atual (a política pilota)
+YAW_TAXA_MAX = 2.0                # rad/s — teto do contrato r12 para `voo.yaw_taxa` (validação estrita)
+YAW_TAXA_TECLA = 0.5              # rad/s — o que as teclas Z/C do site mandam (rodar esquerda/direita)
+# latência da CÂMARA de bordo por alvo de computador (fontes: lab/camera_rpi — Pi CSI-2 116 ms a 1080p50;
+# Vision Shield/DCMI do Arduino ≈ 21 ms, `pesquisas/2026-10-12-...` e README do firmware)
+LATENCIA_CAMERA_PI_S, LATENCIA_CAMERA_DCMI_S = 0.116, 0.021
+# «OLHAR» (r12): enquanto o IBVS estiver ligado o alvo descreve o círculo — os valores do protocolo da B0
+# (`avaliar_nucleo.RAIO_TRAJETORIA_M` = 1,5 m; `vel` 0,5 m/s) — e a guinada segue-o.
+CIRCULO_VEL, CIRCULO_RAIO = 0.5, 1.5
 
 
 # ---------------------------------------------------------------------------------------------- controlo
@@ -306,22 +356,45 @@ class Fpv:
 
 @dataclass
 class Voo:
-    """Bloco `"voo"` do controlo (contrato r11): `{ativo, teclas, seq}` — o CONTROLE DE VOO do site.
+    """Bloco `"voo"` do controlo (contrato r11 + r12): `{ativo, teclas, [yaw_taxa, yaw_alvo, segui_alvo], seq}`.
 
     `teclas` = `{w, a, s, d, q, e}` booleanas (W = +x, S = −x, A = +y, D = −y, Q = subir, E = descer) e
     `ativo: false` (ou a chave ausente com `teclas` presentes) trata as teclas como SOLTAS (segurar
     posição). O bloco é ESTADO: o runner aplica-o em `env.definir_comando_teclas` a cada mudança de
     assinatura (as teclas mudam ao vivo — cada keydown/keyup do site escreve o bloco). Só faz efeito em
     ambientes em modo comando (`comando=True`); num env clássico é ignorado com aviso (uma vez).
+
+    r12 (aditivo, OPCIONAL — ausência = defaults, para ficheiros r11 continuarem válidos):
+    `yaw_taxa` (rad/s, ±YAW_TAXA_MAX; teclas Z/C) · `yaw_alvo` (rumo absoluto desde o armar, rad, ou `None`
+    = sem alvo; tecla X) · `segui_alvo` («olhar»: o IBVS do núcleo segue o alvo com a câmara; tecla V).
+    Só se aplicam no modo CLÁSSICO (a política r11 mantém o rumo fixo) — no modo RL aceitam-se e validam-se,
+    mas o eco `"controlador"` mostra-os a zero, honestamente.
     """
 
     ativo: bool = False
     teclas: dict = field(default_factory=dict)
     seq: int | None = None
+    yaw_taxa: float = 0.0
+    yaw_alvo: float | None = None
+    segui_alvo: bool = False
 
     def assinatura(self) -> str:
-        """Assinatura estável do bloco (estado das teclas + ativo + seq): só uma MUDANÇA o (re)aplica."""
-        return json.dumps({"ativo": self.ativo, "teclas": self.teclas, "seq": self.seq}, sort_keys=True)
+        """Assinatura estável do bloco (estado das teclas + yaw + ativo + seq): só uma MUDANÇA o (re)aplica."""
+        return json.dumps({"ativo": self.ativo, "teclas": self.teclas, "seq": self.seq,
+                           "yaw_taxa": self.yaw_taxa, "yaw_alvo": self.yaw_alvo,
+                           "segui_alvo": self.segui_alvo}, sort_keys=True)
+
+
+@dataclass
+class SelControlador:
+    """Bloco `"controlador"` do controlo (contrato r12): `{"modo": "rl"|"classico", "seq": int}` — o SELETOR.
+
+    É o que o `POST /api/controlador` escreve (o `seq` é do servidor, +1 por pedido); o runner troca de
+    controlador quando o `modo` muda (1x por mudança — reescrever o bloco não re-dispara a troca).
+    """
+
+    modo: str = CONTROLADOR_OMISSAO
+    seq: int | None = None
 
 
 @dataclass
@@ -338,6 +411,7 @@ class Registo:
     camera: Camera | None = None     # None = campo ausente: não mexe na câmara
     fpv: Fpv | None = None           # None = campo ausente: não mexe no módulo de câmara FPV
     voo: "Voo | None" = None         # None = campo ausente: não mexe no controle de voo
+    controlador: SelControlador | None = None     # None = campo ausente: não mexe no seletor (r12)
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -512,12 +586,15 @@ def _ler_fpv(bruto) -> Fpv | None:
 
 
 def _ler_voo(bruto) -> Voo | None:
-    """`"voo"` do controlo → `Voo` validado (`None` se o campo não vier) — contrato r11.
+    """`"voo"` do controlo → `Voo` validado (`None` se o campo não vier) — contratos r11 + r12.
 
     `teclas` = objeto com as 6 teclas do contrato (`w,a,s,d,q,e`) booleanas (tolera 0/1) — chaves
     DESCONHECIDAS são ignoradas em silêncio (um ficheiro com lixo não rebenta) e as teclas em falta valem
     `False`; `ativo` booleano (predefinido `False` — sem `ativo` explícito não se pilota por acidente);
-    `seq` inteiro ≥ 0 opcional. Um bloco que não seja objeto JSON → `ValueError` (como os outros blocos).
+    `seq` inteiro ≥ 0 opcional. r12 (OPCIONAIS; ausência = defaults, um ficheiro r11 continua válido):
+    `yaw_taxa` finito em [−YAW_TAXA_MAX, YAW_TAXA_MAX] (fora → `ValueError`), `yaw_alvo` `None`/nulo (sem
+    alvo) ou finito (normalizado para ]−π, π]) e `segui_alvo` booleano (tolera 0/1) — tipos errados →
+    `ValueError`, como no resto do contrato. Um bloco que não seja objeto JSON → `ValueError`.
     """
     if bruto is None:
         return None
@@ -539,7 +616,37 @@ def _ler_voo(bruto) -> Voo | None:
     seq = bruto.get("seq")
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
         raise ValueError(f"`voo.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
-    return Voo(False if ativo is None else ativo, teclas, seq)
+    yaw_taxa = _numero(bruto, "yaw_taxa", 0.0)
+    if not -YAW_TAXA_MAX <= yaw_taxa <= YAW_TAXA_MAX:
+        raise ValueError(f"`voo.yaw_taxa` tem de estar em [{-YAW_TAXA_MAX}, {YAW_TAXA_MAX}] rad/s "
+                         f"(recebido {yaw_taxa!r})")
+    yaw_alvo = bruto.get("yaw_alvo")
+    if yaw_alvo is not None:
+        yaw_alvo = _numero(bruto, "yaw_alvo", 0.0)
+        yaw_alvo = math.atan2(math.sin(yaw_alvo), math.cos(yaw_alvo))   # normalizado a ]−π, π]
+    segui_alvo = _booleano(bruto, "segui_alvo")
+    return Voo(False if ativo is None else ativo, teclas, seq, yaw_taxa, yaw_alvo,
+               False if segui_alvo is None else segui_alvo)
+
+
+def _ler_controlador(bruto) -> SelControlador | None:
+    """`"controlador"` do controlo → `SelControlador` validado (`None` se o campo não vier) — contrato r12.
+
+    `modo` é OBRIGATÓRIO e tem de ser `rl` ou `classico` (outro valor → `ValueError`, como as faixas dos
+    outros blocos: o registo é ignorado com aviso e o modo em vigor fica) e `seq` inteiro ≥ 0 opcional.
+    Chaves desconhecidas ignoram-se em silêncio (ficheiro velho não rebenta).
+    """
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`controlador` tem de ser um objeto JSON {modo, seq}")  # noqa: TRY004
+    modo = bruto.get("modo")
+    if modo not in MODOS_CONTROLADOR:
+        raise ValueError(f"`controlador.modo` tem de ser um de {list(MODOS_CONTROLADOR)} (recebido {modo!r})")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`controlador.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return SelControlador(str(modo), seq)
 
 
 def ler_registo(dados) -> Registo:
@@ -568,7 +675,7 @@ def ler_registo(dados) -> Registo:
     return Registo(vel, azimute, elevacao, True if ativo is None else ativo, reiniciar,
                    _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")),
                    _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
-                   _ler_voo(dados.get("voo")))
+                   _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -621,6 +728,48 @@ def token_do_arranque(ambiente=None) -> str | None:
     """
     fonte = os.environ if ambiente is None else ambiente
     return fonte.get(ENV_LOOP_ARRANQUE) or None
+
+
+def token_do_arranque_controlador(ambiente=None) -> str | None:
+    """Token do arranque do SELETOR (`ENV_CONTROLADOR_ARRANQUE`) — a mesma regra do `token_do_arranque`."""
+    fonte = os.environ if ambiente is None else ambiente
+    return fonte.get(ENV_CONTROLADOR_ARRANQUE) or None
+
+
+def fixar_controlador(caminho: Path, modo: str, arranque: str | None = None) -> bool:
+    """Fixou o modo do SELETOR de controlador no ficheiro? (escrita ATÓMICA; `False` = já lá estava/não deu).
+
+    Mesma semântica do `fixar_loop` (r12): o ARRANQUE é autoritativo e corrige um modo velho do ficheiro
+    (`--controlador classico` vence um `rl` velho e vice-versa), PRESERVANDO todas as outras chaves. Com o
+    `arranque` (token do site) um `POST /api/controlador` feito durante o arranque do runner vence e não é
+    revertido (o carimbo foi limpo pelo POST). Falha de escrita é aviso, nunca exceção.
+    """
+    caminho = Path(caminho)
+    dados = ler_controlo_bruto(caminho)
+    if arranque is not None and dados.get(CAMPO_ARRANQUE_CONTROLADOR) != arranque:
+        print("[sim] controlo: `controlador` mudado DEPOIS do arranque do site (POST /api/controlador) — "
+              f"respeita-se o valor do ficheiro ({(dados.get('controlador') or {}).get('modo')!r})",
+              flush=True)
+        return False                                     # o pedido do dono vence o default do arranque
+    if not dados:
+        dados = dict(CONTROLO_INICIAL)
+    atual = dados.get("controlador") if isinstance(dados.get("controlador"), dict) else None
+    if atual is not None and atual.get("modo") == modo:
+        return False                                     # já diz o que o CLI quer: não se toca no ficheiro
+    dados["controlador"] = {"modo": str(modo),
+                            "seq": int(atual.get("seq", 0) or 0) + 1 if atual is not None else 0}
+    dados["t"] = time.time()
+    tmp = nome_temporario(caminho)
+    try:
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(dados, separators=(",", ":")) + "\n", encoding="utf-8")
+        os.replace(tmp, caminho)
+    except OSError as erro:
+        tmp.unlink(missing_ok=True)
+        print(f"[sim] aviso: não consegui fixar `controlador={modo}` em {caminho} ({erro}) — sigo com o "
+              "modo da linha de comandos", file=sys.stderr, flush=True)
+        return False
+    return True
 
 
 def fixar_loop(caminho: Path, loop: bool, arranque: str | None = None) -> bool:
@@ -713,6 +862,8 @@ class Controlo:
         self._avisos: set[str] = set()
         self.bateria_seq: int | None = None     # `seq` do último comando de bateria visto (linha de base)
         self.pedido_bateria: str | None = None  # "recarregar" | "nova" por consumir
+        self.controlador: SelControlador | None = None   # seletor (r12) EM VIGOR no ficheiro (None: nunca pedido)
+        self._assinatura_controlador: str | None = None
         self._le_contador_inicial()
 
     def _le_contador_inicial(self) -> None:
@@ -831,9 +982,19 @@ class Controlo:
         return acao
 
     def _actualiza_comandos(self, registo: Registo) -> None:
-        """Regra do contador: 1.º visto = linha de base; ≥ 1 sem ficheiro prévio = REINICIAR já pedido."""
+        """Regra do contador: 1.º visto = linha de base; ≥ 1 sem ficheiro prévio = REINICIAR já pedido.
+
+        O seletor de controlador (r12) fica também aqui: `self.controlador` diz o modo PEDIDO no ficheiro e
+        o `correr` consome-o (uma mudança de `modo` dispara a troca; reescrever o mesmo bloco não).
+        """
         if registo.loop is not None:
             self.loop = bool(registo.loop)
+        if registo.controlador is not None:
+            assinatura = json.dumps({"modo": registo.controlador.modo, "seq": registo.controlador.seq},
+                                    sort_keys=True)
+            if assinatura != self._assinatura_controlador:
+                self._assinatura_controlador = assinatura
+                self.controlador = registo.controlador
         if registo.reiniciar is None:
             return
         if self.reiniciar is None:
@@ -1595,8 +1756,392 @@ def montar_multi_ia(args, politica, env, caminho_seg=None):
     return CascataMultiIA(ia_voo=ia_voo, ia_seguimento=ia_seg)
 
 
+# ------------------------------------------------- seletor de controlador (contrato r12): RL × clássico
+def v_ref_mundo(v_rumo, rumo: float) -> list[float]:
+    """`v_ref` no referencial do RUMO → frame MUNDO (rotação `Rz(rumo)`), em m/s.
+
+    No modo CLÁSSICO o WASDQE é RELATIVO AO RUMO (W = avanço na direção do nariz, A = lateral esquerda):
+    a cascata recebe-o no referencial do rumo e o `p_ref` do env (frame mundo) recebe aqui a rotação — é o
+    «W muda de eixo» do contrato r12: com `rumo = π/2`, W = [+1, 0, 0] no rumo vira [0, +1, 0] no mundo.
+    """
+    vx, vy, vz = (float(v) for v in v_rumo)
+    c, s = math.cos(float(rumo)), math.sin(float(rumo))
+    return [vx * c - vy * s, vx * s + vy * c, vz]
+
+
+def comando_classico(voo: Voo | None, alvo: bool = True) -> dict:
+    """Bloco `voo` (contrato r12) → comando da cascata clássica `{modo, vx, vy, vz, yaw_taxa[, yaw]}`.
+
+    As velocidades são no REFERENCIAL DO RUMO (a `teclas_para_velocidade` do r11 serve tal e qual: W = +vx
+    frente, A = +vy esquerda, Q = +vz cima, diagonais normalizadas, |vz| = 0,7 m/s). PRIORIDADE:
+    `segui_alvo` (modo `olhar` — IBVS com a câmara) > `yaw_alvo` (modo `yaw_alvo` — rumo absoluto) >
+    modo `velocidade` (com a `yaw_taxa` a rodar; v = 0 SEGURA a posição). `alvo=False` (sem ponto mocap no
+    modelo) cai para a prioridade seguinte em vez de fingir um «olhar» sem câmara.
+    """
+    voo = voo if voo is not None else Voo()
+    teclas = dict(voo.teclas) if voo.ativo else {}
+    v = teclas_para_velocidade(**{tecla: bool(teclas.get(tecla, False)) for tecla in VOO_TECLAS})
+    cmd = {"vx": float(v[0]), "vy": float(v[1]), "vz": float(v[2]), "yaw_taxa": float(voo.yaw_taxa or 0.0)}
+    if voo.segui_alvo and alvo:
+        cmd["modo"] = "olhar"
+    elif voo.yaw_alvo is not None:
+        cmd["modo"] = "yaw_alvo"
+        cmd["yaw"] = float(voo.yaw_alvo)
+    else:
+        cmd["modo"] = "velocidade"
+    return cmd
+
+
+def u_yaw_identificado() -> float | None:
+    """`u_yaw_por_taxa` IDENTIFICADO na calibração da B0 (`out/classico/avaliacao.json`), ou `None`.
+
+    É o MESMO número do `avaliar_nucleo.u_yaw_identificado` (leitura do JSON publicado — não se duplicam
+    valores): sem ele a cascata usa a fórmula do arrasto de rotor (`ganhos_de_hardware`).
+    """
+    try:
+        dados = json.loads((_AQUI / "out" / "classico" / "avaliacao.json").read_text(encoding="utf-8"))
+        return float(dados["identificacao_yaw"]["u_yaw_por_taxa"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+class NucleoClassico:
+    """NÚCLEO DE FIRMWARE C++ no env EM USO — cascata clássica + estimador clássico + laço de taxa, via ctypes.
+
+    O mesmo que `sitl.DroneRealEnvNucleo(modo_nucleo="cascata")`, mas SEM criar env novo: a mesma
+    `config_de_hardware` (ganhos derivados da planta + `u_yaw_por_taxa` identificado + estimador clássico +
+    o seguidor IBVS configurado quando há alvo), a mesma .so (`sitl.biblioteca_padrao`, cache por hash das
+    fontes) e os MESMOS adaptadores do `sitl` (`_AdaptadorCascata`/`_AdaptadorEstimador`) trocados em
+    `env.fc`/`env.estimador` — o C++ vê SÓ os sensores e manda nos motores (a ação do `env.step` é
+    ignorada). Porquê não trocar de env: o viewer da janela 3D e os módulos de câmara FPV ficam ligados aos
+    `model`/`data` criados no arranque e não há API para os religar — instalar o núcleo no env em uso dá o
+    MESMO voo (provado equivalente bit-a-bit no `teste_cascata_nucleo.py`) sem apagar a janela.
+    `remover()` repõe o FC/estimador Python (volta ao modo RL sem reiniciar o processo).
+    """
+
+    LARGURA, ALTURA, FPS = 320, 240, 30.0      # a câmara mono QVGA do OLHAR (a do `avaliar_nucleo.py`)
+
+    def __init__(self, env, nucleo, fc, biblioteca, fc_py, est_py, latencia_s: float):
+        self.env = env
+        self.nucleo = nucleo
+        self.fc = fc
+        self.biblioteca = biblioteca
+        self.fc_py, self.est_py = fc_py, est_py
+        self.latencia_s = float(latencia_s)
+
+    @classmethod
+    def criar(cls, env):
+        """Compila/carrega a .so e monta o núcleo para ESTE env (planta real, modo `ctbr`).
+
+        Levanta `ValueError` quando o env não é da planta real em `ctbr` (a cascata é do hardware do dono;
+        no cf2 há só a política) — quem chama traduz isso num estado `erro` honesto.
+        """
+        if not isinstance(env, DroneRealEnv):
+            msg = ("o controlador clássico requer a PLANTA REAL (DroneRealEnv) — a cascata clássica é do "
+                   "hardware do dono; no cf2 só há a política RL")
+            raise ValueError(msg)  # noqa: TRY004
+        if getattr(env, "modo_acao", "") != "ctbr":
+            raise ValueError(f"o núcleo C++ só implementa o modo CTBR (este modelo usa {env.modo_acao!r})")
+        import weakref
+
+        import sitl
+        bib = sitl.biblioteca_padrao()                  # compila a .so UMA vez (cache por hash das fontes)
+        latencia = LATENCIA_CAMERA_DCMI_S if "arduino" in str(getattr(env.hw, "nome", "")) \
+            else LATENCIA_CAMERA_PI_S
+        ganhos_kw = {"altura_min": sitl.VOO_Z_MIN_CONTRATO - sitl.deslocamento_sensor_cm(env.model)}
+        u_yaw = u_yaw_identificado()
+        if u_yaw is not None:
+            ganhos_kw["u_yaw_por_taxa"] = u_yaw
+        camera = None
+        if getattr(env, "com_alvo", False):             # OLHAR: o seguidor IBVS do C++ com a câmara mono
+            camera = {"largura": cls.LARGURA, "altura": cls.ALTURA, "fps": cls.FPS, "latencia_s": latencia}
+            camera["fovy_graus"] = float(env.model.cam_fovy[env.model.camera("fpv").id])
+            camera["atraso_s"] = float(camera["latencia_s"])
+        cfg = sitl.config_de_hardware(env.hw, env.model, env.dt, env=env, ganhos_kw=ganhos_kw,
+                                      estimador_classico=True, camera=camera, bib=bib)
+        fc_py, est_py = env.fc, env.estimador            # o `ControladorFC`/`EstimadorBordo` Python
+        nucleo = sitl.NucleoCpp(cfg, bib).exigir_iniciado()
+        fc = sitl._AdaptadorCascata(weakref.proxy(env), nucleo, None)   # os MESMOS do DroneRealEnvNucleo
+        return cls(env, nucleo, fc, bib, fc_py, est_py, latencia)
+
+    def instalar(self) -> None:
+        """O C++ passa a comandar: `env.fc`/`env.estimador` viram os adaptadores do núcleo."""
+        self.env.fc = self.fc
+        self.env.estimador = sitl_estimador(self.fc)
+
+    def remover(self) -> None:
+        """Repõe o FC/estimador Python (o modo RL volta a comandar como sempre)."""
+        self.env.fc = self.fc_py
+        self.env.estimador = self.est_py
+
+    def pos_reset(self) -> None:
+        """Depois de CADA `env.reset` em modo clássico: calibra o giroscópio no chão e arma a cascata.
+
+        É o que o `DroneRealEnvNucleo.reset` faz (B0): 1 s de física com os motores em idle («gyro
+        calibration» de qualquer FC, sem avançar o relógio do episódio) e `travar` das referências (x, y,
+        ψ, altura do SENSOR) nas estimativas de agora — sem isto a cascata mandaria para a origem.
+        """
+        self.fc.calibrar_no_chao(T_CALIBRACAO_GIRO_S_NUCLEO)
+        self.fc.travar(float(self.env.alvo_z) - deslocamento_sensor_cm(self.env))
+
+    def comando(self, cmd: dict) -> None:
+        """Comando de voo do contrato r12 (`modo` = velocidade | yaw_alvo | olhar) para o C++."""
+        self.fc.definir_comando(dict(cmd))
+
+    def ativar_olhar(self) -> None:
+        """Liga a CÂMARA mono do OLHAR (render EGL + detetor C++) se ainda não estiver ligada.
+
+        `ValueError` quando o env foi criado sem o alvo (`com_alvo=False`): não há ponto a seguir e não se
+        finge um IBVS sem alvo — o chamador avisa e o comando cai para a prioridade seguinte.
+        """
+        if self.fc.camera is not None:
+            return
+        if not getattr(self.env, "com_alvo", False):
+            raise ValueError("«olhar» indisponível: este episódio foi arrancado SEM o alvo mocap "
+                             "(`com_alvo`) — arranque com --controlador classico para o ter")
+        from sitl_camera import CameraSITL
+        self.fc.camera = CameraSITL(self.env, largura=self.LARGURA, altura=self.ALTURA, fps=self.FPS,
+                                    latencia_s=self.latencia_s)
+
+    def olhar_estado(self) -> dict | None:
+        """Alvo na imagem (convenção ÍNDICE do detetor: centro do píxel (0,0) = (0,0)) — ou `None`.
+
+        `{valido, u_px, v_px, raio_px, erro_px, estado, alvo_mundo}`: `erro_px` = offset do alvo face ao
+        CENTRO da imagem (o que «alvo centrado» quer dizer: erro ≈ [0, 0]); `estado` = o do IBVS
+        (0 = A_SEGUIR); `alvo_mundo` = a posição do alvo MOCAP no mundo (é o que descreve o círculo
+        enquanto o «olhar» está ligado). Sem deteção VÁLIDA os campos do alvo vêm `null` (o detetor
+        devolve zeros quando não vê nada — não se mostra isso como se fosse uma deteção no centro) e
+        sem frames (`olhar` nunca ligado) → `None` — nada se inventa.
+        """
+        cam = getattr(self.fc, "camera", None)
+        if cam is None or not cam.registo:
+            return None
+        _t, valido, u, v, raio = cam.registo[-1]
+        cx, cy = 0.5 * (self.LARGURA - 1), 0.5 * (self.ALTURA - 1)   # centro na convenção ÍNDICE
+        alvo = getattr(self.env, "ponto_alvo", None)
+        return {"valido": bool(valido),
+                "u_px": (round(float(u), 3) if valido else None),
+                "v_px": (round(float(v), 3) if valido else None),
+                "raio_px": (round(float(raio), 3) if valido else None),
+                "erro_px": ([round(float(u) - cx, 3), round(float(v) - cy, 3)] if valido else None),
+                "estado": int(self.nucleo.saida.seguidor.estado),
+                "alvo_mundo": (None if alvo is None else
+                               [round(float(alvo[i]), PRECISAO) for i in range(3)])}
+
+
+def sitl_estimador(fc):
+    """`_AdaptadorEstimador` do `sitl.py` para um `_AdaptadorCascata` (as estimativas passam a ser as do C++)."""
+    import sitl
+    return sitl._AdaptadorEstimador(fc)
+
+
+T_CALIBRACAO_GIRO_S_NUCLEO = 1.0          # s de calibração do giroscópio no chão (o `sitl.T_CALIBRACAO_GIRO_S`)
+
+
+def deslocamento_sensor_cm(env) -> float:
+    """Altura do CM acima do sensor de baixo (m) — `sitl.deslocamento_sensor_cm` (import tardio)."""
+    import sitl
+    return float(sitl.deslocamento_sensor_cm(env.model))
+
+
+class ControladorDeVoo:
+    """Quem pilota em cada passo: a POLÍTICA RL (contrato r11) ou a CASCATA CLÁSSICA C++ (contrato r12).
+
+    `modo`/`pedido` são o que está em vigor e o que foi pedido (CLI no arranque, bloco `"controlador"` do
+    ficheiro depois); `estado`/`motivo` são a honestidade para o site (`pronto` · `trocando` · `erro`).
+    A TROCA reinicia o episódio (calibração do giroscópio no chão — é o que o núcleo precisa para armar) e é
+    o `correr` que a orquestra (`trocar` só mexe nas camadas); um pedido recusado (planta cf2) NÃO se repete
+    a cada passo: fica `erro` + `motivo` até o pedido mudar.
+    """
+
+    def __init__(self, env, politica, modo: str = CONTROLADOR_OMISSAO) -> None:
+        if modo not in MODOS_CONTROLADOR:
+            raise ValueError(f"controlador desconhecido {modo!r} (válidos: {MODOS_CONTROLADOR})")
+        self.env = env
+        self.politica = politica                    # o `predict` do modo RL (pode ser a PoliticaCascata)
+        self.modo = modo
+        self.pedido = modo
+        self.estado = "pronto"
+        self.motivo: str | None = None
+        self.nucleo: NucleoClassico | None = None
+        self._recusado: str | None = None           # último pedido recusado (não se repete a cada passo)
+        self._voo: Voo | None = None                # bloco `voo` em vigor (para o eco `"controlador"`)
+
+    # ------------------------------------------------------------------ estado
+    def requisitar(self, modo: str) -> bool:
+        """Regista o modo pedido (ficheiro/CLI) e devolve `True` quando há troca por fazer.
+
+        Um pedido RECENTEMENTE RECUSADO (`_recusado`, ex. clássico com planta cf2) não se repete a cada
+        passo: só um modo diferente volta a tentar.
+        """
+        if modo in MODOS_CONTROLADOR and modo != self.pedido and modo != self._recusado:
+            self.pedido = modo
+        return self.pedido != self.modo
+
+    def trocar(self) -> str:
+        """Instala o modo `pedido` (SEM reset — o `correr` faz o reset + `pos_reset`); devolve o modo em vigor.
+
+        `ValueError` (planta não suportada) → o modo fica como estava e `estado = "erro"` com o `motivo`;
+        o pedido recusado fica em `_recusado` (não se tenta outra vez a cada passo).
+        """
+        if self.pedido == "classico":
+            try:
+                if self.nucleo is None:
+                    self.nucleo = NucleoClassico.criar(self.env)
+                self.nucleo.instalar()
+            except ValueError as erro:
+                self._recusado, self.pedido = self.pedido, self.modo
+                self.estado, self.motivo = "erro", str(erro)
+                return self.modo
+            self.modo = "classico"
+        else:
+            if self.nucleo is not None:
+                self.nucleo.remover()
+            self.modo = "rl"
+        self._recusado = None
+        self.estado, self.motivo = "pronto", None
+        return self.modo
+
+    def pos_reset(self) -> None:
+        """Depois de um `env.reset` com o núcleo instalado (calibração + armar a cascata)."""
+        if self.modo == "classico" and self.nucleo is not None:
+            self.nucleo.pos_reset()
+
+    # ------------------------------------------------------------------ um passo
+    def passo(self, est: Estado, voo: Voo | None) -> np.ndarray:
+        """A ação do `env.step`: a política (RL) ou zeros (clássico — quem manda é o C++ via ctypes).
+
+        No modo clássico é também aqui que o comando de voo (contrato r12) chega ao núcleo (`modo` =
+        `velocidade` | `yaw_alvo` | `olhar`, no REFERENCIAL DO RUMO) e que o eco `voo` do env é alimentado
+        (`p_ref`/erros em frame mundo, com o WASDQE rodado pelo rumo — `v_ref_mundo`).
+        """
+        self._voo = voo
+        if self.modo == "classico":
+            rumo = _rumo_de(self.env)
+            self.comando_do_passo(voo, rumo)
+            self._eco_voo(voo, rumo)
+            return np.zeros(4, dtype=float)
+        acao, _estado = self.politica.predict(est.obs, deterministic=True)
+        return np.asarray(acao, dtype=float).reshape(4)
+
+    def _eco_voo(self, voo: Voo | None, rumo: float | None) -> None:
+        """Alimenta o eco `voo`/`p_ref` do env em modo clássico (só em modo comando; nunca inventa).
+
+        As teclas mandam velocidade no RUMO; para o `p_ref` do env (frame mundo) aplica-se a rotação
+        `v_ref_mundo` com o rumo ATUAL — é assim que o painel mostra «avanço lateral vs rumo» com o eco a
+        bater certo. Sem env de comando (política r11 ausente) não há eco e o site mostra «indisponível».
+        """
+        env = self.env
+        if voo is None or not getattr(env, "comando", False):
+            return
+        teclas = {tecla: bool((voo.teclas if voo.ativo else {}).get(tecla, False)) for tecla in VOO_TECLAS}
+        env.definir_comando_teclas(**teclas, ativo=bool(voo.ativo))
+        v = teclas_para_velocidade(**teclas)
+        if rumo is not None:
+            env.definir_v_ref(v_ref_mundo(v, float(rumo)))
+
+    def comando_do_passo(self, voo: Voo | None, rumo: float | None) -> dict | None:
+        """Bloco `voo` → comando da cascata (modo clássico); `None` no modo RL. Também ativa o «olhar».
+
+        `rumo` (ψ desde o armar) só é usado para o eco de `p_ref` (o comando em si é no referencial do
+        rumo). Quando `segui_alvo` vem sem alvo/câmara, o `comando_classico` cai para a prioridade seguinte
+        e aqui avisa-se UMA vez (nunca se finge um IBVS).
+        """
+        if self.modo != "classico" or self.nucleo is None:
+            return None
+        alvo = getattr(self.env, "com_alvo", False)
+        if voo is not None and voo.segui_alvo and not alvo:
+            self._aviso_olhar()
+        if voo is not None and voo.segui_alvo and alvo:
+            try:
+                self.nucleo.ativar_olhar()
+            except ValueError as erro:
+                self.motivo = str(erro)
+                self._aviso_olhar()
+        cmd = comando_classico(voo, alvo=alvo)
+        self._alternar_circulo(cmd.get("modo") == "olhar")
+        self.nucleo.comando(cmd)
+        return cmd
+
+    def _alternar_circulo(self, olhar: bool) -> None:
+        """«OLHAR» = o alvo passa a descrever o CÍRCULO (o cenário do dono: «olhar para o círculo»).
+
+        Enquanto `segui_alvo` estiver aplicado, o ponto mocap descreve um círculo (`CIRCULO_VEL` m/s com
+        `CIRCULO_RAIO` m — os valores do protocolo da B0/`avaliar_nucleo`) e o IBVS segue-o com a guinada;
+        ao sair do olhar, o alvo fica PARADO onde estiver (`definir_trajetoria_ponto` só muda a lei de
+        movimento — nada de teleportes). Sem alvo no modelo não há o que mexer.
+        """
+        if olhar == getattr(self, "_olhar_ativo", False):
+            return
+        self._olhar_ativo = olhar
+        if not getattr(self.env, "com_alvo", False):
+            return
+        self.env.definir_trajetoria_ponto("circulo" if olhar else "parado",
+                                          vel=CIRCULO_VEL, raio=CIRCULO_RAIO)
+
+    def _aviso_olhar(self) -> None:
+        if getattr(self, "_olhar_avisado", False):
+            return
+        self._olhar_avisado = True
+        print("[sim] aviso: «olhar» (segui_alvo) sem alvo no modelo — o comando cai para a prioridade "
+              "seguinte (yaw_alvo/yaw_taxa); arranque com --controlador classico para ter o alvo mocap",
+              flush=True)
+
+    # ------------------------------------------------------------------ telemetria
+    @property
+    def fonte(self) -> str:
+        """Quem voa, por extenso (o painel «Quem faz o quê» do site)."""
+        if self.modo == "classico":
+            return "cascata clássica C++ (núcleo do firmware, via ctypes)"
+        return "política RL (PPO, IA-1)"
+
+    def v_ref_fonte(self, multi_ia) -> str:
+        """De onde vem o `v_ref`: WASDQE, a IA-2 «seguimento» ou o IBVS «olhar»."""
+        if self.modo == "classico":
+            voo = self._voo
+            return "olhar (IBVS)" if (voo is not None and voo.segui_alvo) else "wasdqe (relativo ao rumo)"
+        if isinstance(multi_ia, dict) and multi_ia.get("v_ref_fonte"):
+            return "seguimento (IA-2)" if multi_ia["v_ref_fonte"] == "seguimento" else "wasdqe (contrato r11)"
+        return "wasdqe (contrato r11)"
+
+    def amostra(self, rumo: float | None, multi_ia=None) -> dict:
+        """Bloco `"controlador"` da telemetria (contrato r12; aditivo — nada muda nas chaves existentes).
+
+        `{modo, fonte, yaw_taxa, yaw_alvo, segui_alvo, v_ref_fonte}` (o contrato) mais `pedido`, `estado`,
+        `motivo` (a honestidade da troca: `trocando`/`erro`), `rumo` (ψ desde o armar — é o que a tecla X
+        manda como `yaw_alvo`) e `olhar` (alvo na imagem, ou `null`). No modo RL os campos de yaw vêm a
+        ZERO/`null`: a política r11 mantém o rumo fixo e não se finge que os comandos de yaw voam.
+        """
+        voo = self._voo
+        classico = self.modo == "classico"
+        yaw_taxa = float(voo.yaw_taxa or 0.0) if (classico and voo is not None) else 0.0
+        yaw_alvo = (voo.yaw_alvo if (classico and voo is not None) else None)
+        segui = bool(voo.segui_alvo) if (classico and voo is not None) else False
+        return {"modo": self.modo, "fonte": self.fonte, "yaw_taxa": yaw_taxa, "yaw_alvo": yaw_alvo,
+                "segui_alvo": segui, "v_ref_fonte": self.v_ref_fonte(multi_ia),
+                "pedido": self.pedido, "estado": self.estado, "motivo": self.motivo,
+                "rumo": (None if rumo is None else round(float(rumo), PRECISAO)),
+                "olhar": (self.nucleo.olhar_estado() if self.nucleo is not None else None)}
+
+
+def _rumo_de(env: HoverEnv) -> float | None:
+    """ψ desde o armar (rad) — o rumo que a tecla X fixa como `yaw_alvo` (frame do estimador de bordo).
+
+    É o `psi` do estimador (a cascata clássica compara o `yaw_alvo` com ESTE ângulo); no cf2 não há
+    estimador de bordo e sai `None` (o site mostra «—», honesto). `estimador` pode ser o `EstimadorBordo`
+    Python ou o adaptador do núcleo C++ — ambos expõem `psi`.
+    """
+    estimador = getattr(env, "estimador", None)
+    if estimador is None:
+        return None
+    try:
+        return float(estimador.psi)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None = None,
-            fpv=None, simulacao=None, multi_ia=None) -> dict:
+            fpv=None, simulacao=None, multi_ia=None, piloto: ControladorDeVoo | None = None) -> dict:
     """Uma linha de telemetria com as chaves (e a ordem) do contrato.
 
     `ctrl` é o comando FÍSICO que a ação produziu — `data.ctrl` = [empuxo N, mx, my, mz N·m], escrito pelo
@@ -1645,6 +2190,8 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "planta": "real" if real else "cf2",        # aditivo: o site escolhe os blocos/rótulos certos
         "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
         "voo": info.get("voo"),                     # aditivo: controle de voo (contrato r11; null = fora do modo)
+        # aditivo r12: quem pilota + o estado do yaw/olhar (null com runner antigo — o site aceita)
+        "controlador": (piloto.amostra(_rumo_de(env), multi_ia) if piloto is not None else None),
     }
     if real:
         linha.update(campos_planta_real(env, gestor))
@@ -1847,6 +2394,11 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     `null`). Nunca se toca no texto/figuras.
     """
     est = Estado(loop=loop_do_arranque(args))           # CLI autoritativo no arranque (ver `fixar_loop`)
+    # SELETOR DE CONTROLADOR (r12): o modo inicial é o do CLI (`--controlador`, padrão `rl` = o de sempre);
+    # depois, o bloco `"controlador"` do ficheiro manda (troca ao vivo, com o estado honesto no site).
+    piloto = ControladorDeVoo(env, politica, getattr(args, "controlador", CONTROLADOR_OMISSAO))
+    if piloto.modo == "classico":
+        piloto.trocar()                        # instala o núcleo ANTES do 1.º reset (que calibra e arma)
     # CÂMARA (só apresentação, TERCEIRA-PESSOA): o ALVO é SEMPRE o drone — `seguir_drone` escreve o
     # `lookat` a cada frame (= `body(CAM_CORPO).xpos + CAM_OFFSET`), antes de cada `viewer.sync` e de cada
     # linha de telemetria. O ARRANQUE do ORBITAR/zoom é explícito: aplica-se `CAM_PADRAO` (os valores de
@@ -1858,6 +2410,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     controlo.ligar_camera(cam)
     controlo.aplicar_padrao()                          # CAM_PADRAO no arranque (conta como aplicação)
     _reiniciar(env, est, sonda, args.seed, ep=1, manter_bateria=False)
+    piloto.pos_reset()                                 # modo clássico: calibra o giroscópio e arma a cascata
     if gestor is not None:
         gestor.restaurar()                             # o pack continua com a carga/ciclo da sessão anterior
         est.obs = env.observacao()
@@ -1889,7 +2442,10 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
         if controlo.alvo_simulacao is not None:
             controlo.alvo_simulacao["alvo"] = alvo_do_drone(env.data)  # thread do simulador: sem corrida
         return amostra(env, est, cam, gestor, fpv=modulo, simulacao=modulo_sim,
-                       multi_ia=multi_ia_amostra(politica))
+                       # a cascata multi-IA só existe no modo RL (em clássico a perceção é o detetor+IBVS
+                       # do núcleo — publicar IAs paradas seria mentir; o bloco fica `null`)
+                       multi_ia=(multi_ia_amostra(politica) if piloto.modo == "rl" else None),
+                       piloto=piloto)
 
     telemetria.escrever(publica())                              # linha de evento do arranque
     print(f"[sim] rollout: ep 1 comecou (seed {args.seed}, vento {_vento_polar(env)[0]:.2f} m/s); "
@@ -1928,10 +2484,36 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
         if controlo.consumir_reinicio():
             novo_ep = est.ep + 1 if (env.passos > 0 or est.fim_episodio) else est.ep
             _reiniciar(env, est, sonda, args.seed + novo_ep - 1, ep=novo_ep)
+            piloto.pos_reset()                             # modo clássico: calibra e arma a cascata de novo
             controlo.reaplicar(env)                      # o reset não apaga o que o dono pediu
             est.vento_modo = controlo.modo_efetivo()
             telemetria.escrever(publica())                    # evento: episódio novo, passo 0
             print(f"[sim] REINICIAR: ep {est.ep} comecou (passo 0, retorno 0)", flush=True)
+        # 1b) SELETOR DE CONTROLADOR (r12): pedido do ficheiro ≠ modo em vigor → troca AO VIVO. A troca
+        #     reinicia o EPISÓDIO (calibração do giroscópio no chão, como o `DroneRealEnvNucleo.reset`) e o
+        #     estado é honesto: linha de evento com `controlador.estado = "trocando"` + `motivo` ANTES e o
+        #     modo novo (ou `erro` + motivo, se recusado) DEPOIS — o `/api/state` mostra `trocando` sempre
+        #     que o pedido ≠ o eco.
+        pedido_controlo = controlo.controlador.modo if controlo.controlador is not None else piloto.modo
+        if piloto.requisitar(pedido_controlo):
+            modo_antigo = piloto.modo
+            motivo_troca = "troca de controlador: episódio reiniciado (calibração do giroscópio no chão)"
+            piloto.estado, piloto.motivo = "trocando", motivo_troca
+            telemetria.escrever(publica())                    # evento: o site vê o `trocando` já
+            print(f"[sim] CONTROLADOR: {modo_antigo} -> {pedido_controlo} ({motivo_troca})", flush=True)
+            piloto.trocar()
+            if piloto.modo != modo_antigo:
+                novo_ep = est.ep + 1 if (env.passos > 0 or est.fim_episodio) else est.ep
+                _reiniciar(env, est, sonda, args.seed + novo_ep - 1, ep=novo_ep)
+                piloto.pos_reset()                          # clássico: calibra + arma (episódio novo)
+                controlo.reaplicar(env)
+                est.vento_modo = controlo.modo_efetivo()
+                telemetria.escrever(publica())                  # evento: o modo novo em vigor (ep nova)
+                print(f"[sim] CONTROLADOR: {piloto.modo} em vigor (ep {est.ep} reiniciada)", flush=True)
+            else:
+                telemetria.escrever(publica())                  # evento: recusa honesta (`erro` + motivo)
+                print(f"[sim] CONTROLADOR: pedido recusado — fica {piloto.modo} ({piloto.motivo})",
+                      flush=True)
         est.vento_modo = controlo.modo_efetivo()         # o modo em vigor já vai nesta amostra
         acao_bateria = controlo.consumir_bateria()
         if acao_bateria is not None:
@@ -1962,11 +2544,10 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             proximo = time.perf_counter()
             continue
 
-        # 3) passo de decisão: rede -> ação -> física (10 passos de física a 500 Hz)
+        # 3) passo de decisão: quem pilota (política RL ou cascata C++) -> ação -> física (10 passos a 500 Hz)
         controlo.passo_rajada(env)                       # rajada one-shot: base+envelope DESTE passo
         try:
-            acao, _estado = politica.predict(est.obs, deterministic=True)
-            est.acao = np.asarray(acao, dtype=float).reshape(4)
+            est.acao = piloto.passo(est, controlo.voo)   # RL: a política · clássico: zeros (o C++ manda)
             est.h1, est.h2 = sonda.escondidas()
             est.obs, recompensa, terminado, truncado, est.info = env.step(est.acao)
         except RuntimeError as erro:                     # sanidade do HoverEnv: estado divergiu
@@ -1997,6 +2578,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             if est.loop:                                 # CONTÍNUO (`--com-loop`/`loop:true`)
                 print(f"[sim] {fim} -> auto-reset continuo (ep {est.ep + 1}, passo 0)", flush=True)
                 _reiniciar(env, est, sonda, args.seed + est.ep, ep=est.ep + 1)
+                piloto.pos_reset()                      # modo clássico: calibra e arma a cascata de novo
                 controlo.reaplicar(env)                  # a transição é INVISÍVEL: o controlo volta a valer
                 est.vento_modo = controlo.modo_efetivo()
                 telemetria.escrever(publica())
@@ -2242,6 +2824,11 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
             "automatica pela observacao da politica; com politica classica o bloco e ignorado com aviso e a\n"
             "telemetria publica \"voo\": null. O eco \"voo\" de cada linha traz {ativo, teclas, v_ref, p_ref,\n"
             "erro_xy, erro_z, erro_v, seguindo}.\n"
+            "r12: o bloco `voo` ganha {yaw_taxa, yaw_alvo, segui_alvo} (opcionais; Z/C = rodar ±0,5 rad/s,\n"
+            "X = fixar rumo, V = olhar/IBVS) e o bloco `controlador` {modo: rl|classico, seq} e o SELETOR\n"
+            "(--controlador rl|classico, padrao rl; POST /api/controlador troca ao vivo — a troca reinicia o\n"
+            "episodio e o estado diz `trocando` + motivo). Telemetria aditiva: chave \"controlador\" =\n"
+            "{modo, fonte, yaw_taxa, yaw_alvo, segui_alvo, v_ref_fonte, pedido, estado, motivo, rumo, olhar}.\n"
             "\n"
             "LOOP: o padrão é SEM REINÍCIO (pedido do dono, 2026-10-09): no fim do episódio a física CONTINUA\n"
             "a integrar no estado em que ficou (nunca reinicia sozinha e nunca congela) e só um REINICIAR\n"
@@ -2287,6 +2874,14 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                                  "recomeça. No arranque vence um `loop: true` velho do ficheiro, que é "
                                  "corrigido para `false` (o site passa a mostrar o estado verdadeiro) — mas "
                                  "nunca reverte um `POST /api/loop` do dono feito durante o arranque")
+    p.add_argument("--controlador", choices=list(MODOS_CONTROLADOR), default=CONTROLADOR_OMISSAO,
+                   metavar="MODO",
+                   help="quem pilota no arranque: `rl` = a política (PADRÃO — comportamento de sempre, "
+                        "contrato r11) ou `classico` = cascata clássica C++ do firmware (núcleo via "
+                        "ctypes, yaw livre, WASDQE relativo ao rumo, «olhar» IBVS; contrato r12). "
+                        "Depois do arranque troca-se ao vivo pelo POST /api/controlador (bloco "
+                        "`controlador` do ficheiro de controlo) — a troca reinicia o episódio e o estado "
+                        "diz `trocando` + motivo")
     p.add_argument("--seed", type=int, default=0,
                    help="semente do reset — o episódio N usa seed + N - 1 (padrão: 0)")
     p.add_argument("--max-segundos", type=float, default=0.0, metavar="S",
@@ -2319,11 +2914,12 @@ def main(argv=None) -> int:
     if not caminho.is_file():
         raise SystemExit(f"[sim] modelo inexistente: {caminho}")
     politica = carregar_politica(caminho)
-    # a IA-2 precisa do ponto-alvo (`com_alvo=True`) — descobre-se ANTES de criar o env
+    # a IA-2 precisa do ponto-alvo (`com_alvo=True`) — descobre-se ANTES de criar o env; o modo CLÁSSICO
+    # também (o «olhar» IBVS segue o alvo mocap — sem ele o alvo não existe no modelo)
     caminho_seg = (None if args.sem_seguimento else
                    (args.seguimento_model or descobrir_seguimento(Path(__file__).resolve().parent / "out")))
     env, gestor = ambiente_para(politica, caminho, args.sem_helices,
-                               com_alvo=caminho_seg is not None)   # planta real ou cf2
+                               com_alvo=caminho_seg is not None or args.controlador == "classico")
     # ARRANQUE AUTORITATIVO (pedido do dono, 2026-10-09): quem decide o `loop` é o CLI — `--com-loop` liga o
     # contínuo, a omissão e o `--sem-loop` arrancam SEM REINÍCIO — e o ficheiro de controlo é corrigido para
     # dizer o mesmo (o site mostra o estado verdadeiro; semântica sticky: depois só o `POST /api/loop` muda).
@@ -2334,6 +2930,11 @@ def main(argv=None) -> int:
     # respeita-o (nunca o reverte; ver o docstring dele).
     loop_inicial = loop_do_arranque(args)
     corrigido = fixar_loop(args.controlo, loop_inicial, token_do_arranque())
+    # SELETOR DE CONTROLADOR (r12): mesma semântica autoritativa do `loop` — o CLI decide o modo do arranque
+    # (`--controlador`, padrão `rl`) e corrige o ficheiro; um `POST /api/controlador` feito durante o arranque
+    # (carimbo limpo) vence e é respeitado (ver `fixar_controlador`). Mostra-se SEMPRE o modo no arranque.
+    controlador_inicial = getattr(args, "controlador", CONTROLADOR_OMISSAO)
+    fixar_controlador(args.controlo, controlador_inicial, token_do_arranque_controlador())
     controlo = Controlo(args.controlo)
     telemetria = Telemetria(args.telemetria, truncar=args.truncar_telemetria)
     sonda = Sonda(politica.policy)
@@ -2356,6 +2957,11 @@ def main(argv=None) -> int:
     print(f"[sim] modo: {modo} | ritmo: {ritmo} | "
           f"loop: {'ligado (continuo)' if loop_inicial else 'desligado (SEM REINICIO: fisica continua)'}",
           flush=True)
+    print(f"[sim] CONTROLADOR: {controlador_inicial} ("
+          + ("cascata clássica C++ do firmware, via ctypes — yaw livre, WASDQE relativo ao rumo, olhar IBVS"
+             if controlador_inicial == "classico" else
+             "política RL como sempre — contrato r11, yaw fixo")
+          + ") · troca ao vivo: POST /api/controlador (bloco `controlador` do controlo)", flush=True)
     if gestor is not None:                             # planta real: discos de hélice, sem animação visual
         print("[sim] helices: discos visuais da planta real (sem animacao; a rotacao REAL de cada motor — "
               "omega/rpm da propulsao — sai na telemetria e no painel dos motores)", flush=True)

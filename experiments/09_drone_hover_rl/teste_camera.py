@@ -39,9 +39,10 @@ Este script prova, por comando, cada ponto do contrato:
   (c) validação: `null` presente e chaves desconhecidas (incl. `alvo`) → 400; subconjuntos → 200;
       faixas; alias `distandia`; `{}` e `{"seq": n}` ACEITES (200, `seq` ignorado) — decisão documentada;
   (d) rajada fria de 40 ligações × 3 rondas → 120/120 servidas E aplicadas, sem resets e sem JSON partido;
-  (e) telemetria: `"camera"` = `{azimute, elevacao, distancia, alvo}` com `alvo` = lookat REAL =
-      drone+offset (ou `null` sem viewer); `camera_padrao`/`camera_atual` coerentes; REPOR VISTA =
-      `CAM_PADRAO`;
+  (e) telemetria: as 19 chaves do contrato (nomes e ordem, `camera` = 19.ª) e DEPOIS só chaves aditivas — sem
+      lista fechada delas (`_chaves_ok`: cada objetivo traz as suas, ex. `multi_ia`); `"camera"` =
+      `{azimute, elevacao, distancia, alvo}` com `alvo` = lookat REAL = drone+offset (ou `null` sem viewer);
+      `camera_padrao`/`camera_atual` coerentes; REPOR VISTA = `CAM_PADRAO`;
   (f) contrato de ficheiro: bloco completo aceite; `alvo` de ficheiro v1 ignorado em silêncio;
   (g) NÃO-TAUTOLOGIA por mutação (cópias staged em $TMPDIR via `--fontes`): seguimento removido,
       colado a posição velha, assinatura sem `seq` (§2) e validação removida (§1) têm de FALHAR.
@@ -55,7 +56,8 @@ Quatro camadas (§1 in-process → §2 ciclo real com viewer falso → §3 servi
      (`validar_camera` do site, `_ler_camera` do runner) e o merge parcial do `escrever_controlo`;
   §2 CICLO REAL — `sim_view.correr` a sério (`HoverEnv` + política de ação mutável, fator-tempo 0) com um
      VIEWER FALSO INSTRUMENTADO: seguimento por escrita enquanto o drone se move, rato preservado,
-     PAN sobreposto, `seq`/REPOR VISTA/ficheiro v1 e a telemetria; + uma corrida SEM viewer (d);
+     PAN sobreposto, `seq`/REPOR VISTA/ficheiro v1 e a telemetria (as 19 chaves, com o próprio VERIFICADOR delas
+     provado: aceita aditivas novas, rejeita qualquer mexida nas 19); + uma corrida SEM viewer (d);
   §3 SERVIDOR REAL — `sim_site.py` + runner reais (`--sem-janela`, porta 8561): BURST FRIO de 40
      ligações simultâneas × 3 rondas (120/120 servidos e aplicados — a fila do `listen()` tem de levar
      um burst inteiro; com o default 5 do stdlib perdiam-se comandos), as 8 rotas, os 400 do (c) —
@@ -156,20 +158,46 @@ PORTA_HTTP = 8561         # §3: porta do servidor de teste (a do laboratório p
 TOL_CAM = 1e-9            # colagem exacta do seguimento (mesma expressão aritmética nos dois lados)
 TOL_REPOUSO = 2e-3        # comparações cruzadas em repouso (telemetria arredondada a 6 casas + folga)
 LIMIAR_MOV = 0.25         # m — deslocamento mínimo do drone para a janela de movimento ser prova de movimento
-# Contrato da linha de telemetria: as 19 chaves do contrato v2, por esta ordem (`camera` é a 19.ª), e depois só
-# chaves ADITIVAS — `planta` e `fim` (2026-10-10), `voo` (contrato r11 do controle de voo, 2026-10-10), `fpv`
-# (módulo de câmara de bordo, 2026-10-11) e, na planta real, os blocos de bordo e a `verdade`.
+PANO_S = 5.0              # limite da espera do «PAN sobreposto» (a kHz basta ms; curto para morrer rápido)
+# Contrato da linha de telemetria (INTERFACE.md §4.2): as 19 chaves do contrato v2 — estes nomes, por esta ordem,
+# `camera` = 19.ª — e DEPOIS SÓ chaves ADITIVAS. «Aditiva» é toda a chave que vem depois da 19.ª: NÃO há lista
+# fechada delas (`planta` e `fim` 2026-10-10, `voo` r11, `fpv` 2026-10-11, `simulacao` e `multi_ia` 2026-10-12 e, na
+# planta real, os blocos de bordo e a `verdade` são só HISTÓRIA). Cada objetivo traz as suas, e um conjunto fechado
+# reprovava o contrato da CÂMARA a cada chave nova que nada tem a ver com ela — foi o que aconteceu com `multi_ia`
+# (3 falhas por uma lista esquecida, com a câmara e as 19 chaves intactas). O que o contrato proíbe é MEXER nas 19.
 CHAVES_CONTRATO = ("t", "estado", "loop", "ep", "passo", "retorno", "z", "dist_xy", "yaw_err", "vento_vel",
                    "vento_azim", "vento_vec", "vento_modo", "obs", "act", "ctrl", "h1", "h2", "camera")
-CHAVES_ADITIVAS = {"planta", "fim", "voo", "fpv", "simulacao", "bateria", "motores", "potencia",
-                   "aero", "estimador", "verdade"}
 
 
 def _chaves_ok(linha: dict) -> bool:
-    """As 19 chaves do contrato por ordem (`camera` = 19.ª) + só chaves aditivas conhecidas depois dela."""
-    chaves = list(linha)
-    return tuple(chaves[:19]) == CHAVES_CONTRATO and set(chaves[19:]) <= CHAVES_ADITIVAS
-PANO_S = 5.0              # limite da espera do «PAN sobreposto» (a kHz basta ms; curto para morrer rápido)
+    """«19 chaves, depois só aditivas»: as 19 primeiras chaves da linha SÃO as do contrato (mesmos nomes, mesma
+    ordem, `camera` = 19.ª). Logo tudo o que não é do contrato vem DEPOIS dela e nada a desloca, renomeia ou
+    reordena; o que vem depois é aditivo, seja qual for (sem lista fechada, sem igualdade exacta de chaves)."""
+    return tuple(list(linha)[:len(CHAVES_CONTRATO)]) == CHAVES_CONTRATO
+
+
+def _aditivas(linha: dict) -> list[str]:
+    """As chaves aditivas da linha (as que vêm depois da 19.ª) — para o detalhe das checagens."""
+    return list(linha)[len(CHAVES_CONTRATO):]
+
+
+def _prova_do_verificador() -> tuple[bool, str]:
+    """O VERIFICADOR das 19 chaves não é tautológico: sem lista fechada das aditivas tem de ACEITAR chaves novas
+    (o que `multi_ia` pedia) e REJEITAR cada violação do contrato das 19. Devolve `(ok, detalhe)`."""
+    ordem = list(CHAVES_CONTRATO)
+    i_h1 = ordem.index("h1")
+    aceites = [_chaves_ok(dict.fromkeys(ordem)),                                        # só as 19
+               _chaves_ok(dict.fromkeys([*ordem, "fpv", "simulacao", "multi_ia", "planta"])),
+               _chaves_ok(dict.fromkeys([*ordem, "chave_de_um_objetivo_futuro"]))]      # que ninguém listou
+    rejeitadas = [not _chaves_ok(dict.fromkeys(ordem[:-1])),                            # falta a `camera`
+                  not _chaves_ok(dict.fromkeys([*(k for k in ordem if k != "h1"), "planta"])),   # falta `h1`
+                  not _chaves_ok(dict.fromkeys([*ordem[:-1], "fpv", "camera"])),        # aditiva ANTES da `camera`
+                  not _chaves_ok(dict.fromkeys([*ordem[:i_h1], "h2", "h1", *ordem[i_h1 + 2:]])),  # h1/h2 trocadas
+                  not _chaves_ok(dict.fromkeys("vento" if k == "vento_vec" else k for k in ordem))]  # renomeada
+    detalhe = (f"verificador: aceita {sum(aceites)}/{len(aceites)} (só 19 · com `multi_ia` · chave futura) e rejeita "
+               f"{sum(rejeitadas)}/{len(rejeitadas)} (sem `camera` · sem `h1` · aditiva antes da `camera` · "
+               f"h1/h2 trocadas · `vento_vec` renomeada)")
+    return all(aceites) and all(rejeitadas), detalhe
 
 
 # ------------------------------------------------------------------------------------------------ checagens
@@ -576,6 +604,7 @@ def checa_pecas(pasta: Path) -> Checagens:
             mau += 1
     c.ok("[§1] ler_registo recusa bloco incompleto, faixas más e `seq` invalido (ValueError)",
          mau == 5, f"{mau}/5 recusas")
+
     return c
 
 
@@ -808,10 +837,13 @@ def roteiro_com_viewer(ciclo: Ciclo, c: Checagens) -> None:
     alvo_ok = (bloco_ok and _perto(camera["alvo"], esperado, TOL_REPOUSO)
                and _perto(camera["alvo"], _lookat_de(cam), TOL_REPOUSO)
                and _perto(camera, _valores3_de(cam), TOL_REPOUSO))
+    verificador_ok, prova_verificador = _prova_do_verificador()
     c.ok("[§2] TELEMETRIA em repouso: as 19 chaves do contrato (`camera` = 19.ª, depois só aditivas) e `camera` "
          "= {azimute, elevacao, distancia, alvo} com alvo = lookat REAL = drone+offset (sem viewer seria null)",
-         chave_ok and bloco_ok and alvo_ok,
-         f"{len(linhas)} linhas · camera={camera} · esperado alvo={esperado}")
+         chave_ok and bloco_ok and alvo_ok and verificador_ok,
+         f"{len(linhas)} linhas · 19 chaves={'ok' if chave_ok else 'FALHA'} (aditivas: {_aditivas(ultima)}) · "
+         f"bloco={'ok' if bloco_ok else 'FALHA'} · alvo={'ok' if alvo_ok else 'FALHA'} · "
+         f"{prova_verificador} · camera={camera} · esperado alvo={esperado}")
 
     # (b) «RATO»: mudanças EXTERNAS em azimute/elevacao/distancia PRESERVADAS entre comandos
     cam.azimuth, cam.elevation, cam.distance = 111.0, 22.0, 9.5            # o «rato» do dono
@@ -911,11 +943,14 @@ def roteiro_sem_viewer(ciclo: Ciclo, c: Checagens) -> None:
     ciclo.comando({"azimute": 45.0, "elevacao": -30.0, "distancia": 4.0})
     time.sleep(0.3)
     linhas = ciclo.linhas()
+    camera_nula = all(l.get("camera") is None for l in linhas)
+    chaves_19 = all(_chaves_ok(l) for l in linhas)
     c.ok("[§2] (d) SEM viewer: o bloco de camera e ignorado sem erro e a telemetria publica "
          "`camera: null` (nada se inventa)",
-         len(linhas) >= 2 and all(l.get("camera") is None and _chaves_ok(l) for l in linhas)
-         and ciclo.controlo.n_cameras == 0,
-         f"{len(linhas)} linhas com camera null · aplicacoes de camara={ciclo.controlo.n_cameras}")
+         len(linhas) >= 2 and camera_nula and chaves_19 and ciclo.controlo.n_cameras == 0,
+         f"{len(linhas)} linhas · camera null={'ok' if camera_nula else 'FALHA'} · "
+         f"19 chaves={'ok' if chaves_19 else 'FALHA'} (aditivas: {_aditivas(linhas[-1]) if linhas else None}) · "
+         f"aplicacoes de camara={ciclo.controlo.n_cameras}")
 
 
 def checa_ciclo(pasta: Path) -> Checagens:
@@ -1138,11 +1173,14 @@ def checa_http(pasta: Path, modelo: Path) -> Checagens:
 
         fim = s.esperar(lambda e: e["passo"] > 20)
         linhas = sim_site.ultimas_linhas(s.telemetria, 200)
+        chaves_19 = all(_chaves_ok(l) for l in linhas)
+        camera_nula = all(l.get("camera") is None for l in linhas)
         c.ok("[§3] (e) a telemetria do runner real tem as 19 chaves do contrato (`camera` = 19.ª, null sem "
              "viewer; depois só aditivas)",
-             fim is not None and len(linhas) >= 5
-             and all(_chaves_ok(l) and l.get("camera") is None for l in linhas),
-             f"{len(linhas)} linhas · chaves depois da camera={list(linhas[-1])[19:] if linhas else None}")
+             fim is not None and len(linhas) >= 5 and chaves_19 and camera_nula,
+             f"{len(linhas)} linhas · 19 chaves={'ok' if chaves_19 else 'FALHA'} · "
+             f"camera null={'ok' if camera_nula else 'FALHA'} · "
+             f"chaves depois da camera={_aditivas(linhas[-1]) if linhas else None}")
 
         s.post("/api/loop", {"ativo": False})
         padrao = s.get("/api/state")["camera_padrao"]

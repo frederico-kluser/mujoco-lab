@@ -1,7 +1,7 @@
 {
   "versao": 2,
-  "atualizado": "2026-10-11",
-  "nota": "Peças REAIS do drone do dono. Cada número tem a sua origem em `fontes` e o grau de confiança em `confianca`: 'fabricante' (declarado pelo fabricante, não medido por terceiros), 'medido' (laboratório/teste independente), 'estimado' (engenharia, a confirmar por SysID). As tabelas de ensaio dos motores são as do fabricante (banco de ensaio, fonte de tensão estável) e são OTIMISTAS face ao voo real (caso ArduPilot: MN4006+15″ voou 36 min contra 50–55 previstos pela tabela; corrente real +29 %) — o modelo acrescenta a perda por download do frame (NASA: 5–15 %), a queda de tensão da bateria e os consumos de bordo. Conteúdo web citado como evidência (untrusted).",
+  "atualizado": "2026-10-12",
+  "nota": "Peças REAIS do drone do dono. Cada número tem a sua origem em `fontes` e o grau de confiança em `confianca`: 'fabricante' (declarado pelo fabricante, não medido por terceiros), 'medido' (laboratório/teste independente), 'estimado' (engenharia, a confirmar por SysID). As tabelas de ensaio dos motores são as do fabricante (banco de ensaio, fonte de tensão estável) e são OTIMISTAS face ao voo real (caso ArduPilot: MN4006+15″ voou 36 min contra 50–55 previstos pela tabela; corrente real +29 %) — o modelo acrescenta a perda por download do frame (NASA: 5–15 %), a queda de tensão da bateria e os consumos de bordo. Conteúdo web citado como evidência (untrusted). Peças do computador de bordo ARDUINO (2026-10-12): specs dos datasheets oficiais da Arduino e da Himax; o que NÃO tem número oficial (massa do Portenta H7, lente/FoV da Vision Shield…) vem em `estimado` com a razão e a fonte.",
   "motores": {
     "tmotor_mn4004_kv300": {
       "fabricante": "T-Motor",
@@ -1735,6 +1735,275 @@
       "fontes": [
         "plano-drone-real.md §3"
       ]
+    },
+    "arduino_portenta_h7": {
+      "nome": "Arduino Portenta H7 (ABX00042) — STM32H747XI dual-core: M7 480 MHz + M4 240 MHz",
+      "massa_g": 10,
+      "potencia_w": {
+        "repouso": 0.66,
+        "voo": 1.0,
+        "pico": 1.15
+      },
+      "dims_mm": [
+        66.04,
+        25.4,
+        8
+      ],
+      "mcu": {
+        "soc": "STM32H747XI",
+        "nucleo_m7": {
+          "nucleo": "Arm Cortex-M7",
+          "clock_max_mhz": 480,
+          "clock_openmv_mhz": 400,
+          "fpu": "dupla precisão",
+          "cache_l1_kb": {
+            "dados": 16,
+            "instrucoes": 16
+          }
+        },
+        "nucleo_m4": {
+          "nucleo": "Arm Cortex-M4",
+          "clock_max_mhz": 240,
+          "clock_openmv_mhz": 200,
+          "fpu": "simples precisão",
+          "art_accelerator": true
+        },
+        "flash_kb": 2048,
+        "ram_kb": 1024,
+        "sdram_mb": 8,
+        "flash_qspi_mb": 16,
+        "pwm": {
+          "conector_hd": 10,
+          "cabecalho_mkr": 7
+        },
+        "timers": {
+          "motor_16bit_avancados": 2,
+          "gerais_16bit": 10,
+          "gerais_32bit": 2,
+          "baixo_consumo_16bit": 5
+        },
+        "i2c_hd": 3,
+        "spi_hd": 1,
+        "uart_hd": 4,
+        "can_hd": 1,
+        "camera_interface": {
+          "tipo": "paralela de 8 bit (DCMI)",
+          "bits": 8,
+          "clock_max_mhz": 80
+        },
+        "jpeg_hardware": true,
+        "imu_integrada": false
+      },
+      "ciclos_por_passo_500hz": {
+        "m7": 960000,
+        "m4": 480000
+      },
+      "variantes": "H7 (ABX00042), H7 Lite (ABX00045) e H7 Lite Connected (ABX00046) partilham SoC e memórias (8 MB SDRAM + 16 MB QSPI); a ficha mede o consumo na versão completa (ABX00042)",
+      "confianca": "fabricante (ficha ABX00042, 05/11/2025: MCU, clocks, FPU, memórias, PWM, câmara paralela, corrente máxima) + medido por terceiros (consumo em repouso e a processar, MDPI Electronics 2025) + ESTIMADO (massa, espessura)",
+      "estimado": {
+        "massa_g": "A ficha não dá a massa e todos os números de venda são de EXPEDIÇÃO (loja Arduino 0,2 kg, Mouser 158,8 g, Amazon 23 g — com embalagem). Estimativa da placa nua ≈ 10 g: a Vision Shield com a MESMA pegada de 66,04×25,40 mm pesa 8 g na ficha (2026) e 11 g na loja (Rev 1 Ethernet). Pesar a placa e corrigir aqui.",
+        "dims_mm[2]": "espessura de 8 mm estimada (PCB + componentes + conectores de alta densidade); a ficha só dá o contorno 66,04×25,40 mm",
+        "potencia_w.voo": "1,0 W = 0,206 A × 4,87 V medidos pelo MDPI numa tarefa de inferência TinyML do sistema Portenta H7 + Vision Shield (câmara incluída) — não em voo de multirrotor; o artigo é internamente inconsistente (diz 0,899 W para a mesma leitura; 0,206 A × 4,87 V = 1,003 W) e usa-se o maior; o repouso (0,134 A × 4,93 V = 0,66 W) é consistente. Pico = ficha (230 mA a 5 V com M7 e M4 ligados) = 1,15 W"
+      },
+      "nota": "Sem IMU (a ficha não lista nenhuma): o build mantém o BMI088 externo. Clocks: a ficha diz 'até' 480 MHz (M7) e 240 MHz (M4); o firmware OpenMV corre o M7 a 400 MHz e o M4 a 200 MHz (docs OpenMV v5.0.0) — orçamentar a 400 MHz se for MicroPython. O M4 é FPv4-SP (precisão simples; a ficha só diz 'with FPU'); o M7 tem FPU de dupla precisão. 10 PWM no conector de alta densidade e 7 no cabeçalho MKR; timers por pino e DShot não vêm na ficha (lacuna). 'Busy loop 2,6 mA' da ficha é um ciclo de sono profundo com acordar de 595 s — não é consumo contínuo. `ciclos_por_passo_500hz` = clock ÷ 500 Hz (teto de ciclos de um passo de 2 ms).",
+      "fontes": [
+        "https://docs.arduino.cc/resources/datasheets/ABX00042-ABX00045-ABX00046-datasheet.pdf",
+        "https://docs.openmv.io/v5.0.0/openmvcam/quickref/arduino-portenta-h7.html",
+        "https://www.mdpi.com/2079-9292/14/21/4165",
+        "https://store.arduino.cc/products/portenta-h7",
+        "https://eu.mouser.com/en/ProductDetail/Arduino/ABX00042?qs=OlC7AqGiEDll%2FHL1BvRkFA%3D%3D",
+        "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
+      ]
+    },
+    "arduino_nicla_vision": {
+      "nome": "Arduino Nicla Vision (ABX00051) — STM32H747AII6 dual-core + câmara GC2145 2 MP + IMU LSM6DSOX",
+      "massa_g": 2,
+      "potencia_w": {
+        "repouso": 0.0014,
+        "voo": 0.39,
+        "pico": 0.39
+      },
+      "dims_mm": [
+        22.86,
+        22.86,
+        4
+      ],
+      "mcu": {
+        "soc": "STM32H747AII6",
+        "nucleo_m7": {
+          "nucleo": "Arm Cortex-M7",
+          "clock_max_mhz": 480,
+          "clock_openmv_mhz": 400,
+          "fpu": "dupla precisão",
+          "cache_l1_kb": {
+            "dados": 16,
+            "instrucoes": 16
+          }
+        },
+        "nucleo_m4": {
+          "nucleo": "Arm Cortex-M4",
+          "clock_max_mhz": 240,
+          "clock_openmv_mhz": 200,
+          "fpu": "simples precisão",
+          "art_accelerator": true
+        },
+        "flash_kb": 2048,
+        "ram_kb": 1024,
+        "flash_qspi_mb": 16,
+        "sdram_mb": null,
+        "pwm": null,
+        "camera_interface": {
+          "tipo": "câmara GC2145 integrada na placa (a ficha não detalha a interface)"
+        },
+        "imu_integrada": true
+      },
+      "imu": {
+        "modelo": "LSM6DSOX",
+        "acelerometro_g": [
+          2,
+          4,
+          8,
+          16
+        ],
+        "giroscopio_dps": [
+          125,
+          250,
+          500,
+          1000,
+          2000
+        ],
+        "fifo_kb": 4
+      },
+      "camera_integrada": {
+        "sensor": "GC2145",
+        "mp": 2,
+        "pixel_um": 1.75,
+        "rgb": true,
+        "resolucao_max_px": [
+          1600,
+          1200
+        ],
+        "lente": {
+          "focal_mm": 2.2,
+          "f_stop": 2.2
+        },
+        "angulo_de_visao_graus": 80,
+        "distorcao_pct_max": 1.0,
+        "nota": "a ficha diz 'View angle: 80°' sem dizer se é diagonal; 1600×1200 é o UXGA da biblioteca Camera (CAMERA_R1600x1200) — a ficha só diz '2 Megapixel'; modos e fps do GC2145 não vêm nas fontes lidas"
+      },
+      "outros_sensores": [
+        "VL53L1CBV0FY/1 ToF (400 cm)",
+        "MP34DT06JTR microfone"
+      ],
+      "confianca": "fabricante (ficha ABX00051, 07/10/2026: SoC, clocks, IMU, câmara GC2145, corrente) + secundária (massa 2 g: CNX Software repete a ficha de lançamento) + derivado/ESTIMADO (potência, espessura)",
+      "estimado": {
+        "potencia_w": "a ficha dá 105 mA médios na captura de imagem e 374 µA em sono profundo, medidos com bateria Li-ion de 200 mAh (firmware OpenMV 4.3.4) sem dizer a tensão: 105 mA × 3,7 V = 0,39 W (derivado); o pico não vem declarado (igual ao voo)",
+        "dims_mm[2]": "espessura de 4 mm estimada; a ficha só dá 22,86×22,86 mm"
+      },
+      "nota": "Só para COMPARAÇÃO com o Portenta H7 (não entra em nenhum build). Mesmo M7/M4 (480/240 MHz), 2 MB flash e 1 MB RAM (loja Arduino), 16 MB QSPI; sem SDRAM listada. A câmara é a única das três placas com datasheet de lente (focal 2,2 mm, f/2,2, 80°) e é RGB, não mono. PWM não declarado na ficha.",
+      "fontes": [
+        "https://docs.arduino.cc/resources/datasheets/ABX00051-datasheet.pdf",
+        "https://store.arduino.cc/products/nicla-vision",
+        "https://www.cnx-software.com/2022/03/09/arduino-nicla-vision-tiny-stm32h7-board-with-2mp-camera-wifi-bluetooth-le-sensors",
+        "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
+      ]
+    },
+    "arduino_giga_r1": {
+      "nome": "Arduino GIGA R1 WiFi (ABX00063) — STM32H747XIH6 dual-core, formato Mega",
+      "massa_g": 37,
+      "potencia_w": {
+        "repouso": 0.7,
+        "voo": 1.0,
+        "pico": 1.2
+      },
+      "dims_mm": [
+        101.52,
+        53.34,
+        12
+      ],
+      "mcu": {
+        "soc": "STM32H747XIH6",
+        "nucleo_m7": {
+          "nucleo": "Arm Cortex-M7",
+          "clock_max_mhz": 480,
+          "clock_openmv_mhz": 400,
+          "fpu": "dupla precisão",
+          "cache_l1_kb": {
+            "dados": 16,
+            "instrucoes": 16
+          }
+        },
+        "nucleo_m4": {
+          "nucleo": "Arm Cortex-M4",
+          "clock_max_mhz": 240,
+          "clock_openmv_mhz": 200,
+          "fpu": "simples precisão",
+          "art_accelerator": true
+        },
+        "flash_kb": 2048,
+        "ram_kb": 1024,
+        "sdram_mb": 8,
+        "flash_qspi_mb": 16,
+        "pwm": {
+          "datasheet": 13,
+          "loja_e_docs": 12
+        },
+        "io_digitais": 76,
+        "entradas_analogicas": 12,
+        "dac": 2,
+        "camera_interface": {
+          "tipo": "conector de câmara Arducam de 20 pinos (DVP)"
+        },
+        "imu_integrada": false
+      },
+      "camera_suportada": {
+        "conector": "20 pinos Arducam (J6, DVP)",
+        "modulos_oficiais": [
+          "Arducam OV7675",
+          "Arducam OV7670"
+        ],
+        "biblioteca_camera": [
+          "OV7670",
+          "HM0360",
+          "HM01B0",
+          "GC2145"
+        ],
+        "modulo_loja_ov7675": {
+          "sensor": "OV7675",
+          "pixel_px": [
+            640,
+            480
+          ],
+          "pixel_um": 2.5,
+          "rgb": true,
+          "fps": 15,
+          "focal_mm": 1.75,
+          "f_stop": 2.8,
+          "fov_diag_graus": 63.9,
+          "foco_m": [
+            0.12,
+            null
+          ],
+          "obturador": "rolling shutter eletrónico"
+        }
+      },
+      "confianca": "fabricante (ficha ABX00063, 03/07/2026: SoC, clocks, memórias, E/S, conector de câmara; loja: módulo OV7675) + ESTIMADO (massa e potência)",
+      "estimado": {
+        "massa_g": "a loja diz 0,063 kg (expedição; o Mega 2560 Rev3 tem 0,06 kg na mesma loja e 37 g na ficha). A pegada é a mesma do Mega (101,52×53,3 mm; Mega 37 g, Due 36 g na ficha oficial): estima-se 37 g",
+        "potencia_w": "a ficha não dá consumo; mesmo SoC do Portenta H7 (0,66–1,0 W medidos) com reguladores de VIN (6–24 V) e Wi-Fi — estimativa por analogia",
+        "dims_mm[2]": "espessura de 12 mm estimada (conectores USB-A/jack e cabeçalhos)"
+      },
+      "nota": "Só para COMPARAÇÃO. Mesmo M7/M4 e memórias do Portenta H7 + 8 MB SDRAM + 16 MB QSPI NOR. PWM: a ficha ABX00063 diz 13 e a loja/docs dizem 12 (lacuna por esclarecer). VIN 6–24 V no cabeçalho da ficha e 6–32 V na tabela (inconsistência da ficha). A câmara OV7675 da loja é RGB a 15 fps (640×480, 320×240, 160×120): lenta para um laço de visão a 25–30 Hz.",
+      "fontes": [
+        "https://docs.arduino.cc/resources/datasheets/ABX00063-datasheet.pdf",
+        "https://store.arduino.cc/products/giga-r1-wifi",
+        "https://store-usa.arduino.cc/products/giga-r1-wifi",
+        "https://store.arduino.cc/products/arducam-camera-module",
+        "https://github.com/arduino/ArduinoCore-mbed/blob/main/libraries/Camera/src/camera.h",
+        "https://store-usa.arduino.cc/products/arduino-mega-2560-rev3",
+        "https://store-usa.arduino.cc/products/arduino-due-without-headers",
+        "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
+      ]
     }
   },
   "sensores": {
@@ -2070,6 +2339,295 @@
         "https://github.com/raspberrypi/rpicam-apps/issues/533"
       ],
       "modelo": "Camera Module 3 Wide (Sony IMX708, wide 120 deg)"
+    },
+    "portenta_vision_shield_hm0360": {
+      "fabricante": "Arduino (sensor Himax)",
+      "tipo": "modulo_camera_dvp",
+      "plataforma": "arduino_portenta_h7",
+      "massa_g": 8,
+      "massa_g_loja": 11,
+      "dims_mm": [
+        66.04,
+        25.4,
+        8.0
+      ],
+      "sensor": "Himax HM0360",
+      "resolucao_px": [
+        640,
+        480
+      ],
+      "matriz_ativa_px": [
+        656,
+        496
+      ],
+      "mp": 0.3072,
+      "pixel_um": 3.6,
+      "optico": "1/6\" (2,88 mm de diagonal)",
+      "mono": true,
+      "cfa": "monocromático (o HM0360 também existe em Bayer; a Vision Shield usa a versão mono)",
+      "obturador": "rolling shutter eletrónico",
+      "fov_graus": {
+        "diag": 85.0,
+        "horizontal": 70.1,
+        "vertical": 55.4
+      },
+      "lente": {
+        "focal_mm": 1.56,
+        "f_stop": 2.4,
+        "foco": "fixo",
+        "foco_min_m": null,
+        "distorcao_tv_pct_max": 1.5
+      },
+      "interface": "DVP paralelo de 8 bit → DCMI do STM32H747 pelos conectores de alta densidade do Portenta H7 (interface de câmara de 8 bit até 80 MHz); sem CSI-2",
+      "formato_sensor": "RAW8 monocromático (CAMERA_GRAYSCALE, 8 bit/píxel) — sem Bayer e sem ISP",
+      "modos_sensor": [
+        {
+          "id": "VGA60",
+          "resolucao_px": [
+            640,
+            480
+          ],
+          "fps": 60.0,
+          "fps_sensor_max": 60.0,
+          "crop_px": [
+            0,
+            0,
+            640,
+            480
+          ],
+          "mono": true,
+          "nota": "leitura completa (Full); VGA 60 FPS é o máximo do sensor (7–8,6 mA)",
+          "fonte": "ficha Arduino da Vision Shield + Himax HM0360 (página oficial) + módulo Himax HM0360-MWA-00FW703 + tabela de correntes do datasheet Himax (via Arducam)"
+        },
+        {
+          "id": "QVGA60",
+          "resolucao_px": [
+            320,
+            240
+          ],
+          "fps": 60.0,
+          "fps_sensor_max": 60.0,
+          "crop_px": [
+            0,
+            0,
+            640,
+            480
+          ],
+          "mono": true,
+          "nota": "binning 2×2 monocromático do campo completo (mesmo FoV do VGA); QVGA 60 FPS = 3,2 mA",
+          "fonte": "Himax HM0360 (página oficial) + tabela de correntes do datasheet Himax (via Arducam)"
+        },
+        {
+          "id": "QVGA30",
+          "resolucao_px": [
+            320,
+            240
+          ],
+          "fps": 30.0,
+          "fps_sensor_max": 60.0,
+          "crop_px": [
+            0,
+            0,
+            640,
+            480
+          ],
+          "mono": true,
+          "nota": "begin(CAMERA_R320x240, CAMERA_GRAYSCALE, 30): a configuração por omissão da Arduino",
+          "fonte": "biblioteca Camera da Arduino (camera.h) + Himax HM0360 (página oficial)"
+        }
+      ],
+      "modos_video": [
+        "VGA60",
+        "QVGA60",
+        "QVGA30"
+      ],
+      "latencia": {
+        "inicio_quadro_ms_max": 2.0,
+        "leitura_quadro_periodos": 1.0,
+        "modelo": "lab/camera_rpi.py `_latencia_mcu`: leitura do quadro (1 período) + processamento (3 ms, ASSUMIDO) + comando M7→M4 (1 ms, ASSUMIDO) — sem ISP/JPEG/rede",
+        "nota": "Himax: 'frame trigger < 2 ms' (arranque do quadro); o quadro só está completo na RAM ao fim da leitura sequencial (rolling shutter)"
+      },
+      "potencia_w": null,
+      "potencia_sensor_w": {
+        "vga_60fps_max": 0.0196,
+        "corrente_vga_60fps_ma": [
+          7.0,
+          8.6
+        ],
+        "corrente_qvga_60fps_ma": 3.2,
+        "standby_max": 0.00014
+      },
+      "nota_potencia": "consumo do SENSOR (informativo): o consumo do conjunto Portenta H7 + Vision Shield já inclui a câmara (MDPI, em `eletronica.arduino_portenta_h7`) — não se soma outra vez",
+      "confianca": "fabricante (ficha da shield: sensor, resolução, 60 FPS, 8 g, 66,04×25,40 mm; Himax: píxel, formato óptico, modos, correntes) + ESTIMADO (lente e FoV por módulo de referência da Himax; espessura)",
+      "estimado": {
+        "fov_graus": "A Arduino NÃO publica a lente da shield. Usa-se o módulo de referência HM0360-MWA-00FW703 da Himax (lente 3P, EFL 1,56 mm, f/2,4, FoV 70,1°H × 55,4°V, 85,0° na diagonal). Medir com um alvo angular quando houver hardware.",
+        "lente": "idem (focal, f/2,4 e distorção do módulo de referência da Himax)",
+        "dims_mm[2]": "espessura de 8 mm estimada; a ficha só dá o contorno 66,04×25,40 mm"
+      },
+      "nota": "Rev 2 da shield (a atual; a Rev 1 usa o HM01B0): câmara MONOCROMÁTICA de 8 bit — um alvo distingue-se por BRILHO (o marcador magenta do simulador tem luma 0,41–0,51; um alvo branco/IR é melhor). O mesmo emulador do módulo RGB, com saída em cinzento (`Modo.mono`). A ficha da shield diz 8 g; a loja (Rev 1 Ethernet) diz 11 g. Modos: o QVGA a 30 fps é a configuração por omissão da biblioteca Camera da Arduino; para resoluções acima de QVGA a biblioteca recomenda pôr o quadro na SDRAM externa de 8 MB.",
+      "fontes": [
+        "https://docs.arduino.cc/resources/datasheets/ASX00021-ASX00026-datasheet.pdf",
+        "https://www.himax.com.tw/en/products/cmos-image-sensor/always-on-vision-sensors/hm0360",
+        "https://media.digikey.com/pdf/Data%20Sheets/Himax%20PDFs/HM0360-MWA-00FW703.pdf",
+        "https://www.arducam.com/blog/product/arducam-hm0360-vga-cmos-mocochrome-camera-module-for-rp2040-arduino",
+        "https://docs.openmv.io/v5.0.0/openmvcam/quickref/arduino-portenta-h7.html",
+        "https://github.com/arduino/ArduinoCore-mbed/blob/main/libraries/Camera/src/camera.h",
+        "https://store.arduino.cc/products/portenta-vision-shield-ethernet",
+        "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
+      ],
+      "modelo": "Portenta Vision Shield Rev 2 (Himax HM0360, VGA monocromático)"
+    },
+    "portenta_vision_shield_hm01b0": {
+      "fabricante": "Arduino (sensor Himax)",
+      "tipo": "modulo_camera_dvp",
+      "plataforma": "arduino_portenta_h7",
+      "massa_g": 8,
+      "massa_g_loja": 11,
+      "dims_mm": [
+        66.04,
+        25.4,
+        8.0
+      ],
+      "sensor": "Himax HM01B0",
+      "resolucao_px": [
+        320,
+        320
+      ],
+      "matriz_ativa_px": [
+        324,
+        324
+      ],
+      "mp": 0.1024,
+      "pixel_um": 3.6,
+      "optico": "1/11\" (1,63 mm de diagonal)",
+      "mono": true,
+      "cfa": "monocromático (o HM01B0 também existe em Bayer; a Vision Shield usa a versão mono)",
+      "obturador": "rolling shutter eletrónico",
+      "fov_graus": {
+        "diag": 115.0,
+        "horizontal": 87.0,
+        "vertical": 87.0
+      },
+      "lente": {
+        "focal_mm": 0.66,
+        "f_stop": 2.4,
+        "foco": "fixo",
+        "foco_min_m": 0.3,
+        "distorcao_tv_pct_max": 4.3
+      },
+      "interface": "DVP paralelo (1/4/8 bit no sensor) → DCMI do STM32H747 pelos conectores de alta densidade do Portenta H7 (interface de câmara de 8 bit até 80 MHz); sem CSI-2",
+      "formato_sensor": "RAW8 monocromático (CAMERA_GRAYSCALE, 8 bit/píxel) — sem Bayer e sem ISP",
+      "modos_sensor": [
+        {
+          "id": "320x320p45",
+          "resolucao_px": [
+            320,
+            320
+          ],
+          "fps": 45.0,
+          "fps_sensor_max": 51.0,
+          "crop_px": [
+            0,
+            0,
+            320,
+            320
+          ],
+          "mono": true,
+          "nota": "matriz inteira: 45 fps a 6 MHz/8 bit (ficha do módulo); a Himax dá 51 fps no máximo",
+          "fonte": "ficha Arduino da Vision Shield + Himax HM01B0 (página oficial) + módulo Himax HM01B0-MNA-00FT870"
+        },
+        {
+          "id": "QVGA60",
+          "resolucao_px": [
+            320,
+            240
+          ],
+          "fps": 60.0,
+          "fps_sensor_max": 60.0,
+          "crop_px": [
+            0,
+            40,
+            320,
+            240
+          ],
+          "mono": true,
+          "nota": "janela 320×240 (window mode) a 60 FPS; a janela CENTRADA na vertical é ASSUMIDA",
+          "fonte": "ficha Arduino da Vision Shield + Himax HM01B0 (página oficial) + módulo Himax HM01B0-MNA-00FT870"
+        },
+        {
+          "id": "QVGA30",
+          "resolucao_px": [
+            320,
+            240
+          ],
+          "fps": 30.0,
+          "fps_sensor_max": 60.0,
+          "crop_px": [
+            0,
+            40,
+            320,
+            240
+          ],
+          "mono": true,
+          "nota": "begin(CAMERA_R320x240, CAMERA_GRAYSCALE, 30): a configuração por omissão da Arduino",
+          "fonte": "biblioteca Camera da Arduino (camera.h) + Himax HM01B0 (página oficial)"
+        },
+        {
+          "id": "QQVGA120",
+          "resolucao_px": [
+            160,
+            120
+          ],
+          "fps": 120.0,
+          "fps_sensor_max": 120.0,
+          "crop_px": [
+            0,
+            40,
+            320,
+            240
+          ],
+          "mono": true,
+          "nota": "binning 2×2 monocromático até 120 FPS (Himax); aplicado à janela QVGA é ASSUMIDO",
+          "fonte": "Himax HM01B0 (página oficial) + módulo Himax HM01B0-MNA-00FT870"
+        }
+      ],
+      "modos_video": [
+        "320x320p45",
+        "QVGA60",
+        "QVGA30",
+        "QQVGA120"
+      ],
+      "latencia": {
+        "inicio_quadro_ms_max": null,
+        "leitura_quadro_periodos": 1.0,
+        "modelo": "lab/camera_rpi.py `_latencia_mcu`: leitura do quadro (1 período) + processamento (3 ms, ASSUMIDO) + comando M7→M4 (1 ms, ASSUMIDO) — sem ISP/JPEG/rede",
+        "nota": "a Himax não publica o arranque de quadro do HM01B0; o quadro só está completo na RAM ao fim da leitura sequencial (rolling shutter)"
+      },
+      "potencia_w": null,
+      "potencia_sensor_w": {
+        "qvga_60fps_max": 0.004,
+        "qvga_30fps_max": 0.002,
+        "qqvga_30fps_max": 0.0011
+      },
+      "nota_potencia": "consumo do SENSOR (informativo): o consumo do conjunto Portenta H7 + Vision Shield já inclui a câmara (MDPI, em `eletronica.arduino_portenta_h7`) — não se soma outra vez",
+      "confianca": "fabricante (ficha da shield: sensor, resolução, 60 FPS, 8 g, 66,04×25,40 mm; Himax: píxel, formato óptico, modos, potências) + ESTIMADO (lente e FoV por módulo de referência da Himax; espessura)",
+      "estimado": {
+        "fov_graus": "A Arduino NÃO publica a lente da shield. Usa-se o módulo de referência HM01B0-MNA-00FT870 da Himax (lente 3P+CG, EFL 0,66 mm, f/2,4, FoV 87°H × 87°V, 115° na diagonal; é o módulo do AI-deck da Bitcraze). Medir com um alvo angular quando houver hardware.",
+        "lente": "idem (focal, f/2,4, distorção e foco 30 cm–∞ do módulo de referência)",
+        "dims_mm[2]": "espessura de 8 mm estimada; a ficha só dá o contorno 66,04×25,40 mm"
+      },
+      "nota": "Rev 1 da shield (substituída pela Rev 2/HM0360): câmara MONOCROMÁTICA de 8 bit. ATENÇÃO ao texto da ficha ('320×320 QVGA 60 FPS'): a matriz inteira 320×320 dá 51 fps no máximo (Himax; 45 fps a 6 MHz na ficha do módulo) e os 60 fps são da janela QVGA 320×240; o binning 2×2 chega a 120 fps. A ficha da shield diz 8 g; a loja (Rev 1 Ethernet) diz 11 g.",
+      "fontes": [
+        "https://docs.arduino.cc/resources/datasheets/ASX00021-ASX00026-datasheet.pdf",
+        "https://www.himax.com.tw/en/products/cmos-image-sensor/always-on-vision-sensors/hm01b0",
+        "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/4886/HM01B0-MNA-00FT870.pdf",
+        "https://www.bitcraze.io/documentation/hardware/ai_deck_mono_camera/ai_deck_mono_camera-datasheet.pdf",
+        "https://docs.openmv.io/v5.0.0/openmvcam/quickref/arduino-portenta-h7.html",
+        "https://github.com/arduino/ArduinoCore-mbed/blob/main/libraries/Camera/src/camera.h",
+        "https://store.arduino.cc/products/portenta-vision-shield-ethernet",
+        "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
+      ],
+      "modelo": "Portenta Vision Shield Rev 1 (Himax HM01B0, 320×320 monocromático)"
     }
   },
   "correcao_tabelas": {

@@ -45,6 +45,15 @@ import { FOCUS_RING } from "@/components/sim/estilo"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { enviarVoo } from "@/lib/api"
+import {
+  ROTULOS_TECLAS_YAW,
+  TECLAS_YAW,
+  YAW_TAXA_TECLA,
+  grausRumo,
+  vRefMundoParaRumo,
+  type ControladorEstado,
+  type TeclaYaw,
+} from "@/lib/controlador"
 import { fmt, fmtSinal } from "@/lib/sim"
 import {
   TECLAS_VOO,
@@ -82,6 +91,11 @@ export interface ControloVooProps {
   amostras: number
   /** O polling está a receber respostas (para o aviso de «API em baixo»). */
   ligado: boolean
+  /**
+   * Bloco `controlador` (contrato r12): traz o `rumo` atual (o que a tecla X fixa) e o modo em vigor
+   * (no CLÁSSICO o WASDQE é relativo ao rumo; no RL o yaw é fixo — o painel diz-o). `null` = sem bloco.
+   */
+  controlador: ControladorEstado | null
   onAviso: (texto: string, tom: TomAviso) => void
 }
 
@@ -89,6 +103,10 @@ export interface ControloVooProps {
 interface EstadoVoo {
   ativo: boolean
   teclas: TeclasVoo
+  /** r12: taxa de guinada (rad/s; Z/C = ±YAW_TAXA_TECLA) e o resto do estado de yaw. */
+  yaw_taxa: number
+  yaw_alvo: number | null
+  segui_alvo: boolean
 }
 
 interface KeycapProps {
@@ -151,6 +169,59 @@ function textoTeclas(teclas: TeclasVoo): string {
     : "nenhuma tecla"
 }
 
+interface KeycapYawProps {
+  tecla: TeclaYaw
+  ligada: boolean
+  podeUsar: boolean
+  /** `true` para as teclas de PRESSÃO (Z/C são de manter; X/V disparam e ficam visíveis no estado). */
+  manter: boolean
+  onBaixar: (tecla: TeclaYaw) => void
+  onSoltar: (tecla: TeclaYaw) => void
+}
+
+/**
+ * Um keycap de yaw (r12): Z/C/X/V com o rótulo da ação («rodar ←», «fixar rumo», «olhar»). O
+ * «ligar/apagar» é o MESMO do `Keycap` (invertido + afundado quando ativo) para o ecrã ler-se todo
+ * igual; Z/C são de MANTER (pressionar = acende, soltar = apaga) e X/V de PRESSÃO (o estado
+ * `segui_alvo`/`yaw_alvo` mantém-se depois do clique — o keycap segue esse estado).
+ */
+function KeycapYaw({ tecla, ligada, podeUsar, manter, onBaixar, onSoltar }: KeycapYawProps) {
+  const { direcao, completo } = ROTULOS_TECLAS_YAW[tecla]
+  return (
+    <div className="flex min-w-0 flex-col items-center gap-1">
+      <button
+        type="button"
+        data-testid={`tecla-${tecla}`}
+        data-estado={ligada ? "ativa" : "inativa"}
+        disabled={!podeUsar}
+        aria-label={`tecla ${completo}`}
+        aria-pressed={ligada}
+        title={completo}
+        className={`flex size-12 items-center justify-center rounded-xl text-base font-semibold transition-all select-none ${FOCUS_RING} ${
+          ligada
+            ? "translate-y-px border-2 border-foreground bg-foreground text-background ring-2 ring-foreground/40"
+            : "border border-border bg-muted/60 text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+        }`}
+        onPointerDown={(evento: EventoApontador<HTMLButtonElement>) => {
+          if (!podeUsar) return
+          evento.preventDefault()
+          onBaixar(tecla)
+          if (!manter) onSoltar(tecla)
+        }}
+        onPointerUp={() => manter && onSoltar(tecla)}
+        onPointerLeave={() => manter && onSoltar(tecla)}
+        onPointerCancel={() => manter && onSoltar(tecla)}
+        onContextMenu={(evento) => evento.preventDefault()}
+      >
+        {tecla.toUpperCase()}
+      </button>
+      <span className="text-center text-[0.65rem] leading-tight text-muted-foreground">
+        {direcao}
+      </span>
+    </div>
+  )
+}
+
 /** `+1,00 x · +0,00 y · +0,00 z m/s` (o v_ref em m/s, mundo). */
 function textoVRef(v: [number, number, number]): string {
   return `${fmtSinal(v[0], 2)} x · ${fmtSinal(v[1], 2)} y · ${fmtSinal(v[2], 2)} z m/s`
@@ -160,15 +231,23 @@ export function ControloVoo({
   eco,
   amostras,
   ligado,
+  controlador,
   onAviso,
 }: ControloVooProps) {
   /** Estado LOCAL otimista (os keycaps seguem ESTE estado, sem esperar pela rede). */
   const [ativo, setAtivo] = useState(false)
   const [teclas, setTeclas] = useState<TeclasVoo>(TECLAS_VOO_ZERADAS)
+  /** r12: o estado de yaw local (keycaps Z/C/X/V + o corpo do `POST /api/voo`). */
+  const [yawTaxa, setYawTaxa] = useState(0)
+  const [yawAlvo, setYawAlvo] = useState<number | null>(null)
+  const [seguiAlvo, setSeguiAlvo] = useState(false)
   /** Espelho síncrono do estado local: os handlers de teclado/pointer leem-no sem depender do render. */
   const estadoRef = useRef<EstadoVoo>({
     ativo: false,
     teclas: TECLAS_VOO_ZERADAS,
+    yaw_taxa: 0,
+    yaw_alvo: null,
+    segui_alvo: false,
   })
   /** Último eco visto (para a re-sincronização quando um envio falha). */
   const ecoRef = useRef<EcoVoo | null>(eco)
@@ -206,9 +285,15 @@ export function ControloVoo({
               estadoRef.current = {
                 ativo: ecoAgora.ativo,
                 teclas: { ...ecoAgora.teclas },
+                yaw_taxa: 0,
+                yaw_alvo: null,
+                segui_alvo: false,
               }
               setAtivo(ecoAgora.ativo)
               setTeclas(estadoRef.current.teclas)
+              setYawTaxa(0)
+              setYawAlvo(null)
+              setSeguiAlvo(false)
             }
           }
         }
@@ -224,6 +309,9 @@ export function ControloVoo({
       estadoRef.current = novo
       setAtivo(novo.ativo)
       setTeclas(novo.teclas)
+      setYawTaxa(novo.yaw_taxa)
+      setYawAlvo(novo.yaw_alvo)
+      setSeguiAlvo(novo.segui_alvo)
       enfileirar(novo)
     },
     [enfileirar]
@@ -235,11 +323,70 @@ export function ControloVoo({
       const atual = estadoRef.current
       if (atual.teclas[tecla] === ligada) return
       aplicar({
+        ...atual,
         ativo: atual.ativo,
         teclas: { ...atual.teclas, [tecla]: ligada },
       })
     },
     [aplicar]
+  )
+
+  // ------------------------------------------------- yaw (r12): Z/C taxa · X fixar rumo · V olhar
+  /** Z = rodar à esquerda (+), C = à direita (−); soltar = 0. Z/C voltam ao modo taxa (`yaw_alvo: null`). */
+  const mudarYawTaxa = useCallback(
+    (tecla: TeclaYaw, ligada: boolean) => {
+      const atual = estadoRef.current
+      const sinal = tecla === "z" ? 1 : -1
+      const yaw_taxa = ligada ? sinal * YAW_TAXA_TECLA : 0
+      if (atual.yaw_taxa === yaw_taxa && (!ligada || atual.yaw_alvo === null)) return
+      aplicar({ ...atual, yaw_taxa, yaw_alvo: ligada ? null : atual.yaw_alvo })
+    },
+    [aplicar]
+  )
+
+  /** X = FIXAR RUMO: `yaw_alvo` = o `rumo` atual da telemetria (sem rumo não se inventa nenhum). */
+  const fixarRumo = useCallback(() => {
+    const rumo = controlador?.rumo ?? null
+    if (rumo === null) {
+      onAviso(
+        "sem rumo na telemetria (controlador.rumo) — o «fixar rumo» precisa do estimador de bordo",
+        "erro"
+      )
+      return
+    }
+    const atual = estadoRef.current
+    aplicar({ ...atual, yaw_alvo: rumo, yaw_taxa: 0 })
+    onAviso(`rumo fixado em ${grausRumo(rumo)} (yaw_alvo = rumo atual)`, "info")
+  }, [aplicar, controlador, onAviso])
+
+  /** V = SEGUIR/OLHAR: alterna `segui_alvo` (o IBVS clássico passa a seguir o alvo). */
+  const alternarOlhar = useCallback(() => {
+    const atual = estadoRef.current
+    const segui_alvo = !atual.segui_alvo
+    aplicar({ ...atual, segui_alvo, yaw_alvo: segui_alvo ? null : atual.yaw_alvo })
+    onAviso(
+      segui_alvo
+        ? "«olhar» LIGADO (segui_alvo) — o IBVS segue o alvo com a câmara de bordo"
+        : "«olhar» desligado — volta ao controlo de yaw/velocidade",
+      "info"
+    )
+  }, [aplicar, onAviso])
+
+  /** Uma tecla de yaw pressionada (teclado, rato ou toque) → o efeito certo. */
+  const aoBaixarYaw = useCallback(
+    (tecla: TeclaYaw) => {
+      if (tecla === "z" || tecla === "c") mudarYawTaxa(tecla, true)
+      else if (tecla === "x") fixarRumo()
+      else alternarOlhar()
+    },
+    [mudarYawTaxa, fixarRumo, alternarOlhar]
+  )
+
+  const aoSoltarYaw = useCallback(
+    (tecla: TeclaYaw) => {
+      if (tecla === "z" || tecla === "c") mudarYawTaxa(tecla, false)
+    },
+    [mudarYawTaxa]
   )
 
   // ------------------------------------------------- teclado (janela), só enquanto ARMADO
@@ -256,12 +403,15 @@ export function ControloVoo({
         alvo.isContentEditable
       )
     }
-    const teclaDoEvento = (evento: KeyboardEvent): TeclaVoo | null => {
+    const teclaDoEvento = (
+      evento: KeyboardEvent
+    ): TeclaVoo | TeclaYaw | null => {
       // Modificadores ficam para os atalhos do browser (Ctrl+W e companhia nunca se roubam).
       if (evento.ctrlKey || evento.metaKey || evento.altKey) return null
       const k = evento.key.toLowerCase()
-      return (TECLAS_VOO as readonly string[]).includes(k)
-        ? (k as TeclaVoo)
+      return (TECLAS_VOO as readonly string[]).includes(k) ||
+        (TECLAS_YAW as readonly string[]).includes(k)
+        ? (k as TeclaVoo | TeclaYaw)
         : null
     }
     const aoBaixar = (evento: KeyboardEvent) => {
@@ -269,14 +419,22 @@ export function ControloVoo({
       if (tecla === null || emEdicao(evento.target)) return
       // Enquanto armado, as teclas de voo não rolam a página nem escrevem nada.
       evento.preventDefault()
-      mudarTecla(tecla, true)
+      if ((TECLAS_YAW as readonly string[]).includes(tecla)) {
+        aoBaixarYaw(tecla as TeclaYaw)
+      } else {
+        mudarTecla(tecla as TeclaVoo, true)
+      }
     }
     const aoSubir = (evento: KeyboardEvent) => {
       // O keyup SOLTA SEMPRE (mesmo vindo de um campo): uma tecla nunca fica presa se o foco
       // saltar para um input a meio da pressão.
       const tecla = teclaDoEvento(evento)
       if (tecla === null) return
-      mudarTecla(tecla, false)
+      if ((TECLAS_YAW as readonly string[]).includes(tecla)) {
+        aoSoltarYaw(tecla as TeclaYaw)
+      } else {
+        mudarTecla(tecla as TeclaVoo, false)
+      }
     }
     window.addEventListener("keydown", aoBaixar)
     window.addEventListener("keyup", aoSubir)
@@ -284,7 +442,7 @@ export function ControloVoo({
       window.removeEventListener("keydown", aoBaixar)
       window.removeEventListener("keyup", aoSubir)
     }
-  }, [ativo, disponivel, mudarTecla])
+  }, [ativo, disponivel, mudarTecla, aoBaixarYaw, aoSoltarYaw])
 
   // ------------------------------------------------- segurança: blur, unmount e perda do modo comando
   useEffect(() => {
@@ -294,7 +452,7 @@ export function ControloVoo({
       const alguma = TECLAS_VOO.some((tecla) => atual.teclas[tecla])
       // Soltar TUDO. Só se envia quando havia tecla pressionada (senão o estado já era o zerado).
       if (!alguma) return
-      aplicar({ ativo: true, teclas: { ...TECLAS_VOO_ZERADAS } })
+      aplicar({ ...atual, ativo: true, teclas: { ...TECLAS_VOO_ZERADAS } })
     }
     window.addEventListener("blur", aoPerderFoco)
     return () => window.removeEventListener("blur", aoPerderFoco)
@@ -307,6 +465,9 @@ export function ControloVoo({
       void enviarVoo({
         ativo: false,
         teclas: { ...TECLAS_VOO_ZERADAS },
+        yaw_taxa: 0,
+        yaw_alvo: null,
+        segui_alvo: false,
       }).catch(() => undefined)
     },
     []
@@ -315,17 +476,20 @@ export function ControloVoo({
   useEffect(() => {
     // Perdeu-se o modo comando (outra política/runner) com o controlo armado: desarma e desativa.
     if (disponivel || !estadoRef.current.ativo) return
-    aplicar({ ativo: false, teclas: { ...TECLAS_VOO_ZERADAS } })
+    aplicar({ ...estadoRef.current, ativo: false, teclas: { ...TECLAS_VOO_ZERADAS } })
   }, [aplicar, disponivel])
 
   // ------------------------------------------------- ARMAR / DESARMAR
   const alternar = useCallback(() => {
     const atual = estadoRef.current
     if (!atual.ativo) {
-      aplicar({ ativo: true, teclas: { ...TECLAS_VOO_ZERADAS } })
-      onAviso("controlo de voo ARMADO — W/A/S/D/Q/E comandam o drone", "info")
+      aplicar({ ...atual, ativo: true, teclas: { ...TECLAS_VOO_ZERADAS } })
+      onAviso(
+        "controlo de voo ARMADO — W/A/S/D/Q/E + yaw (Z/C/X/V) comandam o drone",
+        "info"
+      )
     } else {
-      aplicar({ ativo: false, teclas: { ...TECLAS_VOO_ZERADAS } })
+      aplicar({ ...atual, ativo: false, teclas: { ...TECLAS_VOO_ZERADAS }, yaw_taxa: 0 })
       onAviso("controlo de voo desarmado — teclas soltas", "info")
     }
   }, [aplicar, onAviso])
@@ -336,6 +500,13 @@ export function ControloVoo({
   const vRefLocal: [number, number, number] = ativo
     ? vRefDeTeclas(teclas)
     : [0, 0, 0]
+  // Em modo CLÁSSICO o eco `v_ref` vem do runner em frame MUNDO (o `p_ref` é do mundo): rodá-lo para
+  // o rumo mostra «o que o drone está mesmo a fazer» na mesma linguagem do comando (avanço/lateral).
+  const rumoControlador = controlador?.rumo ?? null
+  const vRefEcoRumo: [number, number, number] | null =
+    eco !== null && rumoControlador !== null
+      ? vRefMundoParaRumo(eco.v_ref, rumoControlador)
+      : null
   const diverge =
     eco !== null && (eco.ativo !== ativo || !teclasIguais(eco.teclas, teclas))
   const seguindo = eco?.seguindo ?? null
@@ -346,7 +517,7 @@ export function ControloVoo({
         <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium">
           <span className="flex items-center gap-1.5">
             <Keyboard className="size-4" aria-hidden="true" />
-            Controlo de voo · teclas WASD/QE
+            Controlo de voo · teclas WASD/QE + yaw (Z/C/X/V)
           </span>
           <span
             data-testid="voo-ativo"
@@ -371,7 +542,9 @@ export function ControloVoo({
           arma o controlo e pilota o drone: W/S frente-trás, A/D
           esquerda-direita, Q/E subir-descer ({fmt(V_HORIZONTAL_M_S, 1)} m/s na
           horizontal, {fmt(V_VERTICAL_M_S, 1)} m/s na vertical) — sem teclas o
-          drone SEGURA a posição
+          drone SEGURA a posição. Yaw (r12): Z/C rodam ±{fmt(YAW_TAXA_TECLA, 1)}{" "}
+          rad/s, X fixa o rumo atual, V liga o «olhar» — em modo CLÁSSICO o
+          WASDQE é relativo ao RUMO
         </p>
       </CardHeader>
 
@@ -446,6 +619,82 @@ export function ControloVoo({
               onBaixar={(t) => mudarTecla(t, true)}
               onSoltar={(t) => mudarTecla(t, false)}
             />
+          </div>
+        </div>
+
+        {/* YAW (r12) — Z/C rodar (±0,5 rad/s) · X fixar rumo · V olhar/IBVS; o rumo vem do estimador */}
+        <div
+          className="flex items-start justify-center gap-6"
+          data-testid="voo-yaw"
+        >
+          <div className="flex gap-1.5">
+            <KeycapYaw
+              tecla="z"
+              ligada={yawTaxa > 0}
+              podeUsar={disponivel}
+              manter
+              onBaixar={aoBaixarYaw}
+              onSoltar={aoSoltarYaw}
+            />
+            <KeycapYaw
+              tecla="c"
+              ligada={yawTaxa < 0}
+              podeUsar={disponivel}
+              manter
+              onBaixar={aoBaixarYaw}
+              onSoltar={aoSoltarYaw}
+            />
+            <KeycapYaw
+              tecla="x"
+              ligada={yawAlvo !== null}
+              podeUsar={disponivel}
+              manter={false}
+              onBaixar={aoBaixarYaw}
+              onSoltar={aoSoltarYaw}
+            />
+            <KeycapYaw
+              tecla="v"
+              ligada={seguiAlvo}
+              podeUsar={disponivel}
+              manter={false}
+              onBaixar={aoBaixarYaw}
+              onSoltar={aoSoltarYaw}
+            />
+          </div>
+          <div className="flex min-w-0 flex-col justify-center gap-0.5">
+            <span className="text-[0.65rem] tracking-wide text-muted-foreground uppercase">
+              rumo atual
+            </span>
+            <span
+              className="truncate text-sm font-medium tabular-nums"
+              data-testid="voo-rumo"
+              data-rumo={controlador?.rumo ?? ""}
+            >
+              {grausRumo(controlador?.rumo ?? null)}
+            </span>
+            <span
+              className="truncate text-[0.65rem] text-muted-foreground"
+              data-testid="voo-rumo-avanco"
+              data-modo={controlador?.modo ?? "rl"}
+            >
+              {controlador?.modo === "classico"
+                ? `avanço ${fmtSinal(vRefLocal[0], 2)} · lateral ${fmtSinal(vRefLocal[1], 2)} · ${
+                    vRefLocal[2] >= 0 ? "subir" : "descer"
+                  } ${fmt(Math.abs(vRefLocal[2]), 2)} m/s — relativo ao RUMO${
+                    vRefEcoRumo === null
+                      ? ""
+                      : ` (eco: avanço ${fmtSinal(vRefEcoRumo[0], 2)} · lateral ${fmtSinal(vRefEcoRumo[1], 2)})`
+                  }`
+                : "rumo fixo (contrato r11) — WASDQE no frame MUNDO (+x = frente)"}
+            </span>
+            <span
+              className="truncate text-[0.65rem] text-muted-foreground"
+              data-testid="voo-yaw-nota"
+            >
+              {controlador?.modo === "classico"
+                ? "yaw livre: Z/C rodam, X fixa o rumo, V liga o «olhar» (IBVS)"
+                : "yaw livre só no modo CLÁSSICO (a política RL mantém o rumo fixo)"}
+            </span>
           </div>
         </div>
 

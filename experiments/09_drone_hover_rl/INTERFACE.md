@@ -34,6 +34,7 @@ Um comando arranca as três coisas (é o `sim_site.py`):
 | `--host H` | interface de escuta (default `127.0.0.1` — só a tua máquina) |
 | `--controlo CAMINHO` / `--telemetria CAMINHO` | onde vivem o ficheiro de controlo e a telemetria (defaults em `out/`) |
 | `--fator-tempo F` | ritmo da simulação: **1** = tempo real (default), 0,5 = metade, 2 = o dobro, **0** = sem travão (o mais rápido possível) |
+| `--controlador rl\|classico` | **SELETOR DE CONTROLADOR** (contrato r12): `rl` = a política de sempre (**PADRÃO** — o comportamento não muda) ou `classico` = a cascata clássica C++ do firmware (via ctypes; yaw livre, WASDQE relativo ao rumo, «olhar» IBVS). Mostra-se no arranque; depois, o `POST /api/controlador` troca ao vivo (§4.7) |
 | `--com-loop` (alias `--loop`) | **CONTÍNUO**: auto-reset no fim do episódio (ep+1, passo 0). **Não** é o padrão. Autoritativo no arranque: vence um `loop: false` velho do ficheiro de controlo, que fica corrigido para `true` (o site mostra o estado verdadeiro). O alias `--loop` é o nome antigo desta flag |
 | `--sem-loop` | **SEM REINÍCIO** — é o **padrão** desde 2026-10-09; a flag fica aceite como pedido explícito e idempotente. No fim do episódio a física CONTINUA no estado em que ficou (nunca reinicia sozinha e nunca congela) e só um REINICIAR recomeça. Autoritativo no arranque: vence um `loop: true` velho do ficheiro, que fica corrigido para `false`. As duas flags juntas são recusadas (`exit 2`) |
 | `--sem-browser` | não abre o browser (o URL sai na mesma) |
@@ -98,12 +99,25 @@ Uma página, sem navegação, em duas colunas: **métricas** (esquerda, larga) e
 shadcn/Tailwind; componentes do registry `@motion`) e atualizado por **polling a `GET /api/sim` a 2,9 Hz**
 (350 ms). Sem websockets.
 
-**CONTROLO DE VOO** (contrato r11, secção «Operação» — ver §4.5): o painel das teclas **WASDQE** com os
-keycaps a ACENDER ao vivo quando pressionados (estado otimista, imediato), armado/desarmado explícito,
-o `v_ref` comandado ao instante + o eco do runner ao lado, e os erros de seguimento em cm/(m/s). Só fica
-ativo com política `--comandos` (autodetetada); com política clássica diz «modo comando indisponível» e
-desativa os controlos. Os `data-testid` (`controlo-voo`, `tecla-w`…`tecla-e`, `voo-ativar`, `voo-vref`,
-`voo-seguindo`, `voo-indisponivel`) são os que o `teste_controle_voo.py` §4 usa na prova de navegador.
+**CONTROLO DE VOO** (contrato r11 + r12, secção «Operação» — ver §4.5 e §4.7): o painel das teclas
+**WASDQE** com os keycaps a ACENDER ao vivo quando pressionados (estado otimista, imediato), armado/desarmado
+explícito, o `v_ref` comandado ao instante + o eco do runner ao lado, e os erros de seguimento em cm/(m/s).
+Só fica ativo com política `--comandos` (autodetetada); com política clássica diz «modo comando
+indisponível» e desativa os controlos. Os `data-testid` (`controlo-voo`, `tecla-w`…`tecla-e`, `voo-ativar`,
+`voo-vref`, `voo-seguindo`, `voo-indisponivel`) são os que o `teste_controle_voo.py` §4 usa na prova de
+navegador. **Yaw (r12)**: 4 keycaps novos — **Z** = rodar à esquerda (`yaw_taxa` +0,5 rad/s), **C** = à
+direita (−0,5), **X** = FIXAR RUMO (`yaw_alvo` = o `rumo` atual da telemetria), **V** = SEGUIR/«OLHAR»
+(`segui_alvo`, o IBVS do núcleo) — com `data-testid="tecla-z|c|x|v"`, a leitura `voo-rumo` (rumo atual em
+graus) e `voo-rumo-avanco` (o avanço/lateral **relativos ao RUMO** em modo clássico; no RL a nota diz que
+o yaw é fixo — contrato r11). Os campos de yaw só VOAM no modo CLÁSSICO; no RL aceitam-se e validam-se,
+mas o eco `"controlador"` mostra-os a zero e o painel diz «yaw livre só no modo CLÁSSICO».
+
+**SELETOR DE CONTROLADOR** (r12, cartão «Controlador» acima do painel de voo) e **«QUEM FAZ O QUÊ»**
+(tabela FC · controlador · perceção · estimador com as latências medidas/estimadas e o semáforo de
+orçamento) — ver §4.7. O painel do computador de bordo (secção Bordo) mostra os **DOIS alvos possíveis**
+(RPi 5 + FC H7 = build atual `endurance_15pol_p50b`; Arduino Portenta H7 + Vision Shield =
+`endurance_15pol_arduino`) com os ciclos/instruções por passo, µs @480 MHz vs o orçamento de 2 ms, text/RAM
+e a latência da câmara (116 ms CSI-2 do Pi vs 21 ms DCMI do Arduino).
 
 ### 3.1 Cabeçalho (topo)
 
@@ -382,7 +396,8 @@ deixa de ser de milissegundos e o defeito é determinístico. Os controlos corre
 | `reiniciar` | **contador inteiro**. Quando **muda**, o runner faz `env.reset()` — é o ÚNICO caminho para recomeçar um episódio (não há auto-reset fora do `loop`). A 1.ª leitura é linha de base; um contador ≥1 que apareça sem ficheiro prévio conta como reinício já pedido. Uma escrita **parcial** (sem esta chave) **não** mexe no contador e por isso não dispara reset nenhum |
 | `loop` | `true` = **CONTÍNUO** (o runner reinicia sozinho no fim do episódio, ep+1); `false` = **SEM REINÍCIO** (a física continua no estado em que ficou — não congela — e só um REINICIAR recomeça); **campo ausente = não mexe** (um ficheiro antigo só com vento continua válido). É **STICKY** e o **padrão é `false`** (2026-10-09): o ARRANQUE é autoritativo e **corrige o ficheiro** — sem flag (ou com `--sem-loop`) um `loop: true` velho passa a `false`, e com `--com-loop` um `loop: false` velho passa a `true` — preservando vento, dinâmica e o contador `reiniciar`; depois do arranque, quem o muda é só o `POST /api/loop`. Escritas parciais nunca lhe tocam |
 | `camera` | bloco **`{"azimute", "elevacao", "distancia", "seq"}`** — o comando de ORBITAR/zoom da câmara 3D (só apresentação: **nunca** toca na física nem nos outros campos). **SEM `alvo`** (contrato v2: o alvo é SEMPRE o drone — o `seguir_drone` escreve o `lookat = body(CAM_CORPO).xpos + CAM_OFFSET` a cada frame, §4.4). Faixas: `azimute` finito (normalizado **mod 360**), `elevacao` ∈ [−90, 90]°, `distancia` ∈ ]0, 20] m (a UI usa 0,1–10); `seq` inteiro ≥ 0, **incrementado a cada comando** pelo servidor (como o `dinamico.seq`) — a assinatura do bloco (`seq`+valores) é o que faz o runner **(re)aplicar UMA vez** os 3 valores ao `viewer.cam` (§4.4). Bloco ausente = não mexe na câmara; bloco com campos em falta/fora de faixa → o registo é ignorado com aviso (como o `dinamico`); **chaves desconhecidas** (ex. o `alvo` de ficheiros v1) são **ignoradas em silêncio** — ficheiros velhos não rebentam (o `POST /api/camera` é que as recusa com 400: a assimetria é intencional). O bloco é sempre COMPLETO (os 3 valores): quem o escreve é o `POST /api/camera` (que completa os campos **ausentes** a partir do bloco em vigor e carimba o `seq`; um campo **presente com valor `null`** é recusado com **400** — `null` não é «ausente») ou a mão |
-| `voo` | bloco **`{"ativo", "teclas": {"w","a","s","d","q","e"}, "seq"}`** — o CONTROLE DE VOO (contrato r11, §4.5): o **estado** das 6 teclas WASDQE, escrito COMPLETO a cada keydown/keyup do site. `W = +x (frente)`, `S = −x`, `A = +y (esquerda)`, `D = −y (direita)`, `Q = subir`, `E = descer` (frame **mundo**, yaw alvo 0); diagonais normalizadas para 1,0 m/s, `|vz| = 0,7 m/s`; `ativo: false` (ou teclas soltas) ⇒ `v_ref = 0` = o drone **segura posição**. `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor; o runner aplica o bloco em `env.definir_comando_teclas` UMA vez por mudança de assinatura. Bloco ausente = não mexe no comando; teclas em falta valem `false`; chaves desconhecidas **ignoradas em silêncio** no ficheiro (o `POST /api/voo` é que as recusa com 400). Só faz efeito com **política `--comandos`** (modo comando detetado pela observação da política): com política clássica o runner ignora o bloco com aviso e a telemetria publica `"voo": null` — o site mostra o painel como **indisponível** em vez de fingir que pilota |
+| `voo` | bloco **`{"ativo", "teclas": {"w","a","s","d","q","e"}, "yaw_taxa"?, "yaw_alvo"?, "segui_alvo"?, "seq"}`** — o CONTROLE DE VOO (contratos r11 + r12, §4.5/§4.7): o **estado** das 6 teclas WASDQE, escrito COMPLETO a cada keydown/keyup do site. `W = +x (frente)`, `S = −x`, `A = +y (esquerda)`, `D = −y (direita)`, `Q = subir`, `E = descer` (frame **mundo** no RL; relativo ao **RUMO** no modo clássico); diagonais normalizadas para 1,0 m/s, `|vz| = 0,7 m/s`; `ativo: false` (ou teclas soltas) ⇒ `v_ref = 0` = o drone **segura posição**. **r12 (opcionais — ausência = defaults, um ficheiro r11 continua válido; o servidor escreve o bloco completo)**: `yaw_taxa` (rad/s, finito em [−2, 2] — teclas Z/C mandam ±0,5), `yaw_alvo` (**`null`** = sem alvo, que é um VALOR; ou rumo em rad **desde o armar**, normalizado a ]−π, π] — tecla X) e `segui_alvo` (booleano — tecla V = «olhar», o IBVS do núcleo segue o círculo). `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor; o runner aplica o bloco UMA vez por mudança de assinatura. Bloco ausente = não mexe no comando; teclas em falta valem `false`; chaves desconhecidas **ignoradas em silêncio** no ficheiro (o `POST /api/voo` é que as recusa com 400). Só faz efeito com **política `--comandos`** (modo comando detetado pela observação da política): com política clássica o runner ignora o bloco com aviso e a telemetria publica `"voo": null` — o site mostra o painel como **indisponível** em vez de fingir que pilota. Os campos de yaw aplicam-se só no **modo clássico** (a política r11 mantém o rumo fixo) |
+| `controlador` | bloco **`{"modo": "rl"|"classico", "seq"}`** — o SELETOR DE CONTROLADOR (r12, §4.7): `modo` é obrigatório e restrito aos dois valores (outro → o registo é ignorado com aviso, como os outros blocos) e `seq` inteiro ≥ 0 incrementado a cada `POST /api/controlador`. O runner troca de controlador quando o `modo` MUDA (reescrever o mesmo bloco não re-dispara). Bloco ausente = não mexe no modo em vigor |
 | `fpv` | bloco **`{"ligada", "modo", "seq"}`** — o MÓDULO DE CÂMARA FPV de bordo (§4.6): `ligada` booleana (a alimentação/streaming do módulo) e `modo` = id de um modo EMULADO da tabela real (`1080p50` por omissão, `720p100`, `480p120`, `2304x1296p56`, `1536x864p120`, `4608x2592p14`; o HDR existe no hardware mas **não é emulado** e é recusado). `seq` inteiro ≥ 0 incrementado a cada comando pelo servidor. Bloco COMPLETO (`ligada` + `modo`) — quem o escreve é o `POST /api/fpv` (que completa o que não vem a partir do bloco em vigor e carimba o `seq`) ou a mão; o runner aplica UMA vez por mudança de assinatura. Bloco ausente = não mexe no módulo; chaves desconhecidas ignoradas em silêncio no ficheiro (o POST recusa-as com 400) |
 | `t` | carimbo de tempo da escrita (informativo; o site e o runner carimbam-no quando escrevem) |
 
@@ -424,10 +439,11 @@ planta real, os blocos de bordo e a `verdade`): **~10 Hz sempre** (com o episód
 | `camera` | **19.ª chave** (sempre no fim): a câmara **REAL** da janela, `{"azimute", "elevacao", "distancia", "alvo": [x,y,z]}` lida de `viewer.cam` — inclui arrastos do rato feitos entre comandos. O `alvo` é o **`lookat` real = drone+offset** (escrito pelo `seguir_drone` a cada frame, §4.4 — sem lag). **`null` sem viewer** (`--sem-janela`, testes): sem dados não se inventa câmara (é o que sai em `camera_atual` na API) |
 | `fpv` | aditivo (2026-10-11): o **MÓDULO DE CÂMARA FPV de bordo** (§4.6), compacto — `{ligada, modo, saida, fps_nominal, fps_medido, bytes_medio, bitrate_mbps, quadros, latencia_ms, cpu_nucleos, host_ms}`. `cpu_nucleos` é o MODELO do Pi 5 (fontes no `lab/camera_rpi`) e `host_ms` é o MEDIDO nesta máquina — nunca misturados. **`null` sem módulo** (modelo sem câmara ou `--sem-fpv`): nunca se inventa uma câmara. A configuração completa fica em `out/fpv/estado.json` e na API |
 | `voo` | **chave aditiva** (contrato r11, §4.5): o CONTROLE DE VOO em vigor = `{"ativo", "teclas": {w,a,s,d,q,e}, "v_ref": [vx,vy,vz], "p_ref": [x,y,z], "erro_xy", "erro_z", "erro_v", "seguindo"}` — o que se pediu (`v_ref`/`p_ref`, em m/s e m), o que se apanhou (erros: `erro_xy`/`erro_z` em m, `erro_v` = ‖v − v_ref‖ em m/s) e se o drone está a seguir a referência (`seguindo`, os limiares do bónus). **`null` quando a política em uso NÃO tem modo comando** — é o que faz o painel do site ficar honestamente indisponível em vez de fingir que pilota |
+| `controlador` | **chave aditiva (r12, §4.7)**: quem pilota + o estado do yaw/olhar = `{"modo", "fonte", "yaw_taxa", "yaw_alvo", "segui_alvo", "v_ref_fonte", "pedido", "estado", "motivo", "rumo", "olhar"}` — `modo` é o EM VIGOR (eco do runner), `pedido` o que foi pedido, `estado` a honestidade (`pronto` · `trocando` · `erro`) com o `motivo`; `rumo` = ψ desde o armar (rad — é o que a tecla X fixa); `olhar` = `{"valido", "u_px", "v_px", "raio_px", "erro_px", "estado", "alvo_mundo"}` (alvo na imagem do IBVS, convenção ÍNDICE; `erro_px` = offset face ao centro — «alvo centrado» = erro ≈ [0,0] — e `alvo_mundo` = a posição do alvo mocap, que descreve o círculo), **`null` quando o «olhar» nunca ligou**; sem deteção válida os campos do alvo vêm `null` (o detetor devolve zeros quando não vê nada — não se mostra isso como deteção). No modo RL os campos de yaw vêm a zero/`null` (a política mantém o rumo fixo) |
 
 Cada linha é escrita com `flush`, para o site ver sem esperar pelo fecho do ficheiro.
 
-### 4.3 A API (14 rotas `/api/*` + os ficheiros do site, JSON, local — `POST /api/bateria` é da planta real: §7; as 4 do módulo FPV são da §4.6)
+### 4.3 A API (16 rotas `/api/*` + os ficheiros do site, JSON, local — `POST /api/bateria` é da planta real: §7; as 4 do módulo FPV são da §4.6; `POST /api/voo` e `POST /api/controlador` são da §4.5/§4.7)
 
 | rota | resposta |
 |---|---|
@@ -577,6 +593,64 @@ PC; controlos **LIGAR/DESLIGAR** e **seletor de modo** (`POST /api/fpv`). Estado
 quando a API traz `null`, «módulo desligado» quando `ligada: false` (a imagem fica parada, não se inventa
 nada). Sem módulo (modelo sem câmara ou `--sem-fpv`) tudo isto desaparece sem erro.
 
+---
+
+### 4.7 Seletor de controlador e o modo clássico — contrato r12 (2026-10-12)
+
+O dono: «quero o drone a RODAR (yaw livre), WASDQE relativo ao RUMO, olhar para o círculo, e ver no site
+quem faz o quê». O contrato r12 (aditivo sobre o r11) junta DOIS caminhos de controlo, trocáveis ao vivo:
+
+| modo | quem pilota | yaw | WASDQE | perceção |
+|---|---|---|---|---|
+| **`rl`** (PADRÃO — o de sempre) | a política RL (IA-1, PPO, 50 Hz) | **FIXO** (contrato r11: yaw alvo 0) | frame **mundo** (+x = frente) | IA-2 «seguimento» (tracker, 25 Hz) quando existe |
+| **`classico`** | a **cascata clássica C++ do firmware** (`firmware/nucleo/`, **via ctypes**) | **LIVRE**: Z/C rodam ±0,5 rad/s, X fixa o rumo (`yaw_alvo`), V = «olhar» | relativo ao **RUMO** (W = avanço no nariz; A/D laterais ao rumo) | detetor + **IBVS** C++ (25–30 Hz) com a câmara mono QVGA |
+
+**Decisão documentada (C++ ou Python?)** — ficou o **C++ via ctypes**, como o dono pediu (é o código que
+voa no Arduino): o núcleo `firmware/nucleo/` é compilado para uma `.so` (`sitl.py`, cache por hash das
+fontes) e instalado **no env em uso** pelos MESMOS adaptadores do `sitl.DroneRealEnvNucleo(modo_nucleo=
+"cascata")` (`_AdaptadorCascata`/`_AdaptadorEstimador`): estimador clássico → cascata → laço de taxa →
+mistura, tudo no C++, que vê só os sensores medidos. O que NÃO se fez foi trocar de ENV em runtime: o
+viewer da janela 3D e os módulos de câmara FPV ficam ligados aos `model`/`data` criados no arranque e não
+há API para os religar — instalar o núcleo no env em uso dá o MESMO voo (a equivalência C++ ↔ Python está
+provada no `teste_cascata_nucleo.py`) sem apagar a janela. O `CascataClassica` do `controlo_classico.py`
+ficou como referência/protótipo e NÃO é o que voa no runner.
+
+**A TROCA reinicia o EPISÓDIO** (calibração do giroscópio no chão — 1 s de motores em idle, como o
+`DroneRealEnvNucleo.reset` — e arma a cascata) e é HONESTA: o bloco `"controlador"` da telemetria publica
+`estado: "trocando"` + `motivo` antes de a troca acontecer (o `/api/state` mostra `trocando` sempre que o
+`pedido` ≠ o eco) e `estado: "erro"` + `motivo` quando a troca é RECUSADA (ex. planta cf2 — a cascata é do
+hardware do dono; no cf2 só há a política) — nunca se finge uma troca nem um silêncio. O núcleo é criado
+UMA vez e reutilizado nas trocas seguintes; voltar a `rl` repõe o FC/estimador Python.
+
+**Teclas novas do painel de voo** (keycaps `tecla-z|c|x|v`, ativos com o controlo ARMADO):
+
+| tecla | ação | campo r12 do bloco `voo` |
+|---|---|---|
+| **Z** / **C** (manter) | rodar à esquerda / à direita a ±0,5 rad/s | `yaw_taxa: ±0.5` (0 ao soltar; limpa o `yaw_alvo`) |
+| **X** (pressão) | FIXAR RUMO = o `rumo` atual da telemetria (ψ desde o armar) | `yaw_alvo: <rumo>` (sem rumo na telemetria o site diz-o e não inventa) |
+| **V** (pressão) | SEGUIR/«OLHAR» — o IBVS passa a seguir o alvo | `segui_alvo: true/false` |
+
+Prioridade no runner: `segui_alvo` > `yaw_alvo` > `yaw_taxa`/velocidade. Com `segui_alvo` o ponto mocap
+passa a descrever o **CÍRCULO** (0,5 m/s, raio 1,5 m — o protocolo da B0/`avaliar_nucleo`) e o IBVS
+segue-o com a guinada; ao sair do olhar o alvo fica parado onde estiver (nada de teleportes). Sem alvo no
+modelo (env criado sem `com_alvo`) o «olhar» é RECUSADO com aviso e o comando cai para a prioridade
+seguinte. O eco `"controlador"` mostra o que está a ser aplicado; no modo RL os campos de yaw vêm a zero
+(a política r11 mantém o rumo fixo) e o painel diz «yaw livre só no modo CLÁSSICO».
+
+**No site**: o cartão «Controlador» (toggle **RL (IA-1)** | **CLÁSSICO (C++)** com o estado honesto e as
+fontes), o painel **«Quem faz o quê»** (FC 500 Hz não-IA · controlador 50 Hz — IA-1 medida × cascata C++
+estimada — · perceção 25–30 Hz — IA-2 tracker × detetor+IBVS — · estimador de bordo 500 Hz, com latências
+e semáforo de orçamento) e o sub-bloco **«Alvos de bordo possíveis»** do painel do computador de bordo (os
+DOIS builds: RPi 5 + FC H7 `endurance_15pol_p50b` e Arduino Portenta H7 + Vision Shield
+`endurance_15pol_arduino`, com os ciclos/instruções por passo do firmware — M7 1438 instr de 500 Hz =
+3016 com tick, 4,3/10,1 µs @480 MHz vs o orçamento de 2 ms, text 24 582 B, RAM 2 940 B — e a latência da
+câmara 116 ms CSI-2 vs 21 ms DCMI; o que é estimativa estática diz-se estimativa).
+
+**Prova**: `teste_controlador.py` (6 secções: contrato r12 validado/recusado · seletor com estado
+honesto · WASDQE relativo ao rumo e yaw Z/C/X/V · painéis presentes · integração real com o seletor a
+trocar ao vivo, o yaw a rodar, W a mudar de eixo a 90° e o «olhar» a centrar o alvo · 2 mutações que têm
+de FALHAR) e `site/testes/controlador.mts` (`npm run test:controlador`, 52 verificações de front).
+
 ## 5. Interfaces alternativas (o resto do experimento)
 
 | peça | para quê | como |
@@ -592,7 +666,8 @@ nada). Sem módulo (modelo sem câmara ou `--sem-fpv`) tudo isto desaparece sem 
 | **`teste_arranque_loop.py`** | prova do **arranque SEM REINÍCIO** (68 checagens com o §4 do front; 65 com `--sem-navegador`, 25 com `--sem-http`): §1 peças (defaults/flags/`fixar_loop`), §2 ciclo real no contador da física (sem auto-reset sem REINICIAR; auto-reset com `--com-loop`), §3 servidor real (fresco, `loop: true` velho corrigido, `POST /api/loop` sticky, `--com-loop`) com o **§3e** (ficheiro de controlo apagado/corrompido a meio da execução: a recriação preserva o `loop` do último POST e o contador `reiniciar`), §4 front real no Chrome headless, §5 corrida de arranque; sem modelo encontrado FALHA (exit 1) em vez de saltar o §3/§4/§5 | `… teste_arranque_loop.py [--sem-http] [--sem-navegador] [--fator-tempo 3] [--fontes DIR]` |
 | **`teste_parar_vento.py`** | prova do **PARAR** (nenhuma rajada sobrevive) + fiabilidade sob POSTs concorrentes (**15/15** sem flags); `--http` ponta a ponta pelo servidor real (**16/16**), `--navegador` dirige o front real num Chrome headless por CDP (**18/18** com `--http --navegador`) | `… teste_parar_vento.py [--http] [--navegador]` |
 | **`teste_camera.py`** | prova dos **comandos de CÂMARA v2 (3ª-pessoa)** (50 checagens: 17 §1 peças — `CAM_PADRAO` SEM `alvo` (== `mjv_defaultFreeCamera` nos 3 valores), `aplicar_camera` (3 escritas, nunca o `lookat`), `seguir_drone` (`lookat == body(CAM_CORPO).xpos + CAM_OFFSET`, offset provado não-nulo), validadores (faixas, **`null` ≠ ausente**, alias `distandia`, **`{}`/`{seq:n}` aceites — decisão documentada**), merge, **convenção de sinais** provada contra a pose real da câmara, `ler_registo` (assimetria: `alvo` de ficheiro v1 ignorado); 15 §2 ciclo real com viewer falso INSTRUMENTADO — **seguimento provado escrita a escrita enquanto o drone se move pela física** (REINICIAR + empuxo; colagem exacta 1e-9, sem lag), 1 aplicação por mudança de assinatura, rato preservado, **PAN sobreposto**, `seq` novo re-aplica, REPOR VISTA, ficheiro v1, telemetria `camera.alvo` = drone+offset (`null` sem viewer); 13 §3 servidor real na porta **8561** — **burst FRIO de 40 ligações × 3 rondas (120/120 servidos E aplicados, sem resets nem JSON partido)**, 8 rotas, 400s (chaves desconhecidas incl. `alvo`, `null`, faixas, alias ambíguo), decisão `{}`/`seq`, `seq` no servidor, merge, `camera_padrao`/`camera_atual`; 5 §4 **não-tautologia** (cópias mutadas em `$TMPDIR`): seguimento removido, posição velha, assinatura sem `seq`, validação de chaves desconhecidas removida e validação de `null` removida têm de FALHAR) | `… teste_camera.py [--sem-http] [--so-ciclo] [--so-pecas] [--fontes DIR]` |
-| **`site/`** | o código do site (React + `motion-plus-ui`); `npm run build` → `dist/`; `npm run test:camera` = **62/62** verificações (20 round-trip + 42 gestos, sem dependências) | `cd site && npm install && npm run build && npm run test:camera` |
+| **`teste_controlador.py`** | prova do **SELETOR DE CONTROLADOR (r12)** — 6 secções, **71 checagens + 2 mutações**: 19 §1 contrato (bloco `voo` com yaw validado/recusado no runner E no servidor, `yaw_alvo` normalizado, `null` = valor, `controlador.modo` restrito) · 8 §2 seletor (arranque no modo do CLI, recusa honesta em cf2 com `erro`+motivo que NÃO se repete, estado `trocando` do `/api/state`) · 9 §3 rumo (**W muda de eixo a 90°**, prioridades olhar > yaw_alvo > velocidade, diagonal normalizada, sem alvo o olhar cai) · 15 §4 painéis presentes (testids) · 18 §5 integração real (servidor+runner: o seletor troca ao vivo com a linha `trocando`+motivo e o episódio novo, Z roda, X fixa o rumo, V liga o IBVS com o **alvo centrado** (mediana 17,7 px com a aquisição na janela) e a mover-se no círculo, **W a 90° leva para +y**) · 2 mutações (rotação do `v_ref_mundo` e validação estrita do seletor removidas → têm de FALHAR) | `… teste_controlador.py [--so-pecas] [--sem-e2e] [--porta N]` |
+| **`site/`** | o código do site (React + `motion-plus-ui`); `npm run build` → `dist/`; `npm run test:camera` = **62/62** verificações (20 round-trip + 42 gestos, sem dependências); `npm run test:controlador` = **52/52** (r12: parsers do `controlador`, rotação rumo↔mundo, teclas Z/C/X/V, «quem faz o quê», alvos de bordo e painéis presentes) | `cd site && npm install && npm run build && npm run test:camera` |
 
 **Notas de `motion-plus-ui`** (para quem for mexer no site): a cascata é *procurar no registry → instalar
 (`npx shadcn@latest add @motion/<nome>`) → compor → só então código novo*; o token vive em `~/.secrets`

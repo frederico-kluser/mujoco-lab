@@ -28,6 +28,7 @@ import { AnimatedNumber } from "@/components/motion-ui/animated-number"
 import { ProgressBar } from "@/components/motion-ui/progress-bar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { CustoEtapaFpv } from "@/components/sim/fpv"
+import { ALVOS_BORDO, type AlvoBordo } from "@/lib/controlador"
 import {
   budgetMs,
   fmt,
@@ -272,6 +273,105 @@ function CameraModuloPi({ camera }: { camera: FpvEstado | null }) {
             }.`
           : ""}
       </p>
+    </section>
+  )
+}
+
+/**
+ * SECÇÃO «ALVOS DE BORDO» (contrato r12) — os DOIS alvos possíveis do computador de bordo, lado a
+ * lado: **RPi 5 + FC H7** (build atual `endurance_15pol_p50b`) e **Arduino Portenta H7 + Vision
+ * Shield** (build `endurance_15pol_arduino` do catálogo). Os números do Arduino (instruções/ciclos
+ * por passo, text/RAM, µs @480 MHz vs o orçamento de 2 ms e a latência DCMI ≈21 ms vs os 116 ms do
+ * CSI-2 do Pi) são os MEDIDOS/ESTIMADOS no `firmware/README.md` e `out/nucleo/avaliacao.json` — o
+ * que é estimativa estática (llvm-mca/QEMU) DIZ-SE estimativa. Aqui só se desenha: os dados vêm de
+ * `ALVOS_BORDO` (`lib/controlador.ts`, puro e testado).
+ */
+function AlvoBordoCartao({ alvo }: { alvo: AlvoBordo }) {
+  return (
+    <div
+      className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg bg-muted/40 px-3 py-2 text-[0.72rem]"
+      data-testid={`bordo-alvo-${alvo.id}`}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+        <span className="font-medium text-foreground">{alvo.nome}</span>
+        <span className="font-mono text-[0.62rem] text-muted-foreground">
+          {alvo.build}
+        </span>
+      </div>
+      <p className="text-[0.65rem] text-muted-foreground">{alvo.cpu}</p>
+      <p className="text-[0.65rem] text-muted-foreground">{alvo.memoria}</p>
+      <dl className="flex flex-col gap-0.5">
+        <div className="flex items-baseline justify-between gap-2">
+          <dt className="text-muted-foreground">câMARA (latência)</dt>
+          <dd
+            className="text-right tabular-nums"
+            data-testid={`bordo-alvo-${alvo.id}-camera`}
+          >
+            {alvo.camera.tipo} · {fmt(alvo.camera.latencia_ms, 0)} ms
+          </dd>
+        </div>
+        {alvo.passos.map((passo) => (
+          <div
+            key={passo.rotulo}
+            className="flex items-baseline justify-between gap-2"
+          >
+            <dt className="text-muted-foreground">{passo.rotulo}</dt>
+            <dd className="text-right tabular-nums">
+              {passo.instrucoes > 0
+                ? `${fmtInteiro(passo.instrucoes)} instr · ${fmtInteiro(passo.ciclos)} ciclos · `
+                : ""}
+              {fmt(passo.us, 1)} µs
+            </dd>
+          </div>
+        ))}
+        <div className="flex items-baseline justify-between gap-2">
+          <dt className="text-muted-foreground">orçamento</dt>
+          <dd className="text-right tabular-nums">
+            {fmt(alvo.orcamento.periodo_ms, 0)} ms por decisão
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-2">
+          <dt className="text-muted-foreground">text · RAM</dt>
+          <dd
+            className="text-right tabular-nums"
+            data-testid={`bordo-alvo-${alvo.id}-${alvo.id === "arduino" ? "ram" : "cpu"}`}
+          >
+            {alvo.text_bytes === null || alvo.ram_bytes === null
+              ? "— (sem firmware: só inferência)"
+              : `${fmt(alvo.text_bytes / 1024, 1)} kB · ${fmtInteiro(alvo.ram_bytes)} B`}
+          </dd>
+        </div>
+      </dl>
+      <p className="text-[0.62rem] text-muted-foreground">{alvo.orcamento.nota}</p>
+      <p className="text-[0.62rem] text-muted-foreground">
+        <span className="rounded bg-muted px-1 py-0.5">origem</span>{" "}
+        {alvo.origem}
+      </p>
+    </div>
+  )
+}
+
+function AlvosBordo() {
+  return (
+    <section
+      className="flex flex-col gap-1.5 border-t border-border pt-3"
+      data-testid="bordo-alvos"
+    >
+      <h3 className="text-xs font-medium text-foreground">
+        Alvos de bordo possíveis (dois builds do catálogo)
+      </h3>
+      <p className="text-[0.68rem] text-muted-foreground">
+        o mesmo núcleo C++ voa nos dois: o build ATUAL usa o RPi 5 com um FC H7
+        dedicado; o build Arduino leva o Portenta H7 + Vision Shield (tudo no
+        mesmo chip — voo 500 Hz + visão). Os µs/ciclos do M7 são estimativas
+        estáticas (llvm-mca/QEMU sobre o objeto cross-compilado); só um DWT numa
+        placa fecha.
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        {ALVOS_BORDO.map((alvo) => (
+          <AlvoBordoCartao key={alvo.id} alvo={alvo} />
+        ))}
+      </div>
     </section>
   )
 }
@@ -622,6 +722,9 @@ export function PainelRpi5({ rpi5, ligado, dimsRede = null }: PainelRpi5Props) {
               : "sem hardware"}
           </dd>
         </dl>
+
+        {/* ALVOS DE BORDO (r12) — os DOIS alvos possíveis: RPi 5 + FC H7 e Arduino Portenta H7 */}
+        <AlvosBordo />
 
         {/* CÂMARA (módulo Pi) — só quando o backend publica `rpi5.camera` (sem módulo não há secção). */}
         <CameraModuloPi camera={rpi5?.camera ?? null} />

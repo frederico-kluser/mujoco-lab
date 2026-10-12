@@ -6,6 +6,10 @@
  */
 
 import {
+  lerControlador,
+  type ControladorEstado,
+} from "./controlador.ts"
+import {
   lerBlocoVoo,
   lerEcoVoo,
   type BlocoVoo,
@@ -140,6 +144,8 @@ export interface RespostaSim {
   planta: Planta | null
   /** Controlo de voo (contrato r11); `null` quando a resposta não publica o bloco. */
   voo: VooEstado | null
+  /** SELETOR de controlador (contrato r12); `null` quando a resposta não publica o bloco. */
+  controlador: ControladorEstado | null
   linhas: LinhaSim[]
 }
 
@@ -175,6 +181,8 @@ export interface ResumoEstado {
   hardware: Hardware | null
   /** Controlo de voo (contrato r11); `null` quando o resumo não publica o bloco. */
   voo: VooEstado | null
+  /** SELETOR de controlador (contrato r12); `null` quando o resumo não publica o bloco. */
+  controlador: ControladorEstado | null
   /** Nº de amostras de telemetria publicadas (`amostras`); `null` se o resumo não as contar. */
   amostras: number | null
 }
@@ -353,6 +361,7 @@ export function lerSim(bruto: unknown): RespostaSim {
     simulacao: lerSimulacao(o.simulacao),
     planta: lerPlanta(o.planta),
     voo: lerVooEstado(o.voo),
+    controlador: lerControlador(o.controlador),
     linhas,
   }
 }
@@ -411,6 +420,7 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     planta: lerPlanta(primeiro("planta")),
     hardware: lerHardware(primeiro("hardware")),
     voo: lerVooEstado(primeiro("voo")),
+    controlador: lerControlador(primeiro("controlador")),
     amostras: numero(primeiro("amostras")),
   }
 }

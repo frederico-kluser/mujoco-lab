@@ -155,7 +155,8 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                    pos=p(0, 0, z_baixo + 0.002), mass=max(m_sens, 1e-4), material="sensor", **sem_contacto)
     corpo.add_site(name="baixo", pos=p(0, 0, z_baixo), quat=[0, 1, 0, 0], size=[0.004, 0, 0])
 
-    # ---- módulo de câmara CSI À FRENTE do drone (peça REAL do catálogo: massa, dimensões e FoV)
+    # ---- módulo de câmara À FRENTE do drone (CSI na Pi Camera, DVP na Vision Shield do Arduino; peça REAL do
+    # catálogo: massa, dimensões e FoV)
     # Placa na vertical no nariz (+x): a LENTE aponta para a frente, por isso a espessura no eixo ótico é a
     # ALTURA COM LENTE (dims[2] = 11,5/12,4 mm) e as outras duas dimensões ficam em y (largura) e z
     # (profundidade da placa, de pé). A `<camera fpv>` fica 1 mm à frente da face da lente (para o próprio
@@ -170,9 +171,11 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
         corpo.add_geom(name="camera", type=mujoco.mjtGeom.mjGEOM_BOX,
                        size=[0.5 * d_x, 0.5 * d_y, 0.5 * d_z], pos=p(x_cam, 0, z_cam),
                        mass=hw.camera.massa, material="sensor", **sem_contacto)
+        # FoV de arranque = o do modo POR OMISSÃO do módulo (1080p50 na Pi Camera; QVGA a 30 fps na Vision Shield
+        # do Arduino) — o `ModuloCamera` reescreve-o a cada captura com o do modo em vigor
+        modulo_cam = cam_rpi.modulo_da_peca(hw.camera.id)
         cam_rpi.add_camera_fpv(corpo, p(x_cam + 0.5 * d_x + 0.001, 0, z_cam),
-                               cam_rpi.fovy_graus(cam_rpi.modulo_da_peca(hw.camera.id),
-                                                  cam_rpi.OMISSAO_MODO), nome="fpv")
+                               cam_rpi.fovy_graus(modulo_cam, cam_rpi.modo_omissao(modulo_cam)), nome="fpv")
 
     # ---- trem de pouso (colisão): 4 pernas sob os braços, mais baixas do que o pack
     h_pernas = max(hw.frame.altura_pernas, -z_baixo + 0.03)

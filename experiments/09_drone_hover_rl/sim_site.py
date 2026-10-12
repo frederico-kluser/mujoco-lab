@@ -79,18 +79,36 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
                                     (`body("cf2").xpos` + offset constante); sem viewer ignora sem erro.
                                     REPOR VISTA = enviar os valores de `camera_padrao` como um comando
                                     normal.
-  · `POST /api/voo`               → `{"ativo": bool, "teclas": {"w","a","s","d","q","e": bool}}` —
-                                    CONTROLE DE VOO (contrato r11): o estado das 6 teclas WASDQE (W=+x,
-                                    S=−x, A=+y, D=−y, Q=subir, E=descer; frame mundo, yaw 0), mandado
-                                    COMPLETO a cada keydown/keyup (ESTADO, não evento). O `seq` do corpo é
-                                    ignorado e o servidor carimba o seu a cada pedido; teclas em falta valem
-                                    `false` e uma chave desconhecida (gralha) → **400** (como na câmara). O runner aplica o bloco em
-                                    `env.definir_comando_teclas` (1x por mudança de assinatura) — só faz
-                                    efeito com política treinada com `train.py --comandos` (a deteção é
-                                    automática pela observação da política; com política clássica o runner
-                                    ignora com aviso e o eco `voo` da telemetria fica `null`, honesto).
+  · `POST /api/voo`               → `{"ativo": bool, "teclas": {"w","a","s","d","q","e": bool},
+                                    "yaw_taxa"?, "yaw_alvo"?, "segui_alvo"?}` — CONTROLE DE VOO (contratos
+                                    r11 + r12): o estado das 6 teclas WASDQE (W=+x, S=−x, A=+y, D=−y,
+                                    Q=subir, E=descer; frame mundo, yaw 0), mandado COMPLETO a cada
+                                    keydown/keyup (ESTADO, não evento), mais o YAW do r12 (opcional no
+                                    corpo, validação ESTRITA): `yaw_taxa` ∈ [−2, 2] rad/s (teclas Z/C),
+                                    `yaw_alvo` = `null` (sem alvo) ou rumo em rad normalizado a ]−π, π]
+                                    (tecla X) e `segui_alvo` bool (tecla V = «olhar» IBVS). O `seq` do
+                                    corpo é ignorado e o servidor carimba o seu a cada pedido; teclas em
+                                    falta valem `false` e uma chave desconhecida (gralha) → **400**. O
+                                    runner aplica o bloco em `env.definir_comando_teclas` (1x por mudança
+                                    de assinatura) — só faz efeito com política treinada com
+                                    `train.py --comandos` (a deteção é automática pela observação da
+                                    política; com política clássica o runner ignora com aviso e o eco
+                                    `voo` da telemetria fica `null`, honesto). Os campos de yaw só VOAM no
+                                    modo clássico (a política r11 mantém o rumo fixo) — o eco `"controlador"`
+                                    mostra-os a zero no modo RL.
+  · `POST /api/controlador`       → `{"modo": "rl"|"classico"}` (só `modo`; mais/menos chaves ou modo
+                                    inválido → **400**) — o SELETOR DE CONTROLADOR (contrato r12): o
+                                    runner troca AO VIVO (RL = a política de sempre; `classico` = cascata
+                                    clássica C++ do firmware via ctypes, no env em uso). A troca reinicia
+                                    o EPISÓDIO (calibração do giroscópio no chão) e o estado é honesto:
+                                    `/api/state` mostra `controlador.estado = "trocando"` + `motivo`
+                                    enquanto o eco da telemetria não apanha o pedido, e `"erro"` + motivo
+                                    quando a troca é recusada (ex. planta cf2). O arranque decide com
+                                    `--controlador rl|classico` (padrão `rl`); o `seq` é do servidor e o
+                                    carimbo do arranque (`controlador_arranque`) garante que um POST
+                                    durante o arranque do runner não é revertido (handshake do `loop`).
 
-São 14 rotas `/api/*` no total (5 GET + 9 POST); além das anteriores: `POST /api/bateria`
+São 15 rotas `/api/*` no total (5 GET + 10 POST); além das anteriores: `POST /api/bateria`
 `{"acao": "recarregar"|"nova"}` (planta REAL; recarregar fecha o ciclo com desgaste; nova = pack novo) e o
 MÓDULO DE CÂMARA FPV — `GET /api/fpv.mjpg` (stream multipart/x-mixed-replace, o padrão do exemplo web
 streaming do picamera2: SÓ o último quadro, `Cache-Control: no-cache`, partes `image/jpeg` com
@@ -220,6 +238,18 @@ COMANDOS = ("loop", "reiniciar")
 # Os dois nomes têm de ser IGUAIS aos do `sim_view.py` (é o handshake; há uma checagem no teste do arranque).
 CAMPO_ARRANQUE = "loop_arranque"
 ENV_LOOP_ARRANQUE = "DRONE_LOOP_ARRANQUE"
+# SELETOR DE CONTROLADOR (contrato r12): `--controlador rl|classico` (padrão `rl`) decide o arranque e o
+# `POST /api/controlador` troca depois; o runner faz a troca ao vivo (com reinício do episódio — a
+# calibração do giroscópio — e o estado honesto `trocando`/`erro` em `/api/state`). O handshake do arranque
+# é o MESMO do `loop` (token no ficheiro + ambiente do filho) para um POST durante o arranque não ser
+# revertido pelo `fixar_controlador` do runner.
+MODOS_CONTROLADOR = ("rl", "classico")
+CONTROLADOR_OMISSAO = "rl"
+YAW_TAXA_MAX = 2.0                    # rad/s — teto do contrato r12 para `voo.yaw_taxa` (validação estrita)
+CAMPO_ARRANQUE_CONTROLADOR = "controlador_arranque"
+ENV_CONTROLADOR_ARRANQUE = "DRONE_CONTROLADOR_ARRANQUE"
+# Motivo do estado `trocando` (mostrado pelo site enquanto o pedido ≠ o eco do runner)
+MOTIVO_TROCA_CONTROLADOR = "troca de controlador: episódio reiniciado (calibração do giroscópio no chão)"
 MAX_LINHAS = 200                                   # teto de amostras devolvidas por `GET /api/sim`
 MAX_CORPO = 64 * 1024                              # teto do corpo de um POST (64 kB chega e sobra)
 MAX_LEITURA = 4 * 1024 * 1024                      # bytes lidos do fim da telemetria por pedido
@@ -419,12 +449,13 @@ def resumo_telemetria(caminho: Path) -> dict:
     if not linhas:
         return {"estado": "desconhecido", "ep": 0, "passo": 0, "retorno": 0.0, "linhas": 0, "t": None,
                 "loop": None, "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None,
-                "camera_atual": None, "voo": None, "multi_ia": None}
+                "camera_atual": None, "voo": None, "multi_ia": None, "controlador": None}
     ultima = linhas[-1]
     vec = ultima.get("vento_vec")
     loop = ultima.get("loop")
     camera = ultima.get("camera")
     voo = ultima.get("voo")
+    controlador = ultima.get("controlador")
     return {"estado": str(ultima.get("estado", "desconhecido")), "ep": int(ultima.get("ep", 0) or 0),
             "passo": int(ultima.get("passo", 0) or 0), "retorno": float(ultima.get("retorno", 0.0) or 0.0),
             "linhas": len(linhas), "t": ultima.get("t"),
@@ -435,7 +466,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "vento_modo": str(ultima.get("vento_modo", "nenhum") or "nenhum"),
             "camera_atual": _camera_da_amostra(camera),
             "voo": voo if isinstance(voo, dict) else None,
-            "multi_ia": (ultima.get("multi_ia") if isinstance(ultima.get("multi_ia"), dict) else None)}
+            "multi_ia": (ultima.get("multi_ia") if isinstance(ultima.get("multi_ia"), dict) else None),
+            "controlador": (controlador if isinstance(controlador, dict) else None)}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -447,6 +479,42 @@ def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
     """
     valor = resumo.get("loop")
     return bool(controlo.get("loop", False)) if valor is None else bool(valor)
+
+
+def controlador_em_vigor(resumo: dict, controlo: dict, modo_cli: str = CONTROLADOR_OMISSAO) -> dict:
+    """Bloco `controlador` (contrato r12) para o `/api/state` e o `/api/sim` — pedido × eco, honesto.
+
+    `pedido` = o modo no FICHEIRO de controlo (o que o site pediu) ou, sem bloco, o do CLI do arranque;
+    `eco` = o bloco `"controlador"` da ÚLTIMA linha da telemetria (o que o runner está mesmo a fazer).
+    ESTADO honesto (a regra do «nunca se finge uma troca»):
+      · o runner manda no `estado`/`motivo` que publica (`pronto` · `trocando` · `erro` + motivo);
+      · SEM eco (runner antigo ou ainda sem linhas) o estado deriva-se do pedido vs o modo do CLI;
+      · pedido ≠ eco SEM o runner dizer `erro` → `trocando`, com o `MOTIVO_TROCA_CONTROLADOR` (a troca
+        reinicia o episódio — calibração do giroscópio — e o site mostra-o enquanto demora).
+    O bloco tem as chaves do contrato (`modo`, `fonte`, `yaw_taxa`, `yaw_alvo`, `segui_alvo`,
+    `v_ref_fonte`) mais `pedido`, `estado`, `motivo`, `rumo` e `olhar` (as duas últimas só com runner r12).
+    """
+    eco = resumo.get("controlador")
+    pedido_bloco = controlo.get("controlador")
+    pedido = (str(pedido_bloco.get("modo")) if isinstance(pedido_bloco, dict) and
+              pedido_bloco.get("modo") in MODOS_CONTROLADOR else str(modo_cli))
+    if not isinstance(eco, dict):
+        return {"modo": str(modo_cli), "pedido": pedido,
+                "estado": "trocando" if pedido != modo_cli else "pronto",
+                "motivo": MOTIVO_TROCA_CONTROLADOR if pedido != modo_cli else None,
+                "fonte": "política RL (PPO, IA-1)" if modo_cli == "rl" else
+                         "cascata clássica C++ (núcleo do firmware, via ctypes)",
+                "yaw_taxa": 0.0, "yaw_alvo": None, "segui_alvo": False,
+                "v_ref_fonte": "wasdqe (contrato r11)" if modo_cli == "rl" else
+                               "wasdqe (relativo ao rumo)",
+                "rumo": None, "olhar": None}
+    bloco = {chave: eco.get(chave) for chave in
+             ("modo", "fonte", "yaw_taxa", "yaw_alvo", "segui_alvo", "v_ref_fonte", "rumo", "olhar")}
+    bloco.update({"pedido": pedido, "estado": eco.get("estado") or "pronto", "motivo": eco.get("motivo")})
+    if bloco.get("estado") != "erro" and pedido != bloco.get("modo"):
+        bloco["estado"] = "trocando"
+        bloco["motivo"] = bloco.get("motivo") or MOTIVO_TROCA_CONTROLADOR
+    return bloco
 
 
 def vento_do_controlo(controlo: dict) -> dict:
@@ -708,7 +776,8 @@ class Servidor:
 
     def __init__(self, controlo: Path, telemetria: Path, host: str, porta: int, verboso: bool = False,
                  filho: subprocess.Popen | None = None, modelo: Path | None = None,
-                 motivo: str = "", memorizados: dict | None = None, fpv: Path | None = None):
+                 motivo: str = "", memorizados: dict | None = None, fpv: Path | None = None,
+                 controlador: str = CONTROLADOR_OMISSAO):
         self.controlo = Path(controlo)
         self.telemetria = Path(telemetria)
         self.host = host
@@ -720,6 +789,7 @@ class Servidor:
         self.memorizados = dict(memorizados or {})                    # `loop`/`reiniciar` efetivos (runtime)
         self.hardware = hardware_do_modelo(self.modelo)               # planta real: peças do modelo em uso
         self.fpv = Path(fpv) if fpv is not None else FPV_OMISSAO      # pasta do stream da câmara FPV
+        self.controlador = str(controlador)                           # modo do arranque (`--controlador`, r12)
         self._ritmo = {"t": None, "passo": None, "valor": 0.0}       # decisoes/s medidos entre pedidos
         self._bench = {"t": 0.0, "dados": None}                      # cache do relatório do deploy.py
         self._fpv_estado: dict = {}        # cache do estado dos módulos (por nome de ficheiro)
@@ -879,6 +949,7 @@ class Handler(BaseHTTPRequestHandler):
             "vento_atual": vento_em_vigor(resumo, controlo),
             "voo": {"pedido": controlo.get("voo"),
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
+            "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
             "fpv": self.servidor.fpv_estado(),         # módulo de câmara FPV (ou null sem módulo)
@@ -905,6 +976,7 @@ class Handler(BaseHTTPRequestHandler):
             "vento_atual": vento_em_vigor(resumo, controlo),
             "voo": {"pedido": controlo.get("voo"),
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
+            "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
             "planta": "real" if self.servidor.hardware else "cf2",
@@ -977,6 +1049,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_fpv(dados)
             elif rota == "/api/voo":
                 self._post_voo(dados)
+            elif rota == "/api/controlador":
+                self._post_controlador(dados)
             elif rota == "/api/bateria":
                 self._post_bateria(dados)
             else:
@@ -1276,22 +1350,52 @@ class Handler(BaseHTTPRequestHandler):
               f"(seq {bloco['seq']})", flush=True)
         self._json(200, {"ok": True, "voo": bloco})
 
+    def _post_controlador(self, dados) -> None:
+        """SELETOR DE CONTROLADOR (contrato r12): `{"modo": "rl"|"classico"}` → 200/400.
+
+        Escreve o bloco `controlador` (merge atómico: nunca toca em vento/`loop`/`reiniciar`/`voo`) e
+        limpa o carimbo do arranque (um POST do dono durante o arranque do runner nunca é revertido pelo
+        `fixar_controlador` — o mesmo handshake do `POST /api/loop`). O runner consome o `modo` no passo de
+        decisão seguinte e a TROCA reinicia o episódio (calibração do giroscópio): o `/api/state` passa a
+        `trocando` + motivo até o eco da telemetria apanhar o pedido — honesto, nunca silencioso.
+        """
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_controlador(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            novo[CAMPO_ARRANQUE_CONTROLADOR] = None     # limpa o carimbo: o pedido do dono vence o arranque
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["controlador"]
+        print(f"[site] controlador: {bloco['modo']} (seq {bloco['seq']}) — o runner troca no passo "
+              "seguinte (o episódio reinicia: calibração do giroscópio)", flush=True)
+        self._json(200, {"ok": True, "controlador": bloco})
+
 
 def validar_voo(dados, atual: dict) -> dict:
-    """`POST /api/voo` → bloco `{"voo": {"ativo", "teclas", "seq"}}` (contrato r11; `seq` do SERVIDOR, +1).
+    """`POST /api/voo` → bloco `{"voo": {"ativo", "teclas", "yaw_taxa", "yaw_alvo", "segui_alvo", "seq"}}`
+    (contratos r11 + r12; `seq` do SERVIDOR, +1).
 
     `teclas` = objeto com as 6 teclas do contrato (`w,a,s,d,q,e`) booleanas (tolera 0/1) — teclas em
     falta valem `False`, mas uma chave DESCONHECIDA (gralha como `ww`) → **400** (como na câmara: num
     painel de piloto uma tecla morta em silêncio é pior do que um erro claro); `ativo` booleano,
-    predefinido `False` (sem `ativo` explícito não se pilota por acidente). O corpo não precisa de `seq`
-    (é sempre incrementado aqui, como na câmara e na bateria) e uma chave de topo desconhecida → 400.
-    Fora do tipo → `ValueError` → 400.
+    predefinido `False` (sem `ativo` explícito não se pilota por acidente). r12 (opcionais no corpo, com
+    validação ESTRITA como as restantes chaves): `yaw_taxa` número finito em [−YAW_TAXA_MAX, YAW_TAXA_MAX]
+    rad/s (padrão 0), `yaw_alvo` **`null`** (sem alvo — é um VALOR válido, diferente de ausente) ou número
+    finito (normalizado a ]−π, π]) e `segui_alvo` booleano (tolera 0/1; padrão `false`) — tipos errados ou
+    fora de faixa → **400** com o motivo. O corpo não precisa de `seq` (é sempre incrementado aqui) e uma
+    chave de topo desconhecida → 400. O bloco escrito é SEMPRE COMPLETO (os 3 campos novos incluídos):
+    é ESTADO — cada keydown/keyup do site manda o estado inteiro — e um ficheiro r11 escrito à mão continua
+    válido (o runner trata a ausência como defaults).
     """
     if not isinstance(dados, dict):
         raise ValueError("o corpo tem de ser um objeto JSON")  # noqa: TRY004  (contrato: 400 por ValueError)
-    desconhecidas = set(dados) - {"ativo", "teclas", "seq"}
+    desconhecidas = set(dados) - {"ativo", "teclas", "seq", "yaw_taxa", "yaw_alvo", "segui_alvo"}
     if desconhecidas:
-        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['ativo', 'seq', 'teclas']")
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['ativo', 'segui_alvo', "
+                         "'seq', 'teclas', 'yaw_alvo', 'yaw_taxa']")
     teclas_bruto = dados.get("teclas") or {}
     if not isinstance(teclas_bruto, dict):
         raise ValueError("`teclas` tem de ser um objeto JSON {w,a,s,d,q,e}")
@@ -1313,9 +1417,50 @@ def validar_voo(dados, atual: dict) -> dict:
         ativo = bool(ativo)
     if not isinstance(ativo, bool):
         raise ValueError(f"`ativo` tem de ser booleano (recebido {ativo!r})")
+    yaw_taxa = _numero_finito(dados, "yaw_taxa")
+    yaw_taxa = 0.0 if yaw_taxa is None else yaw_taxa
+    if not -YAW_TAXA_MAX <= yaw_taxa <= YAW_TAXA_MAX:
+        raise ValueError(f"`yaw_taxa` tem de estar em [{-YAW_TAXA_MAX}, {YAW_TAXA_MAX}] rad/s "
+                         f"(recebido {yaw_taxa!r})")
+    yaw_alvo = None
+    if dados.get("yaw_alvo") is not None:
+        yaw_alvo = _numero_finito(dados, "yaw_alvo")
+        if yaw_alvo is None:
+            raise ValueError(f"`yaw_alvo` tem de ser `null` (sem alvo) ou um número finito em rad "
+                             f"(recebido {dados.get('yaw_alvo')!r})")
+        yaw_alvo = math.atan2(math.sin(yaw_alvo), math.cos(yaw_alvo))    # normalizado a ]−π, π]
+    segui_alvo = dados.get("segui_alvo", False)
+    if isinstance(segui_alvo, int) and not isinstance(segui_alvo, bool) and segui_alvo in (0, 1):
+        segui_alvo = bool(segui_alvo)
+    if not isinstance(segui_alvo, bool):
+        raise ValueError(f"`segui_alvo` tem de ser booleano (recebido {segui_alvo!r})")  # noqa: TRY004
     anterior = atual.get("voo") if isinstance(atual.get("voo"), dict) else {}
     seq = int(anterior.get("seq", 0) or 0) + 1
-    return {"voo": {"ativo": ativo, "teclas": teclas, "seq": seq}}
+    return {"voo": {"ativo": ativo, "teclas": teclas, "yaw_taxa": float(yaw_taxa),
+                    "yaw_alvo": yaw_alvo, "segui_alvo": bool(segui_alvo), "seq": seq}}
+
+
+def validar_controlador(dados, atual: dict) -> dict:
+    """`POST /api/controlador` → bloco `{"controlador": {"modo", "seq"}}` (contrato r12; `seq` do SERVIDOR).
+
+    Corpo `{"modo": "rl"|"classico"}` — `modo` OBRIGATÓRIO e restrito aos dois valores (outro → 400 com o
+    motivo); chaves desconhecidas (incluindo um `seq` do cliente) → 400 (validação estrita como as
+    restantes). A escrita é MERGE (`escrever_controlo`): o seletor nunca toca em vento/`loop`/`reiniciar`
+    nem no bloco `voo`. É este `modo` que o runner consome (troca ao vivo; a troca reinicia o episódio e o
+    `/api/state` mostra `trocando` + motivo enquanto o eco não apanha o pedido).
+    """
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON {modo}")  # noqa: TRY004
+    desconhecidas = set(dados) - {"modo"}
+    if desconhecidas:
+        raise ValueError(f"`controlador` tem chaves desconhecidas {sorted(desconhecidas)} — aceita só "
+                         "['modo'] (o `seq` é do servidor)")
+    modo = dados.get("modo")
+    if modo not in MODOS_CONTROLADOR:
+        raise ValueError(f"`modo` tem de ser um de {list(MODOS_CONTROLADOR)} (recebido {modo!r})")
+    anterior = atual.get("controlador") if isinstance(atual.get("controlador"), dict) else {}
+    seq = int(anterior.get("seq", 0) or 0) + 1
+    return {"controlador": {"modo": str(modo), "seq": seq}}
 
 
 def validar_bateria(dados, atual: dict) -> dict:
@@ -1830,7 +1975,8 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
     padrão é SEM REINÍCIO) —, para o runner e o ficheiro de controlo dizerem ambos o que o dono pediu.
     """
     comando = [sys.executable, str(SIM_VIEW), "--controlo", str(args.controlo),
-               "--telemetria", str(args.telemetria), "--fpv", str(args.fpv)]
+               "--telemetria", str(args.telemetria), "--fpv", str(args.fpv),
+               "--controlador", str(getattr(args, "controlador", CONTROLADOR_OMISSAO))]
     alvo = modelo if modelo is not None else args.model
     if alvo is not None:
         comando += ["--model", str(alvo)]
@@ -1845,17 +1991,24 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
     return comando
 
 
-def lancar_runner(args, modelo: Path | None = None, arranque: str | None = None) -> subprocess.Popen:
+def lancar_runner(args, modelo: Path | None = None, arranque: str | None = None,
+                  arranque_controlador: str | None = None) -> subprocess.Popen:
     """Arranca o `sim_view.py` no seu PRÓPRIO grupo de processos (para o SIGTERM apanhar tudo).
 
-    `arranque` é o token do carimbo do arranque (`CAMPO_ARRANQUE`) que o site acabou de escrever no ficheiro
-    de controlo: vai no AMBIENTE do filho (`ENV_LOOP_ARRANQUE`) e é o handshake que impede o `fixar_loop` de
-    reverter um `POST /api/loop` feito durante o arranque (ver o cabeçalho do `sim_view.fixar_loop`).
+    `arranque`/`arranque_controlador` são os tokens dos carimbos de arranque (`CAMPO_ARRANQUE` do `loop` e
+    `CAMPO_ARRANQUE_CONTROLADOR` do seletor, r12) que o site acabou de escrever no ficheiro de controlo:
+    vão no AMBIENTE do filho e são os handshakes que impedem o `fixar_loop`/`fixar_controlador` de reverter
+    um POST do dono feito durante o arranque (ver os docstrings no `sim_view.py`).
     """
     comando = comando_do_runner(args, modelo)
-    ambiente = None if arranque is None else {**os.environ, ENV_LOOP_ARRANQUE: str(arranque)}
+    ambiente = {**os.environ}
+    if arranque is not None:
+        ambiente[ENV_LOOP_ARRANQUE] = str(arranque)
+    if arranque_controlador is not None:
+        ambiente[ENV_CONTROLADOR_ARRANQUE] = str(arranque_controlador)
     print(f"[site] runner: {' '.join(comando)}", flush=True)
-    return subprocess.Popen(comando, cwd=str(_AQUI), start_new_session=True, env=ambiente)  # herda stdout/stderr
+    return subprocess.Popen(comando, cwd=str(_AQUI), start_new_session=True,
+                            env=ambiente if (arranque or arranque_controlador) else None)  # herda stdout/stderr
 
 
 def terminar_runner(filho: subprocess.Popen | None, limite: float = 5.0) -> None:
@@ -1902,7 +2055,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
         description="UM COMANDO: janela MuJoCo limpa (sim_view.py) + site com métricas e controlos "
                     "(site/dist/) + API local. O vento e o REINICIAR vão pelo ficheiro de controlo.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=("API (9 rotas): GET /api/sim · GET /api/state · POST /api/vento {vel,azimute,elevacao} · "
+        epilog=("API (15 rotas): GET /api/sim · GET /api/state · POST /api/vento {vel,azimute,elevacao} · "
                 "POST /api/bateria {acao: recarregar|nova} (planta real) · "
                 "POST /api/vento-dinamico {modo,params?,ativo?} — `frente` aceita {vel,azimute,elevacao} "
                 "(degrau IMEDIATO do vento base) OU {u_max,t_s} (degrau em curso do env); "
@@ -1910,7 +2063,11 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                 "POST /api/reiniciar · POST /api/loop {\"ativo\": bool} · "
                 "POST /api/camera {azimute,elevacao,distancia} (câmara da janela 3D, contrato v2: SEM "
                 "`alvo` — o alvo é SEMPRE o drone — e o `seq` do corpo é IGNORADO porque o servidor "
-                "carimba sempre o seu; só apresentação)\n"
+                "carimba sempre o seu; só apresentação) · "
+                "POST /api/voo {ativo,teclas,yaw_taxa?,yaw_alvo?,segui_alvo?} (contratos r11+r12: "
+                "WASDQE + yaw Z/C/X/V; validação estrita) · "
+                "POST /api/controlador {modo: rl|classico} (SELETOR r12: o runner troca ao vivo — a troca "
+                "reinicia o episódio e o /api/state diz `trocando` + motivo; padrão rl)\n"
                 "SEM REINÍCIO por omissão (pedido do dono, 2026-10-09): no fim do episódio a física CONTINUA\n"
                 "no estado em que ficou (nunca reinicia sozinha e nunca congela) e só um REINICIAR\n"
                 "(POST /api/reiniciar) recomeça. `--com-loop` (alias `--loop`) liga o CONTÍNUO no arranque; o\n"
@@ -1951,6 +2108,13 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                                  "idempotente): o runner arranca com `--sem-loop` e o arranque corrige para "
                                  "`false` um `loop: true` velho do ficheiro; no fim do episódio a física "
                                  "CONTINUA no estado em que ficou e um REINICIAR recomeça")
+    p.add_argument("--controlador", choices=list(MODOS_CONTROLADOR), default=CONTROLADOR_OMISSAO,
+                   metavar="MODO",
+                   help="quem pilota no arranque (contrato r12): `rl` = a política (PADRÃO — o de sempre) "
+                        "ou `classico` = cascata clássica C++ do firmware (yaw livre, WASDQE relativo ao "
+                        "rumo, olhar IBVS). Mostra-se no arranque e troca-se depois pelo "
+                        "POST /api/controlador (a troca reinicia o episódio e o /api/state diz "
+                        "`trocando` + motivo)")
     p.add_argument("--sem-browser", action="store_true", help="não abre o browser (o URL sai na mesma)")
     p.add_argument("--verboso", action="store_true", help="mostra cada pedido HTTP no terminal")
     return p.parse_args(argv)
@@ -1981,6 +2145,19 @@ def main(argv=None) -> int:
     token_arranque = os.urandom(8).hex()
     antes = ler_controlo_bruto(args.controlo).get("loop")
     arranque = escrever_controlo(args.controlo, {"loop": loop_inicial, CAMPO_ARRANQUE: token_arranque})
+    # SELETOR DE CONTROLADOR (r12): o arranque é autoritativo como o `loop` — o modo é o do CLI
+    # (`--controlador`, padrão `rl` = o comportamento de sempre) e o ficheiro é corrigido para o dizer. O
+    # carimbo `controlador_arranque` (token desta sessão) viaja no ficheiro E no ambiente do filho: um
+    # `POST /api/controlador` durante o arranque limpa-o e vence (o `fixar_controlador` do runner respeita).
+    controlador_inicial = str(args.controlador)
+    token_controlador = os.urandom(8).hex()
+    bruto_controlo = ler_controlo_bruto(args.controlo)
+    bloco_antigo = bruto_controlo.get("controlador") if isinstance(bruto_controlo.get("controlador"), dict) else {}
+    antes_controlador = bloco_antigo.get("modo")
+    escrever_controlo(args.controlo,
+                      {"controlador": {"modo": controlador_inicial,
+                                       "seq": int(bloco_antigo.get("seq", 0) or 0) + 1 if bloco_antigo else 0},
+                       CAMPO_ARRANQUE_CONTROLADOR: token_controlador})
     # A memória do servidor nasce do que ESTE arranque acabou de escrever (o arranque é autoritativo): é ela
     # que sobrevive a um ficheiro de controlo apagado/corrompido durante a execução (ver `Servidor.memorizados`).
     memorizados = {chave: arranque[chave] for chave in COMANDOS if chave in arranque}
@@ -1988,15 +2165,22 @@ def main(argv=None) -> int:
           + (f", corrigido de {antes!r}" if isinstance(antes, bool) and antes != loop_inicial
              else (", ficheiro criado" if not isinstance(antes, bool) else ", ja estava"))
           + ("; SEM REINICIO por omissao" if not loop_inicial else "; CONTINUO (--com-loop)") + ")", flush=True)
+    print(f"[site] CONTROLADOR: {controlador_inicial} ("
+          + ("cascata classica C++ do firmware — yaw livre, WASDQE relativo ao rumo, olhar IBVS"
+             if controlador_inicial == "classico" else "politica RL como sempre — contrato r11")
+          + ")"
+          + (f" · corrigido de {antes_controlador!r}" if antes_controlador not in (None, controlador_inicial)
+             else "")
+          + " · troca ao vivo: POST /api/controlador", flush=True)
 
     # o runner corre com cwd=experiments/09_drone_hover_rl: `--model` relativo resolve-se contra o cwd do SITE
     modelo, motivo = escolher_modelo(args)
     if not modelo.is_file():
         raise SystemExit(f"[site] modelo inexistente: {modelo}")
     print(f"[site] modelo: {modelo} ({motivo})", flush=True)   # diz SEMPRE qual escolheu e porquê
-    filho = lancar_runner(args, modelo, token_arranque)
+    filho = lancar_runner(args, modelo, token_arranque, token_controlador)
     servidor = Servidor(args.controlo, args.telemetria, args.host, args.port, args.verboso, filho, modelo,
-                        motivo, memorizados, fpv=args.fpv)
+                        motivo, memorizados, fpv=args.fpv, controlador=controlador_inicial)
     httpd = abrir_servidor(args.host, args.port, servidor)
     url = f"http://{args.host}:{servidor.porta}/"
     print(f"[site] runner pid {filho.pid} | controlo {args.controlo} | telemetria {args.telemetria}",

@@ -316,7 +316,8 @@ class Hardware:
     esc: ESC
     consumidores: list
     sensores: dict            # {papel: preset dict} — imu, tof, fluxo, baro, monitor
-    arquitetura: str          # "fc" (FC dedicado faz a malha de taxa) | "rpi" (RPi 5 sozinho, PREEMPT_RT)
+    arquitetura: str          # "fc" (FC dedicado faz a malha de taxa) | "rpi" (RPi 5 sozinho, PREEMPT_RT) | "arduino"
+    #                           (Portenta H7: laço de taxa no M4 e visão no M7 — só informativo, nada deriva dele)
     bec_eficiencia: float
     r_ligacoes: float         # Ω — cabos da bateria + conector + PDB (no pack)
     atraso_comando: float     # s — RPi→FC/ESC (sensor→inferência→comando)

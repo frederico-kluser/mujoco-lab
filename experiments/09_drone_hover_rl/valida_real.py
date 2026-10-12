@@ -114,7 +114,9 @@ def checa_catalogo(v: Validador) -> None:
             meia_esp = float(model.geom_size[gid, 0])          # meia-espessura do módulo no eixo ótico
             face_placa = float(model.geom_pos[pgid, 0] + model.geom_size[pgid, 0])
             x_lente = float(pos[0])
-            fovy_esperado = cam_rpi.fovy_graus(cam_rpi.modulo_da_peca(hw.camera.id), cam_rpi.OMISSAO_MODO)
+            modulo_cam = cam_rpi.modulo_da_peca(hw.camera.id)
+            modo_cam = cam_rpi.modo_omissao(modulo_cam)    # 1080p50 (Pi Camera) · QVGA30 (Vision Shield, Arduino)
+            fovy_esperado = cam_rpi.fovy_graus(modulo_cam, modo_cam)
             v.check(f"A3b[{nome}] câmara fpv no NARIZ (módulo além da placa, lente à frente, y=0) e a "
                     f"olhar para +x",
                     x_geom > face_placa and abs(float(model.geom_pos[gid, 1])) < 1e-9
@@ -123,7 +125,7 @@ def checa_catalogo(v: Validador) -> None:
                     f"geom x={x_geom:.4f} (face da placa {face_placa:.4f}) · lente x={x_lente:.4f} "
                     f"({1000 * (x_lente - x_geom - meia_esp):.1f} mm à frente do módulo) · "
                     f"y={model.geom_pos[gid, 1]:.1e} · visão={frente.round(3)}")
-            v.check(f"A3c[{nome}] fovy da câmara = FoV do módulo (modo {cam_rpi.OMISSAO_MODO})",
+            v.check(f"A3c[{nome}] fovy da câmara = FoV do módulo (modo {modo_cam})",
                     abs(float(model.cam_fovy[cid]) - fovy_esperado) < 1e-9,
                     f"fovy={model.cam_fovy[cid]:.6f}° vs {fovy_esperado:.6f}° (GRAUS sempre, 3.15)")
             # a massa da câmara entra no modelo SÓ ela: o mesmo build sem a peça difere exactamente nela

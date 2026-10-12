@@ -226,29 +226,48 @@ export async function enviarLoop(ativo: boolean): Promise<void> {
 }
 
 /**
- * Corpo de `POST /api/voo` (contrato r11) — `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}}`:
- * as 6 teclas SEMPRE presentes e **sem** `seq` (o servidor carimba o dele). Chaves desconhecidas
- * (inclusive `seq` no corpo) são recusadas pelo servidor com 400.
+ * Corpo de `POST /api/voo` (contratos r11 + r12) — `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool},
+ * "yaw_taxa"?: number, "yaw_alvo"?: number|null, "segui_alvo"?: bool}`: as 6 teclas SEMPRE presentes e
+ * **sem** `seq` (o servidor carimba o dele). Chaves desconhecidas (inclusive `seq` no corpo) são
+ * recusadas pelo servidor com 400. Os campos de yaw são opcionais no contrato mas o site MANDA-OS
+ * sempre que tem estado (o corpo é ESTADO completo — cada keydown/keyup manda tudo).
  */
 export interface CorpoVoo {
   ativo: boolean
   teclas: TeclasVoo
+  /** Taxa de guinada (rad/s, ∈ [−2, 2]); Z/C mandam ±0,5. */
+  yaw_taxa?: number
+  /** Rumo-alvo (rad desde o armar) ou `null` (sem alvo); X manda o `rumo` atual. */
+  yaw_alvo?: number | null
+  /** «Olhar»/IBVS (tecla V). */
+  segui_alvo?: boolean
 }
 
 /**
- * `POST /api/voo` (contrato r11) — estado das teclas de voo → 200 `{"ok": true, "voo": {bloco}}`
+ * `POST /api/voo` (contratos r11 + r12) — estado das teclas + yaw → 200 `{"ok": true, "voo": {bloco}}`
  * (o bloco confirmado, com o `seq` do servidor) ou 400 (a mensagem do `erro` chega ao utilizador
- * como `ErroApi`, como nos restantes POSTs). O corpo leva só `{"ativo", "teclas"}` com as 6
- * teclas normalizadas para booleanos — nada mais entra, para nunca levar o servidor a devolver
+ * como `ErroApi`, como nos restantes POSTs). O corpo leva só `{"ativo", "teclas", "yaw_taxa",
+ * "yaw_alvo", "segui_alvo"}` normalizados — nada mais entra, para nunca levar o servidor a devolver
  * «chaves desconhecidas».
  */
 export async function enviarVoo(corpo: CorpoVoo): Promise<BlocoVoo> {
   const teclas: TeclasVoo = { ...TECLAS_VOO_ZERADAS }
   for (const tecla of TECLAS_VOO) teclas[tecla] = corpo.teclas[tecla] === true
+  const yawTaxa = Number(corpo.yaw_taxa ?? 0)
+  const yawAlvo =
+    corpo.yaw_alvo === undefined || corpo.yaw_alvo === null
+      ? null
+      : Number(corpo.yaw_alvo)
   const bruto = await pedirJson("/api/voo", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ativo: corpo.ativo === true, teclas }),
+    body: JSON.stringify({
+      ativo: corpo.ativo === true,
+      teclas,
+      yaw_taxa: Number.isFinite(yawTaxa) ? yawTaxa : 0,
+      yaw_alvo: yawAlvo !== null && Number.isFinite(yawAlvo) ? yawAlvo : null,
+      segui_alvo: corpo.segui_alvo === true,
+    }),
   })
   const o =
     typeof bruto === "object" && bruto !== null
@@ -261,6 +280,28 @@ export async function enviarVoo(corpo: CorpoVoo): Promise<BlocoVoo> {
   if (bloco === null)
     throw new ErroApi("resposta do POST /api/voo sem bloco `voo`", 200)
   return bloco
+}
+
+/**
+ * `POST /api/controlador {"modo": "rl"|"classico"}` (contrato r12) — o SELETOR de controlador → 200
+ * `{"ok": true, "controlador": {"modo", "seq"}}` ou 400 (modo inválido, chaves desconhecidas). O
+ * runner troca AO VIVO no passo de decisão seguinte — a troca reinicia o EPISÓDIO (calibração do
+ * giroscópio) e o `/api/state` mostra `controlador.estado = "trocando"` + `motivo` enquanto o eco não
+ * apanha o pedido. Só `modo` entra no corpo (o `seq` é do servidor).
+ */
+export async function enviarControlador(
+  modo: "rl" | "classico"
+): Promise<void> {
+  const bruto = await pedirJson("/api/controlador", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modo: modo === "classico" ? "classico" : "rl" }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
 }
 
 /** Comandos de bateria da planta real: fechar o ciclo do pack ou trocar por um pack novo. */

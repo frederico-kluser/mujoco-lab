@@ -241,6 +241,36 @@ uv run --group hover-rl python experiments/09_drone_hover_rl/deploy.py --int8 --
 uv run --group hover-rl python experiments/09_drone_hover_rl/deploy.py --nproc 4 --duracao 10
 ```
 
+### Correr com controlo clássico (seletor de controlador, contrato r12, 2026-10-12)
+
+O simulador tem DOIS caminhos de controlo, trocáveis **ao vivo** (sem reiniciar o site): a política RL
+(IA-1, o de sempre) e a **cascata clássica C++ do firmware** (`firmware/nucleo/`, via ctypes — o MESMO
+código que voa no Arduino). O arranque escolhe com `--controlador` (padrão **`rl`**, para não mudar o
+comportamento atual) e o site troca depois (`POST /api/controlador`, cartão «Controlador»):
+
+```bash
+# arranque já em modo clássico (a cascata C++ pilota: yaw livre, WASDQE relativo ao rumo, olhar IBVS)
+uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py --controlador classico
+
+# arranque normal (rl) e troca ao vivo pelo site ou por curl:
+uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py
+curl -X POST http://127.0.0.1:8080/api/controlador -d '{"modo": "classico"}' -H 'Content-Type: application/json'
+
+# prova completa do seletor + yaw + olhar (6 secções, 71 checagens + 2 mutações)
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_controlador.py
+```
+
+O que muda em modo clássico: **yaw livre** (teclas Z/C rodam ±0,5 rad/s, X fixa o rumo atual, V liga o
+«olhar» — o IBVS do núcleo segue o alvo que passa a descrever o círculo); **WASDQE relativo ao RUMO**
+(W = avanço no nariz, A/D laterais ao rumo — o painel mostra o avanço/lateral vs o rumo atual); a
+**perceção** é o detetor + IBVS C++ (25–30 Hz) em vez da IA-2. A TROCA reinicia o episódio (calibração do
+giroscópio no chão) e o estado é honesto: `/api/state` mostra `controlador.estado = "trocando"` + `motivo`
+enquanto o eco não apanha o pedido, e `"erro"` + motivo quando a troca é recusada (planta cf2 — a cascata
+é do hardware do dono). Decisão documentada: preferiu-se o C++ via ctypes mas SEM trocar de env em runtime
+(o viewer 3D e os módulos FPV ficam ligados aos `model`/`data` do arranque e não há API para os religar) —
+o núcleo instala-se no env em uso com os MESMOS adaptadores do `sitl.DroneRealEnvNucleo(modo_nucleo=
+"cascata")`; o protótipo Python (`controlo_classico.py`) não é o que voa no runner. Ver `INTERFACE.md` §4.7.
+
 Flags principais (todas as peças têm `--help`):
 
 | peça | o que faz | flags que importam |
@@ -694,6 +724,393 @@ aplicadas no painel (`controlos.tsx`, teste `site/testes/rajadas-ux.mts` 43/43):
   crítica global** (visível em qualquer secção; clique abre o painel);
 - params em 2 linhas com unidades naturais («p 0,40 por passo · rajadas de 0,5 s (25 passos) até 3,0 m/s»).
 
+## Computador de bordo Arduino (2026-10-12)
+
+O dono decidiu que TUDO corre num **Arduino** (estimador + estabilização + movimento + olhar para um círculo, com
+algoritmos clássicos). A pesquisa (`pesquisas/2026-10-12-para-um-quadricoptero-grande-*.md`, Q5/Q6) concluiu que a
+Pi Camera Module 3 (CSI-2) **não existe em Arduino**; só as 3 placas STM32H747 (Portenta H7, Nicla Vision, GIGA R1)
+têm M7 480 MHz + M4 240 MHz, 2 MB flash e 1 MB RAM. O catálogo ganhou as peças REAIS e um build novo
+**`endurance_15pol_arduino`** (o p50b com o computador trocado; **o build ativo continua o p50b**).
+
+| peça (`componentes.json`) | números das fichas oficiais | estimado (e porquê) |
+|---|---|---|
+| `arduino_portenta_h7` (`eletronica`) | STM32H747XI: M7 480 MHz (FPU **dupla**, L1 16+16 kB) + M4 240 MHz (FPU simples), 2 MB flash, 1 MB RAM, 8 MB SDRAM, 16 MB QSPI, 10 PWM (HD) + 7 (MKR), DCMI 8 bit a 80 MHz, JPEG por hardware, 66,04×25,40 mm; **sem IMU**; pico 230 mA a 5 V = 1,15 W | massa **10 g** (a loja diz 0,2 kg, a Mouser 158,8 g: são massas de EXPEDIÇÃO; a shield de igual pegada pesa 8 g); consumo 0,66 W em repouso e 1,0 W a processar = **medido por terceiros** (MDPI 2025, não em voo) |
+| `portenta_vision_shield_hm0360` / `_hm01b0` (`cameras`) | Rev 2 HM0360 640×480 3,6 µm 1/6″ (VGA 60 fps; QVGA 60 por binning) · Rev 1 HM01B0 320×320 1/11″ (matriz inteira ≤ 51 fps, **QVGA 60 só na janela 320×240**, binning 120 fps) · **mono 8 bit**, DVP paralelo → DCMI (sem CSI-2, sem ISP), 8 g | **FoV/lente**: a Arduino não os publica → módulos de referência da Himax (HM0360 70,1°×55,4°, f 1,56 mm; HM01B0 87°×87°, f 0,66 mm) |
+| `arduino_nicla_vision`, `arduino_giga_r1` (para comparação) | Nicla: GC2145 2 MP **RGB** (f 2,2 mm, f/2,2, 80°), LSM6DSOX, 105 mA na captura, 2 g · GIGA: +8 MB SDRAM, PWM 13 na ficha vs 12 na loja, conector Arducam 20 pinos, OV7675 RGB a **15 fps** | GIGA: massa 37 g (pegada do Mega 2560, 37 g oficiais) e consumo por analogia |
+
+**Build novo vs p50b** (modelo, `hardware.py comparar`): **2137 g** (−46 g: sai RPi 5 52 g + FC 8 g + Pi Camera 4 g,
+entram Portenta 10 g + shield 8 g) · eletrónica 5 V **1,3 W** (era 6,5 W) · pairagem **186,7 W** (era 198,1 W; −5,7 %) ·
+11,44 g/W (11,02) · T/W 2,67 (2,62) · **autonomia 70,0 min** (65,8 min; +4,2 min). Mesmo frame 1950 mm, MN4004 KV300 +
+P15×5, 6S2P P50B, ESC e sensores (o BMI088 externo fica: o Portenta não tem IMU).
+
+**Emulador de câmara** (`lab/camera_rpi.py`, só no que foi preciso — a Pi Camera fica EXATAMENTE como era): cada módulo
+tem os **seus modos** (`MODULOS[id]["modos"]`; o IMX708 mantém `MODOS`) e `ModuloCamera` recusa os do outro mundo;
+`Modo.mono` converte o render para **luma BT.601 de 8 bit** (1 canal) e `Modo.sensor_altura_px` dá o FoV certo por
+janela; a **latência** é a do caminho DCMI (1 período + 3 ms + 1 ms ≈ **20,7 ms** a QVGA60, contra 116 ms do MJPEG da
+Pi; os 2 termos finais são ASSUMIDOS); `custo_pi5: None` (não há Pi) e o modo por omissão é o da biblioteca Camera da
+Arduino (**QVGA30**). Prova: `teste_arduino_catalogo.py` (**46 checagens** + **6 de mutação**: controlo + 5 mutações em
+cópias, cada uma falha a checagem certa); nada regride: `run.py` 296/296 (era 287), `valida_real.py` 150/150 (era 141:
++9 checagens A do build novo), `teste_fpv.py` 91/91 (era 87: +4 do «travão da duplicação» para as 2 câmaras novas);
+os dois testes que já estavam vermelhos antes (defeito do TESTE, não do código) foram reparados depois:
+`teste_camera.py` 50/50 (a telemetria tinha as 19 chaves do contrato intactas; o teste lia «depois só aditivas» com uma
+lista fechada a que faltava `multi_ia`) e o `test_efeito_de_solo` do pytest da skill, 37/37 (o limiar «≥ 1,15 a 0,5·D» era
+do frame de 650 mm: com 1950 mm os rotores ficam a 3,6 D e o ganho é ×1,0739, o da conta fechada de Sanchez-Cuevas 2017).
+
+**Ressalvas** (ditas, não escondidas): (1) o **FoV das shields é ESTIMADO** — medir com um alvo angular em hardware;
+(2) numa câmara **mono** o marcador magenta (luma 0,41–0,51) distingue-se só por brilho — um alvo branco/IR é melhor e o
+detetor por cor do `visao.py` tem de passar a limiar de brilho; (3) a ficha da shield diz «320×320 QVGA 60 FPS»
+mas os 60 fps são da janela 320×240; (4) `atraso_comando_ms` fica em 8 ms (conservador; o laço M4 a 500 Hz sugere
+2–4 ms — a medir); (5) `sim_view.py`/`sim_site.py` ainda passam `OMISSAO_MODO` (1080p50) ao módulo: com este build
+ativo o stream FPV ficaria desligado (ValueError tratado) até usarem `cam_rpi.modo_omissao(modulo)`; (6) nenhuma medida
+em placa: voo do Portenta, jitter do Mbed OS, DShot/PWM por timer e ciclos reais do M7 continuam por provar.
+
+<!-- BEGIN:cascata-classica (gerado por avaliar_classico.py + controlo_classico.py; números em out/classico/*.json) -->
+## Cascata clássica — protótipo de referência (2026-10-12)
+
+> **Decisão do dono (2026-10-12)**: estabilização, rotação (yaw livre) e movimentação passam a ser um algoritmo **clássico**
+> (não-IA), reimplementado a partir de papers/documentação (só o PX4 é BSD-3; ArduPilot/Betaflight/Crazyflie/MultiWii são
+> GPLv3 — nenhuma linha copiada, fontes nos docstrings). Este é o **protótipo de REFERÊNCIA em Python** que a atividade A
+> (firmware C++, `firmware/`) vai portar; **fase 1: SEM VENTO**. Pesquisa de base:
+> `pesquisas/2026-10-12-para-um-quadricoptero-grande-*.md` (§1, Q2.1, Q3, Q4). A decisão clássico-vs-RL sai **daqui, da
+> medição no simulador** (a literatura não compara nada em ~2 kg/15″).
+
+| ficheiro | o que é |
+|---|---|
+| `controlo_classico.py` | `CascataClassica` (float64, escalares, equações explícitas), `GanhosCascata` (`@dataclass`) derivada da planta por `ganhos_de_hardware(env)`, `margens_cascata`, `EstimadorClassico` (substituto direto do `EstimadorBordo`), funções puras (`raiz_quadrada`, `direcao_empuxo`, `erro_atitude`, `velocidade_no_rumo`, `cmd_para_acao`, `acelerador_de_coletivo`) |
+| `avaliar_classico.py` | a medição cascata **vs** a RL `out/real_1950_voo_final/final.zip` no `DroneRealEnv` (mesma planta, sementes, planos, DR e ruído) → `out/classico/avaliacao.json`; `--calibrar` / `--calibrar-yaw` = as varreduras de ganhos e de yaw nas sementes de calibração → `out/classico/calibracao*.json` |
+| `teste_controlo_classico.py` | **38 checagens** (§1 25 fórmulas fechadas · §2 8 malha fechada no simulador · §3 5 incl. **4 mutações** apanhadas: sinal do yaw, falta do ÷cosφcosθ, prioridade de inclinação perdida, anti-windup desligado) + exit code |
+
+```bash
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_controlo_classico.py [--rapido]   # 38 checagens, ~30 s
+uv run --group hover-rl python experiments/09_drone_hover_rl/avaliar_classico.py [--rapido]          # ~3 min (8–10 processos) → out/classico/avaliacao.json
+uv run --group hover-rl python experiments/09_drone_hover_rl/avaliar_classico.py --calibrar         # ~7 min → out/classico/calibracao.json
+uv run --group hover-rl python experiments/09_drone_hover_rl/avaliar_classico.py --calibrar-yaw    # ~1 min → out/classico/calibracao_yaw.json
+```
+
+### Arquitetura e interface (a que a atividade A porta)
+
+```
+cmd {vx,vy,vz,yaw_taxa,modo[,yaw,z_alvo]} (referencial do RUMO: W=+vx frente, A=+vy esquerda, Q=+vz cima)
+  └▶ conformador (acel./jerk-limitado + modelo de seguimento) ─▶ posição (P, raiz quadrada) ─▶ velocidade (PI(D), saída = ACELERAÇÃO,
+     FF de aceleração e de arrasto) ─▶ inclinação desejada + EMPUXO COLETIVO ÷(cosφ·cosθ) ─▶ atitude (P) com PRIORIDADE DE INCLINAÇÃO
+     + peso de yaw + FF da taxa de inclinação ─▶ taxas p,q,r ─▶ [FC 500 Hz = fc.py: laço de taxa + mistura X + airmode — NÃO é daqui]
+```
+
+`coletivo, taxas_sp = CascataClassica(ganhos).passo(est, giro, cmd, dt)` — `est` (atributos ou chaves `roll pitch psi h vz vx vy x y`, o
+mesmo do `estimador.py` e da struct `Saida` do núcleo C++), `giro` (taxas medidas), `cmd`, `dt`; devolve o **empuxo coletivo normalizado
+pelo peso** (T/(m·g), 1,0 = pairagem) e as taxas (rad/s, corpo). A conversão para a ação do env é **à parte** (`cmd_para_acao`:
+a₀ = c − 1, a₁₂₃ = taxas/[2,2,1]) e para o acelerador do firmware também (`acelerador_de_coletivo`: u = u_pair(V)·√c — a
+**compensação de tensão** da bateria vive no `u_pair`, a mesma conta do `DroneRealEnv._comando`). Modos: `velocidade` (v = 0 **segura a
+posição**, como o PX4; `yaw_taxa = 0` **mantém o rumo**) e `yaw_alvo` (rumo absoluto). `armar(False)` = **neutro** (coletivo 0, taxas 0,
+integradores a zero). Referências travadas ao armar (x, y, ψ, altura); `z_alvo` = descolar (os Q/E a meio movem o alvo). Piso de
+altitude = o do contrato r11 (0,25 m do CM) e teto = 90 % do alcance do ToF (3,24 m: acima o drone perde a altura).
+
+### Ganhos e limites DERIVADOS da planta (`ganhos_de_hardware(env)`)
+
+A malha de taxa do `fc.py` (PID + PT1 de 90/60 Hz + motor de 1.ª ordem τ_m = 55,8 ms + atraso de comando 8 ms + meia retenção da
+decisão + giroscópio) tem **cruzamento de ganho ωc = 8,43 rad/s (1,34 Hz)** — o «≈ 8,2 rad/s» da pesquisa, agora calculado da
+planta (`resposta_malha_taxa`). Cada laço externo vê o interno em malha fechada; as **margens de fase** abaixo são da resposta real
+(`margens_cascata`), confirmadas pelos degraus medidos.
+
+| laço | ganho (fórmula fechada) | valor | PM / GM |
+|---|---|---|---|
+| taxa (fc.py) | ωc (cruzamento de L) | 8,43 rad/s | 43° / 17 dB |
+| atitude | K_att = ωc/**2,5** | 3,37 s⁻¹ | 62° / 7,5 dB |
+| velocidade horizontal | K_vel = K_att/**4**, K_i = K_vel²/**2**, K_d = 0 | 0,84 s⁻¹, 0,356 s⁻² | 50° / 17 dB |
+| posição | K_pos = K_vel/**2,5** (raiz quadrada, a = 1 m/s²) | 0,337 s⁻¹ | 69° / 14 dB |
+| velocidade vertical | K_vz = 1/(4·τ_m), K_iz = K_vz²/4 | 4,48 s⁻¹, 5,0 s⁻² | 57° / 22 dB |
+| altura | K_pz = K_vz/4 | 1,12 s⁻¹ | 79° / 18 dB |
+
+**Porque não «razão 4» em tudo** (a regra da pesquisa, sem fonte primária): a PM do laço de atitude é 62° a 2,5 e só 48° a 2,0 —
+2,5 é o primeiro ponto com PM ≥ 60°; a de posição é 69° a 2,5 (57° a 2,0); a de velocidade fica em 4 (62° com K_i = K²/4) e o
+integral usa 2 (PM 50°) — nas sementes de calibração, face ao integral 4: hover 7,2 → 5,1 cm e seguimento com DR 0,419 → 0,359 m, sem mais sobressinal. A
+varredura (tabela de calibração, abaixo) mostra o ponto de partida da pesquisa (4/4/4/4) a dar **hover de 35 cm** e seguimento de 0,50 m: está
+longe do ótimo desta planta. Os pontos de partida «K_att ≈ 2–4, K_vel ≈ 0,5–1, K_pos ≈ 0,12–0,25» da pesquisa ficam confirmados
+(K_att 3,37, K_vel 0,84; K_pos 0,337 fica ligeiramente acima).
+
+Limites e conformadores (todos por fórmula): inclinação **30°** = min(30°, acos(1,3/1,8)) (a_xy,máx = g·tan 30° = 5,66 m/s²; os comandos
+usam g·tan 17° = 3,00 m/s², jerk = a·ω_att/2 = 8,0 m/s³, ω_att = √(K_att·ωc) = 5,3 rad/s); coletivo ∈ [0,3; 1,8];
+conformador vertical a = ½(c_max − 1)g = 3,92 m/s², jerk = a/(2τ_m) = 35,1 m/s³; modelo de seguimento τ = 1/ωc = 0,119 s (a
+realimentação compara com a referência atrasada pela malha de atitude, senão conta o atraso duas vezes e dá 20 % de sobressinal);
+FF de arrasto k = d_rotor = 0,30 s⁻¹ (`aero.d_xy`); anti-windup por retro-cálculo (k_aw = 2/K_vel); empuxo coletivo
+÷(cosφ·cosθ) (compensação de inclinação).
+
+### Limites de yaw IDENTIFICADOS no simulador (`identificar_yaw`, planta nominal, semente de calibração)
+
+| grandeza | fórmula (arrasto de rotor) | **medido** |
+|---|---|---|
+| amortecimento de yaw c_yaw (N·m·s/rad) | d·m·r² = 0,30·2,18·0,975² = 0,622 | **0,487** (−22 %: o integral do PID de yaw do FC em regime, 0,1…0,5 rad/s, dá u/r = 0,438 acelerador/(rad/s), linear até 0,5) |
+| taxa terminal com a mistura saturada | — | **0,95 rad/s** (54 °/s) — mas com 45 % de passos saturados e **perda do controlo de altitude** (o diferencial de yaw acrescenta empuxo ∝ d²: o coletivo, já no mínimo, não compensa; num ensaio longo à parte subiu 9 m em 8 s) |
+| aceleração inicial de yaw (saturada) | α_z·0,47 = 1,12 rad/s² | 0,81 rad/s² (47 °/s², média dos 1.ºs 0,5 s: o rotor demora a rodar) |
+| **limite adotado**: quota f_yaw = 0,6 da folga min(1−u_pair, u_pair−idle) = 0,370 | a = α_z·0,222 | **0,53 rad/s² (30 °/s²) e 0,51 rad/s (29 °/s)**, sem saturar a mistura |
+
+O ArduPilot sugere `ATC_ACC_Y_MAX` 200/100/90 °/s² para hélices de 10/20/30″ (≈ 150 °/s² a 15″): este frame faz **30 °/s²** (÷5; J_zz = 0,467 kg·m²,
+autoridade de yaw ÷10–12) — o ponto de partida da pesquisa não serve aqui. A quota 0,6 é onde a mistura ainda não satura (varredura nas sementes de
+calibração, `avaliar_classico.py --calibrar-yaw`): a 0,8 satura 5 % dos passos e a altitude perde 25 cm num degrau de 90°; a 1,0 satura 11 %, o roll
+sobe de 0,3° para 1,1° e a altitude perde **120 cm** (a «contra-prova» do teste repete-o: sem limites de yaw a mistura satura 99,7 % dos passos e o
+roll/pitch deixa de seguir — a prioridade de inclinação só se mantém porque os limites derivados do frame impedem o yaw de saturar a mistura, que o `fc.py` escala em bloco). O
+diferencial de yaw acrescenta empuxo T ∝ u²: Σ(u₀ ± d)² = 4u₀² + 4d² ⇒ a pré-compensação **só do equilíbrio**, c − (d/u_pair)², reduz \|Δz\| de 14 para 8 cm;
+incluir o termo de aceleração de yaw **piora** (23 cm: o empuxo chega depois do comando) — fica desligado (`comp_yaw_acel = 0`).
+
+| yaw — configuração (sementes de calibração) | degrau 90°: subida 10–90 % (s) | assent. 5 % (s) | \|Δz\| máx. (cm) | roll pico (°) | mistura saturada (%) | arco 0,5 rad/s: \|Δz\| (cm) / ⟨v⟩ (m/s) / saturada (%) |
+|---|---|---|---|---|---|---|
+| base (f_yaw 0,6 · peso 0,7 · compensação de equilíbrio) | 2,51 | 3,54 | 8,2 | 0,26 | 0,0 | 6,7 / 1,111 / 0,2 |
+| f_yaw 0,8 | 1,99 | 2,88 | 24,7 | 0,31 | 4,6 | 10,1 / 1,115 / 1,5 |
+| f_yaw 1,0 (toda a folga) | 1,70 | 2,55 | 120,4 | 1,09 | 11,1 | 15,6 / 1,113 / 2,9 |
+| peso de yaw 0,4 (PX4) | 2,62 | 3,86 | 8,0 | 0,25 | 0,0 | 6,5 / 1,111 / 0,2 |
+| peso de yaw 1,0 | 2,49 | 3,48 | 8,3 | 0,26 | 0,0 | 6,9 / 1,112 / 0,2 |
+| sem pré-compensação do empuxo de yaw | 2,51 | 3,54 | 14,0 | 0,26 | 0,0 | 12,0 / 1,113 / 0,1 |
+| pré-compensação com o termo de aceleração | 2,52 | 3,54 | 23,0 | 0,29 | 0,1 | 20,9 / 1,106 / 0,2 |
+| u/r da fórmula (arrasto de rotor, 0,56) em vez do identificado | 3,15 | 4,19 | 8,6 | 0,27 | 0,0 | 7,6 / 1,059 / 0,0 |
+
+
+### Estimador melhorado — o que realmente limitava o hover (`EstimadorClassico`)
+
+O `EstimadorBordo` integra o giroscópio **sem tirar o viés** (σ = 3,5 mrad/s por voo no BMI088): o viés entra no **rumo** (deriva) e na
+**velocidade do fluxo**, v = d·(q − Ω_y) = v + d·b — 3,5 mm/s a 1 m de altura = **~10 cm de deriva de odometria em 30 s**. A RL e a cascata com o
+estimador de bordo têm exatamente esse erro (tabela: «deriva da odometria» 9,3 vs 9,6 cm). Três correções, todas **medidas** nas sementes de
+calibração (tabela de calibração):
+1. **calibração do giroscópio no chão** (1,0 s parado, motores em idle, antes de armar — o «gyro calibration» de PX4/ArduPilot; fora do relógio do
+   episódio): hover 11,1 → 5,1 cm (a maior das três; deriva de rumo ÷3);
+2. **portão do acelerómetro**: um multirrotor mede o empuxo (sempre ao longo de z_corpo) e não a gravidade quando acelera — a correção
+   «para o acelerómetro» puxa a inclinação para zero durante as manobras (medido: a 23° de inclinação o erro de atitude era de 2,5°). O ganho é escalado por 1/(1+(‖a_h‖/0,15)²):
+   sobressinal do degrau 17,6 → 9,1 %, ‖v−v_ref‖ 0,511 → 0,480 m/s;
+3. **observador de altura de 3.ª ordem** (ĥ, v̂_z, viés do acelerómetro vertical): no de 2.ª ordem o viés do acelerómetro (σ 0,05 m/s² + 0,5 % de escala ≈ 0,1 m/s²)
+   dá um viés de v̂_z = 0,35·b ≈ +4 cm/s (medido: v̂_z ≈ +0,04 m/s em hover) e o laço segurava a altura 3–4 cm abaixo do alvo; hover \|Δz\| RMS 2,4 → 0,6 cm.
+**Mahony PI** (parte integral do filtro complementar, viés de p/q estimado do erro do acelerómetro): **medido, não ajuda** — k_i = 0,02 /s²:
+hover 4,8 cm (base 5,1) e seguimento 0,292 m (base 0,291); 0,1: seguimento pior (0,304 m); 0,5: instável (hover 18,0 cm, seguimento 0,437 m) — o erro que o PI integra
+é falso durante as manobras (o acelerómetro não vê a inclinação), exatamente o argumento físico acima. A calibração no chão é o equivalente robusto.
+
+### Resultados MEDIDOS — cascata vs RL, SEM VENTO
+
+**Protocolo (igual para as duas)**: `DroneRealEnv` com o build do `hardware.json` da política (`endurance_15pol_p50b`), `env.step` a 50 Hz com
+10 passos de física de 2 ms, **12 sementes de avaliação 5000…5011** (⇒ os mesmos planos WASDQE, o mesmo ruído dos sensores e, com DR, as mesmas
+peças sorteadas); a RL em ação determinística (`avaliar_real.py` é o modelo). Os ganhos da cascata foram afinados em **sementes de calibração 9000…9007
+que não entram aqui**. A RL recebe `p_ref`/`v_ref` na observação; a cascata só o `v_ref` como comando no referencial do rumo (e a altura de descolagem).
+Variantes da cascata: **estimador de bordo** (o MESMO que a RL vê, sem calibração — a comparação «mesma informação») · **estimador melhorado** · e
+**melhorado + `p_ref`** (a referência de posição integra a velocidade comandada, como a RL faz; o modo por omissão, `velocidade`, é o do PX4 e não a
+persegue). Médias ± desvio sobre as sementes; «(n/12)» = nas quantas a métrica existe (o assentamento pode não acontecer na janela de 8 s). Métricas
+de erro de seguimento são do referencial do mundo (o do env); o env sorteia ainda um rumo inicial ±5° que nenhum controlador conhece — a mesma
+métrica no referencial de arranque dá o mesmo valor ±1 % (campos `*_arranque` no JSON).
+
+#### Sem domain randomization
+
+**Hover 30 s** (12 sementes, janela t ∈ [10, 30] s; quedas: rl 0/12, cascata_bordo 0/12, cascata_melhorado 0/12)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado |
+|---|---|---|---|
+| ‖xy‖ RMS (cm) | 13,0 ± 5,5 | 10,4 ± 5,0 | 3,9 ± 0,8 |
+| ‖xy‖ máx. (cm) | 17,5 ± 6,9 | 14,9 ± 5,4 | 7,1 ± 1,3 |
+| \|Δz\| RMS (cm) | 2,0 ± 1,0 | 2,5 ± 1,6 | 0,6 ± 0,1 |
+| roll RMS (°) | 0,31 ± 0,02 | 0,08 ± 0,01 | 0,08 ± 0,01 |
+| pitch RMS (°) | 0,50 ± 0,04 | 0,08 ± 0,01 | 0,08 ± 0,01 |
+| deriva de rumo (°, módulo) | 2,6 ± 2,3 | 3,0 ± 2,8 | 0,8 ± 0,5 |
+| esforço: RMS de Δu por passo de 2 ms | 0,0787 ± 0,0004 | 0,0780 ± 0,0004 | 0,0780 ± 0,0005 |
+| potência média (W) | 215,5 ± 0,5 | 214,0 ± 0,6 | 214,0 ± 0,6 |
+| estimador: deriva da odometria RMS (cm) | 9,3 ± 4,7 | 9,6 ± 4,5 | 1,9 ± 0,7 |
+| estimador: erro de atitude RMS (°) | 0,76 ± 0,31 | 0,77 ± 0,31 | 0,42 ± 0,21 |
+
+**Seguimento de planos WASDQE aleatórios** (12 sementes × 10 s, janela t ≥ 4 s; quedas: rl 0/12, cascata_bordo 0/12, cascata_melhorado 0/12, cascata_melhorado_ref 0/12)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| ‖v − v_ref‖ RMS (m/s) | 0,368 ± 0,068 | 0,408 ± 0,113 | 0,357 ± 0,093 | 0,361 ± 0,092 |
+| ‖xy − p_ref‖ RMS (m) | 0,235 ± 0,078 | 0,404 ± 0,148 | 0,297 ± 0,127 | 0,262 ± 0,090 |
+| \|z − z_ref\| RMS (m) | 0,042 ± 0,020 | 0,049 ± 0,032 | 0,036 ± 0,029 | 0,036 ± 0,029 |
+| ‖xy − p_ref‖ média da 2.ª metade (m) — a métrica do `avaliar_real.py` | 0,213 ± 0,089 | 0,392 ± 0,138 | 0,263 ± 0,122 | 0,217 ± 0,079 |
+
+Menor erro que a RL, nas sementes comuns (mesmos planos): `hover_xy_rms cascata_bordo<rl` 11/12; `hover_xy_rms cascata_melhorado<rl` 11/12; `seguimento_v_rms cascata_melhorado<rl` 7/12; `seguimento_xy_rms cascata_melhorado<rl` 3/12; `seguimento_z_rms cascata_melhorado<rl` 7/12; `seguimento_v_rms cascata_melhorado_ref<rl` 6/12; `seguimento_xy_rms cascata_melhorado_ref<rl` 4/12; `seguimento_z_rms cascata_melhorado_ref<rl` 7/12.
+
+**Degrau 0 → 1 m/s à frente (W)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,36 ± 0,02 | 0,34 ± 0,01 | 0,35 ± 0,01 | 0,35 ± 0,01 |
+| sobressinal (%) | 18,0 ± 2,0 | 19,0 ± 4,5 | 9,4 ± 2,1 | 9,9 ± 1,7 |
+| assentamento 2 % (s) | 7,41 ± 0,61 (8/12) | 7,88 ± 0,00 (1/12) | 5,27 ± 1,18 (6/12) | 6,64 ± 0,72 (6/12) |
+| assentamento 5 % (s) | 4,39 ± 1,94 | 7,08 ± 1,29 (6/12) | 3,42 ± 2,18 (11/12) | 3,32 ± 2,41 (11/12) |
+| erro de regime (m/s) | -0,007 ± 0,009 | -0,085 ± 0,032 | -0,025 ± 0,033 | -0,025 ± 0,030 |
+| afundamento após o pico (%) | 6,9 ± 1,2 | 10,0 ± 3,3 | 3,4 ± 3,0 | 4,4 ± 2,8 |
+
+**Degrau 0 → 0,7 m/s a subir (Q; a partir de 0,5 m de altura para ficar no alcance do ToF, janela de 3,6 s)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,22 ± 0,03 | 0,25 ± 0,01 | 0,26 ± 0,02 | 0,26 ± 0,02 |
+| sobressinal (%) | 15,2 ± 4,1 | 9,2 ± 1,6 | 9,6 ± 2,3 | 9,6 ± 2,3 |
+| assentamento 2 % (s) | 3,55 ± 0,04 (5/12) | 3,43 ± 0,05 (2/12) | 3,41 ± 0,16 (3/12) | 3,41 ± 0,16 (3/12) |
+| assentamento 5 % (s) | 3,50 ± 0,06 (6/12) | 2,98 ± 0,24 (8/12) | 2,83 ± 0,83 (8/12) | 2,83 ± 0,83 (8/12) |
+| erro de regime (m/s) | -0,001 ± 0,010 | 0,024 ± 0,007 | 0,015 ± 0,005 | 0,015 ± 0,005 |
+| afundamento após o pico (%) | 13,3 ± 3,4 | 1,9 ± 1,7 | 2,4 ± 2,3 | 2,4 ± 2,3 |
+
+**Degrau 0 → −1 m/s lateral (D)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,34 ± 0,02 | 0,35 ± 0,01 | 0,35 ± 0,01 | 0,35 ± 0,01 |
+| sobressinal (%) | 33,4 ± 2,0 | 15,4 ± 2,0 | 7,1 ± 1,1 | 8,0 ± 1,0 |
+| assentamento 2 % (s) | 6,88 ± 1,10 (9/12) | — | 7,14 ± 0,00 (1/12) | 7,25 ± 0,08 (3/12) |
+| assentamento 5 % (s) | 3,05 ± 1,66 | — | 1,17 ± 0,27 (6/12) | 4,20 ± 2,89 (11/12) |
+| erro de regime (m/s) | 0,008 ± 0,007 | -0,105 ± 0,013 | -0,046 ± 0,014 | -0,040 ± 0,013 |
+| afundamento após o pico (%) | 19,1 ± 1,9 | 12,1 ± 1,4 | 5,8 ± 1,3 | 5,5 ± 1,5 |
+
+**Yaw** (só a cascata + estimador melhorado; a RL não roda; 12 sementes)
+
+| teste | medido |
+|---|---|
+| degrau de rumo de 90° (`yaw_alvo`) | subida 10–90 % (s) 2,51 ± 0,02 · sobressinal (%) 0,17 ± 0,50 · assentamento 2 % / 5 % (s) 3,82 ± 0,06 / 3,53 ± 0,02 · erro final (°) 0,03 ± 0,52 · \|Δz\| máx. (cm) 8,6 ± 0,4 · roll/pitch pico (°) 0,25 ± 0,05 / 0,26 ± 0,07 · mistura saturada (% dos passos) 0,07 ± 0,03 |
+| taxa de 0,5 rad/s (`yaw_taxa`) | taxa média (rad/s) 0,500 ± 0,002 · erro RMS (rad/s) 0,003 ± 0,001 · \|Δz\| máx. (cm) 8,5 ± 0,4 · mistura saturada (%) 0,10 ± 0,05 |
+| avançar a 1 m/s e rodar 0,3 rad/s (arco) | raio ajustado (m) 3,31 ± 0,14 vs esperado 3,33 · desvio ao círculo RMS (cm) 1,7 ± 0,5 · ⟨v⟩ (m/s) 1,015 ± 0,034 · \|Δz\| máx. (cm) 3,2 ± 0,6 · roll pico (°) 5,2 ± 0,1 · mistura saturada (%) 0,00 ± 0,01 |
+| avançar a 1 m/s e rodar 0,5 rad/s (arco) | raio ajustado (m) 2,21 ± 0,05 vs esperado 2,00 · desvio ao círculo RMS (cm) 3,7 ± 1,1 · ⟨v⟩ (m/s) 1,135 ± 0,021 · \|Δz\| máx. (cm) 7,2 ± 0,6 · roll pico (°) 8,9 ± 0,1 · mistura saturada (%) 0,20 ± 0,06 |
+
+
+#### Com domain randomization ligado (massa, inércia, kf, motores, bateria, sensores, arrasto e atraso sorteados por episódio)
+
+**Hover 30 s** (12 sementes, janela t ∈ [10, 30] s; quedas: rl 0/12, cascata_bordo 0/12, cascata_melhorado 0/12)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado |
+|---|---|---|---|
+| ‖xy‖ RMS (cm) | 18,7 ± 9,5 | 16,9 ± 8,8 | 5,8 ± 2,0 |
+| ‖xy‖ máx. (cm) | 25,8 ± 12,8 | 23,0 ± 10,7 | 9,7 ± 2,7 |
+| \|Δz\| RMS (cm) | 2,1 ± 0,9 | 3,4 ± 1,4 | 0,6 ± 0,1 |
+| roll RMS (°) | 0,39 ± 0,10 | 0,10 ± 0,02 | 0,10 ± 0,02 |
+| pitch RMS (°) | 0,58 ± 0,08 | 0,10 ± 0,02 | 0,10 ± 0,02 |
+| deriva de rumo (°, módulo) | 3,8 ± 3,5 | 4,0 ± 3,6 | 0,6 ± 0,4 |
+| esforço: RMS de Δu por passo de 2 ms | 0,0811 ± 0,0040 | 0,0802 ± 0,0040 | 0,0801 ± 0,0040 |
+| potência média (W) | 212,8 ± 22,9 | 211,2 ± 23,0 | 211,2 ± 23,0 |
+| estimador: deriva da odometria RMS (cm) | 13,8 ± 8,4 | 14,2 ± 8,5 | 3,1 ± 1,5 |
+| estimador: erro de atitude RMS (°) | 0,81 ± 0,49 | 0,82 ± 0,49 | 0,49 ± 0,23 |
+
+**Seguimento de planos WASDQE aleatórios** (12 sementes × 10 s, janela t ≥ 4 s; quedas: rl 1/12, cascata_bordo 0/12, cascata_melhorado 0/12, cascata_melhorado_ref 0/12; médias SEM a(s) semente(s) [5007], onde alguma variante caiu)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| ‖v − v_ref‖ RMS (m/s) | 0,435 ± 0,210 | 0,463 ± 0,199 | 0,419 ± 0,182 | 0,420 ± 0,182 |
+| ‖xy − p_ref‖ RMS (m) | 0,223 ± 0,061 | 0,406 ± 0,156 | 0,300 ± 0,146 | 0,248 ± 0,114 |
+| \|z − z_ref\| RMS (m) | 0,043 ± 0,022 | 0,057 ± 0,032 | 0,047 ± 0,034 | 0,047 ± 0,034 |
+| ‖xy − p_ref‖ média da 2.ª metade (m) — a métrica do `avaliar_real.py` | 0,204 ± 0,066 | 0,379 ± 0,177 | 0,280 ± 0,156 | 0,222 ± 0,117 |
+
+Menor erro que a RL, nas sementes comuns (mesmos planos): `hover_xy_rms cascata_bordo<rl` 10/12; `hover_xy_rms cascata_melhorado<rl` 12/12; `seguimento_v_rms cascata_melhorado<rl` 6/11; `seguimento_xy_rms cascata_melhorado<rl` 4/11; `seguimento_z_rms cascata_melhorado<rl` 4/11; `seguimento_v_rms cascata_melhorado_ref<rl` 5/11; `seguimento_xy_rms cascata_melhorado_ref<rl` 4/11; `seguimento_z_rms cascata_melhorado_ref<rl` 4/11.
+
+**Degrau 0 → 1 m/s à frente (W)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,38 ± 0,02 | 0,35 ± 0,03 | 0,35 ± 0,03 | 0,35 ± 0,03 |
+| sobressinal (%) | 17,8 ± 3,6 | 19,9 ± 4,5 | 12,5 ± 6,0 | 13,3 ± 5,5 |
+| assentamento 2 % (s) | 7,12 ± 0,52 (7/12) | 6,44 ± 0,00 (1/12) | 5,68 ± 0,49 (5/12) | 5,97 ± 1,50 (7/12) |
+| assentamento 5 % (s) | 3,43 ± 2,23 (11/12) | 6,09 ± 1,47 (3/12) | 4,29 ± 1,88 (9/12) | 3,42 ± 2,38 (11/12) |
+| erro de regime (m/s) | -0,001 ± 0,012 | -0,086 ± 0,041 | -0,033 ± 0,038 | -0,034 ± 0,031 |
+| afundamento após o pico (%) | 5,8 ± 1,7 | 10,1 ± 4,2 | 5,0 ± 3,7 | 5,8 ± 3,9 |
+
+**Degrau 0 → 0,7 m/s a subir (Q; a partir de 0,5 m de altura para ficar no alcance do ToF, janela de 3,6 s)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,21 ± 0,04 | 0,26 ± 0,04 | 0,24 ± 0,03 | 0,24 ± 0,03 |
+| sobressinal (%) | 14,7 ± 3,9 | 9,5 ± 1,9 | 11,8 ± 1,9 | 11,8 ± 1,9 |
+| assentamento 2 % (s) | — | 3,36 ± 0,19 (3/12) | 3,53 ± 0,01 (3/12) | 3,53 ± 0,01 (3/12) |
+| assentamento 5 % (s) | 3,38 ± 0,29 (7/12) | 3,04 ± 0,41 (8/12) | 3,06 ± 0,46 (6/12) | 3,06 ± 0,46 (6/12) |
+| erro de regime (m/s) | 0,003 ± 0,011 | 0,029 ± 0,010 | 0,021 ± 0,010 | 0,021 ± 0,010 |
+| afundamento após o pico (%) | 12,0 ± 6,0 | 1,4 ± 2,3 | 2,2 ± 1,6 | 2,2 ± 1,6 |
+
+**Degrau 0 → −1 m/s lateral (D)** (12 sementes; «(n/12)» = nas quantas o assentamento acontece dentro da janela)
+
+| | RL | cascata · est. de bordo | cascata · est. melhorado | cascata · melhorado + `p_ref` |
+|---|---|---|---|---|
+| subida 10–90 % (s) | 0,34 ± 0,02 | 0,35 ± 0,03 | 0,35 ± 0,03 | 0,35 ± 0,03 |
+| sobressinal (%) | 34,2 ± 3,7 | 18,7 ± 4,9 | 11,6 ± 4,5 | 12,1 ± 3,8 |
+| assentamento 2 % (s) | 7,28 ± 0,64 (8/12) | 7,76 ± 0,06 (3/12) | 5,26 ± 2,07 (7/12) | 6,00 ± 1,26 (7/12) |
+| assentamento 5 % (s) | 2,98 ± 1,50 | 7,06 ± 1,17 (9/12) | 2,12 ± 1,45 (10/12) | 2,70 ± 2,23 |
+| erro de regime (m/s) | 0,009 ± 0,009 | -0,066 ± 0,022 | -0,015 ± 0,025 | -0,011 ± 0,023 |
+| afundamento após o pico (%) | 20,0 ± 2,1 | 8,4 ± 2,3 | 4,1 ± 3,1 | 4,2 ± 2,9 |
+
+**Yaw** (só a cascata + estimador melhorado; a RL não roda; 12 sementes)
+
+| teste | medido |
+|---|---|
+| degrau de rumo de 90° (`yaw_alvo`) | subida 10–90 % (s) 2,54 ± 0,04 · sobressinal (%) -0,09 ± 0,63 · assentamento 2 % / 5 % (s) 3,87 ± 0,10 / 3,58 ± 0,06 · erro final (°) -0,25 ± 0,66 · \|Δz\| máx. (cm) 9,2 ± 3,5 · roll/pitch pico (°) 0,40 ± 0,11 / 0,48 ± 0,14 · mistura saturada (% dos passos) 1,20 ± 1,95 |
+| taxa de 0,5 rad/s (`yaw_taxa`) | taxa média (rad/s) 0,499 ± 0,005 · erro RMS (rad/s) 0,005 ± 0,003 · \|Δz\| máx. (cm) 9,1 ± 3,5 · mistura saturada (%) 2,83 ± 4,79 |
+| avançar a 1 m/s e rodar 0,3 rad/s (arco) | raio ajustado (m) 3,33 ± 0,15 vs esperado 3,33 · desvio ao círculo RMS (cm) 1,8 ± 0,6 · ⟨v⟩ (m/s) 1,013 ± 0,035 · \|Δz\| máx. (cm) 2,7 ± 0,9 · roll pico (°) 5,3 ± 0,9 · mistura saturada (%) 0,14 ± 0,25 |
+| avançar a 1 m/s e rodar 0,5 rad/s (arco) | raio ajustado (m) 2,16 ± 0,09 vs esperado 2,00 · desvio ao círculo RMS (cm) 4,3 ± 1,7 · ⟨v⟩ (m/s) 1,112 ± 0,034 · \|Δz\| máx. (cm) 9,0 ± 7,3 · roll pico (°) 9,2 ± 2,0 · mistura saturada (%) 3,77 ± 5,85 |
+
+
+### Onde a cascata PERDE (medido)
+
+1. **Seguimento de posição**: ‖xy−p_ref‖ RMS 0,235 m (RL) vs 0,297 (cascata, modo PX4) e 0,262 (com `p_ref`); a RL tem menor erro em **9** das 12
+   sementes (com `p_ref`: 8). Com DR a diferença mantém-se (0,223 vs 0,300/0,248). A RL antecipa e persegue o `p_ref` que vê na observação.
+2. **Erro de regime dos degraus**: a cascata fica 2,5 % (frente), 4,6 % (lateral) abaixo da velocidade pedida ao fim de 8 s (RL: 0,7 % / +0,8 %) — o
+   integral (K_i = 0,356) é lento a absorver o arrasto/viés de atitude; o assentamento a 2 % só acontece em metade das sementes (a RL também em 8/12).
+3. **Sem a calibração do giroscópio no chão a vantagem desaparece**: com o estimador de bordo (o mesmo que a RL vê) a cascata só ganha à RL ~20 % no hover (10,4 vs 13,0 cm) e **perde** no seguimento (0,404 vs 0,235 m).
+4. **Subida vertical**: 10–90 % em 0,26 s vs 0,22 s da RL.
+5. **Yaw é caro**: 90° em 2,5 s (10–90 %), 3,8 s a 2 %; a 0,5 rad/s a altitude oscila ~9 cm (empuxo ∝ d²); num arco apertado (1 m/s, 0,5 rad/s) a
+   velocidade excede em 13 % e o roll chega a 9°. Limites 5× abaixo do ArduPilot a 15″ (autoridade do frame).
+6. **Rajadas/vento: NÃO medidas** (fase 2). Voo acima de 3,6 m: sem altura (ToF) — o contrato r11 deixa subir a 25 m.
+Onde **ganha**: hover (‖xy‖ 3,9 vs 13,0 cm, 3,4×, melhor em 11/12 sementes; \|Δz\| 0,6 vs 2,0 cm; roll/pitch 0,08° vs 0,3–0,5°; deriva de rumo 0,8° vs 2,6°), sobressinal dos degraus
+(7–10 % vs 15–33 %), sobrevivência com DR (0 quedas vs 1/12), e **só ela tem yaw**.
+
+### O que limita o desempenho (MEDIDO ⇒ **medido**; ⇒ *inferido*)
+
+- **Hover = o estimador, não o controlo** — **medido**: a posição verdadeira da RL deriva da estimada 9,3 cm RMS e a RL segura a estimada a 5,6 cm; a
+  cascata+bordo 9,6/3,8 cm; com a calibração do giroscópio a deriva cai para 1,9 cm. Erro de atitude do estimador 0,76° (RL e bordo) vs 0,42°; erro da velocidade do fluxo
+  ≈ 2 cm/s nas três (ruído do PMW3901, não se corrige com calibração).
+- **Seguimento = largura de banda da atitude** — **medido** nas ablações: sem FF de aceleração ‖xy‖ 0,291 → 0,539 m (‖v‖ 0,480 → 0,611); sem FF de taxa de inclinação 0,366 m; sem modelo de seguimento o
+  sobressinal sobe 9,1 → 20,0 %. A malha de taxa cruza a 8,4 rad/s (PM 43°) e a atitude fecha a ω_n = 5,3 rad/s; o degrau de velocidade da cascata e o da RL têm o
+  mesmo 10–90 % (0,35 vs 0,36 s) — a diferença está no sobressinal (9 vs 18–33 %). ⇒ *Inferido*: 0,35 s é o limite da malha de atitude para esta planta sem ultrapassar muito.
+- **Yaw = autoridade e empuxo** — **medido**: u/r = 0,438, folga de acelerador 0,37, empuxo ∝ d².
+- **Ponto de partida «razão 4»** — **medido**: demasiado conservador para esta planta (hover 35 cm, seguimento 0,50 m).
+- ⇒ *Inferido*: o avanço da RL no seguimento de `p_ref` vem de a política ter o `p_ref` na observação e de ter aprendido a antecipar o plano (não medido); a RL
+  ter 0,3–0,5° de roll/pitch RMS (4–6× o da cascata) é o preço da sua ação ruidosa (o Δu por passo é igual: 0,078).
+
+### Calibração (sementes 9000…9007 — NÃO são as de avaliação) e o que mudou depois
+
+Cada linha muda UMA coisa face à base; hover 30 s × 8 sementes, seguimento 10 s × 8, degrau frente × 6; «nom/DR». Registo reproduzível: `avaliar_classico.py --calibrar`.
+
+| configuração (uma coisa muda de cada vez) | hover ‖xy‖ nom/DR (cm) | \|Δz\| hover nom (cm) | seguimento ‖xy‖ nom/DR (m) | seguimento ‖v‖ nom/DR (m/s) | degrau: sobressinal nom/DR (%) | assentamento 5 % nom (s) |
+|---|---|---|---|---|---|---|
+| base (ganhos derivados + estimador melhorado) | 5,1 / 5,2 | 0,6 | 0,291 / 0,359 | 0,480 / 0,423 | 9,1 / 9,9 | 4,38 |
+| estimador de bordo (sem calibração do giroscópio) | 11,1 / 9,1 | 2,3 | 0,414 / 0,429 | 0,516 / 0,471 | 18,4 / 16,4 | 7,21 |
+| estimador melhorado SEM portão do acelerómetro | 5,1 / 5,2 | 0,6 | 0,293 / 0,360 | 0,511 / 0,469 | 17,6 / 16,5 | 6,67 |
+| estimador melhorado SEM calibração do giroscópio | 11,1 / 9,2 | 0,6 | 0,512 / 0,504 | 0,485 / 0,428 | 9,6 / 10,0 | 4,84 |
+| estimador melhorado com altura de 2,ª ordem (sem viés do acelerómetro) | 5,1 / 5,2 | 2,4 | 0,290 / 0,358 | 0,480 / 0,424 | 9,1 / 10,1 | 5,28 |
+| estimador melhorado + parte I do Mahony (k_i = 0,02 /s²) | 4,8 / 4,9 | 0,6 | 0,292 / 0,365 | 0,480 / 0,423 | 9,2 / 10,0 | 4,55 |
+| estimador melhorado + parte I do Mahony (k_i = 0,1 /s²) | 4,9 / 5,2 | 0,6 | 0,304 / 0,392 | 0,483 / 0,425 | 9,5 / 10,4 | 5,46 |
+| estimador melhorado + parte I do Mahony (k_i = 0,5 /s²) | 18,0 / 18,4 | 0,6 | 0,437 / 0,523 | 0,508 / 0,443 | 19,2 / 15,6 | — |
+| razão da atitude 2,0 (K_att = ωc/2) | 4,0 / 4,3 | 0,6 | 0,255 / 0,293 | 0,473 / 0,422 | 17,7 / 16,1 | 3,09 |
+| razão da atitude 3,0 | 6,7 / 6,7 | 0,6 | 0,337 / 0,428 | 0,486 / 0,431 | 4,7 / 4,8 | 3,37 |
+| razão da atitude 4,0 (pesquisa) | 12,7 / 11,9 | 0,6 | 0,444 / 0,559 | 0,499 / 0,453 | 5,5 / 1,5 | 2,83 |
+| razões 4/4/4/4 (ponto de partida da pesquisa) | 34,5 / 28,8 | 0,6 | 0,497 / 0,630 | 0,500 / 0,457 | 5,8 / 1,7 | 4,03 |
+| razão do integral 4 (K_i = K_v²/4) | 7,2 / 6,8 | 0,6 | 0,322 / 0,419 | 0,480 / 0,425 | 8,7 / 9,4 | 3,49 |
+| razão da posição 4 (K_pos = K_v/4) | 6,3 / 6,1 | 0,6 | 0,293 / 0,359 | 0,480 / 0,423 | 9,2 / 9,8 | 3,23 |
+| referência de posição integrada (p_ref) | 5,1 / 5,2 | 0,6 | 0,275 / 0,287 | 0,481 / 0,424 | 10,2 / 11,0 | 5,58 |
+| sem feed-forward de aceleração | 5,1 / 5,2 | 0,6 | 0,539 / 0,558 | 0,611 / 0,588 | 17,1 / 15,2 | 6,22 |
+| sem feed-forward de atitude (n̂ × dn̂/dt) | 5,5 / 5,6 | 0,6 | 0,366 / 0,457 | 0,559 / 0,522 | 13,8 / 12,5 | 6,75 |
+| sem modelo de seguimento (τ_modelo = 0) | 5,1 / 5,2 | 0,6 | 0,275 / 0,348 | 0,495 / 0,435 | 20,0 / 19,5 | 6,08 |
+| sem feed-forward de arrasto | 5,1 / 5,2 | 0,6 | 0,386 / 0,382 | 0,455 / 0,396 | 2,1 / 1,3 | 5,31 |
+
+
+**Declaração de honestidade — o que foi corrigido depois de ver resultados da avaliação**: as sementes de avaliação não serviram para afinar ganhos, mas **serviram para
+descobrir três falhas de lógica/segurança** que as sementes de calibração (planos mais comportados) não tinham mostrado — e por isso o leitor deve tratar as três correções como
+«feitas com visibilidade da avaliação». A 1.ª avaliação completa (`out/classico/avaliacao_v1_sem_piso.json`) dava à cascata ‖xy−p_ref‖ 0,365/0,306 m e \|z−z_ref\| 0,084 m (nominal);
+a distribuição por semente mostrou (i) **sem piso de altitude**: o `p_ref` do contrato r11 pára em 0,25 m e a cascata, que só recebe velocidades, aterrava (sem fluxo abaixo de 8 cm de
+altura a odometria perdia-se: ‖xy‖ 0,97 m na semente 5007); (ii) um Q carregado enquanto descolava **cancelava o descolar** (a semente 5005 ficava 0,2 m abaixo do `p_ref`); depois de
+corrigir (i) e (ii), a 2.ª corrida mostrou (iii) **sem teto**, um plano a subir saía do alcance do ToF (a semente 5007 com DR chegou a 7,7 m; a RL caiu nela). Correções: `altura_min`
+(o piso do contrato), o alvo de descolagem que os Q/E movem, e o teto de 90 % do alcance do ToF; **verificadas primeiro nas sementes de calibração** (9003/9004/9007: \|z−z_ref\| 0,059/0,068/0,103
+m) e só depois a avaliação completa foi repetida (os números desta secção são os da 3.ª corrida: z 0,084 → 0,036). Nenhum ganho foi mexido por causa do conjunto de avaliação.
+**Reprodutibilidade**: a cascata com o estimador melhorado reproduz-se a 1e-10 entre corridas; a RL e a cascata com o estimador de bordo variam ≤ 0,4 % nos agregados entre corridas
+(⇒ *inferido*: o estado inicial do ruído de VRS do env nasce de um gerador sem semente e a calibração de 1 s no chão deixa-o assentar; não investigado).
+
+### Por fazer
+
+- **Vento/rajadas (fase 2)**: a cascata não tem estimador de perturbação; candidatos INDI como malha interna (pesquisa Q1: 0,10 vs 0,34 m) ou o integral do vento. A RL foi treinada com rajadas — aqui não há vento, por isso não se mediu onde a cascata perde.
+- ~~**Port para o núcleo C++**~~ **FEITO na atividade B (2026-10-12)** — `firmware/nucleo/{cascata,estimador_classico}.hpp` ligados em `resolver_modo()` (modos CTBR · VELOCIDADE · YAW_ALVO · OLHAR), SITL fechado com o MuJoCo
+  (`sitl.py cascata`), `avaliar_nucleo.py` (C++ vs Python vs RL: o C++ iguala o Python a ≤ 0,3 % em 12 sementes; hover ‖xy‖ 3,9 cm vs RL 13,0), golden vectors \|Δ\| ≤ 5,4e-5 (3000 decisões), a MESMA fonte em QEMU Cortex-M4/M7 BIT A BIT ≡ host,
+  ≈ 4,3 µs (passo de 500 Hz) / 10,1 µs (decisão a 50 Hz) estimados no M7 @ 480 MHz (0,2–0,5 % de 2 ms). Detalhe, números e ressalvas em `firmware/README.md` («Atividade B»); prova: `teste_cascata_nucleo.py`.
+- Rumo absoluto (sem magnetómetro o yaw deriva ~0,6–0,8° em 30 s com a calibração); voo acima de 3,6 m (barómetro); ESKF com o fluxo para a inclinação; identificação online do arrasto; geométrico/INDI na 2.ª fase.
+
+*Fontes*: PX4 Controller Diagrams e Parameter Reference (docs.px4.io); ArduPilot dev docs (Attitude/Position Control, ATC_ACC_Y_MAX); Brescianini & D'Andrea, IEEE T-CST 28(2), 2018; Faessler, Franchi & Scaramuzza, RA-L 3(2), 2018; Mahony, Hamel & Pflimlin, IEEE TAC 53(5), 2008; Åström & Murray, *Feedback Systems*, 2008; Åström & Hägglund, *PID Controllers*, 1995 — equações reimplementadas, nenhum código copiado.
+<!-- END:cascata-classica -->
+
 ## Arquitetura MULTI-IA de bordo (2026-10-11)
 
 O dono pediu várias IAs a correr em simultâneo, cada uma com o seu papel — e liberdade para decidir o
@@ -763,6 +1180,45 @@ recompensa de centrar domina a de distância — melhoria futura documentada).
 watchdog (sem tracker → `sem_politica` + v_ref do WASDQE; NaN → falha + fallback; 3 falhas → `erro`).
 A auto-descoberta do runner escolhe o tracker promovido e o picker de voo EXCLUI `*seguimento*` (sem
 isso, a IA-2 era escolhida como política de voo — bug achado pela verificação fim-a-fim, corrigido).
+
+### Clássico vs RL vs IA — a prova por medição (2026-10-12, sem vento)
+
+Condições iguais (planta `endurance_15pol_p50b`, mesmas sementes de avaliação 5000–5011, 12 sementes; ganhos
+afinados em sementes separadas). Fontes: `out/classico/avaliacao.json` (cascata Python vs RL) e
+`out/nucleo/avaliacao.json` (cascata+visão C++ em SITL). A IA só fica onde a medição o exigir — e a
+medição diz que **para esta missão (olhar para o círculo e seguir, sem vento) não é preciso nenhum retreino
+de IA**: o clássico EMPATA no círculo a 0,6 m/s e VENCE em tudo o resto (hover 3,3×, «oito» 4–5×, yaw livre, 0 quedas).
+
+| capacidade | clássico (cascata C++/Python) | RL / IA | vence |
+|---|---|---|---|
+| hover ‖xy‖ RMS (12 sementes) | **3,9 cm** (DR 5,8); 10,4 cm só com o estimador de bordo (a mesma informação da RL) | 13,0 cm (DR 18,7) | **clássico** (3,3× com calibração; 1,25× em igualdade de informação) |
+| estabilidade de atitude (roll/pitch RMS) | **0,08°/0,08°** | 0,31°/0,50° | **clássico** |
+| degrau 1 m/s (sobressinal / regime) | **9 %** / −2,5 % | 18 % / **−0,7 %** | empate (clássico amortecido; RL melhor em regime) |
+| seguimento ‖v−v_ref‖ (planos WASDQE) | **0,357 m/s** | 0,368 m/s | empate |
+| seguimento ‖xy−p_ref‖ | 0,297 m (0,262 com p_ref) | **0,235 m** | RL (9/12 sementes) |
+| yaw livre (90° · manter rumo · arco) | 2,5 s sem sobressinal, |Δz| 8,6 cm, arco R=3,31 vs 3,33 | impossível (a RL foi treinada com yaw fixo) | **clássico** |
+| **olhar para o círculo 0,6 m/s** (MESMO protocolo; erro de posição composto = √(dist²+(rumo·1,5 m)²)) | 0,216 m (câmara 21 ms DCMI) · 0,231 m (Pi 116 ms) · 100 % a seguir · yaw livre | tracker PPO: 0,212 m · FOV 96–100 % · yaw FIXO | **empate** no erro; o clássico ganha em yaw livre e em consistência |
+| círculo 0,3–0,8 m/s (clássico, DCMI 21 ms) | composto 0,10 / 0,22 / 0,19 / 0,27 m; rumo RMS 0,44–5,2°; 84 % do tempo no limite do yaw a 0,8 | tracker só medido a 0,6 | clássico estável até 0,7; a 0,8 o yaw satura |
+| **«oito» (inversões) 0,5–0,6 m/s** | **0,27–0,3 m composto** (0,49 m a 0,8) | tracker PPO: **1,39 m** | **clássico (4–5×)** |
+| aleatório 0,6 m/s | (não medido — só círculo/oito) | tracker PPO: 0,67–1,21 m | — |
+| queda no DR | 0/12 (cascata) | 1/12 (RL) | clássico |
+| custo de bordo | 24,6 kB text · 2940 B de estado (+ frame QVGA 76,8 kB e detetor 5,7 kB só no modo OLHAR) · ~1438 instr/passo 500 Hz = 2060 ciclos ≈ **4,3 µs**/passo (10,1 µs no tick de 50 Hz; llvm-mca; instruções MEDIDAS em QEMU) | MLP 64×64 ONNX 7,4 µs (IA-1) + tracker 325 µs | clássico cabe no Arduino Portenta H7 |
+| sem vento: melhorias futuras | vento/rajadas (INDI) por fazer | a RL corrige rajadas (já medido) | **IA útil na fase de vento** (única vantagem restante) |
+
+**Notas de protocolo (honestidade).** O tracker PPO é avaliado por `avaliar_seguimento` a 0,6 m/s com erro de POSIÇÃO 3D; o clássico por `avaliar_nucleo` com erro radial + rumo — a matriz usa o composto √(dist²+(rumo·1,5 m)²) para as duas colunas serem comparáveis; as velocidades iguais (0,6 m/s) são as que contam para o empate no círculo. As métricas de FOV (tracker) e `frac_a_seguir` (clássico) são conceitos equivalentes (alvo visível/a seguir) mas não idênticos. **Sementes e latências não são iguais no «olhar»**: tracker PPO = `avaliar_seguimento` com seeds 9000+, 5 episódios, erro = média |d−d*| só em frames visíveis, pipeline Pi de 116 ms; clássico = `avaliar_nucleo` com seeds 7000–7002, RMS; as linhas do «olhar» DCMI 21 ms (build Arduino) são o cenário alvo. As sementes 5000–5011 (12) valem para hover/degraus/seguimento. Os números do tracker vêm da avaliação de 2026-10-12 (`avaliar_seguimento`; artefacto não guardado em out/ — nota para o futuro).
+
+**Conclusão (medição, não opinião).** Estabilização, rotação, movimentação e «olhar para o círculo» ficam no
+**clássico** (cascata estilo PX4 + detetor por momentos + IBVS, tudo C++ float32 no núcleo de firmware que
+corre bit a bit igual em Cortex-M4/M7 — `teste_cascata_nucleo.py` 66/66 (--rapido 53), QEMU incluído). A IA **não é
+necessária** para esta missão; a política RL fica como comparação e para a fase de vento (onde já ganhou
+medidamente às rajadas). Se no futuro houver distratores/oclusão/reaquisição a alta velocidade, a pesquisa
+diz que aí a perceção aprendida pode ganhar — mas **só com medição** (critério registado).
+
+**Limites medidos do clássico** (honesto): o yaw é o gargalo (autoridade ÷5 do ArduPilot a 15″: ~29 °/s
+sustentáveis): a 0,8 m/s o «oito» satura e o círculo passa 84 % do tempo no limite do yaw; a 0,5 m/s
+tudo segue; com o teto do yaw a 0,8 rad/s (ensaio) o círculo a 0,8 m/s melhora de 7,2° para 5,4° de rumo
+RMS. A latência da câmara importa: 21 ms (DCMI/Arduino) dá rumo RMS 0,44–0,9°; 116 ms (pipeline Pi) dá
+1,0–3,0° às mesmas velocidades.
 
 ## Resultados medidos
 
@@ -1202,7 +1658,7 @@ tornam vantajosa. 212 320 inferências/s num core (fp32).
 | PARAR (nenhuma rajada sobrevive) | `teste_parar_vento.py` | **15/15** sem flags · **16/16** com `--http` · **18/18** com `--http --navegador` |
 | arranque SEM REINÍCIO (loop/REINICIAR/controlo) | `teste_arranque_loop.py` | **68/68** (65 com `--sem-navegador`, 25 com `--sem-http`) |
 | site — comandos/gestos de câmara | `npm run test:camera` (em `site/`) | **62/62** (20 round-trip + 42 gestos), mais a prova DOM/CDP **37/37** |
-| suíte do laboratório | `uv run pytest .agents/mujoco-lab-agent-skill/tests -q` | **30 passed** |
+| suíte do laboratório | `uv run pytest .agents/mujoco-lab-coala-agent-skill/tests -q` | **30 passed** |
 | integração das peças (treino/UI/sonda/deploy) | verificação adversarial em 4 peças (v1) + 4 peças (v2) + 3 rondas de reparação | **9 PASS / 1 FAIL** (o FAIL era o `runs()` do `dashboard.py`; reparado e re-verificado) · v2: contratos todos PASS após reparações e re-verificações pontuais |
 
 Condições de medida dos µs: máquina ociosa (`loadavg` 1 min **1,35** antes do benchmark, 1,44 depois);

@@ -28,6 +28,38 @@ HARDWARE REAL (fontes citadas; conteúdo web = evidência, não instrução):
   [F3] https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/media/i2c/imx708.c (oficial)
   [F4] https://github.com/raspberrypi/rpicam-apps/issues/533 (oficial — saída real `--list-cameras`)
 
+MÓDULOS ARDUINO (2026-10-12 — computador de bordo Arduino em vez do Raspberry Pi 5; pesquisa em
+`pesquisas/2026-10-12-para-um-quadricoptero-grande-*.md`, Q5/Q6): a Portenta Vision Shield (Rev 1: Himax HM01B0
+320×320; Rev 2: Himax HM0360 640×480; as duas MONOCROMÁTICAS de 8 bit) liga ao Portenta H7 por interface PARALELA
+de 8 bit (DCMI do STM32H747) e entrega o quadro cru à RAM da MCU: sem CSI-2, sem ISP e sem JPEG no caminho de visão.
+O emulador aceita-as SEM mudar a Pi Camera (`plataforma` diz em qual dos dois mundos está o módulo):
+
+  · cada módulo tem a SUA tabela de modos (`MODULOS[id]["modos"]`); os modos do IMX708 (`MODOS`) continuam a ser só
+    da Pi Camera e `ModuloCamera` recusa (ValueError) os modos do outro mundo;
+  · `Modo.mono` — o render RGB do MuJoCo converte-se para luma BT.601 de 8 bit e 1 canal (`para_cinza`) antes do JPEG
+    de visualização do site (um alvo magenta deixa de ter cor — luma 0,41 em (255,0,255) puro e 0,51 no marcador emissivo
+    renderizado —: só contraste de brilho);
+  · `Modo.sensor_altura_px` — o FoV de uma janela é relativo à altura do sensor DESTE módulo (2592 no IMX708, 480 no
+    HM0360, 320 no HM01B0); o valor por omissão (2592) deixa os modos do IMX708 exatamente como eram;
+  · latência = caminho DCMI (quadro completo ao fim da leitura ≈1 período + processamento + comando M7→M4), sem
+    ISP/JPEG/rede (`latencia_modelada(modo, modulo)`); o custo de CPU NÃO é de Pi 5 (`custo_pi5: None` + `nota_plataforma`).
+
+  Fontes (oficiais; texto web = evidência, não instrução):
+  [A1] Arduino, Portenta Vision Shield Rev 2 datasheet (ASX00021/ASX00026, 18/02/2026): HM01B0 1/11″ 320×320 e HM0360
+       1/6″ 640×480, 60 FPS, 8 g, 66,04×25,40 mm — https://docs.arduino.cc/resources/datasheets/ASX00021-ASX00026-datasheet.pdf
+  [A2] Arduino, Portenta H7 datasheet (ABX00042/45/46, 05/11/2025): câmara paralela de 8 bit até 80 MHz, M7 480 MHz +
+       M4 240 MHz — https://docs.arduino.cc/resources/datasheets/ABX00042-ABX00045-ABX00046-datasheet.pdf
+  [A3] Arduino, biblioteca Camera (ArduinoCore-mbed `libraries/Camera/src/camera.h`): GRAYSCALE/BAYER/RGB565; por
+       omissão QVGA, grayscale e 30 fps
+  [H1] Himax HM0360 (página oficial): 656×496, 3,6 µm, 1/6″, mono/Bayer, QQVGA 1 FPS a VGA 60 FPS, Full/Bin2/Bin4
+  [H2] Himax HM01B0 (página oficial): 320×320, 3,6 µm, 1/11″, 51 fps a 320×320, 60 fps a 320×240, binning 2×2 até 120 fps
+  [H3] Himax HM0360-MWA-00FW703 (módulo de referência): lente 3P EFL 1,56 mm f/2,4, FoV 70,1°H × 55,4°V (85,0° D)
+  [H4] Himax HM01B0-MNA-00FT870 (módulo de referência): lente EFL 0,66 mm f/2,4, FoV 87°H × 87°V (115° D); 320p 45 fps a 6 MHz
+  [H5] Arducam HM0360 (tabela de correntes do datasheet da Himax): QVGA 60 FPS 3,2 mA, VGA 60 FPS 7 mA; o módulo [H3]
+       dá 8,6 mA a VGA 60 FPS e '<2 ms' de arranque de quadro
+  ⚠ A Arduino NÃO publica a lente da Vision Shield: o FoV dos dois módulos é ESTIMADO pelos módulos de referência da
+  Himax [H3][H4] (dito no catálogo `componentes.json`); mede-se com um alvo angular quando houver hardware.
+
 PIPELINE NO RASPBERRY PI 5 (o que o emulador reproduz; ver
 `pesquisas/relatorio-pipeline-camera-rpi5-custo-cpu.md` para as fontes de cada número):
 
@@ -145,6 +177,11 @@ class Modo:
     emulado: bool = True
     nota: str = ""
     fonte: str = "[F1][F3][F4]"
+    # Só os módulos que NÃO são o IMX708 mudam estes dois (os valores por omissão são os do IMX708, por isso a Pi
+    # Camera fica exatamente como era): a altura do sensor INTEIRO no mesmo referencial do `crop`, e a saída
+    # monocromática (HM0360/HM01B0 da Portenta Vision Shield).
+    sensor_altura_px: int = 2592
+    mono: bool = False
 
     @property
     def mp_sensor(self) -> float:
@@ -156,8 +193,8 @@ class Modo:
 
     @property
     def fator_fov(self) -> float:
-        """Fator linear do FOV do modo face ao sensor inteiro (= altura da janela / 2592)."""
-        return self.crop[3] / 2592.0
+        """Fator linear do FOV do modo face ao sensor inteiro (= altura da janela / altura do sensor, 2592 no IMX708)."""
+        return self.crop[3] / float(self.sensor_altura_px)
 
     @property
     def periodo_s(self) -> float:
@@ -176,11 +213,14 @@ class Modo:
         return (round(self.saida[1] * self.crop[2] / self.crop[3]), self.saida[1])
 
     def as_dict(self) -> dict:
-        return {"id": self.id, "rotulo": self.rotulo, "sensor": list(self.sensor),
-                "fps_sensor": self.fps_sensor, "saida": list(self.saida), "fps": self.fps,
-                "crop": list(self.crop), "mp_sensor": round(self.mp_sensor, 3),
-                "mp_saida": round(self.mp_saida, 3), "fator_fov": round(self.fator_fov, 4),
-                "emulado": self.emulado, "nota": self.nota, "fonte": self.fonte}
+        d = {"id": self.id, "rotulo": self.rotulo, "sensor": list(self.sensor),
+             "fps_sensor": self.fps_sensor, "saida": list(self.saida), "fps": self.fps,
+             "crop": list(self.crop), "mp_sensor": round(self.mp_sensor, 3),
+             "mp_saida": round(self.mp_saida, 3), "fator_fov": round(self.fator_fov, 4),
+             "emulado": self.emulado, "nota": self.nota, "fonte": self.fonte}
+        if self.mono:                  # chave ADITIVA: a Pi Camera (RGB) não a tem
+            d["mono"] = True
+        return d
 
 
 MODOS: dict[str, Modo] = {
@@ -210,12 +250,137 @@ MODOS: dict[str, Modo] = {
     )
 }
 
+# ------------------------------------------------------------------------- módulos ARDUINO (Portenta Vision Shield)
+# Cada módulo traz os SEUS modos (o `crop` está nos píxeis do próprio sensor: 640×480 no HM0360, 320×320 no HM01B0) e o
+# `Modo.sensor_altura_px` correspondente — assim o FoV de uma janela (`fator_fov`) sai certo sem tocar nos modos do IMX708.
+# Sem ISP: o que o sensor lê é o que o DCMI entrega (`sensor == saida` em todos). Os fps são os do SENSOR [H1][H2][H4]; o
+# QVGA a 30 fps é a configuração por omissão da biblioteca Camera da Arduino [A3]. O que é ASSUMIDO diz-se na `nota`.
+_HM0360_ALTURA, _HM01B0_ALTURA = 480, 320
+
+MODULOS.update({
+    "vs_hm0360": {
+        "nome": "Arduino Portenta Vision Shield Rev 2 (Himax HM0360, VGA monocromático)",
+        "peca_catalogo": "portenta_vision_shield_hm0360",
+        "plataforma": "arduino",
+        "sensor": "Himax HM0360",
+        "resolucao_px": (640, 480),
+        "mp": 0.3072,
+        "pixel_um": 3.6,
+        # ESTIMADO: a Arduino não publica a lente da shield — módulo de referência da Himax [H3] (70,1°H × 55,4°V)
+        "fov_graus": {"diag": 85.0, "horizontal": 70.1, "vertical": 55.4},
+        "lente": {"focal_mm": 1.56, "f_stop": 2.4, "foco": "fixo", "foco_min_m": None},
+        "dims_mm": (66.04, 25.4, 8.0),      # contorno da ficha [A1]; espessura 8 mm ESTIMADA
+        "massa_g": 8.0,                     # ficha [A1] (a loja diz 11 g)
+        "mono": True,
+        "modo_omissao": "QVGA30",
+        "modos": {m.id: m for m in (
+            Modo("VGA60", "VGA 640×480 @ 60 fps (leitura completa, mono)", (640, 480), 60.0, (640, 480), 60.0,
+                 (0, 0, 640, 480), fonte="[A1][H1][H3][H5]", sensor_altura_px=_HM0360_ALTURA, mono=True,
+                 nota="leitura completa (Full); VGA 60 FPS é o máximo do sensor (7–8,6 mA)"),
+            Modo("QVGA60", "QVGA 320×240 @ 60 fps (Bin2, mono)", (320, 240), 60.0, (320, 240), 60.0,
+                 (0, 0, 640, 480), fonte="[H1][H5]", sensor_altura_px=_HM0360_ALTURA, mono=True,
+                 nota="binning 2×2 monocromático do campo completo (mesmo FoV do VGA); QVGA 60 FPS = 3,2 mA"),
+            Modo("QVGA30", "QVGA 320×240 @ 30 fps (Bin2, mono) — omissão da biblioteca Arduino", (320, 240), 60.0,
+                 (320, 240), 30.0, (0, 0, 640, 480), fonte="[A3][H1]", sensor_altura_px=_HM0360_ALTURA, mono=True,
+                 nota="begin(CAMERA_R320x240, CAMERA_GRAYSCALE, 30): a configuração por omissão da Arduino"),
+        )},
+    },
+    "vs_hm01b0": {
+        "nome": "Arduino Portenta Vision Shield Rev 1 (Himax HM01B0, 320×320 monocromático)",
+        "peca_catalogo": "portenta_vision_shield_hm01b0",
+        "plataforma": "arduino",
+        "sensor": "Himax HM01B0",
+        "resolucao_px": (320, 320),
+        "mp": 0.1024,
+        "pixel_um": 3.6,
+        # ESTIMADO: lente da shield não publicada — módulo de referência da Himax [H4] (87°H × 87°V, EFL 0,66 mm)
+        "fov_graus": {"diag": 115.0, "horizontal": 87.0, "vertical": 87.0},
+        "lente": {"focal_mm": 0.66, "f_stop": 2.4, "foco": "fixo", "foco_min_m": 0.3},
+        "dims_mm": (66.04, 25.4, 8.0),
+        "massa_g": 8.0,
+        "mono": True,
+        "modo_omissao": "QVGA30",
+        "modos": {m.id: m for m in (
+            Modo("320x320p45", "320×320 @ 45 fps (matriz inteira, mono)", (320, 320), 51.0, (320, 320), 45.0,
+                 (0, 0, 320, 320), fonte="[A1][H2][H4]", sensor_altura_px=_HM01B0_ALTURA, mono=True,
+                 nota="matriz inteira: 45 fps a 6 MHz/8 bit (ficha do módulo); a Himax dá 51 fps no máximo"),
+            Modo("QVGA60", "QVGA 320×240 @ 60 fps (janela, mono)", (320, 240), 60.0, (320, 240), 60.0,
+                 (0, 40, 320, 240), fonte="[A1][H2][H4]", sensor_altura_px=_HM01B0_ALTURA, mono=True,
+                 nota="janela 320×240 (window mode) a 60 FPS; a janela CENTRADA na vertical é ASSUMIDA"),
+            Modo("QVGA30", "QVGA 320×240 @ 30 fps (janela, mono) — omissão da biblioteca Arduino", (320, 240), 60.0,
+                 (320, 240), 30.0, (0, 40, 320, 240), fonte="[A3][H2]", sensor_altura_px=_HM01B0_ALTURA,
+                 mono=True,
+                 nota="begin(CAMERA_R320x240, CAMERA_GRAYSCALE, 30): a configuração por omissão da Arduino"),
+            Modo("QQVGA120", "QQVGA 160×120 @ 120 fps (binning 2×2, mono)", (160, 120), 120.0, (160, 120), 120.0,
+                 (0, 40, 320, 240), fonte="[H2][H4]", sensor_altura_px=_HM01B0_ALTURA, mono=True,
+                 nota="binning 2×2 monocromático até 120 FPS (Himax); aplicado à janela QVGA é ASSUMIDO"),
+        )},
+    },
+})
+
+
+def plataforma(modulo: str) -> str:
+    """`"rpi5"` (Pi Camera, CSI-2 → Raspberry Pi 5; a omissão) ou `"arduino"` (Vision Shield, DVP → Portenta H7)."""
+    return MODULOS[modulo].get("plataforma", "rpi5")
+
+
+def modos_do_modulo(modulo: str) -> dict[str, Modo]:
+    """Os modos DESTE módulo: os próprios (`MODULOS[id]["modos"]`) ou, na Pi Camera, os do IMX708 (`MODOS`)."""
+    if modulo not in MODULOS:
+        raise ValueError(f"módulo {modulo!r} não existe — disponíveis: {sorted(MODULOS)}")
+    return MODULOS[modulo].get("modos") or MODOS
+
+
+def modo_omissao(modulo: str = OMISSAO_MODULO) -> str:
+    """O modo por omissão do módulo: 1080p50 na Pi Camera (`OMISSAO_MODO`), QVGA a 30 fps na Vision Shield."""
+    return MODULOS[modulo].get("modo_omissao", OMISSAO_MODO)
+
+
+def _resolver_modo(modulo: str, modo: str) -> Modo:
+    """O `Modo` de um módulo, recusando (ValueError) o que não é dele ou não é emulado (nunca se finge)."""
+    modos = modos_do_modulo(modulo)
+    if modo not in modos:
+        onde = "" if plataforma(modulo) == "rpi5" else f" no módulo {modulo!r}"
+        raise ValueError(f"modo {modo!r} não existe{onde} — disponíveis: {sorted(modos)}")
+    if not modos[modo].emulado:
+        raise ValueError(f"o modo {modo!r} existe no hardware mas NÃO é emulado ({modos[modo].nota})")
+    return modos[modo]
+
+
+def _modo_geometria(modulo: str, modo: str) -> Modo:
+    """O `Modo` para a GEOMETRIA ótica: os modos do módulo primeiro e, depois, os do IMX708 (`MODOS`).
+
+    O FoV é matemática pura (fator do recorte × FoV vertical do módulo) e aceita qualquer par — é o que deixa a
+    prova de especificação cruzar todos os módulos com todos os modos; quem RESTRINGE módulo↔modo é o `ModuloCamera`.
+    """
+    proprios = MODULOS[modulo].get("modos") or {}
+    return proprios[modo] if modo in proprios else MODOS[modo]
+
+
+# Luma ITU-R BT.601 (a de `PIL.Image.convert("L")` e do OpenCV): o sensor monocromático não distingue cor, só brilho.
+LUMA_BT601 = (0.299, 0.587, 0.114)
+
+
+def para_cinza(rgb: np.ndarray) -> np.ndarray:
+    """RGB uint8 `(H, W, 3)` → cinzento uint8 `(H, W)` por luma BT.601 — o que um HM0360/HM01B0 de 8 bit entregaria.
+
+    Um magenta puro (255, 0, 255) dá 105/255 = 0,41 e o marcador emissivo do simulador, renderizado como (255, 44, 255),
+    dá 131/255 = 0,51: metade do brilho de um branco e do tamanho de um chão cinzento iluminado — numa câmara mono o
+    círculo tem de se distinguir por BRILHO (alvo branco/IR), não por cor.
+    """
+    r, g, b = LUMA_BT601
+    return np.rint(rgb[..., 0] * r + rgb[..., 1] * g + rgb[..., 2] * b).astype(np.uint8)
+
+
 QUALIDADE_OMISSAO = 50          # `rpicam-vid --quality` por omissão é 50 (1–100) — documentação oficial
 
 # Fonte `simulacao` (a vista 3ª-pessoa da simulação, trocável com a FPV no site): NÃO é hardware de
 # bordo e por isso não tem custo de Pi 5 — esta nota acompanha o estado para ninguém o esquecer.
 NOTA_FONTE_SIMULACAO = ("vista da simulação — não é hardware de bordo: entrega IMEDIATA "
                          "(sem latência de pipeline Pi) e só custa CPU ao host (medida)")
+# Módulos Arduino: o computador de bordo é o Portenta H7 — não há Pi 5 e o custo de CPU não é modelado.
+NOTA_PLATAFORMA_ARDUINO = ("computador de bordo Arduino (Portenta H7): sem Raspberry Pi — sem custo de CPU de Pi 5; o "
+                           "quadro cru vai por DCMI para a RAM da MCU e o JPEG é só a visualização no host")
 
 
 # --------------------------------------------------------------------------------- ótica (FoV → fovy MJCF)
@@ -235,16 +400,20 @@ def fovy_graus(modulo: str = OMISSAO_MODULO, modo: str = OMISSAO_MODO) -> float:
         geometria 16:9 entre si; mantém-se o VERTICAL como âncora porque é o que o `fovy` precisa).
 
     Os modos recortados (janela 2/3 do sensor) dão fovy = 2·atan(2/3·tan(V/2)): 28,0° (std) e 47,6° (wide).
+
+    Vision Shield (Arduino; FoV ESTIMADO pelos módulos de referência da Himax — a Arduino não publica a lente): o
+    HM0360 dá 55,4° em todos os modos (leituras de campo completo, só o binning muda) e o HM01B0 dá 87° na matriz
+    inteira e 2·atan(0,75·tan(43,5°)) = 70,9° na janela QVGA (240 das 320 linhas).
     """
     m = MODULOS[modulo]
-    mo = MODOS[modo]
+    mo = _modo_geometria(modulo, modo)
     meio = math.radians(m["fov_graus"]["vertical"]) / 2.0
     return math.degrees(2.0 * math.atan(mo.fator_fov * math.tan(meio)))
 
 
 def fov_modo(modulo: str = OMISSAO_MODULO, modo: str = OMISSAO_MODO, aspeto: float | None = None) -> dict:
     """FoV efetivo (graus) de (módulo, modo) numa imagem de `aspeto` (largura/altura; 16:9 por omissão)."""
-    m, mo = MODULOS[modulo], MODOS[modo]
+    m, mo = MODULOS[modulo], _modo_geometria(modulo, modo)
     aspeto = (mo.saida[0] / mo.saida[1]) if aspeto is None else float(aspeto)
     v = fovy_graus(modulo, modo)
     meia_v = math.tan(math.radians(v) / 2.0)
@@ -325,9 +494,35 @@ LATENCIA_SENSOR_PERIODO = 0.5  # exposição+leitura CSI ≈ meio período
 LATENCIA_CLIENTE_PERIODO = 1.0  # o <img> pinta no ciclo seguinte do browser
 FAIXA_PUBLICADA_MS = (150.0, 300.0)   # MJPEG 1080p em Pi (comunidade/docs, baixa confiança)
 
+# Caminho DCMI do ARDUINO (Portenta Vision Shield → STM32H747): sem ISP, sem JPEG, sem rede. O sensor lê as linhas
+# (rolling shutter) e o DMA do DCMI deposita-as na RAM — o quadro só está completo ao fim da leitura. O resto é o
+# algoritmo de visão no M7 e o resultado a chegar ao laço de voo do M4.
+LATENCIA_MCU_LEITURA_PERIODO = 1.0   # quadro completo na RAM ≈ 1 período (leitura sequencial; a exposição cabe no período)
+LATENCIA_MCU_PROCESSAMENTO_MS = 3.0  # ASSUMIDO: limiar+momentos ≈ 3 ms/quadro (fórum OpenMV; ZERO medições em Portenta)
+LATENCIA_MCU_COMANDO_MS = 1.0        # ASSUMIDO: resultado M7 → laço de voo M4 (memória partilhada/RPC)
 
-def latencia_modelada(modo: str = OMISSAO_MODO) -> dict:
-    """Latência MODELO captura→site (ms) por estágio — e é esta soma que a entrega reproduz."""
+
+def _latencia_mcu(mo: Modo) -> dict:
+    periodo = 1000.0 * mo.periodo_s
+    estagios = {"leitura_quadro": round(LATENCIA_MCU_LEITURA_PERIODO * periodo, 1),
+                "processamento": LATENCIA_MCU_PROCESSAMENTO_MS,
+                "comando_m7_m4": LATENCIA_MCU_COMANDO_MS}
+    return {"estagios_ms": estagios, "total_ms": round(sum(estagios.values()), 1),
+            "faixa_publicada_ms": None,
+            "nota": "caminho DCMI do Arduino: leitura do quadro = 1 período do modo (rolling shutter + DMA); "
+                    "processamento e comando ASSUMIDOS (sem medição em Portenta — mede-se na placa com "
+                    "DWT->CYCCNT); NÃO há ISP, JPEG nem rede no caminho de visão (o JPEG do site é só a "
+                    "visualização no host)"}
+
+
+def latencia_modelada(modo: str = OMISSAO_MODO, modulo: str | None = None) -> dict:
+    """Latência MODELO captura→site (ms) por estágio — e é esta soma que a entrega reproduz.
+
+    `modulo` (opcional) escolhe o caminho: o da Pi Camera (omissão: ISP + JPEG + rede, a tabela abaixo) ou o DCMI do
+    Arduino (`_latencia_mcu`: leitura do quadro + processamento + comando M7→M4).
+    """
+    if modulo is not None and plataforma(modulo) != "rpi5":
+        return _latencia_mcu(_resolver_modo(modulo, modo))
     mo = MODOS[modo]
     periodo = 1000.0 * mo.periodo_s
     estagios = {
@@ -485,16 +680,15 @@ class ModuloCamera:
       mesmo: é o mesmo módulo emulado).
     """
 
-    def __init__(self, model, camera: str = "fpv", modo: str = OMISSAO_MODO,
+    def __init__(self, model, camera: str = "fpv", modo: str | None = None,
                  modulo: str = OMISSAO_MODULO, qualidade: int = QUALIDADE_OMISSAO,
                  com_latencia: bool = True,
                  camera_livre: Callable[[], mujoco.MjvCamera] | None = None) -> None:
-        if modo not in MODOS:
-            raise ValueError(f"modo {modo!r} não existe — disponíveis: {sorted(MODOS)}")
-        if not MODOS[modo].emulado:
-            raise ValueError(f"o modo {modo!r} existe no hardware mas NÃO é emulado ({MODOS[modo].nota})")
         if modulo not in MODULOS:
             raise ValueError(f"módulo {modulo!r} não existe — disponíveis: {sorted(MODULOS)}")
+        # `modo=None` → o modo por omissão DO MÓDULO (1080p50 na Pi Camera, como sempre; QVGA a 30 fps na Vision
+        # Shield); um modo explícito tem de ser DESTE módulo e emulado (ValueError — nunca se finge)
+        modo_inicial = _resolver_modo(modulo, modo_omissao(modulo) if modo is None else modo)
         self.camera_livre = camera_livre          # fonte `simulacao`: a pose vem toda do MjvCamera
         if camera_livre is None:
             try:
@@ -511,7 +705,7 @@ class ModuloCamera:
         self.modulo = modulo
         self.qualidade = int(qualidade)
         self.com_latencia = bool(com_latencia)
-        self._modo = MODOS[modo]
+        self._modo = modo_inicial
         self._renderer = None
         self._render_tamanho = None
         self._pronto = mujoco.MjData(model)      # snapshot publicado pelo simulador
@@ -538,11 +732,7 @@ class ModuloCamera:
         execução e por isso um render nunca apanha o FoV de outro modo ou de outro `ModuloCamera`.
         """
         if modo is not None:
-            if modo not in MODOS:
-                raise ValueError(f"modo {modo!r} não existe — disponíveis: {sorted(MODOS)}")
-            if not MODOS[modo].emulado:
-                raise ValueError(f"o modo {modo!r} existe no hardware mas NÃO é emulado ({MODOS[modo].nota})")
-            self._modo = MODOS[modo]
+            self._modo = _resolver_modo(self.modulo, modo)      # só modos DESTE módulo, emulados
             self._descartar_fila()
         self._ligada = bool(ligada)
         if not self._ligada:
@@ -580,17 +770,28 @@ class ModuloCamera:
         """Descrição completa do (módulo, modo) em vigor — o site mostra-a como "o que a câmara é"."""
         m = MODULOS[self.modulo]
         livre = self.camera_livre is not None
-        return {"fonte": "simulacao" if livre else "camera",
-                "nota_fonte": (NOTA_FONTE_SIMULACAO if livre else None),
-                "modulo": m["nome"], "modulo_id": self.modulo, "sensor": m["sensor"],
-                "sensor_mp": m["mp"], "sensor_px": list(m["resolucao_px"]), "pixel_um": m["pixel_um"],
-                "fov_publicado_graus": dict(m["fov_graus"]), "fov_modo_graus": fov_modo(self.modulo,
-                                                                                        self._modo.id),
-                "lente": dict(m["lente"]), "modo": self._modo.as_dict(),
-                "jpeg_qualidade": self.qualidade,
-                "latencia_modelada": (latencia_modelada(self._modo.id)
-                                      if self.com_latencia else None),
-                "custo_pi5": None if livre else custo_cpu(self._modo.id)}
+        arduino = plataforma(self.modulo) != "rpi5"
+        cfg = {"fonte": "simulacao" if livre else "camera",
+               "nota_fonte": (NOTA_FONTE_SIMULACAO if livre else None),
+               "modulo": m["nome"], "modulo_id": self.modulo, "sensor": m["sensor"],
+               "sensor_mp": m["mp"], "sensor_px": list(m["resolucao_px"]), "pixel_um": m["pixel_um"],
+               "fov_publicado_graus": dict(m["fov_graus"]), "fov_modo_graus": fov_modo(self.modulo,
+                                                                                       self._modo.id),
+               "lente": dict(m["lente"]), "modo": self._modo.as_dict(),
+               "jpeg_qualidade": self.qualidade,
+               "latencia_modelada": (latencia_modelada(self._modo.id, self.modulo)
+                                     if self.com_latencia else None),
+               "custo_pi5": None if (livre or arduino) else custo_cpu(self._modo.id)}
+        if arduino:
+            cfg.update(self._extra_plataforma())
+        return cfg
+
+    def _extra_plataforma(self) -> dict:
+        """Chaves ADITIVAS dos módulos que não são da Pi (a Pi Camera não as tem): honestidade sobre a plataforma."""
+        mo = self._modo
+        return {"plataforma": plataforma(self.modulo), "mono": mo.mono and self.camera_livre is None,
+                "bytes_quadro_bruto": mo.saida[0] * mo.saida[1] * (1 if mo.mono else 2),
+                "nota_plataforma": NOTA_PLATAFORMA_ARDUINO}
 
     # -------------------------------------------------------------------------------- captura e codificação
     def apontar(self, data, t: float | None = None) -> None:
@@ -642,7 +843,7 @@ class ModuloCamera:
         jpeg = self._jpeg(img)
         t3 = time.perf_counter()
         self._seq += 1
-        latencia = latencia_modelada(mo.id)["total_ms"] / 1000.0 if self.com_latencia else 0.0
+        latencia = latencia_modelada(mo.id, self.modulo)["total_ms"] / 1000.0 if self.com_latencia else 0.0
         quadro = Quadro(seq=self._seq, jpeg=jpeg, largura=int(img.shape[1]), altura=int(img.shape[0]),
                         t_captura=t_estado or t0, t_disponivel=(t_estado or t0) + latencia,
                         t_codificado=t3, bytes=len(jpeg),
@@ -660,13 +861,18 @@ class ModuloCamera:
         ISP aqui só faz o que falta: a fatia central quando a saída é mais estreita que a janela (o
         4:3 do modo 480p120 — recorte ASSUMIDO, dito no modo). Não há redimensionamento: a escala
         sensor→saída do PiSP está contabilizada no custo do Pi, mas o MuJoCo renderiza já na saída.
+
+        Num sensor MONOCROMÁTICO (`Modo.mono`: HM0360/HM01B0 da Vision Shield) o quadro sai em cinzento de 8 bit
+        (`para_cinza`) — só na câmara de BORDO: a fonte `simulacao` é a vista do simulador, não hardware, e fica a cores.
         """
         largura = rgb.shape[1]
         alvo = mo.saida[0]
-        if largura == alvo:
-            return rgb
-        x0 = (largura - alvo) // 2
-        return rgb[:, x0:x0 + alvo]
+        if largura != alvo:
+            x0 = (largura - alvo) // 2
+            rgb = rgb[:, x0:x0 + alvo]
+        if mo.mono and self.camera_livre is None:
+            return para_cinza(rgb)
+        return rgb
 
     def _jpeg(self, img: np.ndarray) -> bytes:
         from PIL import Image
@@ -715,12 +921,13 @@ class ModuloCamera:
         """
         mo = self._modo
         livre = self.camera_livre is not None
+        arduino = plataforma(self.modulo) != "rpi5"
         with self._trava_estado:                    # instantâneo dos contadores partilhados
             bytes_medio = (self._bytes["soma"] / self._bytes["n"]) if self._bytes["n"] else 0
             fps_medido = self._fps["valor"] if self._fps["valor"] else None
             quadros, fila = self._seq, len(self._fila)
             host = dict(self._host)                 # média móvel do custo REAL por etapa (não o último)
-        return {
+        estado = {
             "fonte": "simulacao" if livre else "camera",
             "nota_fonte": (NOTA_FONTE_SIMULACAO if livre else None),
             "ligada": self._ligada, "modo": mo.id, "modo_rotulo": mo.rotulo,
@@ -733,14 +940,18 @@ class ModuloCamera:
             "quadros": quadros, "fila": fila,
             # NEM latência de modelo para a vista da simulação (não é hardware de bordo: um
             # atraso de pipeline Pi numa vista do simulador seria uma mentira — entrega imediata)
-            "latencia_modelada_ms": (latencia_modelada(mo.id) if self.com_latencia else None),
-            # NUNCA custo de Pi para a vista da simulação (honestidade: não é hardware de bordo)
-            "custo_pi5": None if livre else custo_cpu(mo.id),
+            "latencia_modelada_ms": (latencia_modelada(mo.id, self.modulo) if self.com_latencia else None),
+            # NUNCA custo de Pi para a vista da simulação (honestidade: não é hardware de bordo) — nem para um
+            # módulo Arduino (não há Raspberry Pi a bordo: o custo do M7 mede-se na placa)
+            "custo_pi5": None if (livre or arduino) else custo_cpu(mo.id),
             "host_ms": {"render": round(host["render"], 2), "isp": round(host["isp"], 2),
                         "jpeg": round(host["jpeg"], 2),
                         "total": round(sum(host.values()), 2),
                         "nota": "média móvel do custo REAL deste pipeline nesta máquina (nunca o modelo do Pi)"},
         }
+        if arduino:                                 # chaves ADITIVAS: só os módulos Arduino as têm
+            estado.update(self._extra_plataforma())
+        return estado
 
     def fechar(self) -> None:
         """Liberta o renderer (chamar da thread que o criou — o contexto GL é dela)."""
@@ -786,6 +997,7 @@ def correr_cadencia(modulo: ModuloCamera, parar, ao_disponivel, passo_estado=Non
 
 
 __all__ = [
+    "LUMA_BT601",
     "MODOS",
     "MODULOS",
     "OMISSAO_MODO",
@@ -800,7 +1012,11 @@ __all__ = [
     "fov_modo",
     "fovy_graus",
     "latencia_modelada",
+    "modo_omissao",
+    "modos_do_modulo",
     "modulo_da_peca",
+    "para_cinza",
+    "plataforma",
     "preparar_framebuffer",
     "quat_para_frente",
 ]

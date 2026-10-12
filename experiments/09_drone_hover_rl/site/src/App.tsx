@@ -32,6 +32,7 @@ import {
 import { Cabecalho } from "@/components/sim/cabecalho"
 import { ControlosCamera } from "@/components/sim/camera"
 import { ROTULOS_MODO_ESTADO } from "@/components/sim/controlos"
+import { ControladorCard } from "@/components/sim/controlador"
 import { ControloVoo } from "@/components/sim/controlo-voo"
 import { Curvas, ValoresAtuais } from "@/components/sim/curvas"
 import {
@@ -47,6 +48,7 @@ import { IndicadorBateria, PainelBateria } from "@/components/sim/bateria"
 import { PainelHardware } from "@/components/sim/hardware"
 import { PainelMotores } from "@/components/sim/motores"
 import { PainelVoo } from "@/components/sim/painel-voo"
+import { QuemFazOQue } from "@/components/sim/quem-faz-o-que"
 import { ResumoBordo } from "@/components/sim/resumo-bordo"
 import { PainelRpi5 } from "@/components/sim/rpi5"
 import { Rede } from "@/components/sim/rede"
@@ -534,11 +536,22 @@ export function App() {
               fim={ultima?.fim ?? null}
             />
             <ValoresAtuais linha={ultima} />
+            <ControladorCard
+              controlador={sim.controlador}
+              definirControlador={sim.definirControlador}
+              ligado={sim.ligacao === "ligado"}
+              onAviso={notificar}
+            />
             <ControloVoo
               eco={vooEco}
               amostras={amostras}
               ligado={sim.ligacao === "ligado"}
+              controlador={sim.controlador}
               onAviso={notificar}
+            />
+            <QuemFazOQue
+              controlador={sim.controlador}
+              multiIa={sim.rpi5?.multiIa ?? null}
             />
             {real ? <PainelVoo linha={ultima} /> : null}
             <div

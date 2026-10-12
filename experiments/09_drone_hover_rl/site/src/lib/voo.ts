@@ -1,12 +1,12 @@
 /**
- * CONTROLO DE VOO (contrato r11) — as teclas WASD/QE e o eco do runner, em funções PURAS.
+ * CONTROLO DE VOO (contratos r11 + r12) — as teclas WASD/QE, o yaw e o eco do runner, em funções PURAS.
  *
- * Nada aqui toca no DOM nem no `fetch`: é a camada testável em node (`testes/voo-teclas.mts`) que
- * traduz o estado das teclas em velocidade comandada e normaliza (sem adivinhar) os blocos `voo`
- * que vêm do backend `sim_site.py`/`sim_view.py`:
+ * Nada aqui toca no DOM nem no `fetch`: é a camada testável em node (`testes/voo-teclas.mts`,
+ * `testes/controlador.mts`) que traduz o estado das teclas em velocidade comandada e normaliza (sem
+ * adivinhar) os blocos `voo` que vêm do backend `sim_site.py`/`sim_view.py`:
  *
- *  · `POST /api/voo` recebe `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}}` (as 6 teclas sempre
- *    presentes; o `seq` é carimbado pelo SERVIDOR, nunca se manda);
+ *  · `POST /api/voo` recebe `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}, "yaw_taxa"?, "yaw_alvo"?,
+ *    "segui_alvo"?}` (as 6 teclas sempre presentes; o `seq` é carimbado pelo SERVIDOR, nunca se manda);
  *  · o `/api/sim` e o `/api/state` publicam `"voo": {"pedido": {bloco}|null, "eco": {eco}|null}`;
  *  · cada linha de telemetria ganhou `"voo"` (aditivo; `null` quando a política em uso NÃO tem
  *    modo comando) com o ECO do runner.
@@ -14,7 +14,10 @@
  * Semântica de voo (frame MUNDO, yaw alvo 0): W = +x (frente), S = −x (trás), A = +y (esquerda),
  * D = −y (direita), Q = +z (subir), E = −z (descer). Diagonais horizontais normalizadas para
  * 1,0 m/s; velocidade vertical |vz| = 0,7 m/s; sem teclas `v_ref = [0,0,0]` = o drone SEGURA
- * posição. Leituras tolerantes: o que vier inválido nunca rebenta nem é inventado — `null` no
+ * posição. r12: em modo CLÁSSICO o mesmo mapeamento vale no RUMO (W = avanço no nariz — ver
+ * `controlador.ts` `vRefRumoParaMundo`) e o bloco ganha `yaw_taxa` (±2 rad/s; teclas Z/C mandam ±0,5),
+ * `yaw_alvo` (rumo em rad desde o armar, `null` = sem alvo; tecla X) e `segui_alvo` (tecla V = «olhar»).
+ * Leituras tolerantes: o que vier inválido nunca rebenta nem é inventado — `null` no
  * bloco inteiro ou defaults razoáveis nos campos em falta.
  */
 
@@ -33,11 +36,18 @@ export type TeclasVoo = {
 
 /**
  * Bloco `voo` do ficheiro de controlo (o que o site PEDIU): `seq` é do SERVIDOR (opcional aqui —
- * o corpo do `POST /api/voo` nunca o leva).
+ * o corpo do `POST /api/voo` nunca o leva). r12: os três campos de yaw/olhar são OPCIONAIS no
+ * contrato (um bloco r11 continua válido) e o site manda-os sempre que tem estado.
  */
 export interface BlocoVoo {
   ativo: boolean
   teclas: TeclasVoo
+  /** Taxa de guinada comandada (rad/s; teclas Z/C = ±YAW_TAXA_TECLA; 0 = não rodar). */
+  yaw_taxa: number
+  /** Rumo-alvo em rad desde o armar (tecla X = o `rumo` atual); `null` = sem alvo. */
+  yaw_alvo: number | null
+  /** «Olhar»/IBVS (tecla V): o núcleo clássico segue o alvo com a câmara. */
+  segui_alvo: boolean
   seq?: number | null
 }
 
@@ -161,11 +171,14 @@ function lerVetor3(bruto: unknown): [number, number, number] | null {
 }
 
 /**
- * Qualquer bloco `{ativo, teclas, seq}` do backend → `BlocoVoo`, ou `null`.
+ * Qualquer bloco `{ativo, teclas, yaw_taxa, yaw_alvo, segui_alvo, seq}` do backend → `BlocoVoo`,
+ * ou `null`.
  *
  * `null` quando a entrada NÃO é um objeto ou quando não tem NADA reconhecível dentro (tudo
  * inválido → `null`); campos em falta dentro de um bloco reconhecível saem com defaults razoáveis
- * (`ativo: false`, teclas soltas, `seq: null`). Nunca lança.
+ * (`ativo: false`, teclas soltas, `yaw_taxa: 0`, `yaw_alvo: null`, `segui_alvo: false`, `seq: null`).
+ * `yaw_alvo: null` explícito mantém-se `null` (é um VALOR — «sem alvo» — e não ausência); um
+ * `yaw_alvo` que não seja número finito vira `null` (nunca `NaN` no DOM). Nunca lança.
  */
 export function lerBlocoVoo(bruto: unknown): BlocoVoo | null {
   const o = objetoSimples(bruto)
@@ -173,10 +186,24 @@ export function lerBlocoVoo(bruto: unknown): BlocoVoo | null {
   const ativo = booleanoTolerante(o.ativo)
   const teclas = lerTeclas(o.teclas)
   const seq = numeroFinito(o.seq)
-  if (ativo === null && teclas === null && seq === null) return null
+  const yawTaxa = numeroFinito(o.yaw_taxa)
+  const temYawAlvo = "yaw_alvo" in o && o.yaw_alvo !== undefined
+  const yawAlvo = o.yaw_alvo === null ? null : numeroFinito(o.yaw_alvo)
+  const segui = booleanoTolerante(o.segui_alvo)
+  const algum =
+    ativo !== null ||
+    teclas !== null ||
+    seq !== null ||
+    yawTaxa !== null ||
+    (temYawAlvo && (o.yaw_alvo === null || yawAlvo !== null)) ||
+    segui !== null
+  if (!algum) return null
   return {
     ativo: ativo ?? false,
     teclas: teclas ?? { ...TECLAS_VOO_ZERADAS },
+    yaw_taxa: yawTaxa ?? 0,
+    yaw_alvo: temYawAlvo ? yawAlvo : null,
+    segui_alvo: segui ?? false,
     seq,
   }
 }
