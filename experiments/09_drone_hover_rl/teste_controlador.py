@@ -60,6 +60,11 @@ for _caminho in (_RAIZ, _AQUI):
     if str(_caminho) not in sys.path:
         sys.path.insert(0, str(_caminho))
 
+# O pack de bateria PERSISTENTE do dono (`out/bateria/`) não é para ser gasto por testes: o `sim_view` importado
+# aqui e tudo o que esta suíte lançar (runner, servidor) usam um pack DESCARTÁVEL numa pasta temporária. Tem de
+# ficar ANTES do `import sim_view` (a pasta lê-se no import) — sem isto cada corrida gastava o pack real.
+os.environ.setdefault("DRONE_PASTA_BATERIA", tempfile.mkdtemp(prefix="bateria_teste_", dir=os.environ.get("TMPDIR")))
+
 import numpy as np
 import sim_site
 import sim_view
