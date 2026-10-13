@@ -24,7 +24,7 @@ CONTRATO r11 (o que este script prova, ponto por ponto):
   · ficheiro de controlo, bloco `"voo"` = `{"ativo", "teclas", "seq"}` (ESTADO; `seq` do servidor) e API
     `POST /api/voo` (validação ESTRITA: gralha → 400; runner tolerante a ficheiros velhos);
   · telemetria: chave aditiva `"voo"` = `{ativo, teclas, v_ref, p_ref, erro_xy, erro_z, erro_v, seguindo}`
-    (ou `null` quando a política NÃO tem modo comando — honesto, o site mostra o painel indisponível);
+    (ou `null` quando a política NÃO tem modo comando — honesto, o cockpit avisa que ela não obedece);
   · auto-detecção: o runner cria o env em modo comando pela OBSERVAÇÃO da política carregada (19/24+24),
     nunca por flags — qualquer `.zip` voa com o contrato com que foi treinado.
 
@@ -38,13 +38,15 @@ Quatro camadas (§1 peças → §2 seguimento com política treinada → §3 ser
     a movimentação, Q/E (subir/descer ≈ ±0,7 m/s) e PARAGEM (solta → segura posição); o GUIÃO NULO
     (ação [0,0,0,0] = hover aberto) tem de FALHAR os mesmos limiares — prova de não-tautologia dos
     critérios;
-  §3 SERVIDOR — `sim_site.py` + runner reais (`--sem-janela`): `POST /api/voo` (200/400), bloco no
-    ficheiro, eco `"voo"` na telemetria coerente com as teclas, `voo.pedido/eco` no `/api/state`, merge
-    que não clobbera com um POST de vento, e a HONESTIDADE com política clássica (eco `null` + aviso
-    «bloco `voo` ignorado» — o painel do site fica indisponível em vez de fingir que pilota);
-  §4 NAVEGADOR (`--navegador`) — front real (`site/dist`) num Chrome headless por CDP: os keycaps
-    ACENDEM com o keydown real e apagam com o keyup, `voo-ativar` arma o painel, e o POST chega ao
-    servidor (o ficheiro de controlo prova-o).
+  §3 SERVIDOR — `sim_site.py` + runner reais (`--sem-janela --controlador rl`): o arranque já deixa o
+    voo ATIVO com as teclas soltas (r13: não há ARMAR), `POST /api/voo` (200/400), bloco no ficheiro,
+    eco `"voo"` na telemetria coerente com as teclas, `voo.pedido/eco` no `/api/state`, merge que não
+    clobbera com um POST de vento, e a HONESTIDADE com uma política SEM modo comando (eco `null` + aviso
+    «bloco `voo` ignorado» — o cockpit diz «esta política não obedece às teclas» em vez de fingir que
+    pilota);
+  §4 NAVEGADOR (`--navegador`) — o COCKPIT real (`site/dist`) num Chrome headless por CDP, SEM armar
+    nada: os keycaps do HUD ACENDEM com o keydown e apagam com o keyup, a janela Voo (tecla `1`) mostra
+    a velocidade pedida, o POST chega ao servidor com a tecla em baixo e o drone ANDA (posição medida).
 
     uv run --group hover-rl python experiments/09_drone_hover_rl/teste_controle_voo.py              # §1–§3
     uv run --group hover-rl python experiments/09_drone_hover_rl/teste_controle_voo.py --so-pecas   # §1
@@ -53,6 +55,13 @@ Quatro camadas (§1 peças → §2 seguimento com política treinada → §3 ser
 
 Sem política `--comandos` em `out/` o §2 e o §3 FALHAM ALTO (exit 1) em vez de saltarem: o contrato exige
 uma política treinada para pilotar e o teste tem de o dizer.
+
+COCKPIT (contrato r13, 2026-10-12) — o que mudou aqui:
+  · o §3/§4 pedem `--controlador rl` EXPLICITAMENTE: o padrão do site passou a `auto` (cascata clássica
+    na planta real) e este contrato é o da POLÍTICA (o caminho clássico prova-se em `teste_cockpit.py` §4);
+  · SAIU a verificação «`voo-ativar` arma o painel» (`voo-ativar`/`voo-ativo`): o dono mandou tirar o botão
+    ARMAR CONTROLO — as teclas valem desde o arranque. Substitui-a a prova de que o W voa SEM armar (§3 e
+    §4 daqui) e a da AUSÊNCIA do botão (`site/testes/controlador.mts` §11; `teste_cockpit.py` §2/§4).
 """
 from __future__ import annotations
 
@@ -105,6 +114,7 @@ RMS_RAJADA = 0.45             # m/s — RMS(vx − 1,0) durante rajadas agressiv
 TOL_PARAGEM = 0.25            # m/s — |vx| 1,5 s depois de soltar as teclas (segurar posição)
 DERIVA_PARAGEM = 0.60         # m — deriva máxima em 2 s de paragem com vento de 2 m/s
 VENTO_SIMETRIA = 2.0          # m/s — vento constante da prova de simetria (proa vs cauda)
+PASSOS_VIVO = 25              # passos de decisão (0,5 s de simulação) que provam que o runner está a pilotar
 
 
 class Checagens:
@@ -482,12 +492,18 @@ def _http(url: str, dados=None, timeout: float = 10.0):
 
 
 def _arrancar_site(pasta: Path, modelo: Path | None, porta: int, fator_tempo: float = 0.0):
-    """`sim_site.py --sem-janela --sem-browser` numa pasta própria; devolve (processo, base_url, log)."""
+    """`sim_site.py --sem-janela --sem-browser --controlador rl` numa pasta própria.
+
+    O `--controlador rl` vai EXPLÍCITO: desde o r13 o padrão do site é `auto` (= cascata clássica na
+    planta real) e o que este script prova é a POLÍTICA `--comandos` a pilotar. Devolve
+    `(processo, base_url, controlo, telemetria, linhas_lidas)`.
+    """
     pasta.mkdir(parents=True, exist_ok=True)
     controlo, telemetria = pasta / "controlo.json", pasta / "telemetria.jsonl"
     for caminho in (controlo, telemetria):
         caminho.unlink(missing_ok=True)
     comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
+               "--controlador", "rl",
                "--port", str(porta), "--controlo", str(controlo), "--telemetria", str(telemetria),
                "--fator-tempo", f"{fator_tempo:g}"]
     if modelo is not None:
@@ -540,7 +556,15 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
                     f"sem URL do sim_site em 180 s · filho {'VIVO (mudo)' if vivo else f'morto (exit {processo.poll()})'} · saída: "
                     + (linhas[-400:].replace("\n", " | ") if linhas else "(vazia — morreu sem escrever)"))
     try:
-        c.ok("servidor arrancou com a política de comando", True, f"{base} · modelo {modelo.name}")
+        linha_controlador = next((l for l in stdout.splitlines() if "CONTROLADOR" in l), "")
+        c.ok("servidor arrancou com a política de comando A PILOTAR (`--controlador rl` explícito)",
+             "CONTROLADOR: rl" in linha_controlador, f"{base} · modelo {modelo.name} · {linha_controlador}")
+
+        # r13: não há ARMAR — o ARRANQUE já deixa o voo ativo com as 6 teclas soltas, antes de qualquer POST
+        arranque = json.loads(controlo.read_text(encoding="utf-8")).get("voo", {})
+        c.ok("arranque SEM armar: o controlo nasce com `voo.ativo = true` e as 6 teclas soltas",
+             arranque.get("ativo") is True and set(arranque.get("teclas", {})) == set("wasdqe")
+             and not any(arranque["teclas"].values()), f"bloco de arranque = {arranque}")
 
         # POST válido: bloco `voo` no ficheiro com o `seq` do SERVIDOR
         codigo, corpo = _http(base + "/api/voo", {"ativo": True,
@@ -574,6 +598,18 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
                 time.sleep(0.1)
         c.ok("eco `voo` na telemetria: W aplicado (v_ref = [+1,0,0] ou p_ref colado ao limite de +25 m)",
              viu_comando, f"eco = {eco}")
+        # … e o drone ANDA: a posição real em x é ≥ `p_ref.x − erro_xy` (o erro é a distância à
+        # referência), logo esse limite inferior a passar de 1 m prova deslocamento físico, não só eco
+        avanco, t0 = -math.inf, time.perf_counter()
+        while time.perf_counter() - t0 < 30 and avanco < 1.0:
+            _codigo, estado = _http(base + "/api/state")
+            eco = (estado.get("voo") or {}).get("eco") or {}
+            if eco.get("p_ref") and eco.get("erro_xy") is not None:
+                avanco = max(avanco, float(eco["p_ref"][0]) - float(eco["erro_xy"]))
+            if avanco < 1.0:
+                time.sleep(0.1)
+        c.ok("o W faz o drone ANDAR: avanço em +x ≥ 1 m (limite inferior `p_ref.x − erro_xy` do eco)",
+             avanco >= 1.0, f"avanço ≥ {avanco:.2f} m · eco = {eco}")
         codigo, estado = _http(base + "/api/state")
         c.ok("/api/state traz voo.pedido e voo.eco",
              isinstance((estado.get("voo") or {}).get("pedido"), dict)
@@ -610,16 +646,20 @@ def secao_servidor(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
 
 
 def secao_honestidade(pasta: Path, porta: int) -> bool:
-    """§3b: política CLÁSSICA (sem comando) — o `voo` é ignorado com aviso e o eco fica `null`."""
-    c = Checagens("§3b honestidade: política clássica não finge que pilota")
-    classico = next(iter(sorted((_AQUI / "out").glob("vento_*/final.zip"),
-                                key=lambda p: p.stat().st_mtime_ns, reverse=True)), None)
-    if classico is None:
-        return c.ok("há política clássica para comparar", False, "nenhum out/vento_*/final.zip")
-    processo, base, controlo, _telemetria, _stdout = _arrancar_site(pasta / "classico", classico, porta)
+    """§3b: política SEM modo comando (v2b, `out/vento_*`) — o `voo` é ignorado com aviso e o eco fica `null`.
+
+    («Sem comando» é a política de pairar de antes do r11 — não confundir com a CASCATA clássica do r12/r13,
+    que obedece às teclas e é provada no `teste_cockpit.py`.)
+    """
+    c = Checagens("§3b honestidade: uma política sem modo comando não finge que pilota")
+    sem_comando = next(iter(sorted((_AQUI / "out").glob("vento_*/final.zip"),
+                                   key=lambda p: p.stat().st_mtime_ns, reverse=True)), None)
+    if sem_comando is None:
+        return c.ok("há política sem modo comando para comparar", False, "nenhum out/vento_*/final.zip")
+    processo, base, controlo, _telemetria, _stdout = _arrancar_site(pasta / "sem_comando", sem_comando, porta)
     if base is None:
         _fechar_site(processo)
-        return c.ok("servidor (clássico) arrancou", False, "sem URL em 180 s")
+        return c.ok("servidor (política sem modo comando) arrancou", False, "sem URL em 180 s")
     try:
         _http(base + "/api/voo", {"ativo": True,
                                   "teclas": {"w": True, "a": False, "s": False, "d": False,
@@ -633,20 +673,41 @@ def secao_honestidade(pasta: Path, porta: int) -> bool:
                 break
             time.sleep(0.3)
         _codigo, estado = _http(base + "/api/state")
-        c.ok("política clássica: eco `voo` = null (painel indisponível no site)",
+        c.ok("política sem modo comando: eco `voo` = null (o cockpit avisa que ela não obedece às teclas)",
              (estado.get("voo") or {}).get("eco") is None and (estado.get("amostras") or 0) > 0,
              f"amostras = {estado.get('amostras')} · eco = {(estado.get('voo') or {}).get('eco')}")
+        # … e a política VOA de facto: a 1.ª amostra sai antes do 1.º passo de decisão, por isso só o
+        # `passo` a avançar prova que o runner não morreu ao pilotar (o eco `null` de um runner morto
+        # também passava a checagem de cima)
+        passo, t0 = 0, time.perf_counter()
+        while time.perf_counter() - t0 < 30 and passo < PASSOS_VIVO:
+            _codigo, estado = _http(base + "/api/state")
+            passo = int(estado.get("passo") or 0)
+            if passo < PASSOS_VIVO:
+                time.sleep(0.2)
     finally:
         log = _fechar_site(processo)
+    morte = next((linha for linha in log.splitlines() if "o runner terminou" in linha), "")
+    erro = next((linha for linha in reversed(log.splitlines()) if "Error" in linha), "")
+    c.ok(f"a política sem modo comando VOA de facto: o runner chega aos {PASSOS_VIVO} passos de decisão e não "
+         "morre a pilotar",
+         passo >= PASSOS_VIVO and not morte, f"passo = {passo}" + (f" · {morte.strip()} · {erro.strip()}"
+                                                                     if morte else ""))
     c.ok("runner avisa que ignorou o bloco `voo` (uma vez)",
          "bloco `voo` ignorado" in log, f"presente no log = {'bloco `voo` ignorado' in log}")
     return c.fechar()
 
 
 # ---------------------------------------------------------------------------------------- §4 navegador
+ESPERA_COCKPIT_S = 150        # s de PAREDE para o HUD ligar e o drone descolar (o simulador pode ir lento)
+ESPERA_AVANCO_S = 90          # s de PAREDE, com o W em baixo, para o drone avançar AVANCO_MIN_M
+AVANCO_MIN_M = 0.5            # m em +x (o W da política é +x no mundo, yaw alvo 0)
+
 _DRIVER_CDP_VOO = r'''
-// Driver CDP mínimo: abre o site, arma o painel de voo, manda keydown/keyup e lê o estado dos keycaps.
-const porta = process.argv[2], base = process.argv[3]
+// Driver CDP mínimo do COCKPIT (r13): não arma nada — espera o HUD vivo e o drone a voar, abre a janela
+// Voo pela tecla 1, manda keydown/keyup e lê os keycaps do HUD; a API (o que chegou ao servidor e onde
+// está o drone) lê-se daqui, do lado do Node, pelo mesmo servidor.
+const porta = process.argv[2], base = process.argv[3], args = JSON.parse(process.argv[4])
 const http = (caminho) => new Promise((ok, mal) => {
   import("node:http").then(({ default: h }) => {
     h.get({ host: "127.0.0.1", port: Number(porta), path: caminho }, (res) => {
@@ -674,7 +735,7 @@ async function avaliar(expressao) {
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
     try {
       const r = await comando("Runtime.evaluate", { expression: expressao, awaitPromise: true,
-        returnByValue: true, timeout: 60000 })
+        returnByValue: true, timeout: (args.esperaCockpitS + 30) * 1000 })
       if (r.exceptionDetails) {
         const d = r.exceptionDetails.exception || {}
         throw new Error("na página: " + (d.description || r.exceptionDetails.text))
@@ -686,89 +747,116 @@ async function avaliar(expressao) {
     }
   }
 }
-// 1) espera pelo painel PRONTO (com o modo comando confirmado) e ARMA o controlo de voo
-const pronto = await avaliar(`(async () => {
+const api = async (rota) => await (await fetch(base + rota, { cache: "no-store" })).json()
+const ate = async (leitura, predicado, limiteMs, passoMs = 100) => {
   const t0 = Date.now()
-  while (Date.now() - t0 < 60000) {
-    const painel = document.querySelector('[data-testid="controlo-voo"]')
-    const indisponivel = document.querySelector('[data-testid="voo-indisponivel"]')
-    const estado = indisponivel ? indisponivel.getAttribute("data-estado") : null
-    if (estado === "indisponivel") return { erro: "painel indisponível (política sem modo comando)" }
-    if (painel && estado === "pronto") {
-      const armar = document.querySelector('[data-testid="voo-ativar"]')
-      if (armar) {
-        armar.click()
-        const t1 = Date.now()
-        while (Date.now() - t1 < 8000) {
-          const ativo = document.querySelector('[data-testid="voo-ativo"]')
-          if (ativo && ativo.getAttribute("data-estado") === "armado") return { ok: true }
-          await new Promise((r) => setTimeout(r, 150))
-        }
-        return { erro: "cliquei em voo-ativar mas o painel não ficou armado em 8 s" }
-      }
-    }
-    await new Promise((r) => setTimeout(r, 250))
+  let valor = null
+  while (Date.now() - t0 < limiteMs) {
+    valor = await leitura()
+    if (predicado(valor)) return { ok: true, valor, ms: Date.now() - t0 }
+    await esperar(passoMs)
   }
-  return { erro: "o painel não ficou pronto (data-estado=pronto) em 60 s" }
+  return { ok: false, valor, ms: Date.now() - t0 }
+}
+// Funções que correm DENTRO da página (vão coladas a cada expressão).
+const NA_PAGINA = `
+  const q = (id) => document.querySelector('[data-testid="' + id + '"]')
+  const estado = (letra) => { const el = q("tecla-" + letra); return el ? el.getAttribute("data-estado") : null }
+  const teclas = () => Object.fromEntries(["w", "a", "s", "d", "q", "e"].map((l) => [l, estado(l)]))
+  const vref = () => ((q("voo-vref") || {}).textContent || "").replace(/\\s+/g, " ").trim()
+  const tecla = (tipo, key, code, keyCode) => window.dispatchEvent(new KeyboardEvent(tipo, {
+    key, code, keyCode, bubbles: true, cancelable: true }))
+  const dorme = (ms) => new Promise((r) => setTimeout(r, ms))
+`
+// 1) COCKPIT PRONTO, sem armar: HUD vivo (o SSE chega), keycaps no ecrã e o drone A VOAR
+const pronto = await avaliar(`(async () => { ${NA_PAGINA}
+  const t0 = Date.now()
+  let visto = null
+  while (Date.now() - t0 < ${args.esperaCockpitS * 1000}) {
+    const hud = q("hud"), pilula = q("hud-estado")
+    visto = { vivo: hud ? hud.getAttribute("data-vivo") : null,
+              fase: pilula ? pilula.getAttribute("data-estado") : null, teclaW: estado("w") }
+    if (q("hud-sem-comandos")) return { erro: "o cockpit diz que esta política não obedece às teclas" }
+    if (visto.vivo === "sim" && visto.fase === "a_voar" && visto.teclaW !== null)
+      return { ok: true, armar: !!q("voo-ativar") || /ARMAR CONTROLO/i.test(document.body.innerText),
+               modo: (q("hud-modo") || {}).textContent || null, ms: Date.now() - t0 }
+    await dorme(250)
+  }
+  return { erro: "o cockpit não ficou pronto: " + JSON.stringify(visto) }
 })()`)
 if (!pronto || pronto.erro) throw new Error(pronto && pronto.erro)
-// 2) keydown REAL (KeyboardEvent no window, com key+code) e leitura dos keycaps — a captura de ecrã
-//    (Page.captureScreenshot, LADO NODE) faz-se com a W ainda acesa, entre o keydown e o keyup
-const durante = await avaliar(`(async () => {
-  const estado = (letra) => {
-    const el = document.querySelector('[data-testid="tecla-' + letra + '"]')
-    return el ? el.getAttribute("data-estado") : null
+const resultado = { pronto }
+// o que o SERVIDOR tem antes de qualquer tecla: o voo já ativo (escrito pelo arranque, não por um clique)
+resultado.pedido_arranque = ((await api("/api/state")).voo || {}).pedido || null
+// 2) a janela Voo abre-se pela tecla 1 (as janelas do cockpit chamam-se pelo teclado)
+resultado.janela = await avaliar(`(async () => { ${NA_PAGINA}
+  tecla("keydown", "1", "Digit1", 49); tecla("keyup", "1", "Digit1", 49)
+  const t0 = Date.now()
+  while (Date.now() - t0 < 10000) {
+    if (q("janela-voo") && q("voo-vref")) return { aberta: true, indisponivel: !!q("voo-indisponivel") }
+    await dorme(100)
   }
-  const vref = () => (document.querySelector('[data-testid="voo-vref"]') || {}).textContent || ""
-  const saida = { antes: {}, durante: {}, vref_antes: vref(), vref_durante: "" }
-  for (const l of ["w", "a", "s", "d", "q", "e"]) saida.antes[l] = estado(l)
-  window.dispatchEvent(new KeyboardEvent("keydown", {
-    key: "w", code: "KeyW", keyCode: 87, bubbles: true, cancelable: true,
-  }))
-  await new Promise((r) => setTimeout(r, 200))
-  for (const l of ["w", "a", "s", "d", "q", "e"]) saida.durante[l] = estado(l)
+  return { aberta: false, indisponivel: !!q("voo-indisponivel") }
+})()`)
+// onde está o drone antes do W: a posição REAL do HUD (planta real) ou, sem ela (cf2), o limite inferior
+// `p_ref.x − erro_xy` do eco (a posição nunca está mais atrás do que isso)
+const posicao = async () => {
+  const hud = (await api("/api/hud.json")).hud || {}
+  if (hud.real && typeof hud.real.x === "number") return { x: hud.real.x, fonte: "hud.real.x", t: hud.t }
+  const eco = ((await api("/api/state")).voo || {}).eco || {}
+  if (Array.isArray(eco.p_ref) && typeof eco.erro_xy === "number")
+    return { x: eco.p_ref[0] - eco.erro_xy, fonte: "eco p_ref.x − erro_xy", t: hud.t }
+  return { x: null, fonte: "sem posição", t: hud.t }
+}
+const antes = await posicao()
+// 3) keydown do W (KeyboardEvent no window, com key+code) e leitura dos keycaps — a captura de ecrã
+//    (Page.captureScreenshot, LADO NODE) faz-se com a W ainda acesa, entre o keydown e o keyup
+Object.assign(resultado, await avaliar(`(async () => { ${NA_PAGINA}
+  const saida = { antes: teclas(), vref_antes: vref() }
+  tecla("keydown", "w", "KeyW", 87)
+  await dorme(200)
+  saida.durante = teclas()
   saida.vref_durante = vref()
   return saida
-})()`)
-durante.captura = (await comando("Page.captureScreenshot", { format: "png" })).data   // W ACESA
-const depois = await avaliar(`(async () => {
-  const estado = (letra) => {
-    const el = document.querySelector('[data-testid="tecla-' + letra + '"]')
-    return el ? el.getAttribute("data-estado") : null
-  }
-  const vref = () => (document.querySelector('[data-testid="voo-vref"]') || {}).textContent || ""
-  window.dispatchEvent(new KeyboardEvent("keyup", {
-    key: "w", code: "KeyW", keyCode: 87, bubbles: true, cancelable: true,
-  }))
-  await new Promise((r) => setTimeout(r, 200))
-  const saida = { depois: {}, vref_depois: vref() }
-  for (const l of ["w", "a", "s", "d", "q", "e"]) saida.depois[l] = estado(l)
-  const ativo = document.querySelector('[data-testid="voo-ativo"]')
-  saida.ativo = ativo ? (ativo.getAttribute("data-estado") || ativo.textContent) : null
-  const seguindo = document.querySelector('[data-testid="voo-seguindo"]')
-  saida.seguindo = seguindo ? seguindo.textContent : null
-  // REGRESSÃO DO TEMA: 'd' é a tecla de voar à direita e NÃO pode alternar dark/light (o atalho do
-  // template foi removido — defeito reportado a 2026-10-10: cada voo à direita mudava o site para claro)
-  saida.tema_antes = document.documentElement.className
-  window.dispatchEvent(new KeyboardEvent("keydown", {
-    key: "d", code: "KeyD", keyCode: 68, bubbles: true, cancelable: true,
-  }))
-  window.dispatchEvent(new KeyboardEvent("keyup", {
-    key: "d", code: "KeyD", keyCode: 68, bubbles: true, cancelable: true,
-  }))
-  await new Promise((r) => setTimeout(r, 250))
+})()`))
+resultado.captura = (await comando("Page.captureScreenshot", { format: "png" })).data   // W ACESA
+// com a tecla EM BAIXO: o POST chegou ao servidor e o drone anda
+const comW = await ate(async () => ((await api("/api/state")).voo || {}).pedido || null,
+                       (p) => !!p && p.ativo === true && !!p.teclas && p.teclas.w === true, 10000)
+resultado.pedido_durante = comW.valor
+const andou = await ate(posicao, (p) => p.x !== null && antes.x !== null && p.x - antes.x >= args.avancoMinM,
+                        args.esperaAvancoS * 1000, 200)
+resultado.avanco = { de: antes, ate: andou.valor, ok: andou.ok, parede_ms: andou.ms,
+                     m: andou.valor && andou.valor.x !== null && antes.x !== null ? andou.valor.x - antes.x : null }
+// 4) keyup: o keycap apaga, a velocidade pedida volta a zero e o servidor fica com a tecla solta
+Object.assign(resultado, await avaliar(`(async () => { ${NA_PAGINA}
+  tecla("keyup", "w", "KeyW", 87)
+  await dorme(200)
+  return { depois: teclas(), vref_depois: vref() }
+})()`))
+const semW = await ate(async () => ((await api("/api/state")).voo || {}).pedido || null,
+                       (p) => !!p && !!p.teclas && p.teclas.w === false, 10000)
+resultado.pedido_depois = semW.valor
+// 5) REGRESSÃO DO TEMA: 'd' é a tecla de voar à direita e NÃO pode alternar dark/light (o atalho do
+//    template foi removido — defeito reportado a 2026-10-10: cada voo à direita mudava o site para claro)
+Object.assign(resultado, await avaliar(`(async () => { ${NA_PAGINA}
+  const saida = { tema_antes: document.documentElement.className }
+  tecla("keydown", "d", "KeyD", 68)
+  await dorme(150)
+  saida.tecla_d = estado("d")
+  tecla("keyup", "d", "KeyD", 68)
+  await dorme(250)
   saida.tema_depois = document.documentElement.className
   return saida
-})()`)
-const resultado = { ...durante, ...depois }
+})()`))
 ws.close()
 process.stdout.write(JSON.stringify(resultado))
 '''
 
 
-def secao_navegador(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
-    """§4: front real (site/dist) num Chrome headless — keycaps acendem e o POST chega ao servidor."""
-    c = Checagens("§4 navegador: keycaps WASDQE ao vivo no site (CDP)")
+def secao_navegador(modelos: dict[str, Path], pasta: Path, porta: int, pasta_captura: Path) -> bool:
+    """§4: o COCKPIT real (site/dist) num Chrome headless — sem armar, o W acende, chega ao servidor e voa."""
+    c = Checagens("§4 navegador: keycaps WASDQE ao vivo no cockpit, sem armar (CDP)")
     comando = next(((p, m) for p, m in modelos.items() if m is not None), None)
     if comando is None:
         return c.ok("há política --comandos para o §4", False, "nenhum modelo em out/")
@@ -796,7 +884,7 @@ def secao_navegador(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
         navegador = subprocess.Popen(
             [chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={perfil}",
              "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-dev-shm-usage",
-             "--remote-allow-origins=*", base + "/"],
+             "--window-size=1366,768", "--remote-allow-origins=*", base + "/"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         porta_cdp = None
         t0 = time.perf_counter()
@@ -812,44 +900,77 @@ def secao_navegador(modelos: dict[str, Path], pasta: Path, porta: int) -> bool:
             time.sleep(0.1)
         if porta_cdp is None:
             return c.ok("Chrome abriu a porta CDP", False)
+        argumentos = {"esperaCockpitS": ESPERA_COCKPIT_S, "esperaAvancoS": ESPERA_AVANCO_S,
+                      "avancoMinM": AVANCO_MIN_M}
+        limite = ESPERA_COCKPIT_S + ESPERA_AVANCO_S + 120
         try:
-            resultado = subprocess.run([node, str(driver), str(porta_cdp), base],
-                                       capture_output=True, text=True, timeout=180, check=False)
+            resultado = subprocess.run([node, str(driver), str(porta_cdp), base, json.dumps(argumentos)],
+                                       capture_output=True, text=True, timeout=limite, check=False)
         except subprocess.TimeoutExpired:
-            return c.ok("driver CDP terminou", False, "timeout de 180 s")
+            return c.ok("driver CDP terminou", False, f"timeout de {limite} s")
         if resultado.returncode != 0:
             return c.ok("driver CDP correu", False,
                         (resultado.stderr or resultado.stdout)[-1500:])
         dados = json.loads(resultado.stdout)
-        c.ok("painel de voo aparece e ARMA (sem voo-indisponivel)", dados.get("ativo") is not None,
-             f"estado ativo = {dados.get('ativo')!r}")
+        pronto = dados.get("pronto") or {}
+        arranque = dados.get("pedido_arranque") or {}
+        c.ok("cockpit PRONTO sem armar: HUD vivo, drone A VOAR, voo já ativo no servidor e NENHUM botão de "
+             "armar no ecrã",
+             pronto.get("ok") is True and pronto.get("armar") is False and arranque.get("ativo") is True
+             and not any((arranque.get("teclas") or {"w": True}).values()),
+             f"pronto em {pronto.get('ms')} ms · modo do HUD = {pronto.get('modo')!r} · botão de armar = "
+             f"{pronto.get('armar')} · voo.pedido no arranque = {arranque}")
         c.ok("keycaps W acende no keydown e apaga no keyup",
-             dados.get("antes", {}).get("w") in ("inativa", "false", "0")
-             and dados.get("durante", {}).get("w") in ("ativa", "true", "1")
-             and dados.get("depois", {}).get("w") in ("inativa", "false", "0"),
+             dados.get("antes", {}).get("w") == "inativa" and dados.get("durante", {}).get("w") == "ativa"
+             and dados.get("depois", {}).get("w") == "inativa",
              f"antes={dados.get('antes', {}).get('w')!r} durante={dados.get('durante', {}).get('w')!r} "
              f"depois={dados.get('depois', {}).get('w')!r}")
         c.ok("só a W pressionada acende (as outras ficam inativas)",
-             all(dados.get("durante", {}).get(l) in ("inativa", "false", "0", None)
-                 for l in "asdqe"),
+             all(dados.get("durante", {}).get(letra) == "inativa" for letra in "asdqe"),
              f"durante = {dados.get('durante')}")
-        c.ok("o painel mostra o v_ref comandado durante a tecla",
-             "1" in str(dados.get("vref_durante", "")),
-             f"v_ref durante = {dados.get('vref_durante')!r} · depois = {dados.get('vref_depois')!r}")
-        bloco = json.loads(controlo.read_text(encoding="utf-8")).get("voo", {})
-        c.ok("o POST chegou ao servidor (ficheiro de controlo tem w=true durante)",
-             bloco.get("teclas", {}).get("w") is True or bloco.get("ativo") is True,
+        janela = dados.get("janela") or {}
+        vref_durante, vref_depois = str(dados.get("vref_durante", "")), str(dados.get("vref_depois", ""))
+        c.ok("a janela Voo (tecla 1) mostra a velocidade pedida: frente +1,0 com a tecla e 0,0 depois",
+             janela.get("aberta") is True and janela.get("indisponivel") is False
+             and re.search(r"frente\s*\+1,0", vref_durante) is not None
+             and re.search(r"frente\s*0,0", vref_depois) is not None,
+             f"janela = {janela} · v_ref durante = {vref_durante!r} · depois = {vref_depois!r}")
+        durante, depois = dados.get("pedido_durante") or {}, dados.get("pedido_depois") or {}
+        c.ok("o POST chegou ao servidor: com a tecla EM BAIXO `voo.pedido` tem w=true (ativo) e, largada, "
+             "w=false",
+             durante.get("ativo") is True and (durante.get("teclas") or {}).get("w") is True
+             and (depois.get("teclas") or {}).get("w") is False
+             and isinstance(durante.get("seq"), int) and isinstance(depois.get("seq"), int)
+             and depois["seq"] > durante["seq"] > int(arranque.get("seq", 0) or 0),
+             f"seq arranque {arranque.get('seq')} → durante {durante.get('seq')} (w="
+             f"{(durante.get('teclas') or {}).get('w')}) → depois {depois.get('seq')} (w="
+             f"{(depois.get('teclas') or {}).get('w')})")
+        avanco = dados.get("avanco") or {}
+        c.ok(f"o W faz o drone ANDAR sem armar: avança ≥ {AVANCO_MIN_M:g} m em +x com a tecla em baixo",
+             avanco.get("ok") is True and (avanco.get("m") or 0.0) >= AVANCO_MIN_M,
+             f"avanço = {avanco.get('m')} m em {avanco.get('parede_ms')} ms de parede (limite "
+             f"{ESPERA_AVANCO_S} s) · de {avanco.get('de')} até {avanco.get('ate')}")
+        c.ok("pressionar D (voar à direita) acende a tecla D e NÃO muda o tema do site (atalho removido)",
+             dados.get("tecla_d") == "ativa"
+             and dados.get("tema_antes") == dados.get("tema_depois") and bool(dados.get("tema_depois")),
+             f"tecla D = {dados.get('tecla_d')!r} · classe do <html> antes={dados.get('tema_antes')!r} "
+             f"depois={dados.get('tema_depois')!r}")
+        bloco, t0 = {}, time.perf_counter()
+        while time.perf_counter() - t0 < 10:              # o POST do keyup do D pode ainda ir a caminho
+            bloco = json.loads(controlo.read_text(encoding="utf-8")).get("voo", {})
+            if not any((bloco.get("teclas") or {"w": True}).values()):
+                break
+            time.sleep(0.2)
+        c.ok("no fim o ficheiro de controlo fica com o voo ativo e as 6 teclas soltas (nada preso)",
+             bloco.get("ativo") is True and not any((bloco.get("teclas") or {"w": True}).values()),
              f"bloco = {bloco}")
-        c.ok("pressionar D (voar à direita) NÃO muda o tema do site (atalho removido)",
-             dados.get("tema_antes") == dados.get("tema_depois") and bool(dados.get("tema_depois")),
-             f"classe do <html> antes={dados.get('tema_antes')!r} depois={dados.get('tema_depois')!r}")
         captura = dados.get("captura")
         if isinstance(captura, str) and captura:
             import base64
-            imagem = _AQUI / "out" / "voo_keycaps.png"
+            imagem = pasta_captura / "voo_keycaps.png"
             imagem.parent.mkdir(parents=True, exist_ok=True)
             imagem.write_bytes(base64.b64decode(captura))
-            c.ok("captura do painel com a W acesa gravada", imagem.is_file(), str(imagem))
+            c.ok("captura do cockpit com a W acesa gravada", imagem.is_file(), str(imagem))
     finally:
         if navegador is not None:
             try:
@@ -878,7 +999,8 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
     p.add_argument("--planta", choices=("cf2", "real"), default="cf2",
                    help="planta do --model (só com --model explícito)")
     p.add_argument("--pasta", type=Path, default=None,
-                   help="pasta de trabalho dos testes (por omissão $TMPDIR/teste_controle_voo)")
+                   help="pasta de trabalho dos testes (por omissão $TMPDIR/teste_controle_voo); com ela, a "
+                        "captura do §4 (`voo_keycaps.png`) também fica lá em vez de em out/")
     p.add_argument("--porta", type=int, default=8571, help="porta base do servidor nos testes")
     return p.parse_args(argv)
 
@@ -906,6 +1028,9 @@ def main(argv=None) -> int:
     args = analisar_argumentos(argv)
     pasta = args.pasta or (Path(os.environ.get("TMPDIR", ".")) / "teste_controle_voo")
     pasta.mkdir(parents=True, exist_ok=True)
+    # o pack de bateria dos servidores lançados aqui (planta real) vive na pasta do TESTE, a não ser que
+    # venha definido de fora: a prova não gasta o pack persistente do dono (`out/bateria/`)
+    os.environ.setdefault("DRONE_PASTA_BATERIA", str(pasta / "bateria"))
     ok = secao_pecas()
     if args.so_pecas:
         print(f"\n[teste] resultado: {'TUDO OK' if ok else 'FALHAS'} (só §1)")
@@ -920,7 +1045,8 @@ def main(argv=None) -> int:
         ok = secao_servidor(modelos, pasta, args.porta) and ok
         ok = secao_honestidade(pasta, args.porta + 2) and ok
         if args.navegador:
-            ok = secao_navegador(modelos, pasta, args.porta + 4) and ok
+            ok = secao_navegador(modelos, pasta, args.porta + 4,
+                                 pasta if args.pasta is not None else _AQUI / "out") and ok
     print(f"\n[teste] resultado: {'TUDO OK' if ok else 'FALHAS — ver linhas FALHA acima'}")
     return 0 if ok else 1
 
