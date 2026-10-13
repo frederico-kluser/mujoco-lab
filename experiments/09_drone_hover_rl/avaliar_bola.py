@@ -70,6 +70,7 @@ SEMENTES_AFINACAO = tuple(range(8100, 8112))      # as do `treinar_bola.py`
 VELOCIDADES = (0.3, 0.5, 0.8)                     # m/s — o teto de velocidade da bola (banda do desenho do dono)
 CAMINHOS = {"pi_116ms": (None, 0.116), "arduino_21ms": (BUILD_ARDUINO, 0.021)}   # nome → (build | None = o da política, latência s)
 LARGURA, ALTURA, FPS = 320, 240, 30.0             # a câmara mono do detetor (a do runner e do `avaliar_nucleo.py`)
+VENTO_DIRECAO_GRAUS = 90.0                        # o vento do `--ventos` sopra de lado (para +y), como no `avaliar_vento.py`
 T_OLHAR_S = 4.0                                   # descola e segura 4 s antes de ligar o OLHAR; a bola começa a mexer aqui
 T_AQUISICAO_S = 4.0                               # as métricas ignoram os primeiros 4 s de OLHAR
 T_MEDIDA_S = 30.0                                 # janela de medida
@@ -244,6 +245,14 @@ def episodio_classico(job: dict) -> dict:
         env.ponto_modo, env.ponto_vel = "parado", vel
         env.camera_sitl.semente = seed                           # o ruído do modo projeção muda com o episódio
         env.reset(seed=seed)
+        # VENTO (opcional): o gerador do cockpit (`vento_natural.VentoNatural`), a soprar desde a descolagem, pareado
+        # pela semente — o mesmo vento para todas as variantes. `vento` = intensidade média W (m/s); 0 = ar parado.
+        gerador = None
+        if float(job.get("vento") or 0.0) > 0.0:
+            import vento_natural
+            gerador = vento_natural.VentoNatural(semente=seed)
+            gerador.definir(True, float(job["vento"]), bool(job.get("vento_aleatorio", True)),
+                            float(job.get("vento_direcao", VENTO_DIRECAO_GRAUS)))
         verdade = Verdade(env.model)
         cfg = env.nucleo.cfg
         d_alvo, yaw_teto = float(cfg.seguidor.dist_alvo_m), float(cfg.cascata.taxa_yaw_max)
@@ -257,6 +266,8 @@ def episodio_classico(job: dict) -> dict:
                 if job.get("sem_teto"):                      # estudo do limite físico: velocidades acima da banda do desenho
                     env.ponto_vel = vel
             env.fc.definir_comando({"modo": "olhar"} if k >= k_olhar else {})
+            if gerador is not None:
+                env.definir_vento(*vento_natural.polar_do_vetor(gerador.passo(env.dt_decisao)))
             _o, _r, term, _tr, _i = env.step(acao)
             d = env._derivados()
             s = env.nucleo.saida
@@ -392,8 +403,12 @@ def executar(jobs: list[dict], n_jobs: int) -> list[dict]:
 
 
 def jobs_variante(variante: str, sementes, velocidades=VELOCIDADES, caminhos=CAMINHOS, seguidor: dict | None = None,
-                  **extra) -> list[dict]:
-    """Os episódios de uma variante: `antes` | `depois` | `ppo` | (qualquer nome + `seguidor` = campos a sobrepor)."""
+                  ventos=(0.0,), **extra) -> list[dict]:
+    """Os episódios de uma variante: `antes` | `depois` | `ppo` | (qualquer nome + `seguidor` = campos a sobrepor).
+
+    `ventos` = intensidades médias (m/s) do vento ALEATÓRIO do cockpit a soprar de lado durante todo o episódio; cada
+    W > 0 acrescenta um caminho `<caminho>_vento<W>` (só nas variantes clássicas — o tracker PPO já perde em ar parado).
+    """
     u_yaw = u_yaw_identificado()
     jobs = []
     if variante == "ppo":
@@ -403,8 +418,11 @@ def jobs_variante(variante: str, sementes, velocidades=VELOCIDADES, caminhos=CAM
         return jobs
     seg = seguidor_antes() if variante == "antes" else dict(seguidor or {})
     for nome, (build, lat) in caminhos.items():
-        jobs += [{"kind": "classico", "variante": variante, "caminho": nome, "build": build, "latencia": lat, "u_yaw": u_yaw,
-                  "vel": v, "seed": s, "seguidor": seg, **extra} for v in velocidades for s in sementes]
+        for w in ventos:
+            rotulo = nome if not w else f"{nome}_vento{w:g}"
+            jobs += [{"kind": "classico", "variante": variante, "caminho": rotulo, "build": build, "latencia": lat,
+                      "u_yaw": u_yaw, "vel": v, "seed": s, "seguidor": seg, "vento": float(w), **extra}
+                     for v in velocidades for s in sementes]
     return jobs
 
 
@@ -479,6 +497,10 @@ def main(argv=None) -> int:
     p.add_argument("--variantes", default="antes,depois,ppo")
     p.add_argument("--velocidades", default=",".join(f"{v:g}" for v in VELOCIDADES))
     p.add_argument("--sem-teto", action="store_true", help="aceita velocidades da bola acima da banda do desenho (estudo do limite)")
+    p.add_argument("--ventos", default="0",
+                   help="intensidades (m/s) do vento ALEATÓRIO do cockpit a soprar de lado, separadas por vírgula; 0 = ar "
+                        "parado (a avaliação publicada). Ex.: `--variantes depois --ventos 0,2,3 --json out/bola/"
+                        "avaliacao_vento.json` (dê um --json próprio: o de omissão é o da avaliação sem vento)")
     p.add_argument("--jobs", type=int, default=min(12, max(1, (os.cpu_count() or 2) - 2)))
     p.add_argument("--json", type=Path, default=SAIDA_JSON)
     args = p.parse_args(argv)
@@ -487,10 +509,15 @@ def main(argv=None) -> int:
     sementes = SEMENTES_AVALIACAO[:2] if args.rapido else SEMENTES_AVALIACAO[: args.sementes]
     velocidades = tuple(float(v) for v in args.velocidades.split(","))
     extra = {"sem_teto": True} if args.sem_teto else {}
-    jobs = [j for var in args.variantes.split(",") for j in jobs_variante(var.strip(), sementes, velocidades, **extra)]
+    ventos = tuple(float(w) for w in args.ventos.split(","))
+    if any(w > 0 for w in ventos) and args.json == SAIDA_JSON:
+        p.error("--ventos com vento: dê um --json próprio (ex.: out/bola/avaliacao_vento.json) — o de omissão é o publicado sem vento")
+    jobs = [j for var in args.variantes.split(",")
+            for j in jobs_variante(var.strip(), sementes, velocidades, ventos=ventos, **extra)]
     t0 = time.perf_counter()
     print(f"SEGUIR A BOLA (aleatória, OU com teto) · {len(jobs)} episódios de {T_OLHAR_S + T_AQUISICAO_S + T_MEDIDA_S:g} s "
-          f"(medida {T_MEDIDA_S:g} s) · sementes de avaliação {sementes[0]}..{sementes[-1]} · {args.jobs} processos · SEM VENTO", flush=True)
+          f"(medida {T_MEDIDA_S:g} s) · sementes de avaliação {sementes[0]}..{sementes[-1]} · {args.jobs} processos · "
+          + ("SEM VENTO" if not any(ventos) else f"vento aleatório de lado: {list(ventos)} m/s"), flush=True)
     res = executar(jobs, args.jobs)
     ag = agregar(jobs, res)
     imprimir(ag)

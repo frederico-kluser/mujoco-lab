@@ -466,7 +466,10 @@ def secao_malha(c: Checagens, n_jobs: int) -> None:
     jobs = [j for var in ("antes", "depois") for j in ab.jobs_variante(var, SEMENTES_TESTE, (0.5,), **extra)]
     rep = [{**j, "camera_modo": "projecao", "t_medida": 6.0, "variante": f"rep{i}"}
            for i in (0, 1) for j in ab.jobs_variante("depois", SEMENTES_TESTE[:1], (0.5,), caminhos={"pi_116ms": ab.CAMINHOS["pi_116ms"]})]
-    res = ab.executar(jobs + rep, n_jobs)
+    # com VENTO: a lei da bola por cima da cascata com observador de perturbação, vento aleatório do cockpit a 3 m/s
+    vento = ab.jobs_variante("depois", SEMENTES_TESTE, (0.5,), caminhos={"pi_116ms": ab.CAMINHOS["pi_116ms"]},
+                             ventos=(3.0,), **extra)
+    res = ab.executar(jobs + rep + vento, n_jobs)
     por = {}
     for j, r in zip(jobs, res[: len(jobs)], strict=True):
         por.setdefault((j["variante"], j["caminho"]), []).append(r)
@@ -495,6 +498,15 @@ def secao_malha(c: Checagens, n_jobs: int) -> None:
          med("depois", "pi_116ms", "roll_rms_graus") > max(0.8, 1.3 * med("antes", "pi_116ms", "roll_rms_graus"))
          and med("depois", "pi_116ms", "caminho_drone_m") > 2.0,
          f"roll RMS {med('antes', 'pi_116ms', 'roll_rms_graus'):.2f}° → {med('depois', 'pi_116ms', 'roll_rms_graus'):.2f}°")
+    rv = res[len(jobs) + len(rep):]
+    c.ok(f"[§5] COM VENTO aleatório de 3 m/s (o do cockpit, de lado; {len(rv)} sementes, bola a 0,5 m/s, 116 ms): o drone não cai, "
+         "a bola fica 100 % do tempo no campo e o erro de centragem RMS fica abaixo de 6° (medido em 12 sementes: 3,9 ± 0,7°, "
+         "pior 5,1°; sem vento 2,2°)",
+         len(rv) == len(vento) and not any(r.get("terminou") for r in rv)
+         and all(r["frac_fov"] == 1.0 and r["centro_rms_graus"] < 6.0 for r in rv),
+         "; ".join(f"seed {j['seed']}: RMS {r.get('centro_rms_graus', float('nan')):.2f}° · campo "
+                   f"{100 * r.get('frac_fov', 0.0):.0f} %{' · CAIU' if r.get('terminou') else ''}"
+                   for j, r in zip(vento, rv, strict=False)))
     r0, r1 = res[len(jobs)], res[len(jobs) + 1]
     c.ok("[§5] REPRODUTÍVEL: o mesmo episódio (semente, velocidade, latência; câmara em modo projeção) corrido 2× em processos "
          "diferentes tem a MESMA bola, bit a bit (velocidade média e LOS iguais), e o mesmo voo até ao arredondamento da planta "
