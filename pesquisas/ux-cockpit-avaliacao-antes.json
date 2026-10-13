@@ -1,0 +1,111 @@
+{
+  "_meta": {
+    "skill": "uxui-evaluator",
+    "data": "2026-10-12",
+    "alvo": "experiments/09_drone_hover_rl/site (estado do commit b153c3d, ANTES do redesenho cockpit)",
+    "evidencia_medida": {
+      "viewport": "1920x1080 (Chromium headless, sim_site.py --sem-janela --controlador classico)",
+      "altura_pagina_operacao_px": 4784,
+      "ecras_de_scroll": 4.4,
+      "cartoes": 24,
+      "botoes": 51,
+      "entradas": 10,
+      "palavras_visiveis": 2223,
+      "posicao_y_da_imagem_fpv_px": 2929,
+      "seccao_vento": { "altura_px": 1225, "botoes": 18, "entradas": 8, "palavras": 334 }
+    },
+    "descricao_avaliada": "Site de pilotagem de um drone simulado. Página única com scroll vertical, 5 separadores (Operação, Rede, Vento, Bordo, Tudo) e 24 cartões. A secção Operação empilha: cabeçalho de episódio (episódio, passos, retorno, modelo), 4 valores atuais, seletor de controlador (RL vs Clássico C++), controlo de voo por teclas WASD/QE + Z/C/X/V atrás de um botão ARMAR CONTROLO, painel «quem faz o quê», painel de instrumentos, câmara da janela 3D com dois pads de orbitar e 6 vistas rápidas, resumo de bateria, e só então (a 2929 px do topo) a imagem da câmara FPV com seletor FPV/Simulação e tabelas de custo do Raspberry Pi 5, seguida de 4 gráficos. A secção Vento tem 3 sliders (força, azimute, elevação), APLICAR/PARAR, e um bloco «vento dinâmico» com 4 modos (parado, rajadas, aleatória, dryden), parâmetros por modo (p, duração, u_max, sigma, L) e 3 botões de ação (rajada agora, frente agora, parar dinâmico). A barra superior fixa mostra REINICIAR, o toggle SEM REINÍCIO/CONTÍNUO e uma linha de estado com o jargão do treino (loop=false · estado=episodio_terminado · fim=tempo).",
+    "nota": "As capturas do «antes» foram tiradas nesta sessão; a avaliação do «depois» está em pesquisas/ux-cockpit-avaliacao-depois.json."
+  },
+  "interface_type": "dashboard",
+  "interface_type_note": "Painel de pilotagem em tempo real (dashboard + controlo). O tipo dominante é dashboard; há também formulários de parâmetros (vento) e um vídeo ao vivo que devia ser o elemento primário.",
+  "overall_score": 29,
+  "band": "poor",
+  "findings": [
+    {
+      "id": "finding-1",
+      "principle": { "code": "F.1.1.02", "slug": "cognitive-load", "title": "Cognitive Load", "part": "part-1" },
+      "severity": "critical",
+      "message": "A secção de pilotagem ocupa 4784 px a 1080p (4,4 ecrãs) com 24 cartões, 51 botões e ~2200 palavras visíveis ao mesmo tempo. Pilotar um drone é uma tarefa de atenção contínua: cada scroll tira os olhos do veículo e o volume de texto compete com os poucos sinais que importam (altitude, atitude, bateria, modo).",
+      "remediation": "Layout de ecrã único sem scroll de página: a vista do drone ocupa 100 % do viewport e a informação essencial (≤ 7 leituras) vive num HUD sobreposto; tudo o resto abre a pedido em janelas flutuantes.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-2",
+      "principle": { "code": "D.2.1.02", "slug": "visual-hierarchy", "title": "Visual Hierarchy", "part": "part-3" },
+      "severity": "critical",
+      "message": "O único retorno direto do que as teclas fazem — a imagem da câmara (FPV ou 3.ª pessoa) — está a 2929 px do topo, 2,7 ecrãs abaixo das teclas WASD/QE. É impossível ver ao mesmo tempo o comando e o efeito: o elemento primário da tarefa tem a hierarquia de um detalhe.",
+      "remediation": "A vista (1.ª ou 3.ª pessoa) é o fundo permanente do ecrã, sempre visível; as teclas de voo e os instrumentos sobrepõem-se a ela. Troca de vista com uma tecla e miniatura da outra vista.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-3",
+      "principle": { "code": "F.2.2.03", "slug": "hicks-law", "title": "Hick's Law", "part": "part-1" },
+      "severity": "warning",
+      "message": "O vento expõe 3 sliders + 4 modos dinâmicos + 2 a 4 parâmetros por modo + 5 botões de ação (18 botões e 8 entradas na secção) para o que o dono descreve como 3 decisões: ligar, intensidade, aleatoriedade. Os modos (rajadas/aleatória/dryden/frente) são vocabulário do treino, não do piloto.",
+      "remediation": "Um painel de vento com 3 controlos: interruptor LIGADO, slider de intensidade (m/s) e interruptor ALEATORIEDADE (turbulência + rajadas escaladas pela intensidade); a direção escolhe-se arrastando uma bússola. Os modos internos deixam de ser visíveis.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-4",
+      "principle": { "code": "F.2.2.03", "slug": "hicks-law", "title": "Hick's Law", "part": "part-1" },
+      "severity": "warning",
+      "message": "O seletor «Controlador · quem pilota» obriga a escolher entre RL e Clássico C++ quando a medição do próprio projeto já decidiu qual é melhor; a troca reinicia o episódio. É uma decisão de engenharia exposta como opção de operação.",
+      "remediation": "Remover o seletor: o site arranca sempre com o controlador que ganhou na medição e mostra apenas, num painel de sistema, quem está a voar.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-5",
+      "principle": { "code": "C.1.4.01", "slug": "error-prevention", "title": "Error Prevention", "part": "part-2" },
+      "severity": "warning",
+      "message": "As teclas de voo só funcionam depois de carregar em ARMAR CONTROLO; antes disso carregar em W não faz nada e nada explica porquê junto ao vídeo. É um erro de modo clássico: o utilizador age e o sistema ignora em silêncio.",
+      "remediation": "O controlo de voo arranca ATIVO. As teclas são captadas sempre que o foco não está num campo de texto, e os keycaps acendem no HUD como confirmação imediata.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-6",
+      "principle": { "code": "F.1.1.03", "slug": "mental-model", "title": "Mental Model", "part": "part-1" },
+      "severity": "warning",
+      "message": "A barra de estado fala a língua do treino por reforço («episódio 1 concluído · sem reinício», «retorno +426,53», «loop=false · estado=episodio_terminado · fim=tempo», SEM REINÍCIO/CONTÍNUO). O modelo mental do piloto é «está a voar / caiu / pousado»; um episódio de 10 s que «termina» com o drone a voar normalmente contradiz o que ele vê.",
+      "remediation": "Estado em linguagem de voo (A VOAR, NO CHÃO, CAIU, SEM LIGAÇÃO) e um único REINICIAR; episódios, retorno e loop saem da interface de pilotagem.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-7",
+      "principle": { "code": "D.1.1.01", "slug": "progressive-disclosure", "title": "Progressive Disclosure", "part": "part-3" },
+      "severity": "warning",
+      "message": "Tabelas de engenharia (custo de CPU do Raspberry Pi 5 por etapa, bitrate, observações da rede, pilha de bordo) aparecem ao mesmo nível e com o mesmo peso que os controlos de voo. O acordeão «detalhes técnicos» existe mas a maior parte do detalhe está sempre aberta.",
+      "remediation": "Três níveis: HUD (essencial, sempre), janelas (a pedido, uma por assunto), e dentro de cada janela o detalhe técnico recolhido por omissão.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-8",
+      "principle": { "code": "I.2.2.02", "slug": "fitts-law", "title": "Fitts's Law", "part": "part-4" },
+      "severity": "suggestion",
+      "message": "Orbitar a câmara faz-se em dois pads pequenos (vista de cima / vista de lado) + slider + 6 botões de vista rápida, longe da imagem que controlam. A manipulação é indireta e os alvos são pequenos.",
+      "remediation": "Manipulação direta: arrastar a própria vista em 3.ª pessoa orbita, a roda do rato aproxima/afasta e o duplo clique repõe a vista.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-9",
+      "principle": { "code": "C.1.1.01", "slug": "consistency-and-standards", "title": "Consistency and Standards", "part": "part-2" },
+      "severity": "suggestion",
+      "message": "Estado velho sobrevive entre sessões: o site arrancou com o selo «ALEATÓRIA a correr» (vento dinâmico de uma sessão anterior) com o vento a 0 m/s. Há ainda dois conceitos de câmara em cartões separados («Câmara da janela 3D» e «Câmara FPV», com o seletor FPV/Simulação escondido no segundo).",
+      "remediation": "Arranque autoritativo: vento desligado e modos limpos em cada arranque. Um único conceito de VISTA com dois valores (1.ª pessoa · 3.ª pessoa).",
+      "business_impact": null
+    }
+  ],
+  "strengths": [
+    {
+      "principle": { "code": "S.1.3.01", "slug": "ai-transparency", "title": "AI Transparency" },
+      "message": "O site distingue sempre o que é medido do que é modelo/estimado (latência, custo de CPU, estimador de bordo vs verdade do simulador) e nunca inventa um estado quando a telemetria falta."
+    },
+    {
+      "principle": { "code": "C.1.4.01", "slug": "error-prevention", "title": "Error Prevention" },
+      "message": "O REINICIAR exige manter premido (hold-to-confirm) e o PARAR VENTO desliga base e dinâmica numa só escrita atómica — as ações destrutivas estão bem protegidas."
+    }
+  ],
+  "priority_fixes": ["finding-1", "finding-2", "finding-5", "finding-3", "finding-6", "finding-4", "finding-7"],
+  "api_enriched": false,
+  "api_note": "Install the uxuiprinciples API key for enriched findings with citations and business impact data. See uxuiprinciples.com/en/checkout"
+}
