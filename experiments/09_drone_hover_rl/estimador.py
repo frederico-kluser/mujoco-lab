@@ -27,6 +27,15 @@ ALFA_FLUXO = 0.35        # PT1 da velocidade do fluxo, por amostra nova
 DECAI_FLUXO = 0.995      # sem fluxo válido, a velocidade estimada decai devagar (por passo de física)
 
 
+def _floats(v) -> list:
+    """Leitura vetorial (ndarray, lista ou tuplo) → lista de floats do Python. Um `ndarray` de float64 converte-se
+    de uma vez com `tolist()` (a 500 Hz, `float(x)` elemento a elemento num gerador custava mais do que a conta)."""
+    tipo = getattr(v, "dtype", None)
+    if tipo is not None and tipo.char == "d":
+        return v.tolist()
+    return [float(x) for x in v]
+
+
 class EstimadorBordo:
     """Estimação de bordo a partir das leituras medidas (escalares Python: barato a 500 Hz)."""
 
@@ -52,8 +61,8 @@ class EstimadorBordo:
               fluxo, fluxo_ok: bool, n_fluxo: int) -> None:
         """Um passo de física com as leituras atuais (`n_*` = contador de amostras, p/ detetar novas)."""
         dt = self.dt
-        p, q, r = (float(v) for v in giro)
-        ax, ay, az = (float(v) for v in acc)
+        p, q, r = _floats(giro)
+        ax, ay, az = _floats(acc)
         sf, cf = math.sin(self.roll), math.cos(self.roll)
         ct = math.cos(self.pitch)
         tt = math.tan(self.pitch) if abs(ct) > 1e-3 else 0.0
@@ -85,7 +94,7 @@ class EstimadorBordo:
         if n_fluxo != self._n_fluxo:
             self._n_fluxo = n_fluxo
             if fluxo_ok and tof_ok:
-                fx, fy = (float(v) for v in fluxo)
+                fx, fy = _floats(fluxo)
                 vx_m = tof_d * (q - fy)
                 vy_m = -tof_d * (fx + p)
                 self.vx += ALFA_FLUXO * (vx_m - self.vx)

@@ -122,7 +122,8 @@ dashboard seguir na mesma linha do tempo). O `--out-dir` deve ser NOVO: o run re
 Receita (SB3 2.9.0 em CPU, `MlpPolicy` MLP [64, 64] tanh). Os DEFAULT desta peça são os que o smoke do I1-w
 mostrou necessários com a recompensa v2 (os defaults do SB3 mal aprendem aqui): `--lr 1e-4`,
 `--ent-coef 0,001`, `--log-std-init −0,5` (σ inicial ≈ 0,61; o 0,0 do SB3 explora demasiado numa ação de
-4 canais com bónus estreito) · `n_steps 512` × `n_envs 8` = 4 096 passos por rollout (≈ 16× o batch) ·
+4 canais com bónus estreito) · ROLLOUT de 4 096 passos (≈ 16× o batch) repartido pelos ambientes
+(`n_steps = 4096 / n_envs`: 512 × 8, 256 × 16, 128 × 32 — ver «Nº de ambientes» abaixo) ·
 `batch_size 256` · `n_epochs 10` · `gamma 0,99` · `gae_lambda 0,95` · `clip_range 0,2` · `vf_coef 0,5` ·
 `max_grad_norm 0,5` · **L2** `weight_decay 1e-4` pelo `policy_kwargs["optimizer_kwargs"]` (aceite pelo SB3
 2.9.0: `ActorCriticPolicy._build` faz `optimizer_class(self.parameters(), lr, **optimizer_kwargs)` — com o
@@ -131,6 +132,37 @@ Adam por omissão, `weight_decay` é exatamente o L2; o valor EFETIVO é impress
 env · `torch.set_num_threads(1)` (MLP minúscula com batch pequeno: o intra-op do torch só traz overhead —
 medido nesta máquina, +15 % de débito com n_envs=4) · **SEM VecNormalize** (a obs já sai normalizada do env
 → o grafo ONNX do deploy fica puro; não adicionar).
+
+Nº DE AMBIENTES (revisão de 2026-10-12, `bench_treino.py escala`). O que define a dinâmica de aprendizagem do PPO é
+o TAMANHO DO ROLLOUT (`n_steps × n_envs` = passos de ambiente entre duas atualizações da política) e quantas vezes
+cada amostra entra num passo de gradiente (`n_epochs`, em lotes de `batch_size`) — não o `n_envs` em si. Antes o
+`n_steps` era fixo (512) e o rollout ia atrás do `--n-envs` (4 envs ⇒ 2 048 passos e 80 passos de gradiente por
+atualização; 16 envs ⇒ 8 192 e 320): mudar o paralelismo mudava a receita sem aviso. Agora o rollout é FIXO em
+`PASSOS_ROLLOUT = 4 096` e é o `n_steps` que se ajusta (`passos_por_env`):
+
+    n_steps = (múltiplo de batch/mdc(batch, n_envs)) mais próximo de 4096/n_envs
+    ⇒ n_steps × n_envs é sempre múltiplo de 256 (nenhum minilote truncado) e, para n_envs potência de 2 até 32,
+      exatamente 4 096: 16 minilotes × 10 épocas = 160 passos de gradiente por atualização, 10 por amostra —
+      os MESMOS números do padrão antigo (512 × 8), qualquer que seja o `--n-envs`.
+
+O que muda com mais ambientes é só a composição do rollout: mais trajetórias, mais curtas (menos correlação entre
+amostras; a GAE corta mais cedo e apoia-se no crítico — com γ·λ = 0,94 o peso para lá de 64 passos é < 2 %, por
+isso `n_steps` ≥ 64 não altera a vantagem de forma apreciável; abaixo disso o `passos_por_env` não desce).
+O PADRÃO do `--n-envs` deixa de ser um 8 fixo e passa a sair da máquina (`n_envs_padrao`): a maior potência de 2
+que cabe nos CPUs LÓGICOS DE DESEMPENHO (núcleos P com os hyperthreads), entre 4 e 16 — nesta máquina (i9-14900HX:
+8 núcleos P / 16 threads P + 16 E) dá 16. É o que a MEDIÇÃO com a máquina livre escolhe (2026-10-12, passos de
+treino por segundo com o update incluído, `bench_treino.py escala --n-envs-lista 1,4,8,16,24 --com-original`):
+
+    n_envs        1      4      8     16     24
+    atual       524   1736   2417   3578   3405
+    original    278    918   1345   2294   2935
+
+16 ambientes rendem +48 % sobre 8, e 24 já perde (o `SubprocVecEnv` é SÍNCRONO: cada passo do vec espera pelo
+ambiente MAIS LENTO, e os que caem em núcleos E marcam o passo). Uma primeira estimativa feita com a máquina
+carregada («de 9 a 14 fica pior que 8 e 16 dá ≈ +12 %») NÃO se confirmou — vale a medição. Noutra máquina:
+`bench_treino.py escala` mede o joelho, e `--n-envs N` manda — com o rollout e a cadência de avaliação fixos,
+mudar o N já não muda a receita.
+`--n-steps` fixa o `n_steps` à mão (aí o rollout volta a depender do `--n-envs`: por conta de quem o usa).
 
 Saída (tudo em `--out-dir`, por omissão `experiments/09_drone_hover_rl/out/runs/seed<seed>`):
 
@@ -145,16 +177,34 @@ Saída (tudo em `--out-dir`, por omissão `experiments/09_drone_hover_rl/out/run
                       do currículo; `frac_no_alvo` e `frac_alvo_total` = bónus COMPLETO xy+z+yaw, iguais
                       entre si no contrato v2 do env; `mean_yaw_err` = média de |yaw_err| em rad, alvo 0;
                       `u_vento` = teto de vento EM VIGOR a partir desta avaliação — já com o avanço)
+    train_diag.jsonl  UMA linha por ATUALIZAÇÃO do PPO (ficheiro novo, 2026-10-12; nada o lê — é diagnóstico):
+                      onde vai o relógio (`s_rollout` = ambientes + inferência, `s_avaliacao` = EvalCallback +
+                      métricas, `s_update` = passos de gradiente) e os indicadores que o SB3 calcula mas esta peça
+                      não mostrava: `approx_kl`, `clip_fraction`, `explained_variance`, `std` (σ da política),
+                      `value_loss`, `policy_gradient_loss`, `entropy_loss`
 
 Contagem (armadilha do SB3): `EvalCallback`/`CheckpointCallback` contam CHAMADAS do callback, e cada chamada
 é UM passo do VEC (`n_calls = num_timesteps / n_envs`) — não um passo de ambiente. `--eval-freq` está em
 passos do vec e é reduzido automaticamente em treinos curtos para garantir ≥4 avaliações (≥4 linhas no
-`train_log.jsonl`), sem alterar a cadência pedida nos treinos longos.
+`train_log.jsonl`), sem alterar a cadência pedida nos treinos longos. POR OMISSÃO a cadência é fixada em passos
+de AMBIENTE (`PASSOS_ENTRE_AVALIACOES` = 40 000, os 5 000 passos do vec × 8 envs de sempre): com outro `--n-envs`
+o `--eval-freq` por omissão é 40 000 / n_envs, para o currículo (que sobe no máximo um estágio por avaliação) e o
+`best_model` não mudarem de ritmo só porque mudou o paralelismo.
+
+CUSTO DA AVALIAÇÃO (medido nos `train_log.jsonl` de 2026-10-11: 716 passos/s de relógio com 8 envs, contra
+≈ 1 500 passos/s só de rollout + update): cada avaliação corre 10 + 3 episódios de 500 passos num ÚNICO ambiente,
+no processo principal, com os ambientes de treino parados — a cada 40 000 passos isso é METADE do relógio do
+treino. `--eval-envs N` (por omissão 1 = o comportamento de sempre) corre os 10 episódios do `EvalCallback` em N
+processos (`SubprocVecEnv`, sementes `seed+1000+i`): o mesmo critério e os mesmos episódios determinísticos sem
+vento, mas com estados iniciais de N streams — os números não são comparáveis passo a passo com um run de
+`--eval-envs 1`, só estatisticamente.
 
 Reprodutibilidade: `--seed` fixa o PPO, as `n_envs` cópias do env (`seed+i`), o env de AVALIAÇÃO (`seed+1 000`)
 e o env das métricas (`seed+10 000`) → a mesma seed do CLI dá o mesmo `evaluations.npz` e a mesma telemetria
 de avaliação (avanços de currículo incluídos, porque dependem só da política; só `fps`/`elapsed_s` do JSONL
-variam, por serem wall-clock). `--timesteps`, `--n-envs` são inteiros ≥ 1, `--vento-max` está em [0, 10],
+variam, por serem wall-clock). ATENÇÃO: o `--n-envs` faz parte da receita reprodutível (decide quantos streams de
+ambiente há e o `n_steps`) e o seu PADRÃO depende da máquina — para repetir um run noutra máquina dê-o explícito
+(o valor em vigor sai no cabeçalho do treino). `--timesteps`, `--n-envs` são inteiros ≥ 1, `--vento-max` está em [0, 10],
 `--avanco-frac` em [0, 1] e `--curriculo-vento` é uma lista de tetos em [0, 10] ESTRITAMENTE crescente:
 valores inválidos dão erro de argparse com `exit 2` (nunca um traceback do SubprocVecEnv).
 """
@@ -163,6 +213,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 import warnings
@@ -204,6 +255,8 @@ from torch import nn
 PASTA_RUNS = Path("experiments/09_drone_hover_rl/out/runs")
 ARQUIVO_LOG = "train_log.jsonl"
 N_EVAL_EPISODES = 10        # episódios do EvalCallback (retorno médio)
+PASSOS_ENTRE_AVALIACOES = 40_000   # passos de AMBIENTE entre avaliações por omissão (5 000 do vec × 8 envs)
+ARQUIVO_DIAG = "train_diag.jsonl"  # uma linha por atualização do PPO: relógio (rollout/avaliação/update) + KL…
 N_EPISODIOS_METRICAS = 3    # rollouts determinísticos PRÓPRIOS (z / dist_xy / yaw_err / no_alvo)
 CHECKPOINT_PASSOS = 100_000  # passos de AMBIENTE entre checkpoints (÷ n_envs → passos do vec)
 MIN_AVALIACOES = 4          # garante ≥4 linhas no train_log.jsonl mesmo em treinos curtos
@@ -216,15 +269,113 @@ VENTO_MAX_LIMITE = 10.0     # m/s — acima disto o CF2 real perde posição (#7
 FRAC_AVANCO = 0.5           # `frac_xy_z` (xy+z no alvo, SEM yaw) que faz subir um estágio (ronda 3)
 
 # hiperparâmetros do PPO (evidência do smoke do I1-w: os defaults do SB3 mal aprendem com a recompensa v2)
-N_STEPS = 512               # passos por env e por rollout: 512 × n_envs(=8) = 4 096 ≈ 16× o batch
-BATCH_SIZE = 256            # tem de dividir n_steps × n_envs (512 ≥ 256 → divide qualquer n_envs ≥ 1)
+PASSOS_ROLLOUT = 4096       # passos de ambiente por atualização (n_steps × n_envs): FIXO, qualquer que seja o n_envs
+N_STEPS = 512               # o n_steps de referência: 512 × 8 envs = 4 096 ≈ 16× o batch (ver `passos_por_env`)
+N_STEPS_MINIMO = 64         # abaixo disto a GAE (γ·λ = 0,94) ficava truncada de forma apreciável
+BATCH_SIZE = 256            # divide SEMPRE n_steps × n_envs (o `passos_por_env` garante-o para qualquer n_envs)
 N_EPOCHS = 10
+N_ENVS_MIN, N_ENVS_MAX = 4, 16   # faixa do padrão AUTOMÁTICO do --n-envs (ver `n_envs_padrao`)
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 VF_COEF = 0.5
 MAX_GRAD_NORM = 0.5
 PESO_L2 = 1e-4              # weight_decay do Adam (#7978: o regularizador que mais vezes ajuda em PPO)
+
+
+# ----------------------------------------------------------------------------------------------- paralelismo
+def nucleos_fisicos() -> int:
+    """Núcleos FÍSICOS que este processo pode usar (hyperthreads contam uma vez; respeita a afinidade/cgroup).
+
+    Linux: pares (pacote, núcleo) distintos em `/sys/devices/system/cpu/cpu*/topology` entre os CPUs da afinidade
+    do processo. Sem essa informação (outros sistemas): metade dos CPUs lógicos, no mínimo 1.
+    """
+    try:
+        cpus = sorted(os.sched_getaffinity(0))
+    except AttributeError:                           # macOS/Windows
+        cpus = list(range(os.cpu_count() or 1))
+    nucleos = set()
+    for cpu in cpus:
+        base = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+        try:
+            nucleos.add(((base / "physical_package_id").read_text().strip(), (base / "core_id").read_text().strip()))
+        except OSError:
+            return max(1, len(cpus) // 2)
+    return max(1, len(nucleos))
+
+
+def _lista_de_cpus(texto: str) -> set[int]:
+    """`"0-15,20,22-23"` (formato cpulist do Linux) → conjunto de índices de CPU."""
+    cpus: set[int] = set()
+    for parte in texto.strip().split(","):
+        if parte:
+            a, _, b = parte.partition("-")
+            cpus.update(range(int(a), int(b or a) + 1))
+    return cpus
+
+
+def nucleos_de_desempenho() -> int:
+    """Núcleos físicos de DESEMPENHO que este processo pode usar.
+
+    Num CPU híbrido da Intel (núcleos P + E) o Linux lista os P em `/sys/devices/cpu_core/cpus`: contam-se só esses
+    (hyperthreads uma vez). Nos outros CPUs (ou sem essa informação) são todos os núcleos físicos.
+    """
+    try:
+        p_cpus = _lista_de_cpus(Path("/sys/devices/cpu_core/cpus").read_text())
+        afinidade = set(os.sched_getaffinity(0))
+        nucleos = {(Path(f"/sys/devices/system/cpu/cpu{c}/topology/physical_package_id").read_text().strip(),
+                    Path(f"/sys/devices/system/cpu/cpu{c}/topology/core_id").read_text().strip())
+                   for c in p_cpus & afinidade}
+    except (OSError, ValueError, AttributeError):
+        return nucleos_fisicos()
+    return len(nucleos) or nucleos_fisicos()
+
+
+def threads_de_desempenho() -> int:
+    """CPUs LÓGICOS de desempenho que este processo pode usar (os núcleos P com os seus hyperthreads).
+
+    Num CPU híbrido da Intel são os de `/sys/devices/cpu_core/cpus` dentro da afinidade do processo; nos outros
+    CPUs (ou sem essa informação) devolve os núcleos FÍSICOS — sem medição nessa classe de máquina fica-se pelo
+    número conservador.
+    """
+    try:
+        p_cpus = _lista_de_cpus(Path("/sys/devices/cpu_core/cpus").read_text())
+        return len(p_cpus & set(os.sched_getaffinity(0))) or nucleos_fisicos()
+    except (OSError, ValueError, AttributeError):
+        return nucleos_fisicos()
+
+
+def n_envs_padrao(nucleos: int | None = None) -> int:
+    """Padrão do `--n-envs`: a maior potência de 2 que cabe nos CPUs lógicos de desempenho, entre 4 e 16.
+
+    Potência de 2 ⇒ o rollout fica EXATAMENTE em `PASSOS_ROLLOUT` (4096 = 2¹²); teto 16 ⇒ sobra máquina (e memória)
+    para um 2.º seed, a avaliação e o painel.
+
+    MEDIDO com a máquina livre (2026-10-12, `bench_treino.py escala --n-envs-lista 1,4,8,16,24 --com-original`,
+    i9 8P+16E / 32 threads, passos de treino por segundo com o update incluído): 1 → 524 · 4 → 1736 · 8 → 2417 ·
+    **16 → 3578** · 24 → 3405 (o código original: 278 · 918 · 1345 · 2294 · 2935). 16 ambientes rendem +48 % sobre
+    8 e 24 já perde — por isso o padrão conta os hyperthreads dos núcleos P (16 nesta máquina) e não só os núcleos
+    físicos (a estimativa «16 dá ≈ +12 %» feita sob carga não se confirmou). Repetir a medição noutra máquina com
+    `bench_treino.py escala`.
+    """
+    n = threads_de_desempenho() if nucleos is None else int(nucleos)
+    potencia = 1 << max(0, n.bit_length() - 1)       # maior potência de 2 ≤ n
+    return max(N_ENVS_MIN, min(N_ENVS_MAX, potencia))
+
+
+def passos_por_env(n_envs: int, batch_size: int = BATCH_SIZE, rollout: int = PASSOS_ROLLOUT) -> int:
+    """`n_steps` do PPO para `n_envs` ambientes com o ROLLOUT fixo (a conta está no docstring do módulo).
+
+    Devolve o múltiplo de `batch/mdc(batch, n_envs)` mais próximo de `rollout/n_envs` — assim `n_steps × n_envs` é
+    múltiplo do lote (nenhum minilote truncado) e o mais perto possível de `rollout` (exato se `n_envs` dividir
+    `rollout/batch`·mdc: 1, 2, 4, 8, 16, 32…; 24 envs ⇒ 160 × 24 = 3 840). Nunca desce de `N_STEPS_MINIMO`.
+    """
+    n_envs = int(n_envs)
+    grao = batch_size // math.gcd(batch_size, n_envs)
+    n_steps = grao * max(1, round(rollout / (n_envs * grao)))
+    while n_steps < N_STEPS_MINIMO:
+        n_steps += grao
+    return n_steps
 
 
 # ----------------------------------------------------------------------------------------------- CLI
@@ -325,8 +476,14 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--timesteps", type=_inteiro_positivo, default=500_000,
                    help="passos de AMBIENTE a treinar (≥ 1)")
-    p.add_argument("--n-envs", type=_inteiro_positivo, default=8,
-                   help="envs em SubprocVecEnv (≥ 1, ≤ núcleos lógicos)")
+    p.add_argument("--n-envs", type=_inteiro_positivo, default=None,
+                   help="envs em SubprocVecEnv (≥ 1, ≤ núcleos lógicos); por omissão a maior potência de 2 que "
+                        f"cabe nos núcleos físicos de DESEMPENHO, entre {N_ENVS_MIN} e {N_ENVS_MAX} (nesta máquina: "
+                        f"{n_envs_padrao()}). O rollout fica em {PASSOS_ROLLOUT} passos: n_steps = "
+                        f"{PASSOS_ROLLOUT}/n_envs")
+    p.add_argument("--n-steps", type=_inteiro_positivo, default=None,
+                   help="passos por env e por rollout; por omissão o que mantém o rollout em "
+                        f"{PASSOS_ROLLOUT} passos (512 com 8 envs, 256 com 16)")
     p.add_argument("--seed", type=int, default=0, help="semente do PPO e dos envs (seed+i)")
     p.add_argument("--out-dir", type=str, default=None,
                    help=f"pasta de saída (por omissão <raiz>/{PASTA_RUNS}/seed<seed>)")
@@ -376,8 +533,14 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "(~500 = hover perfeito na v2b), 700 na planta real (~750 = pairagem perfeita na "
                         "v3-real) e **720 em modo `--comandos`** (teto ≈750: o critério do hover parava o "
                         "treino de seguimento a meio — medido)")
-    p.add_argument("--eval-freq", type=int, default=5000,
-                   help="passos do VEC entre avaliações (n_calls = timesteps/n_envs)")
+    p.add_argument("--eval-freq", type=int, default=None,
+                   help="passos do VEC entre avaliações (n_calls = timesteps/n_envs); por omissão "
+                        f"{PASSOS_ENTRE_AVALIACOES} passos de AMBIENTE (= {PASSOS_ENTRE_AVALIACOES}/n_envs do vec: "
+                        "5000 com 8 envs)")
+    p.add_argument("--eval-envs", type=_inteiro_positivo, default=1,
+                   help="processos da AVALIAÇÃO: 1 = um ambiente no processo principal (o de sempre); N > 1 corre "
+                        f"os {N_EVAL_EPISODES} episódios do EvalCallback em N processos (≈ N× mais depressa; os "
+                        "estados iniciais passam a vir de N streams)")
     p.add_argument("--sem-painel", action="store_true",
                    help="sem rich: só linhas de log (CI/verificadores); o rich nunca é importado")
     p.add_argument("--planta", choices=("real", "cf2"), default="real",
@@ -409,6 +572,14 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="camadas ocultas do ator e do crítico, ex. '128,128' (por omissão: 128,128 na planta "
                         "real, 64,64 no cf2)")
     args = p.parse_args(argv)
+    if args.n_envs is None:
+        args.n_envs = n_envs_padrao()
+    if args.n_envs > (os.cpu_count() or args.n_envs):
+        p.error(f"--n-envs {args.n_envs}: mais ambientes do que os {os.cpu_count()} núcleos lógicos da máquina")
+    if args.n_steps is None:
+        args.n_steps = passos_por_env(args.n_envs)
+    if args.eval_freq is None:
+        args.eval_freq = max(1, PASSOS_ENTRE_AVALIACOES // args.n_envs)
     if args.sucesso is None:
         # em modo comando o retorno "bom" é outro (r limitado por passo, máximo ≈ 1,5×500 = 750): o
         # critério clássico 450 disparava a meio do seguimento (medido: parou aos 400 k passos a rastrear
@@ -660,6 +831,46 @@ def criar_env_avaliacao(args: argparse.Namespace) -> HoverEnv:
     return HoverEnv(comando=comando, comandos_aleatorios=perfis)
 
 
+def _fabrica_env_avaliacao(semente: int, pasta: str, raiz: str, planta: str, build: str | None, modo_acao: str,
+                           comando: bool, perfis: bool) -> Callable[[], Any]:
+    """Fábrica picklável de UM env de AVALIAÇÃO (o mesmo do `criar_env_avaliacao`: sem vento, sem DR) com
+    `Monitor`, para o `--eval-envs N` correr os episódios de avaliação em N processos."""
+
+    def _init():
+        for caminho in (pasta, raiz):
+            if caminho not in sys.path:
+                sys.path.insert(0, caminho)
+        if planta == "real":
+            from env_real import DroneRealEnv as _Real
+
+            ambiente = _Real(build=build, modo_acao=modo_acao, aleatorizar=False, comando=comando,
+                             comandos_aleatorios=perfis)
+        else:
+            from env import HoverEnv as _HoverEnv
+
+            ambiente = _HoverEnv(comando=comando, comandos_aleatorios=perfis)
+        ambiente.reset(seed=semente)
+        return Monitor(ambiente)
+
+    return _init
+
+
+def criar_envs_avaliacao(args: argparse.Namespace):
+    """O env do `EvalCallback`: UM ambiente no processo principal (`--eval-envs 1`, o de sempre, semeado com
+    `seed+1000`) ou `--eval-envs N` ambientes em processos (`seed+1000+i`)."""
+    n = int(getattr(args, "eval_envs", 1))
+    if n <= 1:
+        env_eval = criar_env_avaliacao(args)
+        env_eval.reset(seed=args.seed + 1_000)
+        return Monitor(env_eval)             # env ÚNICO (o EvalCallback embrulha-o em DummyVecEnv)
+    comando = bool(getattr(args, "comandos", False))
+    perfis = comando and not bool(getattr(args, "sem_perfis_comando", False))
+    planta = getattr(args, "planta", "cf2")
+    return SubprocVecEnv([_fabrica_env_avaliacao(args.seed + 1_000 + i, str(_PASTA), str(_RAIZ), planta,
+                                                 getattr(args, "build", None), getattr(args, "modo_acao", "ctbr"),
+                                                 comando, perfis) for i in range(n)])
+
+
 def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
     """`hardware.json` ao lado do modelo: o build (peças + config), os derivados e a DR — os dados das peças
     REAIS com que a política foi treinada (o deploy e o site leem-no; trocar de peças = treinar de novo)."""
@@ -839,6 +1050,67 @@ class Painel:
 
 
 # ----------------------------------------------------------------------------------------------- callback
+class EvalCronometrado(EvalCallback):
+    """O `EvalCallback` do SB3, a contar o tempo de relógio que as avaliações levam (`s_avaliacao`)."""
+
+    s_avaliacao = 0.0
+
+    def _on_step(self) -> bool:
+        t0 = time.perf_counter()
+        try:
+            return super()._on_step()
+        finally:
+            self.s_avaliacao += time.perf_counter() - t0
+
+
+class CallbackDiagnostico(BaseCallback):
+    """Uma linha por ATUALIZAÇÃO do PPO em `train_diag.jsonl` (diagnóstico; não altera nada no treino).
+
+    Relógio: `s_rollout` (ambientes + inferência, já SEM as avaliações que correm dentro do rollout), `s_avaliacao`
+    (EvalCallback + rollouts de métricas disparados nesse rollout) e `s_update` (os passos de gradiente da
+    atualização ANTERIOR — a que produziu a política deste rollout). Indicadores do `train()` anterior, lidos do
+    logger do SB3 antes de ele os despejar: `approx_kl`, `clip_fraction`, `explained_variance`, `std`, perdas.
+    """
+
+    CHAVES = ("approx_kl", "clip_fraction", "explained_variance", "std", "value_loss", "policy_gradient_loss",
+              "entropy_loss")
+
+    def __init__(self, caminho: Path, eval_cb: EvalCallback, registo: BaseCallback | None = None):
+        super().__init__(verbose=0)
+        self.caminho = Path(caminho)
+        self.eval_cb, self.registo = eval_cb, registo
+        self._t_inicio = self._t_fim = None
+        self._s_update = None
+        self._aval0 = 0.0
+
+    def _s_avaliacoes(self) -> float:
+        return float(getattr(self.eval_cb, "s_avaliacao", 0.0)) + float(getattr(self.registo, "s_metricas", 0.0))
+
+    def _on_training_start(self) -> None:
+        self.caminho.unlink(missing_ok=True)
+
+    def _on_rollout_start(self) -> None:
+        agora = time.perf_counter()
+        if self._t_fim is not None:
+            self._s_update = agora - self._t_fim
+        self._t_inicio, self._aval0 = agora, self._s_avaliacoes()
+        # os `train/*` do update que acabou de correr leem-se JÁ: o `EvalCallback` despeja (e limpa) o logger do
+        # SB3 a cada avaliação, e uma avaliação dentro deste rollout levava-os antes do `_on_rollout_end`
+        valores = self.model.logger.name_to_value
+        self._treino = {k: (float(valores[f"train/{k}"]) if f"train/{k}" in valores else None) for k in self.CHAVES}
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        self._t_fim = time.perf_counter()
+        s_aval = self._s_avaliacoes() - self._aval0
+        linha = {"t": int(self.num_timesteps), "s_rollout": self._t_fim - self._t_inicio - s_aval,
+                 "s_avaliacao": s_aval, "s_update": self._s_update, **self._treino}
+        with self.caminho.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(linha) + "\n")
+
+
 class CallbackRegisto(BaseCallback):
     """Acrescenta UMA linha a `train_log.jsonl` por avaliação, avalia o currículo de vento e alimenta o painel.
 
@@ -874,6 +1146,7 @@ class CallbackRegisto(BaseCallback):
         self._metricas: dict[str, float] = {}
         self._ultimo_refresh = 0.0
         self._p_media = 0.0
+        self.s_metricas = 0.0       # relógio gasto nos rollouts de métricas (para o `train_diag.jsonl`)
 
     def _on_training_start(self) -> None:
         self._t0 = time.perf_counter()
@@ -902,7 +1175,9 @@ class CallbackRegisto(BaseCallback):
         with np.load(self.caminho_log.parent / "evaluations.npz") as dados:
             timesteps = int(dados["timesteps"][-1])
             retornos = np.asarray(dados["results"][-1], dtype=float)
+        t_metricas = time.perf_counter()
         z_medio, dist_medio, yaw_medio, frac_alvo, frac_total, frac_xy_z = self._rollouts_proprios()
+        self.s_metricas += time.perf_counter() - t_metricas
         teto_antes = self.curriculo.u_vento
         novo_teto = self.curriculo.avaliar(frac_xy_z)
         if novo_teto is not None and self.venv is not None:
@@ -1038,10 +1313,8 @@ def construir_callbacks(args: argparse.Namespace, out_dir: Path, eval_freq: int,
     # O env de avaliação é semeado UMA vez, a partir da seed do run, e é SEM VENTO: a régua (retorno médio,
     # best_model) tem de ser comparável entre estágios do currículo — se o vento entrasse aqui, o retorno
     # caía sempre que o teto sobe e o critério de avanço ficava confundido com a dificuldade do treino.
-    env_eval = criar_env_avaliacao(args)
-    env_eval.reset(seed=args.seed + 1_000)
-    eval_cb = EvalCallback(
-        Monitor(env_eval),                   # env de avaliação ÚNICO (o EvalCallback embrulha-o em DummyVecEnv)
+    eval_cb = EvalCronometrado(
+        criar_envs_avaliacao(args),          # 1 env no processo principal (padrão) ou --eval-envs N processos
         callback_on_new_best=paragem,        # para o treino quando o retorno médio passa --sucesso
         n_eval_episodes=N_EVAL_EPISODES,
         eval_freq=eval_freq,
@@ -1061,7 +1334,8 @@ def construir_callbacks(args: argparse.Namespace, out_dir: Path, eval_freq: int,
     registo_cb = CallbackRegisto(eval_cb, out_dir / ARQUIVO_LOG, painel, env_metrica, curriculo, venv,
                                  seed=args.seed, sucesso=args.sucesso, passos_iniciais=passos_iniciais,
                                  din_cfg=din_cfg)
-    return [eval_cb, ckpt_cb, registo_cb], eval_cb
+    diag_cb = CallbackDiagnostico(out_dir / ARQUIVO_DIAG, eval_cb, registo_cb)
+    return [eval_cb, ckpt_cb, registo_cb, diag_cb], eval_cb
 
 
 def resolver_checkpoint(texto: str) -> Path:
@@ -1091,10 +1365,12 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
         receber `learning_rate=1e-4`) — por isso o `--lr` e o L2 (`weight_decay`) do CLI são FORÇADOS nos
         `param_groups` depois do load, para o CLI mandar no que manda.
     """
+    n_steps = int(getattr(args, "n_steps", None) or passos_por_env(args.n_envs))
+    rollout = n_steps * args.n_envs
     comuns: dict[str, Any] = {
         "learning_rate": args.lr,
-        "n_steps": N_STEPS,
-        "batch_size": BATCH_SIZE,   # divide n_steps · n_envs (qualquer n_envs ≥ 1: N_STEPS ≥ BATCH_SIZE)
+        "n_steps": n_steps,         # rollout FIXO em ~4 096 passos: n_steps = 4096/n_envs (`passos_por_env`)
+        "batch_size": BATCH_SIZE,   # divide n_steps · n_envs (garantido por `passos_por_env`)
         "n_epochs": N_EPOCHS,
         "gamma": GAMMA,
         "gae_lambda": GAE_LAMBDA,
@@ -1107,10 +1383,14 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
         "device": "cpu",
     }
     painel.escrever(
-        f"PPO · n_steps={N_STEPS} × n_envs={args.n_envs} = {N_STEPS * args.n_envs} passos/rollout · "
-        f"batch={BATCH_SIZE} · n_epochs={N_EPOCHS} · gamma={GAMMA:g} · gae={GAE_LAMBDA:g} · "
-        f"clip={CLIP_RANGE:g} · vf={VF_COEF:g} · max_grad_norm={MAX_GRAD_NORM:g}"
+        f"PPO · n_steps={n_steps} × n_envs={args.n_envs} = {rollout} passos/rollout · "
+        f"batch={BATCH_SIZE} ({rollout // BATCH_SIZE} minilotes × {N_EPOCHS} épocas = "
+        f"{N_EPOCHS * (rollout // BATCH_SIZE)} passos de gradiente por atualização) · gamma={GAMMA:g} · "
+        f"gae={GAE_LAMBDA:g} · clip={CLIP_RANGE:g} · vf={VF_COEF:g} · max_grad_norm={MAX_GRAD_NORM:g}"
     )
+    if rollout % BATCH_SIZE:
+        painel.escrever(f"[aviso] rollout {rollout} não é múltiplo do lote {BATCH_SIZE}: o último minilote de cada "
+                        f"época fica com {rollout % BATCH_SIZE} amostras (--n-steps dado à mão?)")
     if args.retomar is None:
         real = getattr(args, "planta", "cf2") == "real"
         camadas = list(getattr(args, "camadas", [64, 64]))

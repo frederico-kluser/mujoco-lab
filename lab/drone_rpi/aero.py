@@ -106,13 +106,24 @@ class Aerodinamica:
         p = hw.ponto_pairagem(hw.bateria.v_nominal)
         self.omega_h = p["omega"]
         self.definir_arrasto(*d_xy)
-        self._vrs_ruido = np.zeros(4)
+        self._vrs_ruido = [0.0, 0.0, 0.0, 0.0]       # estado AR(1) da flutuação do VRS, por rotor (lista de floats)
 
     def definir_arrasto(self, d_x: float, d_y: float) -> None:
         """Arrasto de rotor (s⁻¹) ao longo de x e y do CORPO, em pairagem (c_d por rotor)."""
         m = self.hw.massa_total
         self.d_xy = (float(d_x), float(d_y))
         self.cd = np.array([d_x, d_y]) * m / (4.0 * self.omega_h)   # N/((rad/s)·(m/s)) por rotor
+
+    @property
+    def cd(self) -> np.ndarray:
+        """c_d (x, y) por rotor — `ndarray` só de leitura (o caminho quente lê a lista `_cd_l`)."""
+        return self._cd
+
+    @cd.setter
+    def cd(self, valor) -> None:
+        self._cd = np.array(valor, dtype=float).reshape(2)
+        self._cd.flags.writeable = False
+        self._cd_l = self._cd.tolist()
 
     # ------------------------------------------------------------------ fatores de empuxo/binário
     def fator_inflow(self, v_axial, omega) -> tuple[np.ndarray, np.ndarray]:
@@ -136,57 +147,79 @@ class Aerodinamica:
         v_h = np.sqrt(np.maximum(empuxo, 0.0) / (2.0 * RHO_AR * self.area))
         x = np.where(v_h > 1e-6, -np.asarray(v_axial) / np.maximum(v_h, 1e-6), 0.0)
         env = np.where(x > 0.0, np.exp(-((x - 1.0) / VRS_LARGURA) ** 2), 0.0)
+        ruido = np.asarray(self._vrs_ruido, dtype=float)
         if rng is not None:
             a = math.exp(-dt / VRS_TAU)
-            self._vrs_ruido = a * self._vrs_ruido + math.sqrt(1.0 - a * a) * rng.normal(0.0, 1.0, 4)
-        return np.minimum(np.maximum(1.0 - self.k_vrs * env + VRS_SIGMA * env * self._vrs_ruido, 0.3), 1.2)
+            ruido = a * ruido + math.sqrt(1.0 - a * a) * rng.normal(0.0, 1.0, 4)
+            self._vrs_ruido = ruido.tolist()
+        return np.minimum(np.maximum(1.0 - self.k_vrs * env + VRS_SIGMA * env * ruido, 0.3), 1.2)
 
     def fatores(self, altura, v_axial, omega, dt: float, rng=None) -> tuple[np.ndarray, np.ndarray, dict]:
         """κ_T (4,), κ_Q (4,) e o detalhe de cada efeito, para alturas/velocidades axiais/rotações dadas.
 
-        Caminho QUENTE (500 Hz × 4 rotores): as mesmas fórmulas de `ganho_solo`/`fator_inflow`/`fator_vrs`
-        em escalares Python (arrays de 4 em NumPy custam ~5× mais aqui); os testes comparam os dois caminhos.
+        Invólucro vetorial de `_fatores_l` (o caminho QUENTE, em escalares: arrays de 4 em NumPy custam ~5× mais
+        aqui); os testes comparam-no com as funções vetorizadas `ganho_solo`/`fator_inflow`/`fator_vrs`.
+        """
+        kt, kq, g_s, k_ti, k_v = self._fatores_l([float(x) for x in altura], [float(x) for x in v_axial],
+                                                 [float(x) for x in omega], dt, rng)
+        if not (self.flags.solo or self.flags.inflow or self.flags.vrs):
+            um = np.ones(4)
+            return um, um, {"solo": um, "inflow": um, "vrs": um}
+        return np.array(kt), np.array(kq), {"solo": np.array(g_s), "inflow": np.array(k_ti), "vrs": np.array(k_v)}
+
+    def _fatores_l(self, altura: list, v_axial: list, omega: list, dt: float, rng=None) -> tuple:
+        """(κ_T, κ_Q, ganho de solo, κ_T do inflow, fator do VRS) — cinco LISTAS de 4 floats, um rotor de cada vez.
+
+        As mesmas fórmulas de `ganho_solo`/`fator_inflow`/`fator_vrs` em escalares Python. O ruído do VRS consome
+        4 normais do gerador por passo (`standard_normal(4)` — a mesma sequência de `normal(0, 1, 4)`).
         """
         f = self.flags
         if not (f.solo or f.inflow or f.vrs):
-            um = np.ones(4)
-            return um, um, {"solo": um, "inflow": um, "vrs": um}
+            um = [1.0, 1.0, 1.0, 1.0]
+            return um, um, um, um, um
         r, r2 = self.raio, self.raio * self.raio
         d2, b2, kb, esc = self.d_vizinhos ** 2, self.b_opostos ** 2, self.kb, self.escala_solo
-        sa, th6, b4 = SIGMA_A, SIGMA_A * self.theta / 6.0, SIGMA_A / 4.0
+        th6, b4 = SIGMA_A * self.theta / 6.0, SIGMA_A / 4.0
         ct0, cq0, cqp = self.ct0, self.cq0, self.cq_perfil
         w_min = OMEGA_MIN_INFLOW * self.omega_h
         kf, area2 = self.hw.kf, 2.0 * RHO_AR * self.area
+        ruido = self._vrs_ruido
         if f.vrs and rng is not None:
             a = math.exp(-dt / VRS_TAU)
-            self._vrs_ruido = a * self._vrs_ruido + math.sqrt(1.0 - a * a) * rng.normal(0.0, 1.0, 4)
-        g_s, k_ti, k_qi, k_v = [1.0] * 4, [1.0] * 4, [1.0] * 4, [1.0] * 4
-        for i in range(4):
-            w = float(omega[i])
-            va = float(v_axial[i])
-            if f.solo:
-                z = max(float(altura[i]), 1e-6)
+            c = math.sqrt(1.0 - a * a)
+            ruido = self._vrs_ruido = [a * n + c * z for n, z in zip(ruido, rng.standard_normal(4).tolist(),
+                                                                     strict=True)]
+        solo, inflow, vrs, k_vrs = f.solo, f.inflow, f.vrs, self.k_vrs
+        g_max, s_max, raiz, exp = GANHO_SOLO_MAX, 1.0 - 1.0 / GANHO_SOLO_MAX, math.sqrt, math.exp
+        k_t, g_s, k_ti, k_qi, k_v = [], [], [], [], []
+        for z, va, w, n in zip(altura, v_axial, omega, ruido, strict=True):
+            g = kti = kqi = kv = 1.0
+            if solo:
+                z = max(z, 1e-6)
                 z2 = 4.0 * z * z
                 s = ((r / (4.0 * z)) ** 2 + r2 * z / (d2 + z2) ** 1.5 + 0.5 * r2 * z / (2.0 * d2 + z2) ** 1.5
                      + 2.0 * r2 * z * kb / (b2 + z2) ** 1.5)
-                g = min(1.0 / (1.0 - s), GANHO_SOLO_MAX) if s < 1.0 - 1.0 / GANHO_SOLO_MAX else GANHO_SOLO_MAX
-                g_s[i] = 1.0 + (g - 1.0) * esc
-            if f.inflow and w > w_min:
+                g = min(1.0 / (1.0 - s), g_max) if s < s_max else g_max
+                g = 1.0 + (g - 1.0) * esc
+            if inflow and w > w_min:
                 lam_c = va / (w * r)
                 bb = b4 - 2.0 * lam_c
-                lam = (-bb + math.sqrt(bb * bb + 8.0 * th6)) / 4.0
+                lam = (-bb + raiz(bb * bb + 8.0 * th6)) / 4.0
                 ct = th6 - b4 * lam
-                k_ti[i] = min(max(ct / ct0, 0.0), 1.3)
-                k_qi[i] = min(max((cqp + lam * max(ct, 0.0)) / cq0, 0.1), 1.5)
-            if f.vrs:
-                t_est = kf * w * w * g_s[i] * k_ti[i]
-                v_h = math.sqrt(max(t_est, 0.0) / area2)
+                kti = min(max(ct / ct0, 0.0), 1.3)
+                kqi = min(max((cqp + lam * max(ct, 0.0)) / cq0, 0.1), 1.5)
+            if vrs:
+                t_est = kf * w * w * g * kti
+                v_h = raiz(max(t_est, 0.0) / area2)
                 x = -va / v_h if v_h > 1e-6 else 0.0
-                env = math.exp(-((x - 1.0) / VRS_LARGURA) ** 2) if x > 0.0 else 0.0
-                k_v[i] = min(max(1.0 - self.k_vrs * env + VRS_SIGMA * env * float(self._vrs_ruido[i]), 0.3), 1.2)
-        g_solo, k_t_in, k_q_in, k_vrs = np.array(g_s), np.array(k_ti), np.array(k_qi), np.array(k_v)
-        del sa
-        return g_solo * k_t_in * k_vrs, k_q_in, {"solo": g_solo, "inflow": k_t_in, "vrs": k_vrs}
+                env = exp(-((x - 1.0) / VRS_LARGURA) ** 2) if x > 0.0 else 0.0
+                kv = min(max(1.0 - k_vrs * env + VRS_SIGMA * env * n, 0.3), 1.2)
+            g_s.append(g)
+            k_ti.append(kti)
+            k_qi.append(kqi)
+            k_v.append(kv)
+            k_t.append(g * kti * kv)
+        return k_t, k_qi, g_s, k_ti, k_v
 
     # ------------------------------------------------------------------ forças extra (mundo)
     def forca_arrasto(self, v_ar_rotores: np.ndarray, eixos_corpo: np.ndarray, omega) -> np.ndarray:

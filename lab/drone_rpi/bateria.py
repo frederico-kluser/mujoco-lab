@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
+from . import escalar
 from .componentes import Hardware, v_pouso_celula
 
 R_GAS = 8.314
@@ -48,6 +49,7 @@ SOH_FIM_DE_VIDA = 0.80
 EXPOENTE_DOD = 1.2
 EXPOENTE_C = 0.5
 RESERVA_SOC = {"lipo": 0.20, "li-ion": 0.10}   # reserva de pouso para a "autonomia restante" mostrada
+_EA_R = EA_RESISTENCIA / R_GAS  # K — expoente de Arrhenius da resistência (a mesma divisão, feita uma vez)
 
 
 @dataclass
@@ -128,6 +130,19 @@ class ModeloBateria:
         c, l_, a = dims
         self.area = 2.0 * (c * l_ + c * a + l_ * a)
         self.c_termica = CP_PACK * self.b.massa
+        # constantes do pack lidas a 500 Hz (as peças são dataclasses congeladas: o valor não muda) e memórias de
+        # um só valor das funções PURAS do passo (OCV(SoC), f_T(T), exp(−dt/τ₁)) — a conta é a mesma, feita uma vez
+        cel = self.b.celula
+        self._ns = self.b.s
+        self._r0_nom = self.b.r0                     # Ω — R_célula·S/P (nova, 25 °C)
+        self._r1_nom = cel.r1_frac * self.b.r0
+        self._cap_nom = self.b.capacidade_ah
+        self._r_lig = hw.r_ligacoes
+        self._tau1 = cel.tau1
+        self._ocv_tab = escalar.Tabela(*cel.curva)
+        self._ocv_soc = self._ocv_v = None
+        self._ft_temp = self._ft_v = None
+        self._a_dt = self._a_v = None
         self.reiniciar(soc0, temperatura_c)
 
     # ------------------------------------------------------------------ estado
@@ -155,19 +170,32 @@ class ModeloBateria:
         return self.b.capacidade_ah * self.desgaste.soh * self.escala_cap
 
     def ocv(self) -> float:
-        return float(self.b.ocv(self.soc))
+        """OCV do pack (V) no SoC atual = N_s × interpolação da curva da célula (`Bateria.ocv`)."""
+        soc = self.soc
+        if soc != self._ocv_soc:
+            tab = self._ocv_tab
+            if escalar.OK and tab.exata:
+                self._ocv_v = self._ns * tab._escalar(escalar.clip(soc, 0.0, 1.0))
+            else:
+                self._ocv_v = float(self.b.ocv(soc))
+            self._ocv_soc = soc
+        return self._ocv_v
+
+    def _f_t(self) -> float:
+        """Fator térmico de Arrhenius da resistência à temperatura atual (1 a 25 °C)."""
+        temp = self.temp
+        if temp != self._ft_temp:
+            self._ft_v = math.exp(_EA_R * (1.0 / (temp + 273.15) - 1.0 / 298.15))
+            self._ft_temp = temp
+        return self._ft_v
 
     def r0(self) -> float:
         """R₀ efetiva do pack + ligações (Ω) no estado atual (temperatura, SoC, desgaste)."""
-        t_k = self.temp + 273.15
-        f_t = math.exp(EA_RESISTENCIA / R_GAS * (1.0 / t_k - 1.0 / 298.15))
         f_soc = 1.0 + max(0.0, 0.2 - self.soc) / 0.2
-        return self.b.r0 * f_t * f_soc * self.desgaste.r_fator * self.escala_r + self.hw.r_ligacoes
+        return self._r0_nom * self._f_t() * f_soc * self.desgaste.r_fator * self.escala_r + self._r_lig
 
     def r1(self) -> float:
-        t_k = self.temp + 273.15
-        f_t = math.exp(EA_RESISTENCIA / R_GAS * (1.0 / t_k - 1.0 / 298.15))
-        return self.b.celula.r1_frac * self.b.r0 * f_t * self.desgaste.r_fator * self.escala_r
+        return self._r1_nom * self._f_t() * self.desgaste.r_fator * self.escala_r
 
     def tensao_aberta(self) -> float:
         """OCV − V_rc: a "fonte" vista pelos consumidores neste instante (falta só a queda I·R₀)."""
@@ -177,25 +205,32 @@ class ModeloBateria:
     def passo(self, corrente: float, dt: float) -> None:
         """Integra `dt` com a corrente `corrente` (A, + = descarga) e atualiza V/P/temperatura/ciclo."""
         i = float(corrente)
-        r0 = self.r0()
-        r1 = self.r1()
-        tau = self.b.celula.tau1
-        a = math.exp(-dt / tau)
-        self.v = self.ocv() - self.v_rc - i * r0          # tensão no instante (com o V_rc antes do passo)
-        self.v_rc = self.v_rc * a + i * r1 * (1.0 - a)    # solução exata do ramo RC com I constante
-        self.soc = max(0.0, self.soc - i * dt / (3600.0 * self.capacidade_ah))
-        calor = i * i * r0 + self.v_rc * i
-        self.temp += dt * (calor - H_CONVECCAO * self.area * (self.temp - self.t_amb)) / self.c_termica
+        f_t = self._f_t()
+        r_fator = self.desgaste.r_fator
+        soc = self.soc
+        r0 = self._r0_nom * f_t * (1.0 + max(0.0, 0.2 - soc) / 0.2) * r_fator * self.escala_r + self._r_lig   # r0()
+        r1 = self._r1_nom * f_t * r_fator * self.escala_r                                                   # r1()
+        if dt != self._a_dt:
+            self._a_v = math.exp(-dt / self._tau1)
+            self._a_dt = dt
+        a = self._a_v
+        v_rc = self.v_rc
+        v = self.v = self.ocv() - v_rc - i * r0           # tensão no instante (com o V_rc antes do passo)
+        v_rc = self.v_rc = v_rc * a + i * r1 * (1.0 - a)  # solução exata do ramo RC com I constante
+        self.soc = max(0.0, soc - i * dt / (3600.0 * (self._cap_nom * self.desgaste.soh * self.escala_cap)))
+        calor = i * i * r0 + v_rc * i
+        temp = self.temp
+        temp = self.temp = temp + dt * (calor - H_CONVECCAO * self.area * (temp - self.t_amb)) / self.c_termica
         self.i = i
-        self.p = self.v * i
+        p = self.p = v * i
         if i > 0.0:
             self.ah_ciclo += i * dt / 3600.0
-            self.wh_ciclo += self.p * dt / 3600.0
+            self.wh_ciclo += p * dt / 3600.0
         self.t_ciclo += dt
-        self.soma_c_dt += abs(i) / self.b.capacidade_ah * dt
-        self.soma_t_dt += self.temp * dt
+        self.soma_c_dt += abs(i) / self._cap_nom * dt
+        self.soma_t_dt += temp * dt
         self.i_pico = max(self.i_pico, i)
-        self.v_min = min(self.v_min, self.v)
+        self.v_min = min(self.v_min, v)
 
     # ------------------------------------------------------------------ leitura
     @property
