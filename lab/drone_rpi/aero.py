@@ -108,6 +108,16 @@ class Aerodinamica:
         self.definir_arrasto(*d_xy)
         self._vrs_ruido = [0.0, 0.0, 0.0, 0.0]       # estado AR(1) da flutuação do VRS, por rotor (lista de floats)
 
+    def reiniciar(self) -> None:
+        """Novo voo: a flutuação AR(1) do VRS recomeça do zero (um voo novo não herda a esteira do anterior).
+
+        Era o ÚNICO estado da planta que nenhum `reset` repunha: avançava no construtor do ambiente (o
+        `_medir_repouso` corre a planta com um gerador ainda sem semente) e continuava de episódio em episódio —
+        por isso `reset(seed=s)` não dava a mesma trajetória em duas instâncias (medido em 2026-10-12: mesma
+        semente e mesmas ações, `qpos` diverge ao passo 112, numa descida na própria esteira).
+        """
+        self._vrs_ruido = [0.0, 0.0, 0.0, 0.0]
+
     def definir_arrasto(self, d_x: float, d_y: float) -> None:
         """Arrasto de rotor (s⁻¹) ao longo de x e y do CORPO, em pairagem (c_d por rotor)."""
         m = self.hw.massa_total

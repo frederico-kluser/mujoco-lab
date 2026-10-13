@@ -317,8 +317,12 @@ def correr_cenario(tarefa: dict) -> dict:
     # (`aero._vrs_ruido`) avança no `__init__` do ambiente (o `_medir_repouso` corre a planta com um gerador SEM
     # semente) e nenhum `reset` o repõe. Para comparar as duas árvores iguala-se esse estado ao do original; tudo o
     # resto (bias dos sensores, bateria, FC, estimador) é sorteado/reposto no `reset(seed=…)`.
+    # Desde 2026-10-13 o código ATUAL repõe esse ruído em cada reinício (`Planta.repor_aero_no_reinicio`, a correção
+    # da reprodutibilidade); o original não. Para a prova de identidade a reposição desliga-se nas árvores atuais — é
+    # a única diferença deliberada de trajetória e está provada à parte (`valida_real.py`: reset(seed) reprodutível).
     vrs0 = [float(x) for x in envs[0].planta.aero._vrs_ruido]
     for e in envs[1:]:
+        e.planta.repor_aero_no_reinicio = False
         e.planta.aero._vrs_ruido = list(vrs0)
     acoes = gerar_acoes(semente, n_passos)
     manter = int(cen.get("manter", 0))
@@ -527,6 +531,7 @@ def comando_passo(args, original: Path) -> bool:
     print(f"   atual: {arv_n.caminho_ativo()}")
     env_o, env_n = _env_treino(arv_o), _env_treino(arv_n)
     vrs0 = [float(x) for x in env_o.planta.aero._vrs_ruido]         # mesmo estado inicial ⇒ mesma trajetória e
+    env_n.planta.repor_aero_no_reinicio = False                     # (o original não repõe o ruído do VRS no reinício)
     env_n.planta.aero._vrs_ruido = list(vrs0)                       # mesmo trabalho nas duas (ver `correr_cenario`)
     bloco, n_blocos = 100, max(4, args.passos * args.rondas // 100)
     acoes = gerar_acoes(7, bloco * n_blocos + 150)

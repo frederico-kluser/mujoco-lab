@@ -148,6 +148,10 @@ class Planta:
         self._detalhe = valor
 
     # ------------------------------------------------------------------ estado
+    # `False` só serve à prova de identidade contra o código de antes de 2026-10-13 (`bench_treino.py`), em que o
+    # ruído do VRS atravessava os reinícios — é a ÚNICA diferença deliberada de trajetória em relação a ele.
+    repor_aero_no_reinicio = True
+
     def reiniciar(self, soc0: float = 1.0, temperatura_c: float | None = None, armado: bool = False,
                   omega=None) -> None:
         """Novo voo: rotores parados (ou `omega`), pack descansado com `soc0`, sensores recalibrados.
@@ -156,6 +160,8 @@ class Planta:
         com a verdade atual)."""
         self.prop.reiniciar(omega)
         self.prop.armar(armado)
+        if self.repor_aero_no_reinicio:
+            self.aero.reiniciar()                # o ruído do VRS recomeça do zero ⇒ `reset(seed)` é reprodutível
         self.bat.reiniciar(soc0, temperatura_c)
         self.v_bus = self.bat.v
         self.i_total = self.p_eletronica / max(self.v_bus, 1e-3)
