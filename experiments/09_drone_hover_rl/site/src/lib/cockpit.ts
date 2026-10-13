@@ -1318,7 +1318,7 @@ export interface MetaJanela {
 export const JANELAS: readonly MetaJanela[] = [
   { id: "voo", titulo: "Voo", tecla: "1", largura: 300, alturaPrevista: 352, principal: true },
   { id: "bola", titulo: "Bola", tecla: "2", largura: 300, alturaPrevista: 440, principal: true },
-  { id: "vento", titulo: "Vento", tecla: "3", largura: 300, alturaPrevista: 400, principal: true },
+  { id: "vento", titulo: "Vento", tecla: "3", largura: 300, alturaPrevista: 440, principal: true },
   { id: "instrumentos", titulo: "Sensores", tecla: "4", largura: 820, alturaPrevista: 640, principal: false },
   { id: "energia", titulo: "Energia", tecla: "5", largura: 340, alturaPrevista: 330, principal: false },
   { id: "graficos", titulo: "Gráficos", tecla: "6", largura: 720, alturaPrevista: 520, principal: false },
@@ -1437,12 +1437,62 @@ export function encaixar(
 const TOPO_JANELAS = 64
 const FOLGA_JANELAS = 12
 /** Faixa de baixo ocupada pela miniatura, a doca e as teclas (px) — as janelas abrem por cima dela. */
-const RESERVA_BAIXO = 216
+const RESERVA_BAIXO = 212
+/**
+ * Deslocamento da CASCATA (px): num ecrã baixo o Vento abre por cima do Voo, um pouco para a direita e
+ * abaixo da barra de título dele — as duas barras ficam à vista e um clique traz qualquer uma para a
+ * frente. 16 px na horizontal é o que cabe antes da leitura de velocidade do HUD a 1280 px.
+ */
+export const CASCATA_JANELAS: Ponto = { x: 16, y: 44 }
+
+/** Largura que cada leitura dos flancos do HUD ocupa (px) — o horizonte acaba antes dela. */
+export const LARGURA_FLANCO_HUD = 150
+
+/**
+ * Distância (px) da margem do ecrã a que começam as leituras dos flancos do HUD — velocidade à esquerda,
+ * altitude à direita: ficam fora da coluna onde as janelas abrem (300 px + margens).
+ */
+export function flancoHud(larguraViewport: number): number {
+  return Math.round(limitar(larguraViewport * 0.26, 332, 520))
+}
+
+export interface ZonaHud {
+  id: "velocidade" | "altitude" | "mira"
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+/**
+ * Os INSTRUMENTOS que nenhuma janela principal pode tapar ao abrir: as leituras de velocidade e de
+ * altitude (a meio da altura, nos flancos) e a mira ao centro. É a mesma geometria que o `hud.tsx` desenha
+ * (`flancoHud`, `LARGURA_FLANCO_HUD`) — uma fonte só, para o teste das posições iniciais valer o que vale.
+ */
+export function zonasInstrumentos(viewport: Tamanho): ZonaHud[] {
+  const flanco = flancoHud(viewport.largura)
+  const cy = viewport.altura / 2
+  const cx = viewport.largura / 2
+  const meiaAltura = 36
+  return [
+    { id: "velocidade", x0: flanco, y0: cy - meiaAltura, x1: flanco + LARGURA_FLANCO_HUD, y1: cy + meiaAltura },
+    {
+      id: "altitude",
+      x0: viewport.largura - flanco - LARGURA_FLANCO_HUD,
+      y0: cy - meiaAltura,
+      x1: viewport.largura - flanco,
+      y1: cy + meiaAltura,
+    },
+    { id: "mira", x0: cx - 64, y0: cy - meiaAltura, x1: cx + 64, y1: cy + meiaAltura },
+  ]
+}
 
 /**
  * Onde uma janela abre pela 1.ª vez: as de VOO encostam à esquerda, a BOLA à direita, e o centro — a
  * mira e o horizonte — fica livre. O Vento vai para baixo do Voo quando o ecrã tem altura para os
- * dois; num ecrã baixo (768) abre ao lado da Bola. As janelas de detalhe abrem ao centro, em cascata
+ * dois; num ecrã baixo (768, 720) abre em CASCATA por cima do Voo (`CASCATA_JANELAS`) — as janelas
+ * sobrepõem-se uma à outra, nunca aos instrumentos do HUD (`zonasInstrumentos`; até 2026-10-13 abria ao
+ * lado da Bola e tapava a leitura de altitude). As janelas de detalhe abrem ao centro, em cascata
  * horizontal; a Energia (compacta) fica ao lado da coluna da Bola.
  */
 export function posicaoInicial(id: IdJanela, viewport: Tamanho): Ponto {
@@ -1459,21 +1509,23 @@ export function posicaoInicial(id: IdJanela, viewport: Tamanho): Ponto {
       break
     case "vento": {
       const voo = metaJanela("voo")
+      // 8 px entre o Voo e o Vento: a 1080 px de altura os dois empilhados acabam 4 px acima da miniatura.
+      const entreJanelas = FOLGA_JANELAS - 4
       const cabeEmbaixo =
         viewport.altura >=
         TOPO_JANELAS +
           voo.alturaPrevista +
-          FOLGA_JANELAS +
+          entreJanelas +
           meta.alturaPrevista +
           RESERVA_BAIXO
       ponto = cabeEmbaixo
         ? {
             x: FOLGA_JANELAS,
-            y: TOPO_JANELAS + voo.alturaPrevista + FOLGA_JANELAS,
+            y: TOPO_JANELAS + voo.alturaPrevista + entreJanelas,
           }
         : {
-            x: direita - metaJanela("bola").largura - FOLGA_JANELAS,
-            y: TOPO_JANELAS,
+            x: FOLGA_JANELAS + CASCATA_JANELAS.x,
+            y: TOPO_JANELAS + CASCATA_JANELAS.y,
           }
       break
     }

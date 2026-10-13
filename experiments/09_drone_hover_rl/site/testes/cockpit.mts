@@ -553,14 +553,24 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
     })
     ok(caixas.every((c) => c.x0 >= 0 && c.y0 >= 0 && c.x1 <= vp.largura && c.y1 <= vp.altura),
       `janelas: Voo, Bola e Vento abrem DENTRO do viewport a ${vp.largura}×${vp.altura}`)
-    const sobrepoe = (p: (typeof caixas)[number], q: (typeof caixas)[number]) => p.x0 < q.x1 && q.x0 < p.x1 && p.y0 < q.y1 && q.y0 < p.y1
-    ok(!sobrepoe(caixas[0], caixas[1]) && !sobrepoe(caixas[0], caixas[2]) && !sobrepoe(caixas[1], caixas[2]),
-      `janelas: as três principais não se sobrepõem ao abrir a ${vp.largura}×${vp.altura}`)
-    const cx = vp.largura / 2
-    const cy = vp.altura / 2
-    ok(caixas.every((c) => !(c.x0 < cx && cx < c.x1 && c.y0 < cy && cy < c.y1)),
-      `janelas: nenhuma das três tapa a mira (centro) a ${vp.largura}×${vp.altura}`)
+    type Caixa = { x0: number; y0: number; x1: number; y1: number }
+    const sobrepoe = (p: Caixa, q: Caixa) => p.x0 < q.x1 && q.x0 < p.x1 && p.y0 < q.y1 && q.y0 < p.y1
+    const [voo, bola, vento] = caixas
+    ok(!sobrepoe(voo, bola) && !sobrepoe(bola, vento),
+      `janelas: a Bola não se sobrepõe ao Voo nem ao Vento ao abrir a ${vp.largura}×${vp.altura}`)
+    // Voo + Vento só cabem empilhados com altura para os dois; senão o Vento abre em CASCATA sobre o Voo,
+    // com a barra de título do Voo (40 px) inteira à vista por cima — nunca tapado de todo.
+    const empilhados = !sobrepoe(voo, vento)
+    const cascata = vento.x0 === voo.x0 + m.CASCATA_JANELAS.x && vento.y0 === voo.y0 + m.CASCATA_JANELAS.y && m.CASCATA_JANELAS.y >= 40
+    ok(vp.altura >= 1080 ? empilhados : cascata,
+      `janelas: Voo e Vento ${vp.altura >= 1080 ? "empilhados" : "em cascata (barra do Voo à vista)"} a ${vp.largura}×${vp.altura}`)
+    const zonas = m.zonasInstrumentos(vp)
+    const tapadas = zonas.filter((z) => caixas.some((c) => sobrepoe(c, z))).map((z) => z.id)
+    ok(zonas.length === 3 && tapadas.length === 0,
+      `janelas: nenhuma das três tapa a velocidade, a altitude ou a mira do HUD a ${vp.largura}×${vp.altura} (tapadas: ${tapadas.join(",") || "nenhuma"})`)
   }
+  ok(m.flancoHud(1280) === 333 && m.flancoHud(1920) === 499 && m.flancoHud(800) === 332 && m.flancoHud(4000) === 520,
+    "HUD: o flanco das leituras escala com a largura, entre 332 e 520 px")
   const guardado = m.serializarJanelas(j)
   const lido = m.lerJanelas(guardado)
   ok(lido.abertas.join() === j.abertas.join() && lido.posicoes.voo?.x === 40, "janelas: guardar e ler (localStorage) é ida e volta")

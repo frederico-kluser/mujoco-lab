@@ -38,6 +38,8 @@ import {
   fmtAutonomia,
   fmtHud,
   fmtRumo,
+  LARGURA_FLANCO_HUD,
+  flancoHud,
   focalNaVista,
   horizonteNaVista,
   instrumentos,
@@ -210,8 +212,6 @@ export interface HudProps {
   atrasoImagemMs: number
 }
 
-/** Largura que cada leitura dos flancos ocupa (px) — o horizonte acaba antes dela. */
-const LARGURA_FLANCO = 150
 const ESCADA: readonly { graus: number; meio: number }[] = [
   { graus: 10, meio: 70 },
   { graus: 20, meio: 48 },
@@ -246,10 +246,10 @@ export function Hud({
     limitar(viewport.largura * 0.3, 240, 380)
   )
   // As leituras dos flancos ficam fora da coluna onde as janelas abrem (300 px + margens) e o traço do
-  // horizonte cabe entre as duas.
-  const flanco = Math.round(limitar(viewport.largura * 0.26, 332, 520))
+  // horizonte cabe entre as duas (a geometria vive em `lib/cockpit.ts`: é a que as janelas evitam).
+  const flanco = flancoHud(viewport.largura)
   const horizonteMeio = limitar(
-    viewport.largura / 2 - flanco - LARGURA_FLANCO,
+    viewport.largura / 2 - flanco - LARGURA_FLANCO_HUD,
     120,
     300
   )
