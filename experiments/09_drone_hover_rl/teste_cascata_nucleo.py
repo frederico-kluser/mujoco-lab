@@ -59,7 +59,9 @@ PASSOS_ESTRESSE = 3_000_000
 # --- tolerâncias da equivalência (float32 vs float64; medido ~10× abaixo) ---------------------------------------------------------
 TOL_CASCATA = 1e-4            # |Δ| do coletivo (T/(m·g)) e das taxas p, q, r (rad/s): o critério do enunciado (medido ≲ 5e-5)
 TOL_DIAG = {"a_des": 2e-3, "n_des": 1e-4, "e_tilt": 1e-4, "gama": 1e-4, "v_h": 1e-5, "v_o": 1e-5, "v_sp_h": 1e-5, "p_sp": 1e-5,
-            "z_sp": 1e-4, "psi_sp": 1e-4, "r_ref": 1e-4, "i_vel": 1e-5, "i_z": 2e-3}
+            "z_sp": 1e-4, "psi_sp": 1e-4, "r_ref": 1e-4, "i_vel": 1e-5, "i_z": 2e-3, "pert": 2e-3}
+# campos da ConfigCascata que NÃO são da cascata: a geometria/tempos do sensor de fluxo, consumidos pelo estimador clássico (interface 3)
+CAMPOS_DO_ESTIMADOR = ("braco_fluxo", "atraso_fluxo")
 TOL_EST = {"roll": 2e-5, "pitch": 2e-5, "psi": 5e-5, "h": 1e-4, "vz": 1e-4, "vx": 1e-5, "vy": 1e-5, "x": 2e-4, "y": 2e-4}
 TOL_REL_MALHA = 0.05          # ≤ 5 % nas métricas da malha fechada C++ vs Python (o enunciado)
 CAMPOS_EST = ("roll", "pitch", "psi", "h", "vz", "vx", "vy", "x", "y")
@@ -110,10 +112,17 @@ def secao_regras(c: tn.Checagens) -> None:
     cpp = set(campos_struct("ConfigCascata", NUCLEO_DIR / "config.hpp"))
     renomeados = {"ref_posicao": "ref_posicao_trava"}
     faltam = sorted(u for u in usados if renomeados.get(u, u) not in cpp)
-    mortos = sorted(cpp - {renomeados.get(u, u) for u in usados} - {"decimacao", *sitl.LITERAIS_CASCATA})
+    mortos = sorted(cpp - {renomeados.get(u, u) for u in usados} - {"decimacao", *sitl.LITERAIS_CASCATA, *CAMPOS_DO_ESTIMADOR})
     c.ok("[§0] paridade GanhosCascata ↔ ConfigCascata: todos os `gn.<campo>` do `CascataClassica.passo` existem na Config C++ "
-         f"({len(usados)} campos) e não há campos da Config sem uso no protótipo (fora a decimação e os literais espelhados)",
+         f"({len(usados)} campos) e não há campos da Config sem uso no protótipo (fora a decimação, os literais espelhados e os do sensor de fluxo)",
          not faltam and not mortos, f"faltam no C++: {faltam} · sem uso no Python: {mortos}" if (faltam or mortos) else f"{len(cpp)} campos na ConfigCascata")
+    # os campos do sensor de fluxo (interface 3) não são da cascata: quem os usa é o estimador clássico — nos DOIS lados, e a cascata não
+    est_cpp = tn._sem_comentarios_e_strings((NUCLEO_DIR / "estimador_classico.hpp").read_text(encoding="utf-8"))
+    casc_cpp = tn._sem_comentarios_e_strings((NUCLEO_DIR / "cascata.hpp").read_text(encoding="utf-8"))
+    est_py = texto[texto.index("class EstimadorClassico"):]
+    usa = {k: (f"c.cascata.{k}" in est_cpp, k in est_py, re.search(rf"\b{k}\b", casc_cpp) is None, hasattr(cc.GanhosCascata(), k)) for k in CAMPOS_DO_ESTIMADOR}
+    c.ok(f"[§0] os campos do SENSOR DE FLUXO da ConfigCascata ({', '.join(CAMPOS_DO_ESTIMADOR)}) são consumidos pelo estimador clássico (C++: `c.cascata.<campo>`; "
+         "Python: `EstimadorClassico.configurar_fluxo`), existem em `GanhosCascata` e a cascata não lhes toca", all(all(v) for v in usa.values()), str(usa))
 
 
 # ============================================================================================ §1 host
@@ -280,6 +289,7 @@ def gravar_python(dados: dict, u_yaw: float, seed: int, T: float = 60.0, dr: boo
     env.reset(seed=seed)
     gn = cc.ganhos_de_hardware(env, u_yaw_por_taxa=u_yaw, altura_min=VOO_Z_MIN - ac.deslocamento_sensor_cm(env))
     casc = cc.CascataClassica(gn)
+    gest.i.configurar_fluxo(gn.atraso_fluxo, gn.braco_fluxo)      # como o `ControladorCascata` (e a Config do C++: campos da cascata)
     ac.calibrar_no_chao(env, 1.0)
     z_alvo = env.alvo_z - ac.deslocamento_sensor_cm(env)
     arm_est = gest._est()
@@ -522,6 +532,9 @@ def secao_layout(c: tn.Checagens, tmp: Path, bib, ctx: dict) -> None:
              "n_esc = 1": lambda k: setattr(k, "n_esc", 1),
              "curva do ESC não crescente": lambda k: k.esc_d.__setitem__(3, 0.0),
              "a_portao = 0": lambda k: setattr(k.est_cl, "a_portao", 0.0),
+             "w_pert = NaN": lambda k: setattr(k.cascata, "w_pert", float("nan")),
+             "lim_pert < 0": lambda k: setattr(k.cascata, "lim_pert", -1.0),
+             "atraso_fluxo fora da fila": lambda k: setattr(k.cascata, "atraso_fluxo", 16),
              "seguidor com f_px = 0": lambda k: setattr(k.seguidor, "f_px", 0.0),
              "estimador_classico = 2": lambda k: setattr(k, "estimador_classico", 2)}
     aceites = [nm for nm, m in casos.items() if not recusada(m)]
@@ -710,7 +723,12 @@ def secao_olhar(c: tn.Checagens, u_yaw: float, dados: dict) -> dict:
             {**base, "variante": "ard", "build": "arduino", "latencia": 0.021, "modo": "circulo", "vel": 0.5, "seed": 7000},
             {**base, "variante": "pi", "build": None, "latencia": 0.116, "modo": "circulo", "vel": 0.8, "seed": 7000},
             {**base, "variante": "ard", "build": "arduino", "latencia": 0.021, "modo": "circulo", "vel": 0.8, "seed": 7000}]
-    est, pi5, ard5, pi8, ard8 = _tarefas(jobs, 5)
+    # a «parede» da guinada é da lei da VERSÃO 1 do IBVS (só guinada: `visao::config_versao1`); a lei por omissão (versão 2,
+    # «seguir a bola») junta-lhe a translação lateral — os 4 círculos voam-se também com a v1 (`pi5v`…`ard8`) para a medir
+    import avaliar_bola
+    v1 = avaliar_bola.seguidor_antes()
+    jobs += [{**j, "variante": j["variante"] + "_v1", "seguidor": v1} for j in jobs[1:]]
+    est, pi5, ard5, pi8n, ard8n, pi5v, ard5v, pi8, ard8 = _tarefas(jobs, 8)
     c.ok(f"[§5] OLHAR com frames mono QVGA RENDERIZADOS (EGL, 30 Hz, latência 116 ms) + detetor C++ + IBVS + cascata, alvo PARADO: rumo RMS {est['rumo_rms_graus']:.2f}° · "
          f"|D−d*| RMS {est['dist_erro_rms'] * 100:.1f} cm · A_SEGUIR {est['frac_a_seguir'] * 100:.0f} % · frames válidos {est['frac_frames_validos'] * 100:.0f} % "
          f"(render {est['render_ms']:.2f} ms + detetor {est['detetor_ms']:.2f} ms no host)", est["rumo_rms_graus"] < 1.0 and est["frac_a_seguir"] > 0.9 and est["frac_frames_validos"] > 0.99
@@ -718,17 +736,23 @@ def secao_olhar(c: tn.Checagens, u_yaw: float, dados: dict) -> dict:
     c.ok(f"[§5] OLHAR segue o CÍRCULO a 0,5 m/s sem perder o alvo (3D completo, planta MuJoCo): rumo RMS {pi5['rumo_rms_graus']:.2f}° (116 ms) / {ard5['rumo_rms_graus']:.2f}° (21 ms DCMI, "
          f"build Arduino), máx {pi5['rumo_max_graus']:.1f}° / {ard5['rumo_max_graus']:.1f}°, A_SEGUIR {pi5['frac_a_seguir'] * 100:.0f} % / {ard5['frac_a_seguir'] * 100:.0f} %",
          pi5["rumo_rms_graus"] < 3.0 and ard5["rumo_rms_graus"] < 2.0 and pi5["frac_a_seguir"] > 0.9 and ard5["frac_a_seguir"] > 0.9 and not pi5.get("terminou"), "")
-    c.ok(f"[§5] a PAREDE da autoridade de yaw (medido, não implementado): a 0,8 m/s o yaw fica no teto de {pi8['yaw_teto']:.2f} rad/s durante {pi8['frac_yaw_no_limite'] * 100:.0f} % "
+    c.ok(f"[§5] a PAREDE da autoridade de yaw com a lei v1 do IBVS (só guinada): a 0,8 m/s o yaw fica no teto de {pi8['yaw_teto']:.2f} rad/s durante {pi8['frac_yaw_no_limite'] * 100:.0f} % "
          f"(116 ms) / {ard8['frac_yaw_no_limite'] * 100:.0f} % (21 ms) do tempo e o rumo RMS sobe para {pi8['rumo_rms_graus']:.1f}° / {ard8['rumo_rms_graus']:.1f}° "
-         f"(×{pi8['rumo_rms_graus'] / pi5['rumo_rms_graus']:.1f} / ×{ard8['rumo_rms_graus'] / ard5['rumo_rms_graus']:.1f} face a 0,5 m/s; taxa LOS verdadeira p95 "
+         f"(×{pi8['rumo_rms_graus'] / pi5v['rumo_rms_graus']:.1f} / ×{ard8['rumo_rms_graus'] / ard5v['rumo_rms_graus']:.1f} face a 0,5 m/s; taxa LOS verdadeira p95 "
          f"{pi8['los_taxa_p95']:.2f} rad/s) — o alvo continua no campo ({pi8['frac_frames_validos'] * 100:.0f} % de frames válidos): é a autoridade de yaw, não a visão",
-         pi8["frac_yaw_no_limite"] > 0.2 and ard8["frac_yaw_no_limite"] > 0.2 and pi8["rumo_rms_graus"] > 2.0 * pi5["rumo_rms_graus"] and pi8["frac_frames_validos"] > 0.95, "")
+         # a razão face a 0,5 m/s é ×2,3 nominal nesta semente mas o render não é determinístico (medido ×1,9–×2,3): limiar 1,5
+         pi8["frac_yaw_no_limite"] > 0.2 and ard8["frac_yaw_no_limite"] > 0.2 and pi8["rumo_rms_graus"] > 1.5 * pi5v["rumo_rms_graus"] and pi8["frac_frames_validos"] > 0.95, "")
+    c.ok(f"[§5] …e a lei POR OMISSÃO (v2: guinada + translação lateral) contorna-a: o mesmo círculo a 0,8 m/s dá rumo RMS {pi8n['rumo_rms_graus']:.1f}° / {ard8n['rumo_rms_graus']:.1f}° "
+         f"(medido ×0,5 / ×0,6 do da v1; exige-se < ×0,8 / ×0,9) com o yaw no teto só {pi8n['frac_yaw_no_limite'] * 100:.0f} % / {ard8n['frac_yaw_no_limite'] * 100:.0f} % do tempo (< 10 %), sem perder o alvo",
+         pi8n["rumo_rms_graus"] < 0.8 * pi8["rumo_rms_graus"] and ard8n["rumo_rms_graus"] < 0.9 * ard8["rumo_rms_graus"] and pi8n["frac_yaw_no_limite"] < 0.1
+         and ard8n["frac_yaw_no_limite"] < 0.1 and pi8n["frac_frames_validos"] > 0.95 and not pi8n.get("terminou") and not ard8n.get("terminou"), "")
     p = olhar_perda(dados, u_yaw)
     ok = 2 in p["sequencia"] and p["sequencia"][-1] == 0 and p["frac_final_a_seguir"] > 0.9 and np.isfinite(p["perdido_em"]) and p["perdido_em"] - 10.0 < 1.0
     c.ok(f"[§5] OLHAR com perda e reaquisição (o alvo some atrás do drone 2,5 s): estados A_SEGUIR=0/EM_FALTA=1/PERDIDO=2/REAQUISICAO=3 → sequência {p['sequencia']}; PERDIDO a "
          f"t = {p['perdido_em']:.2f} s (≤ 1 s depois de sumir), de novo em A_SEGUIR a t = {p['a_seguir_de_novo_em']:.2f} s, {p['frac_final_a_seguir'] * 100:.0f} % "
          "em A_SEGUIR no fim — o drone não cai", ok, "")
-    return {"pi5": pi5, "ard5": ard5, "pi8": pi8, "ard8": ard8, "estatico": est, "perda": p}
+    return {"pi5": pi5, "ard5": ard5, "pi8": pi8, "ard8": ard8, "estatico": est, "perda": p,
+            "pi5_v1": pi5v, "ard5_v1": ard5v, "pi8_v2": pi8n, "ard8_v2": ard8n}
 
 
 # ============================================================================================ §6 alvo
@@ -832,6 +856,19 @@ MUTACOES = (
      "viés do giroscópio NÃO subtraído (calibração no chão inútil em p)", "golden"),
     ("estimador_classico.hpp", "bias_acc_ = limita(bias_acc_ - w * w * w * periodo * erro, -e.lim_bias_acc, e.lim_bias_acc);",
      "bias_acc_ = limita(bias_acc_ + w * w * w * periodo * erro, -e.lim_bias_acc, e.lim_bias_acc);", "sinal do viés do acelerómetro (altura de 3.ª ordem)", "golden"),
+    # --- interface 3 (fase 2: vento): o observador de perturbação da cascata e a velocidade do fluxo sem os artefactos da rotação
+    ("cascata.hpp", "d_obs_[i] = limita(d_obs_[i] + dt * g.w_pert * g.w_pert * e_o, -g.lim_pert, g.lim_pert);",
+     "d_obs_[i] = limita(d_obs_[i] - dt * g.w_pert * g.w_pert * e_o, -g.lim_pert, g.lim_pert);",
+     "observador de perturbação: ganho do estado estendido com o sinal trocado", "golden"),
+    ("cascata.hpp", "const float ax = aff_x + g.k_vel * evx + i_vel_[0] - g.kd_vel * d_filt_[0] - d_obs_[0];",
+     "const float ax = aff_x + g.k_vel * evx + i_vel_[0] - g.kd_vel * d_filt_[0] + d_obs_[0];",
+     "a perturbação observada SOMA-SE à aceleração pedida em vez de ser anulada", "golden"),
+    ("cascata.hpp", "const float fz_emp = (g.g + az_ref_) / den;", "const float fz_emp = 0.0f * (g.g + az_ref_) / den;",
+     "observador de perturbação SEM o modelo do empuxo (cada inclinação passa a ser «vento»)", "golden"),
+    ("estimador_classico.hpp", "const float vx_m = s.tof_d * (q_f - s.fluxo[1]) + braco * q_f;",
+     "const float vx_m = s.tof_d * (q_f - s.fluxo[1]) - braco * q_f;", "braço do sensor de fluxo ao CM com o sinal trocado", "golden"),
+    ("estimador_classico.hpp", "if (n_atraso > 0 && n_fila_ > n_atraso) {", "if (n_atraso > 0 && n_fila_ > n_atraso + 100) {",
+     "alinhamento giroscópio/fluxo desligado (a rotação tirada ao fluxo é a de agora)", "golden"),
     ("nucleo.cpp", "float d = cfg_.upv_k / v_bat;", "float d = cfg_.upv_k / 22.0f;", "compensação de tensão desligada (tensão fixa)", "tensao"),
     ("nucleo.cpp", "if (cont_cascata_ == 0) {  // ---- uma decisão da cascata", "if (cont_cascata_ >= 0) {  // ---- uma decisão da cascata",
      "a cascata corre a 500 Hz em vez de 50 Hz (decimação ignorada)", "decimacao"),

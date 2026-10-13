@@ -41,7 +41,12 @@ CXX = os.environ.get("CXX", "g++")
 FLAGS_BASE = ["-std=c++17", "-O2", "-fno-exceptions", "-fno-rtti", "-ffp-contract=off",
               "-Wall", "-Wextra", "-Wdouble-promotion", "-Werror"]
 FLAGS_SO = [*FLAGS_BASE, "-fPIC", "-shared"]
-FICHEIROS_VISAO = ("visao_tipos.hpp", "visao.hpp", "alvo.hpp", "ibvs.hpp", "capi_visao.cpp")
+FICHEIROS_VISAO = ("visao_tipos.hpp", "visao.hpp", "alvo.hpp", "ibvs.hpp", "ibvs_ganhos.hpp", "capi_visao.cpp")
+# A lei que `SeguidorCpp(lei=None)` usa: "v2" = a por omissão do firmware (`visao::config_padrao`: «seguir a bola», com v_y e as
+# compensações — provada no simulador completo pelo `teste_bola.py`); "v1" = a da atividade C (`visao::config_versao1`: guinada +
+# v_z + v_x, v_y = 0), que é a que o `teste_visao.py` caracteriza na planta cinemática deste módulo.
+LEIS = ("v2", "v1")
+LEI_OMISSAO = "v2"
 
 _TIPOS_C = {"float": ctypes.c_float, "int32_t": ctypes.c_int32, "uint32_t": ctypes.c_uint32}
 
@@ -172,6 +177,8 @@ class BibliotecaVisao:
             lib.seguidor_criar.restype = c_i32
             lib.seguidor_liberar.argtypes = [c_i32]
             lib.seguidor_config_padrao.argtypes = [c_i32, c_i32, c_f, c_i32, P(self.ConfigSeguidor)]
+            if hasattr(lib, "seguidor_config_versao1"):         # as .so de antes da versão 2 não a têm (o `teste_bola.py` carrega uma)
+                lib.seguidor_config_versao1.argtypes = [P(self.ConfigSeguidor)]
             lib.seguidor_iniciar.argtypes = [c_i32, P(self.ConfigSeguidor)]
             lib.seguidor_iniciar.restype = c_i32
             lib.seguidor_reiniciar.argtypes = [c_i32]
@@ -277,18 +284,24 @@ class DetetorCpp:
 class SeguidorCpp:
     """Uma instância do `Seguidor` C++ (estimador do alvo + lei IBVS + máquina de estados) do pool estático da .so.
 
-    `cfg` = campos de `ConfigSeguidor` a sobrepor aos de `config_padrao(largura, altura, fovy, modelo)`.
+    `cfg` = campos de `ConfigSeguidor` a sobrepor aos de `config_padrao(largura, altura, fovy, modelo)`; `lei` = "v2" (a por
+    omissão do firmware) ou "v1" (`config_versao1` aplicada antes do `cfg`); None = `LEI_OMISSAO`.
     Os buffers `att`, `cam` e `saida` são reutilizados (a `saida` é sobrescrita a cada passo — copie o que precisar).
     """
 
     def __init__(self, largura: int = 320, altura: int = 240, fovy_graus: float = 55.4, modelo: int = 2,
-                 cfg: dict | None = None, bib: BibliotecaVisao | None = None):
+                 cfg: dict | None = None, bib: BibliotecaVisao | None = None, lei: str | None = None):
         self.bib = bib or biblioteca_padrao()
+        self.lei = LEI_OMISSAO if lei is None else lei
+        if self.lei not in LEIS:
+            raise ValueError(f"lei tem de ser uma de {LEIS} (recebido {self.lei!r})")
         self.id = int(self.bib.lib.seguidor_criar())
         if self.id < 0:
             raise RuntimeError("pool de seguidores esgotado (16)")
         self.cfg = self.bib.ConfigSeguidor()
         self.bib.lib.seguidor_config_padrao(int(largura), int(altura), float(fovy_graus), int(modelo), self.cfg)
+        if self.lei == "v1":
+            self.bib.lib.seguidor_config_versao1(self.cfg)
         for k, v in (cfg or {}).items():
             if not hasattr(self.cfg, k):
                 raise AttributeError(f"ConfigSeguidor não tem o campo {k!r}")

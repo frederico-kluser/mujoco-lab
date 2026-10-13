@@ -11,7 +11,7 @@ copyright, o código sim).
    conformador (acel./jerk-limitado, modelo de seguimento) ─────────────────────────────┤
                   │                                                                      │
    posição (P, raiz quadrada) ──▶ velocidade (PI(D) + FF de aceleração e de arrasto) ──▶ aceleração desejada
-                                                                                          │
+                                     − PERTURBAÇÃO observada (fase 2, VENTO: observador de estado estendido) │
               inclinação desejada + EMPUXO COLETIVO ÷ (cosφ·cosθ)  ◀─────────────────────┘
                   │
    atitude (P) com PRIORIDADE DE INCLINAÇÃO (Brescianini) + PESO DE YAW (MC_YAW_WEIGHT) + FF da taxa de inclinação
@@ -45,6 +45,16 @@ PEÇAS (todas com equações explícitas e unidades nos docstrings)
   ordem — as causas medidas do erro de hover; ver o README) · funções puras (`raiz_quadrada`, `direcao_empuxo`,
   `erro_atitude`, `velocidade_no_rumo`, `cmd_para_acao`, `acelerador_de_coletivo`).
 
+FASE 2 — VENTO (2026-10-12; medido em `avaliar_vento.py`, provado em `teste_vento_classico.py`). Diagnóstico da fase 1 com
+vento: o estimador NÃO é enganado (velocidade 2 cm/s, atitude 0,4° com e sem vento) e nada satura; quem perde é o INTEGRAL
+da velocidade, a única coisa que rejeitava uma perturbação constante — lento (um degrau de vento de 3 m/s desvia 1,5 m e
+leva 13 s a voltar) e limitado a 2 m/s² (5 m/s de vento pedem 2,1: o drone fica a 3,5 m). O que mudou:
+  · um OBSERVADOR DE ESTADO ESTENDIDO no laço de velocidade horizontal (`CascataClassica.passo`, etapa 1b): estima a
+    perturbação da velocidade medida contra a de um modelo (empuxo lido da atitude estimada − arrasto) e anula-a;
+  · a velocidade do fluxo do `EstimadorClassico` deixou de levar a rotação do corpo (braço do sensor ao CM e alinhamento
+    do giroscópio com a amostra do fluxo) — sem isso cada manobra de inclinação parecia vento ao observador.
+A vertical ficou como na fase 1 (o observador vertical foi medido e não entrou).
+
 FONTES (equações reimplementadas; nenhuma linha copiada)
   [PX4]   Controller Diagrams — docs.px4.io/main/en/flight_stack/controller_diagrams (cascata posição P →
           velocidade PID → aceleração → inclinação+empuxo → atitude P → taxa PID; o modo velocidade contorna a
@@ -63,6 +73,13 @@ FONTES (equações reimplementadas; nenhuma linha copiada)
   [MAH08] Mahony, Hamel & Pflimlin, «Nonlinear Complementary Filters on the Special Orthogonal Group», IEEE TAC
           53(5), 2008 (filtro complementar P/PI de atitude; medido aqui: a parte I não ajuda em voo — README).
   [BF]    Betaflight docs `vbat_sag_compensation` (ideia: o acelerador de pairagem acompanha a tensão).
+  [HAN09] Han, «From PID to Active Disturbance Rejection Control», IEEE Trans. Industrial Electronics 56(3), 2009 (o
+          observador de estado estendido: a perturbação TOTAL é mais um estado, estimado e anulado — fase 2, vento).
+  [GAO03] Gao, «Scaling and Bandwidth-Parameterization Based Controller Tuning», American Control Conference, 2003 (os
+          ganhos do observador por UMA banda ω: polos duplos em −ω ⇒ 2ω e ω²).
+  [SME18] Smeur, de Croon & Chu, «Cascaded Incremental Nonlinear Dynamic Inversion for MAV Disturbance Rejection»,
+          Control Engineering Practice 73, 2018 (a alternativa MEDIDA e não adotada: realimentar a aceleração do
+          acelerómetro — aqui o ruído de vibração piora a pairagem em ar parado; ver `avaliar_vento.py`).
 
 Unidades SI; +Z para cima; ângulos ZYX (yaw ψ, pitch θ, roll φ): θ > 0 inclina o empuxo para +x (acelera para a
 frente), φ < 0 inclina-o para +y (esquerda); ψ > 0 roda no sentido anti-horário visto de cima.
@@ -70,6 +87,7 @@ frente), φ < 0 inclina-o para +y (esquerda); ψ > 0 roda no sentido anti-horár
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 
@@ -238,6 +256,10 @@ class PlantaLinear:
     dt_decisao: float = 0.02   # s — período da cascata
     u_yaw_por_taxa: float | None = None   # (acelerador diferencial)/(rad/s) em equilíbrio — IDENTIFICADO no simulador;
     #                            sem ele usa-se a fórmula c_yaw/(J_zz·α_z) (arrasto de rotor)
+    # --- o sensor de fluxo ótico (de onde vem a velocidade medida que o observador de perturbação usa)
+    atraso_vel: float = 0.0    # s — atraso da velocidade do fluxo: transporte + PT1 do estimador + meia amostra
+    braco_fluxo: float = 0.0   # m — altura do CM acima do sensor de fluxo
+    atraso_fluxo: int = 0      # passos de física entre uma leitura do giroscópio e a amostra de fluxo do mesmo instante
 
 
 @dataclass(frozen=True)
@@ -259,6 +281,14 @@ class GanhosCascata:
              r_yaw = u_yaw/(u/r) com u/r = c_yaw/(J_zz·α_z) (arrasto de rotor) ou o valor IDENTIFICADO no simulador
         comandos: a_cmd = g·tan(17°), jerk = a_cmd·ω_att/2 (ω_att = √(K_att·ω_c)), K_conf = K_att, τ_modelo = 1/ω_c;
                   vertical: a_z = ½·(c_max − 1)·g, jerk_z = a_z/(2·τ_m), K_conf_z = 1/(2·τ_m)
+        observador de perturbação (fase 2, VENTO; só na horizontal): ω_obs = ω_c/razão_pert (razão 1: a banda do laço
+                  mais rápido que o corpo segue; ganhos 2·ω_obs e ω_obs² = polos duplos [GAO03]); limite = a autoridade
+                  da inclinação, g·tan(tilt_max); τ_vel = atraso da velocidade do fluxo (transporte + PT1 do estimador +
+                  meia amostra).
+    As escolhas da fase 2 foram MEDIDAS nas sementes de calibração (`avaliar_vento.py --calibrar`; números no docstring
+    desse ficheiro): a banda do observador, o que cada peça do modelo vale, e o que NÃO entrou — um observador pelo
+    acelerómetro (o ruído de vibração piora a pairagem em ar parado) e um observador VERTICAL (segura a altitude mas
+    troca-a por deriva horizontal quando o empuxo satura, e piora o degrau de subida).
     """
 
     razao_lacos: float = 4.0
@@ -314,6 +344,15 @@ class GanhosCascata:
     k_ff_acc: float = 1.0                  # escala do feed-forward da aceleração conformada (0 = só realimentação)
     k_arrasto: float = 0.30                # s⁻¹   feed-forward do arrasto linear (a = d·v_modelo); d do rotor da planta
     aw_ganho: float = 2.0                  # anti-windup por retro-cálculo: k_aw = aw_ganho/K_vel (0 = sem anti-windup)
+    # rejeição de perturbação (VENTO, fase 2): OBSERVADOR DE ESTADO ESTENDIDO no laço de velocidade horizontal
+    # [HAN09][GAO03] — a perturbação (vento, arrasto mal modelado, viés de atitude) é estimada da velocidade MEDIDA contra a
+    # do modelo e anulada na aceleração pedida, sem esperar pelo integral (ver `passo`, etapa 1b)
+    w_pert: float = 8.43                   # rad/s  banda do observador (polos duplos em −w) = ω_c/razão_pert; 0 = fase 1
+    lim_pert: float = 5.66                 # m/s²   |perturbação| ≤ g·tan(tilt_max): o que a inclinação consegue anular
+    tau_vel: float = 0.034                 # s      atraso da velocidade medida pelo fluxo (o modelo do observador leva o mesmo)
+    # velocidade do fluxo no `EstimadorClassico` (geometria e sensores do build — ver `EstimadorClassico.configurar_fluxo`)
+    braco_fluxo: float = 0.041             # m      altura do CM acima do sensor de fluxo (v_cm = v_sensor − ω × r)
+    atraso_fluxo: int = 4                  # passos a amostra do fluxo chega N passos de física depois do giroscópio que lhe corresponde
     ff_atitude: bool = True                # feed-forward da taxa de inclinação (ω = n̂ × dn̂/dt) — segue rampas sem atraso
     tau_ff: float = 0.08                   # s     filtro da derivada de n̂ (rejeita o ruído do fluxo)
     comp_yaw_empuxo: bool = True           # pré-compensa o empuxo extra do diferencial de yaw (ver `passo`)
@@ -326,11 +365,13 @@ class GanhosCascata:
     def de_planta(cls, p: PlantaLinear, razao: float = 4.0, *, razao_atitude: float = 2.5,
                   razao_posicao: float = 2.5, razao_integral: float = 2.0, tilt_max_graus: float = 30.0,
                   tilt_cmd_graus: float = 17.0, f_yaw: float = 0.6, peso_yaw: float = 0.7, c_max: float = 1.8,
-                  reserva_vertical: float = 1.3, **extra) -> GanhosCascata:
+                  reserva_vertical: float = 1.3, razao_pert: float = 1.0, **extra) -> GanhosCascata:
         """Ganhos e limites por FÓRMULAS FECHADAS a partir da planta (ver o docstring da classe)."""
         if min(razao, razao_atitude, razao_posicao, razao_integral) <= 1.0:
             raise ValueError("as razões entre laços têm de ser > 1 "
                              f"(recebido {razao!r}, {razao_atitude!r}, {razao_posicao!r}, {razao_integral!r})")
+        if razao_pert <= 0.0:
+            raise ValueError(f"razao_pert tem de ser > 0 (recebido {razao_pert!r})")
         k_att = p.omega_taxa / razao_atitude
         k_vel = k_att / razao
         k_pos = k_vel / razao_posicao
@@ -360,6 +401,8 @@ class GanhosCascata:
             "tau_modelo": 1.0 / p.omega_taxa,
             "acc_cmd_z": acc_cmd_z, "jerk_cmd_z": acc_cmd_z / (2.0 * p.tau_motor),
             "k_conf_z": 1.0 / (2.0 * p.tau_motor),
+            "w_pert": p.omega_taxa / razao_pert, "lim_pert": G * math.tan(tilt_max), "tau_vel": p.atraso_vel,
+            "braco_fluxo": p.braco_fluxo, "atraso_fluxo": int(p.atraso_fluxo),
             "notas": notas,
         }
         dados.update(extra)
@@ -430,6 +473,8 @@ def ganhos_de_hardware(env, razao: float = 4.0, razao_atitude: float = 2.5, raza
       simulador por `avaliar_classico.identificar_yaw`) substitui a fórmula quando dado;
     · arrasto — `k_arrasto` = d do rotor (feed-forward do arrasto linear);
     · teto de altitude — 90 % do alcance do ToF (VL53L1X: 3,6 m): acima, ĥ e o fluxo (escala) deixam de existir;
+    · sensor de fluxo — o atraso da velocidade medida, o braço ao CM e o desfasamento giroscópio/fluxo (catálogo de
+      sensores + geometria do modelo): o que o observador de perturbação e o `EstimadorClassico` precisam;
     · tudo o resto: fórmulas fechadas de `GanhosCascata.de_planta`.
     """
     import numpy as np
@@ -441,11 +486,22 @@ def ganhos_de_hardware(env, razao: float = 4.0, razao_atitude: float = 2.5, raza
     tof = hw.sensores.get("tof")
     if tof is not None:        # o ToF só mede até `alcance_max` (3,6 m): acima o drone perde a altura (e o fluxo a escala)
         opcoes.setdefault("altura_max", 0.9 * float(tof.get("alcance_max", 1e9)))
+    # sensor de fluxo: atraso da velocidade medida (transporte + PT1 do estimador, τ = T·(1/α − 1), + meia amostra), braço
+    # ao CM (o fluxo e o ToF partilham o site `baixo`) e passos entre o giroscópio e a amostra de fluxo do mesmo instante
+    fluxo = hw.sensores.get("fluxo")
+    atraso_vel, braco_fluxo, atraso_fluxo = 0.0, 0.0, 0
+    if fluxo is not None:
+        periodo = 1.0 / float(fluxo.get("taxa_hz", 1.0 / float(env.dt)))
+        atraso_s = float(fluxo.get("atraso_s", 0.0))
+        atraso_vel = atraso_s + periodo * (1.0 / ALFA_FLUXO - 1.0) + 0.5 * periodo
+        atraso_giro = float(hw.sensores["imu"]["giro"].get("atraso_s", 0.0))
+        atraso_fluxo = max(0, round((atraso_s - atraso_giro) / float(env.dt)))
+        braco_fluxo = -float(env.model.site_pos[env.model.site("baixo").id][2])
     planta = PlantaLinear(
         omega_taxa=omega_c, tau_motor=float(fc.tau_motor), alfa_yaw=float(fc.alfa[2]),
         inercia_zz=float(fc.inercia[2]), c_yaw=d_arrasto * float(env.massa) * r_braco * r_braco,
         u_pairagem=float(env.u_pairagem), idle=float(fc.idle), dt_decisao=float(env.dt_decisao),
-        u_yaw_por_taxa=u_yaw_por_taxa)
+        u_yaw_por_taxa=u_yaw_por_taxa, atraso_vel=atraso_vel, braco_fluxo=braco_fluxo, atraso_fluxo=atraso_fluxo)
     return GanhosCascata.de_planta(planta, razao, razao_atitude=razao_atitude, razao_posicao=razao_posicao,
                                    **opcoes)
 
@@ -550,7 +606,15 @@ class CascataClassica:
         self.z_alvo = None
         self._n_ant = None                # direção do empuxo do passo anterior (feed-forward de taxa)
         self._dn = [0.0, 0.0, 0.0]
+        self._zerar_observador()
         self.dados: dict = {}
+
+    def _zerar_observador(self) -> None:
+        """Estados do observador de perturbação (fase 2), no referencial de arranque."""
+        self.v_obs = None                 # m/s — velocidade horizontal do modelo (None = arranca na 1.ª medida)
+        self.d_obs = [0.0, 0.0]           # m/s² — perturbação horizontal observada
+        self.a_emp = [0.0, 0.0]           # m/s² — aceleração do empuxo (da atitude estimada), atrasada como a medida
+        self.az_ref = 0.0                 # m/s² — aceleração vertical pretendida na decisão anterior (sem o integral)
 
     def armar(self, armado: bool, est=None, z_alvo: float | None = None) -> None:
         """Arma/desarma. Ao armar com `est`, trava referências (x, y, ψ) no estado atual; `z_alvo` [m] = altura a
@@ -571,6 +635,7 @@ class CascataClassica:
         self.i_vel, self.i_z, self.d_filt, self.v_ant = [0.0, 0.0], 0.0, [0.0, 0.0], None
         self.z_alvo = None
         self._n_ant, self._dn = None, [0.0, 0.0, 0.0]
+        self._zerar_observador()
 
     def _travar(self, e: tuple[float, ...], z_alvo: float | None) -> None:
         _phi, _theta, psi, h, _vz, _vx, _vy, x, y = e
@@ -584,10 +649,11 @@ class CascataClassica:
     def passo(self, est, giro, cmd, dt: float) -> tuple[float, tuple[float, float, float]]:
         """Uma decisão: estimativas + taxas medidas + comando → (empuxo coletivo T/(m·g), (p, q, r) [rad/s]).
 
-        Etapas: 1 velocidade medida no rumo/arranque · 2 yaw (conformador de taxa + referência de rumo) · 3 conformador de
-        velocidade e de altura (+ modelo de seguimento) · 4 referência de posição · 5 laço de posição (raiz quadrada) e de
-        velocidade (PI + FF) → aceleração · 6 laço de altura/velocidade vertical → a_z · 7 inclinação desejada e coletivo
-        (÷ cosφ·cosθ; anti-windup) · 8 atitude com prioridade de inclinação → taxas. Estado de diagnóstico em `self.dados`.
+        Etapas: 1 velocidade medida no rumo/arranque · 1b observador de perturbação (vento) · 2 yaw (conformador de taxa +
+        referência de rumo) · 3 conformador de velocidade e de altura (+ modelo de seguimento) · 4 referência de posição ·
+        5 laço de posição (raiz quadrada) e de velocidade (PI + FF − perturbação observada) → aceleração · 6 laço de
+        altura/velocidade vertical → a_z · 7 inclinação desejada e coletivo (÷ cosφ·cosθ; anti-windup) · 8 atitude com
+        prioridade de inclinação → taxas. Estado de diagnóstico em `self.dados`.
         """
         dt = _finito("dt", dt)
         if dt <= 0.0:
@@ -608,6 +674,33 @@ class CascataClassica:
         # ---- 1. velocidade medida: corpo → referencial do rumo (H) → referencial de arranque (O)
         vhx, vhy = velocidade_no_rumo(phi, theta, vbx, vby, vz)
         vox, voy = cs * vhx - sn * vhy, sn * vhx + cs * vhy
+        sf, cf = math.sin(phi), math.cos(phi)
+        st, ct = math.sin(theta), math.cos(theta)
+
+        # ---- 1b. OBSERVADOR DE PERTURBAÇÃO horizontal (estado estendido [HAN09]; fase 2: vento), no referencial O
+        # Modelo:      v̇ = a_emp − d_arr·v + d      a_emp = (g + a_z)·(ẑ_b)_xy/(ẑ_b)_z — a aceleração que o EMPUXO dá, lida
+        #                                           da atitude ESTIMADA (não da pedida: o atraso da malha de atitude e a
+        #                                           saturação da inclinação já vêm lá dentro, sem windup)
+        # Observador:  v̂' = a_emp,f − d_arr·v̂ + d̂ + 2ω·(v − v̂)       d̂' = ω²·(v − v̂)        (polos duplos em −ω [GAO03])
+        # `d` é tudo o que o modelo não explica: vento, arrasto mal modelado, viés da atitude estimada. a_emp,f é a_emp com o
+        # atraso da velocidade medida (τ_vel): modelo e medida comparam-se no MESMO instante (sem isto, cada manobra
+        # parecia uma perturbação — medido: sobressinal do degrau de velocidade 10 % → 3 %).
+        if gn.w_pert > 0.0:
+            den = ct * cf
+            if den < 0.2:                               # quase de cabeça para baixo: sem modelo (nunca acontece em voo)
+                atx = aty = 0.0
+            else:
+                fz = (gn.g + self.az_ref) / den
+                atx, aty = fz * (cs * st * cf + sn * sf), fz * (sn * st * cf - cs * sf)
+            if self.v_obs is None:
+                self.v_obs, self.a_emp = [vox, voy], [atx, aty]
+            am = dt / (gn.tau_vel + dt)
+            for i, (vm, at) in enumerate(((vox, atx), (voy, aty))):
+                self.a_emp[i] += am * (at - self.a_emp[i])
+                e_o = vm - self.v_obs[i]
+                self.v_obs[i] += dt * (self.a_emp[i] - gn.k_arrasto * self.v_obs[i] + self.d_obs[i]
+                                       + 2.0 * gn.w_pert * e_o)
+                self.d_obs[i] = limita(self.d_obs[i] + dt * gn.w_pert * gn.w_pert * e_o, -gn.lim_pert, gn.lim_pert)
 
         # ---- 2. YAW: conformador da taxa (limite de taxa e de aceleração) + referência de rumo
         yaw_aut = c["modo"] == "yaw_alvo"
@@ -712,14 +805,19 @@ class CascataClassica:
         # ainda não chegou à referência: usar v_sp ultrapassa o regime e dá sobressinal)
         aff_x += gn.k_arrasto * vsx
         aff_y += gn.k_arrasto * vsy
-        ax = aff_x + gn.k_vel * evx + self.i_vel[0] - gn.kd_vel * self.d_filt[0]
-        ay = aff_y + gn.k_vel * evy + self.i_vel[1] - gn.kd_vel * self.d_filt[1]
+        # … e a perturbação observada é ANULADA (o vento é compensado à velocidade do laço de atitude, sem esperar pelo
+        # integral, que fica só com o resíduo)
+        ax = aff_x + gn.k_vel * evx + self.i_vel[0] - gn.kd_vel * self.d_filt[0] - self.d_obs[0]
+        ay = aff_y + gn.k_vel * evy + self.i_vel[1] - gn.kd_vel * self.d_filt[1] - self.d_obs[1]
 
         # ---- 6. laço vertical: altura (P) → velocidade (PI) → aceleração
         ez = self.z_sp - h
         v_corr_z = limita(raiz_quadrada(ez, gn.k_pz, gn.acc_cmd_z), -gn.vel_corr_z_max, gn.vel_corr_z_max)
         evz = self.v_mod_z + v_corr_z - vz
-        az = self.a_sp_z + gn.k_vz * evz + self.i_z
+        # a aceleração vertical PRETENDIDA fica guardada para o modelo do observador (etapa 1b da decisão seguinte); o
+        # integral não entra nela: só adapta o empuxo de pairagem (massa, kf), não é aceleração
+        self.az_ref = self.a_sp_z + gn.k_vz * evz
+        az = self.az_ref + self.i_z
 
         # ---- 7. inclinação desejada + empuxo coletivo (÷ cosφ·cosθ)
         nx, ny, nz, coletivo, sat_incl = direcao_empuxo(ax, ay, az, gn.g, gn.tilt_max,
@@ -749,8 +847,6 @@ class CascataClassica:
         # ---- 8. atitude com prioridade de inclinação → taxas
         n_des = (nx, ny, nz)
         e_x, e_y, gama = erro_atitude(phi, theta, psi, n_des, self.psi_sp)
-        sf, cf = math.sin(phi), math.cos(phi)
-        st, ct = math.sin(theta), math.cos(theta)
         # taxa de yaw do MUNDO (ψ̇ = r_ref) nos eixos do corpo: ω_b = Rᵀ·(ψ̇·ẑ) = ψ̇·(−sθ, sφ·cθ, cφ·cθ)
         p_ff, q_ff, r_ff = -st * self.r_ref, sf * ct * self.r_ref, cf * ct * self.r_ref
         # feed-forward da taxa de inclinação: n̂ roda com ω = n̂ × dn̂/dt (mundo); as componentes x, y do corpo são p, q
@@ -773,7 +869,8 @@ class CascataClassica:
         self.dados = {"a_des": (ax, ay, az), "n_des": n_des, "coletivo": coletivo, "e_tilt": (e_x, e_y),
                       "gama": gama, "v_h": (vhx, vhy), "v_o": (vox, voy), "v_sp_h": tuple(self.v_sp_h),
                       "p_sp": tuple(self.p_sp), "z_sp": self.z_sp, "psi_sp": self.psi_sp, "r_ref": self.r_ref,
-                      "sat_incl": sat_incl, "i_vel": tuple(self.i_vel), "i_z": self.i_z, "r_giro": r_giro}
+                      "sat_incl": sat_incl, "i_vel": tuple(self.i_vel), "i_z": self.i_z, "r_giro": r_giro,
+                      "pert": tuple(self.d_obs)}
         return coletivo, (p_sp, q_sp, r_sp)
 
 
@@ -784,6 +881,7 @@ ZETA_ALTURA = 0.7
 ALFA_FLUXO = 0.35        # PT1 da velocidade do fluxo, por amostra nova
 DECAI_FLUXO = 0.995      # sem fluxo válido, a velocidade estimada decai devagar (por passo de física)
 TAU_ACC_PORTAO = 0.5     # s — constante do PT1 que dá a aceleração horizontal ao «portão» do acelerómetro
+ATRASO_FLUXO_MAX = 16    # passos — tamanho da fila do giroscópio que alinha a rotação com a amostra do fluxo (firmware)
 
 
 class EstimadorClassico:
@@ -806,6 +904,13 @@ class EstimadorClassico:
         laço de altitude segura ĥ 3–4 cm abaixo do alvo; com o 3.º estado o viés é estimado e a altura assenta;
       · opcional `ki_mahony` (parte INTEGRAL de Mahony et al. [MAH08] sobre roll/pitch, com o mesmo portão): desligada por
         omissão — MEDIDO que não ajuda (hover −5 % com 0,02 /s², seguimento pior com 0,1 e instável com 0,5);
+      · VELOCIDADE DO FLUXO sem os artefactos da ROTAÇÃO (`configurar_fluxo`; fase 2 — é desta velocidade que o observador de
+        perturbação da cascata vive, e cada manobra de inclinação enganava-o): (i) o sensor de fluxo mede a velocidade
+        DELE, a `braco_fluxo` do CM — v_cm = v_sensor − ω × r, ou seja v̂_x += b·q e v̂_y −= b·p (4 cm × 1 rad/s = 4 cm/s
+        a mudar em décimas de segundo); (ii) a amostra do fluxo sai `atraso_fluxo` passos depois do giroscópio do mesmo
+        instante — a rotação que se lhe tira (q − Ω_y) é a do giroscópio DESSE instante (fila de N amostras), não a de
+        agora. MEDIDO no núcleo C++ com o observador ligado (degrau de comando, sementes de calibração): sobressinal 11,3 %
+        sem as duas correções → 2,6 % com elas;
       · tudo o resto é igual ao `EstimadorBordo` (cinemática ZYX, v̂_xy do fluxo no corpo, odometria) — mesmas
         fórmulas, escalares Python.
 
@@ -813,7 +918,8 @@ class EstimadorClassico:
     """
 
     def __init__(self, dt: float, *, cal_giro: bool = True, portao_acc: bool = True, a_portao: float = 0.15,
-                 k_atitude: float = K_ATITUDE, bias_acc_z: bool = True, ki_mahony: float = 0.0):
+                 k_atitude: float = K_ATITUDE, bias_acc_z: bool = True, ki_mahony: float = 0.0,
+                 braco_fluxo: float = 0.0, atraso_fluxo: int = 0):
         self.dt = float(dt)
         self.bias_acc_z = bool(bias_acc_z)
         self.ki_mahony = float(ki_mahony)
@@ -821,7 +927,18 @@ class EstimadorClassico:
         self.portao_acc = bool(portao_acc)
         self.a_portao = float(a_portao)
         self.k_atitude = float(k_atitude)
+        self.configurar_fluxo(atraso_fluxo, braco_fluxo)
         self.reiniciar()
+
+    def configurar_fluxo(self, atraso_passos: int, braco: float) -> None:
+        """Geometria e tempos do sensor de fluxo (os da `GanhosCascata` da planta: `atraso_fluxo`, `braco_fluxo`):
+        `atraso_passos` = passos entre o giroscópio e a amostra de fluxo do mesmo instante (0 = usa o giroscópio de agora,
+        como o `EstimadorBordo`); `braco` [m] = altura do CM acima do sensor (0 = sem correção ω × r)."""
+        if int(atraso_passos) < 0 or int(atraso_passos) >= ATRASO_FLUXO_MAX:
+            raise ValueError(f"atraso_passos tem de estar em [0, {ATRASO_FLUXO_MAX - 1}] (recebido {atraso_passos!r})")
+        self.atraso_fluxo = int(atraso_passos)
+        self.braco_fluxo = float(braco)
+        self._fila_pq: deque = deque(maxlen=self.atraso_fluxo + 1)       # (p, q) sem viés dos últimos N + 1 passos
 
     def reiniciar(self, acc=(0.0, 0.0, G), tof_d: float = 0.0, tof_ok: bool = False) -> None:
         ax, ay, az = (float(v) for v in acc)
@@ -842,6 +959,7 @@ class EstimadorClassico:
         self._n_fluxo = -1
         self._a_h = 0.0
         self._v_lenta = (0.0, 0.0)
+        self._fila_pq.clear()
 
     def calibrar(self, ativo: bool) -> None:
         """`True` abre a janela de calibração (drone PARADO); `False` fecha-a e aplica b̂ e a atitude inicial."""
@@ -862,6 +980,7 @@ class EstimadorClassico:
             self.h = d * math.cos(self.roll) * math.cos(self.pitch) if ok else self.h
             self.psi = 0.0
             self.vz = self.vx = self.vy = self.x = self.y = 0.0
+            self._fila_pq.clear()
         self._calibrando = False
 
     def passo(self, giro, acc, tof_d: float, tof_ok: bool, n_tof: int, fluxo, fluxo_ok: bool,
@@ -916,12 +1035,16 @@ class EstimadorClassico:
                 else:                                   # 2.ª ordem do `estimador.py` (ζ = 0,7)
                     self.h += min(1.0, 2.0 * ZETA_ALTURA * W_ALTURA * periodo) * e
                     self.vz += W_ALTURA * W_ALTURA * periodo * e
+        self._fila_pq.append((p, q))
         if n_fluxo != self._n_fluxo:
             self._n_fluxo = n_fluxo
             if fluxo_ok and tof_ok:
                 fx, fy = (float(v) for v in fluxo)
-                self.vx += ALFA_FLUXO * (tof_d * (q - fy) - self.vx)
-                self.vy += ALFA_FLUXO * (-tof_d * (fx + p) - self.vy)
+                # a rotação do instante da amostra de fluxo (N passos atrás; enquanto a fila não enche, a de agora) e a
+                # velocidade do CM: v_cm = v_sensor − ω × r, com o sensor `braco_fluxo` abaixo do CM
+                p_f, q_f = self._fila_pq[0] if len(self._fila_pq) == self._fila_pq.maxlen else (p, q)
+                self.vx += ALFA_FLUXO * (tof_d * (q_f - fy) + self.braco_fluxo * q_f - self.vx)
+                self.vy += ALFA_FLUXO * (-tof_d * (fx + p_f) - self.braco_fluxo * p_f - self.vy)
         if not (fluxo_ok and tof_ok):
             self.vx *= DECAI_FLUXO
             self.vy *= DECAI_FLUXO

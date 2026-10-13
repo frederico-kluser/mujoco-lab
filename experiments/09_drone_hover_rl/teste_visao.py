@@ -66,11 +66,17 @@ sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 import numpy as np
 import sitl_visao as sv
 
+# ESTA PROVA É A DA LEI DA VERSÃO 1 (atividade C, «olhar para o círculo»: guinada PI+FF, v_z, v_x, v_y = 0). Desde 2026-10-12 a lei
+# POR OMISSÃO do firmware é a versão 2 («seguir a bola»: + v_y, compensação da translação própria e da inclinação — provada no
+# simulador completo pelo `teste_bola.py`). A versão 1 continua no código, bit a bit (`visao::config_versao1`), e é com ela que
+# os seguidores deste ficheiro são criados: os números das §5–§7 (planta CINEMÁTICA do `sitl_visao.py`) são os de sempre.
+sv.LEI_OMISSAO = "v1"
+
 FIRMWARE_DIR = sv.FIRMWARE_DIR
 NUCLEO_DIR = sv.NUCLEO_DIR
 CROSS_DIR = FIRMWARE_DIR / "cross"
 ESTRESSE_CPP = FIRMWARE_DIR / "teste" / "estresse_visao.cpp"
-FICHEIROS_C = ("visao_tipos.hpp", "visao.hpp", "alvo.hpp", "ibvs.hpp", "capi_visao.cpp")
+FICHEIROS_C = ("visao_tipos.hpp", "visao.hpp", "alvo.hpp", "ibvs.hpp", "ibvs_ganhos.hpp", "capi_visao.cpp")
 VERIFICA_CPP = CROSS_DIR / "verifica_visao.cpp"
 PASSOS_ESTRESSE_DET, PASSOS_ESTRESSE_SEG = 20000, 400
 

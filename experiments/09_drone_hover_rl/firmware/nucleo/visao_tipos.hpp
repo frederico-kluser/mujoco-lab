@@ -3,7 +3,7 @@
 // Quem os usa:
 //   · visao.hpp   Detetor        — frame mono uint8 → Deteccao (limiar + momentos)       [corre no M7 / MCU de visão]
 //   · alvo.hpp    FiltroAlvo     — α-β / KF-CV / KF-CA do bearing do alvo + histórico de atitude + atraso
-//   · ibvs.hpp    Seguidor       — lei IBVS (yaw ← u, v_z ← v, v_x ← distância) + máquina de estados de perda
+//   · ibvs.hpp    Seguidor       — lei IBVS (yaw + v_y ← u, v_z ← v, v_x ← distância) + máquina de estados de perda
 //   · capi_visao.cpp             — wrappers extern "C" para o SITL (ctypes) — NÃO entra no .ino
 //
 // MESMAS REGRAS do núcleo (config.hpp): só `float` + inteiros de <stdint.h>, sem heap/exceções/RTTI, só
@@ -29,7 +29,10 @@
 namespace nucleo {
 namespace visao {
 
-constexpr uint32_t kVersaoVisao = 1u;
+// VERSÃO 2 (modo «seguir a bola», 2026-10-12): ao FIM de ConfigSeguidor — translação lateral (v_y), compensação da translação
+// própria no filtro do alvo e da inclinação do corpo no canal vertical; ao FIM de SaidaSeguidor — o erro NA IMAGEM e a
+// velocidade estimada do alvo (para o HUD). Com os campos novos a 0 a lei é EXATAMENTE a da versão 1.
+constexpr uint32_t kVersaoVisao = 2u;
 
 // Estado da máquina de perda do seguidor.
 enum Estado : int32_t {
@@ -69,6 +72,7 @@ constexpr int32_t kFlagOutlier = 32;          // a medida deste frame foi recusa
 constexpr int32_t kFlagReinicioFiltro = 64;   // o filtro foi reiniciado com esta medida
 constexpr int32_t kFlagProcuraEsgotada = 128; // PERDIDO há > t_procura_max_s: a procura parou (supervisor decide)
 constexpr int32_t kFlagSaturouYaw = 256;      // yaw_taxa no limite (yaw_max ou slew)
+constexpr int32_t kFlagSaturouLateral = 512;  // v_y no limite (vy_max ou slew)
 
 // ----------------------------------------------------------------------------------------- medida da câmara
 // O QUE O DETETOR ENTREGA AO NÚCLEO DE VOO (por frame). É a struct que o núcleo terá de aceitar (ver README):
@@ -134,7 +138,7 @@ struct Atitude {
 // (só yaw: x = frente, y = esquerda, z = cima) e taxa de guinada. nucleo::Comando já tem os 4 campos reservados.
 struct ComandoVoo {
     float vx;              // m/s — frente (|v_xy| ≤ 1)
-    float vy;              // m/s — esquerda (o IBVS manda sempre 0)
+    float vy;              // m/s — esquerda (0 na lei da versão 1; a translação lateral do «seguir a bola» na 2)
     float vz;              // m/s — cima (|v_z| ≤ 0,7)
     float yaw_taxa;        // rad/s — + anti-horário visto de cima
 };
@@ -187,6 +191,17 @@ struct ConfigSeguidor {
     int32_t n_reaq;        // deteções aceites seguidas para REAQUISICAO → A_SEGUIR
     float w_procura;       // rad/s — taxa da procura de yaw em PERDIDO
     float t_procura_max_s; // s — depois disto a procura pára (flag) — 0 = sem limite
+    // --- versão 2: «seguir a bola» (tudo a 0 = a lei da versão 1)
+    int32_t comp_translacao; // 1 = o filtro do alvo desconta a translação PRÓPRIA (odometria de bordo): as taxas são só do alvo
+    float kp_y;            // 1/s — v_y = kp_y·(desvio lateral do alvo, m) + kff_y·v_tangencial_alvo
+    float kff_y;           // feedforward da velocidade tangencial estimada do alvo (1 = o drone acompanha-o de lado)
+    float vy_max;          // m/s
+    float acel_y_max;      // m/s²
+    float zona_morta_y;    // m
+    float k_incl_z;        // [0,1] — 0: v_z anula a elevação INERCIAL (drone à altura do alvo) · 1: anula o erro vertical NA IMAGEM
+    float tau_incl_s;      // s — PT1 da parcela de inclinação do corpo no canal vertical (0 = sem filtro)
+    int32_t raio_cv;       // 1 = com KF_CA, o canal do RAIO usa velocidade constante (q_raio passa a ser o do CV): o raio de um
+                           //     blob de ~6 px não dá para estimar aceleração — o CA só punha a distância a oscilar
 };
 
 // O que o seguidor devolve: comando + estado + diagnóstico (todas as grandezas finitas).
@@ -211,6 +226,12 @@ struct SaidaSeguidor {
     int32_t n_aceites;     // medidas aceites desde o último reinício do filtro
     int32_t n_rejeitadas;  // medidas válidas recusadas pelo gate (total)
     int32_t procura;       // 1 = a procurar (PERDIDO a rodar)
+    // --- versão 2: o que o dono vê e o que a lei antecipa (para o HUD)
+    float e_h_cam;         // rad — erro HORIZONTAL previsto NA IMAGEM agora (+ = alvo à direita do centro); 0 sem previsão
+    float e_v_cam;         // rad — erro VERTICAL previsto na imagem (+ = alvo acima do centro): inclui a inclinação do corpo
+    float v_alvo_rad;      // m/s — velocidade estimada do alvo ao longo da linha de vista (+ = afasta-se)
+    float v_alvo_tan;      // m/s — idem, tangencial (+ = para a esquerda da linha de vista)
+    float v_alvo_vert;     // m/s — idem, vertical (+ = sobe)
 };
 
 }  // namespace visao

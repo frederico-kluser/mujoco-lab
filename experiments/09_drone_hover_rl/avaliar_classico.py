@@ -181,6 +181,8 @@ class ControladorCascata:
         self.ganhos = gn
         self.casc = cc.CascataClassica(gn)
         if self.estimador == "melhorado":
+            # a geometria e os tempos do sensor de fluxo vêm com os ganhos da planta (como na Config do núcleo C++)
+            env.estimador.configurar_fluxo(gn.atraso_fluxo, gn.braco_fluxo)
             calibrar_no_chao(env, T_CALIBRACAO_GIRO)
         self.casc.armar(True, env.estimador, z_alvo=env.alvo_z - deslocamento_sensor_cm(env))
 

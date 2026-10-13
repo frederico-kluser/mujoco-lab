@@ -14,9 +14,35 @@
 //                                                                    fase do lag do yaw, só no KF-CA)
 //   v_z      = Kz·(D·sen e_ε) + Kffz·v_vertical_alvo                ← P no desvio vertical (m), não no ângulo
 //   v_x      = Kd·(D − d*) + Kffd·v_radial_alvo        (só avante × max(0, cos e_ψ))   ← P na DISTÂNCIA
-//   v_y      = 0
+//   v_y      = 0                                                                        ← versão 1 («olhar para o círculo»)
 //   (a «compensação da própria rotação» do enunciado está na desrotação: ω_los = d(az_câmara)/dt + r_própria)
 //   com zona morta suave, limite e slew (aceleração máxima) por canal e anti-windup do integral.
+//
+// VERSÃO 2 — «SEGUIR A BOLA» (a bola anda ao acaso e tem de ficar CENTRADA NA IMAGEM da câmara fixa ao corpo). Medido no
+// simulador completo (avaliar_bola.py): com a lei da versão 1 o erro era sobretudo VERTICAL (4–5° RMS contra 1–2° na
+// horizontal) e vinha de três coisas — (a) o feedforward «velocidade do alvo = taxa relativa + velocidade própria» punha a
+// altura a oscilar a 0,87 Hz e o pitch a 0,5–0,7 Hz (os dois termos têm atrasos diferentes); (b) o pitch com que o drone
+// acelera aponta a câmara para cima/baixo e a lei anulava a elevação INERCIAL, não a da imagem; (c) a guinada do frame de
+// 1950 mm só dá ≈ 0,5 rad/s e 0,5 rad/s². O que mudou, tudo desligável pela Config (a 0 fica a versão 1, bit a bit):
+//   · comp_translacao — o filtro do alvo desconta a translação PRÓPRIA (alvo.hpp): as taxas são só do alvo e o feedforward
+//     de cada canal deixa de somar a velocidade própria (v_radial = Ḋ, v_tangencial = D·cos ε·α̇, v_vertical);
+//   · raio_cv — o canal do raio em velocidade constante: a «velocidade radial» tirada do raio de um blob de ~6 px em CA tinha
+//     mais erro do que sinal (0,2–0,28 m/s RMS de erro para 0,19 m/s de sinal) e punha a distância a oscilar;
+//   · v_y = Ky·(D·cos ε·sen e_ψ) + Kffy·v_tangencial_alvo — TRANSLAÇÃO LATERAL em paralelo com a guinada: o rolamento roda a
+//     imagem em torno do centro (não descentra um alvo centrado) e a translação tem 2–4× a banda da guinada. REPARTIÇÃO
+//     explícita do movimento tangencial do alvo: a translação antecipa a fração Kffy (até vy_max) e a guinada SÓ O RESTO,
+//     ω_los = (v_tangencial − v_y,ff)/(D·cos ε); o P de cada uma atua sobre o mesmo erro (somam-se, não lutam);
+//   · v_z = Kz·D·sen(e_ε + k_incl·δ) + Kffz·v_vertical_alvo, com δ = (erro vertical NA IMAGEM) − e_ε = a inclinação do eixo
+//     óptico: com k_incl = 1 o drone sobe/desce D·tan(pitch) para a bola ficar no centro da imagem. MEDIDO: só anula a parte
+//     LENTA (a altura não acompanha o pitch de 0,3–0,9 Hz com que o drone acelera, e antecipá-lo com a taxa de inclinação
+//     piorou: 2,3° → 2,9° a 116 ms) — o que conta é o drone inclinar-se POUCO: canal de distância manso (ver ibvs_ganhos.hpp).
+//   Também MEDIDO e rejeitado: avanço de fase da translação lateral com a aceleração do KF-CA (2,3° → 2,5°/3,3°: ruído) e
+//   KF-CV nos ângulos (2,1° → 2,6°: o CA faz falta na horizontal).
+// Ideias (o código é próprio): Chaumette & Hutchinson 2006/07 (IBVS; feedforward do movimento do alvo); Corke & Hutchinson,
+// «A new partitioned approach to image-based visual servo control», IEEE T-RA 17(4), 2001 (repartir os graus de liberdade
+// por canal); a «câmara virtual» nivelada dos IBVS de quadricópteros subatuados (Jabbari Asl, Oriolo & Bolandi, «An adaptive
+// scheme for image-based visual servoing of an underactuated UAV», 2014) é a desrotação de alvo.hpp — aqui o canal vertical
+// faz o contrário de propósito: o que o dono quer centrado é a imagem REAL.
 //
 // MÁQUINA DE ESTADOS (tempos em segundos desde a última deteção ACEITE):
 //   A_SEGUIR ──(t_sem > t_gap)──▶ EM_FALTA ──(t_sem > t_falta ≈ 0,3)──▶ PERDIDO ──(deteção aceite)──▶ REAQUISICAO
@@ -36,6 +62,7 @@
 #include <stdint.h>
 
 #include "alvo.hpp"
+#include "ibvs_ganhos.hpp"
 #include "visao_tipos.hpp"
 
 namespace nucleo {
@@ -86,6 +113,54 @@ inline ConfigSeguidor config_padrao(float largura, float altura, float fovy_grau
     c.n_reaq = 3;
     c.w_procura = 0.3f;
     c.t_procura_max_s = 30.0f;
+    // --- versão 2 («seguir a bola»): a lei por omissão é a AFINADA — os números vivem em ibvs_ganhos.hpp (gerado por
+    // treinar_bola.py --promover, versionado); a lei da versão 1 repõe-se com config_versao1()
+    c.comp_translacao = 1;
+    c.sigma_px = ganhos::kSigmaPx;
+    c.kp_z = ganhos::kKpZ;
+    c.kff_z = ganhos::kKffZ;
+    c.acel_z_max = ganhos::kAcelZMax;
+    c.kp_d = ganhos::kKpD;
+    c.kff_d = ganhos::kKffD;
+    c.acel_x_max = ganhos::kAcelXMax;
+    c.zona_morta_d = ganhos::kZonaMortaD;
+    c.kp_y = ganhos::kKpY;
+    c.kff_y = ganhos::kKffY;
+    c.vy_max = 1.0f;
+    c.acel_y_max = ganhos::kAcelYMax;
+    c.zona_morta_y = 0.01f;
+    c.k_incl_z = ganhos::kInclZ;
+    c.tau_incl_s = ganhos::kTauIncl;
+    if (modelo == KF_CA) {  // os ruídos de processo afinados são os do modelo por omissão (CA nos ângulos, CV no raio)
+        c.raio_cv = 1;
+        c.q_ang = ganhos::kQAng;
+        c.q_raio = ganhos::kQRaioCv;
+    }
+    return c;
+}
+
+// A lei da VERSÃO 1 («olhar para o círculo»: guinada + v_z + v_x, v_y = 0, sem compensações) sobre uma Config qualquer:
+// os campos novos a 0 e os ganhos da atividade C. Serve de referência «antes» (avaliar_bola.py) e aos testes da versão 1.
+inline ConfigSeguidor config_versao1(ConfigSeguidor c) {
+    c.sigma_px = 0.3f;
+    c.kp_z = 0.8f;
+    c.kff_z = 0.5f;
+    c.acel_z_max = 1.0f;
+    c.kp_d = 0.8f;
+    c.kff_d = 0.4f;
+    c.acel_x_max = 1.0f;
+    c.zona_morta_d = 0.03f;
+    c.comp_translacao = 0;
+    c.kp_y = 0.0f;
+    c.kff_y = 0.0f;
+    c.vy_max = 1.0f;
+    c.acel_y_max = 1.0f;
+    c.zona_morta_y = 0.0f;
+    c.k_incl_z = 0.0f;
+    c.tau_incl_s = 0.0f;
+    c.raio_cv = 0;
+    c.q_ang = c.modelo == KF_CA ? 0.01f : 0.002f;
+    c.q_raio = c.modelo == KF_CA ? 1e-5f : 2e-6f;
     return c;
 }
 
@@ -112,6 +187,11 @@ inline bool config_valida(const ConfigSeguidor& c) {
     ok = ok && finito(c.acel_x_max) && c.acel_x_max > 0.0f && finito(c.zona_morta_d) && c.zona_morta_d >= 0.0f;
     ok = ok && finito(c.t_gap_s) && c.t_gap_s > 0.0f && finito(c.t_falta_s) && c.t_falta_s > c.t_gap_s;
     ok = ok && c.n_reaq >= 1 && finito(c.w_procura) && c.w_procura >= 0.0f && finito(c.t_procura_max_s);
+    ok = ok && (c.comp_translacao == 0 || c.comp_translacao == 1);
+    ok = ok && finito(c.kp_y) && c.kp_y >= 0.0f && finito(c.kff_y) && finito(c.vy_max) && c.vy_max > 0.0f;
+    ok = ok && finito(c.acel_y_max) && c.acel_y_max > 0.0f && finito(c.zona_morta_y) && c.zona_morta_y >= 0.0f;
+    ok = ok && finito(c.k_incl_z) && c.k_incl_z >= 0.0f && c.k_incl_z <= 1.0f;
+    ok = ok && finito(c.tau_incl_s) && c.tau_incl_s >= 0.0f && (c.raio_cv == 0 || c.raio_cv == 1);
     return ok;
 }
 
@@ -121,6 +201,9 @@ constexpr float kRhoMin = 1e-4f;          // raio normalizado mínimo (distânci
 constexpr float kDtPassoMax = 0.25f;      // s — o dt do passo satura aqui (integrador e slew)
 constexpr int32_t kIdadeMaxUs = 1000000;  // µs — Camera.t mais velho que isto é absurdo
 constexpr float kRampaFF = 6.0f;          // medidas aceites para o feedforward chegar ao peso 1 (a partir da 3.ª)
+constexpr float kVelPropriaMax = 50.0f;   // m/s — a velocidade própria que entra na odometria satura aqui (guarda)
+constexpr float kPosPropriaMax = 1000.0f; // m — acima disto a odometria recentra-se (o float32 mantém resolução sub-mm)
+constexpr float kCosElevMin = 0.2f;       // cos ε mínimo ao converter a taxa de azimute em velocidade (alvo quase na vertical)
 
 // zona morta suave: 0 dentro de ±db, e − sinal(e)·db fora (contínua)
 inline float suave(float e, float db) { return e > db ? e - db : (e < -db ? e + db : 0.0f); }
@@ -151,6 +234,12 @@ public:
         hist_.zerar();
         filtro_.configurar(c_.modelo, c_.alfa, c_.beta, c_.q_ang, c_.q_raio, c_.sigma_px / c_.f_px,
                            c_.sigma_raio_px / c_.f_px, c_.gate_sigma);
+        filtro_.compensar_translacao(c_.comp_translacao != 0 ? c_.raio_alvo_m : 0.0f);
+        filtro_.raio_em_cv(c_.raio_cv != 0);
+        for (int32_t e = 0; e < 3; ++e) pos_[e] = 0.0f;
+        cmd_vy_ = 0.0f;
+        incl_f_ = 0.0f;
+        tem_incl_ = false;
         estado_ = PERDIDO;
         tem_t_ = false;
         tem_n_ = false;
@@ -223,7 +312,27 @@ public:
                 t_ant_ = t_us;
             }
         }
-        hist_.empurrar(t_us, a.roll, a.pitch, a.psi);
+        // ---- odometria própria (só com comp_translacao): a velocidade estimada, integrada no referencial de arranque como o
+        //      estimador de bordo faz (x += (cos ψ·v_x − sen ψ·v_y)·dt); só contam DIFERENÇAS de posição em ≲ 1 s
+        const bool comp = c_.comp_translacao != 0;
+        if (comp && dt > 0.0f) {
+            const float lim = ibvs_detalhe::kVelPropriaMax;
+            const float vxl = geo::limita(a.vx, -lim, lim);
+            const float vyl = geo::limita(a.vy, -lim, lim);
+            const float cs = cosf(a.psi);
+            const float sn = sinf(a.psi);
+            pos_[0] += (cs * vxl - sn * vyl) * dt;
+            pos_[1] += (sn * vxl + cs * vyl) * dt;
+            pos_[2] += geo::limita(a.vz, -lim, lim) * dt;
+            const float pm = ibvs_detalhe::kPosPropriaMax;
+            if (geo::absf(pos_[0]) > pm || geo::absf(pos_[1]) > pm || geo::absf(pos_[2]) > pm) {  // recentra a origem
+                const float d[3] = {-pos_[0], -pos_[1], -pos_[2]};
+                hist_.transladar(d);
+                filtro_.transladar_ref(d);
+                for (int32_t e = 0; e < 3; ++e) pos_[e] = 0.0f;
+            }
+        }
+        hist_.empurrar(t_us, a.roll, a.pitch, a.psi, comp ? pos_ : nullptr);
 
         // ---- medida nova da câmara → filtro (no INSTANTE DA CAPTURA, desrodada pela atitude desse instante)
         bool aceite = false;
@@ -246,14 +355,15 @@ public:
                 float rc = 0.0f;
                 float pc = 0.0f;
                 float yc = 0.0f;
+                float pcap[3] = {0.0f, 0.0f, 0.0f};  // posição própria no instante da captura
                 bool fora = false;
-                if (hist_.consultar(t_cap, &rc, &pc, &yc, &fora)) {
+                if (hist_.consultar(t_cap, &rc, &pc, &yc, &fora, pcap)) {
                     if (fora) flags |= kFlagHistoricoCurto;
                     float az = 0.0f;
                     float el = 0.0f;
                     geo::pixel_para_angulos(ot_, geo::rot_zyx(rc, pc, yc), cam.u, cam.v, &az, &el);
                     if (estado_ == PERDIDO) filtro_.zerar();  // recomeça a pista
-                    const int32_t r = filtro_.medir(t_cap, az, el, cam.raio / c_.f_px);
+                    const int32_t r = filtro_.medir(t_cap, az, el, cam.raio / c_.f_px, comp ? pcap : nullptr);
                     if (r == 0 || r == 3) {
                         aceite = true;
                         reinicio = r == 3;
@@ -281,12 +391,17 @@ public:
         float a_los = 0.0f;
         float v_rad = 0.0f;
         float v_vert = 0.0f;
+        float v_tan = 0.0f;
+        float y_lat = 0.0f;
+        float e_h_cam = 0.0f;
+        float e_v_cam = 0.0f;
+        bool tem_cam = false;
         bool tem_pred = false;
         if (estado_ != PERDIDO && filtro_.inicializado()) {
             float pos[3];
             float vel[3];
             float acc[3];
-            filtro_.prever(t_us, pos, vel, acc);
+            filtro_.prever(t_us, pos, vel, acc, comp ? pos_ : nullptr);
             const float rho = pos[2] > ibvs_detalhe::kRhoMin ? pos[2] : ibvs_detalhe::kRhoMin;
             e_psi = geo::envolve(pos[0] - a.psi);
             e_el = pos[1];
@@ -294,8 +409,28 @@ public:
             w_los = vel[0];
             a_los = acc[0];
             const float d_dot = -c_.raio_alvo_m * vel[2] / (rho * rho);   // Ḋ
-            v_rad = d_dot + a.vx;                                          // Ḋ + v_x própria = velocidade radial do alvo
-            v_vert = d_dot * sinf(e_el) + dist * cosf(e_el) * vel[1] + a.vz;   // ż relativo + v_z própria
+            if (comp) {
+                // as taxas do filtro são SÓ do alvo: a velocidade dele sai sem somar a própria
+                const float ce = cosf(e_el);
+                const float alcance = dist * (ce > ibvs_detalhe::kCosElevMin ? ce : ibvs_detalhe::kCosElevMin);
+                v_rad = d_dot;
+                v_vert = d_dot * sinf(e_el) + dist * ce * vel[1];
+                v_tan = alcance * vel[0];
+                y_lat = dist * ce * sinf(e_psi);              // desvio lateral do alvo (m), + = à esquerda do rumo
+                // REPARTIÇÃO do movimento tangencial do alvo: a translação lateral leva a fração kff_y (até vy_max) e a
+                // guinada antecipa SÓ O RESTO. Dar à guinada a linha de vista medida (alvo − translação própria) punha-a a
+                // perseguir o transitório da translação, que é 2–4× mais rápida: medido, os dois canais lutavam
+                const float vy_ff = geo::limita(c_.kff_y * v_tan, -c_.vy_max, c_.vy_max);
+                w_los = (v_tan - vy_ff) / alcance;
+                a_los = acc[0] * geo::limita(1.0f - c_.kff_y, 0.0f, 1.0f);
+            } else {
+                v_rad = d_dot + a.vx;                                          // Ḋ + v_x própria = velocidade radial do alvo
+                v_vert = d_dot * sinf(e_el) + dist * cosf(e_el) * vel[1] + a.vz;   // ż relativo + v_z própria
+                if (c_.kp_y != 0.0f || c_.kff_y != 0.0f) {                     // v_y sem compensação (só para ablações)
+                    v_tan = dist * cosf(e_el) * vel[0] + a.vy;
+                    y_lat = dist * cosf(e_el) * sinf(e_psi);
+                }
+            }
             tem_pred = true;
             o.az_pred = pos[0];
             o.el_pred = pos[1];
@@ -305,6 +440,9 @@ public:
                 o.u_pred = up;
                 o.v_pred = vp;
                 o.raio_pred = rho * c_.f_px;
+                e_h_cam = atan2f(up - c_.cx, c_.f_px);        // o erro NA IMAGEM (o que o dono vê): + direita, + cima
+                e_v_cam = atan2f(c_.cy - vp, c_.f_px);
+                tem_cam = true;
             }
             if (geo::absf(e_psi) > 0.02f) lado_ = e_psi > 0.0f ? 1.0f : -1.0f;  // último lado visto
         }
@@ -312,6 +450,7 @@ public:
         // ---- lei de controlo por estado
         float yaw_alvo = 0.0f;
         float vx_alvo = 0.0f;
+        float vy_alvo = 0.0f;
         float vz_alvo = 0.0f;
         int32_t procura = 0;
         if (estado_ == A_SEGUIR || estado_ == EM_FALTA) {
@@ -332,7 +471,18 @@ public:
                     i_yaw_ = geo::limita(i_yaw_ + c_.ki_yaw * e * dt, -c_.i_max_yaw, c_.i_max_yaw);
                 }
             }
-            const float dz = dist * sinf(e_el);  // desvio vertical (m)
+            float e_z = e_el;  // o ângulo que o canal vertical anula: a elevação inercial…
+            if (c_.k_incl_z != 0.0f) {  // …ou (k_incl = 1) o erro vertical NA IMAGEM = elevação + inclinação do eixo óptico
+                const float delta = tem_cam ? e_v_cam - e_el : 0.0f;
+                if (!tem_incl_) {  // 1.ª amostra: o PT1 arranca no valor medido
+                    incl_f_ = delta;
+                    tem_incl_ = true;
+                } else if (dt > 0.0f) {
+                    incl_f_ += dt / (c_.tau_incl_s + dt) * (delta - incl_f_);
+                }
+                e_z = e_el + c_.k_incl_z * incl_f_;
+            }
+            const float dz = dist * sinf(e_z);  // desvio vertical (m)
             vz_alvo = fator * (c_.kp_z * ibvs_detalhe::suave(dz, c_.zona_morta_z) + c_.kff_z * v_vert * peso_ff);
             const float ed = dist - c_.dist_alvo_m;
             vx_alvo = fator * (c_.kp_d * ibvs_detalhe::suave(ed, c_.zona_morta_d) + c_.kff_d * v_rad * peso_ff);
@@ -340,11 +490,18 @@ public:
                 const float ce = cosf(e_psi);
                 vx_alvo *= ce > 0.0f ? ce : 0.0f;
             }
+            // translação LATERAL: o desvio lateral do alvo (m) + a velocidade tangencial dele (o drone acompanha-o de lado)
+            // (o avanço de fase com a aceleração tangencial do KF-CA foi MEDIDO e piora: 2,3° → 2,5°/3,3° com 0,15/0,3 s — ruído)
+            vy_alvo = fator * (c_.kp_y * ibvs_detalhe::suave(y_lat, c_.zona_morta_y) + c_.kff_y * v_tan * peso_ff);
         } else if (estado_ == REAQUISICAO) {
             i_yaw_ = 0.0f;
+            incl_f_ = 0.0f;
+            tem_incl_ = false;
             yaw_alvo = 0.6f * c_.kp_yaw * ibvs_detalhe::suave(e_psi, c_.zona_morta_yaw);
         } else {  // PERDIDO: v = 0 e procura lenta para o último lado
             i_yaw_ = 0.0f;
+            incl_f_ = 0.0f;
+            tem_incl_ = false;
             const float t_p = static_cast<float>(static_cast<int32_t>(t_us - t_perdido_)) * 1e-6f;
             if (c_.t_procura_max_s > 0.0f && t_p > c_.t_procura_max_s) {
                 flags |= kFlagProcuraEsgotada;
@@ -358,25 +515,34 @@ public:
         if (geo::absf(yaw_alvo) > c_.yaw_max) flags |= kFlagSaturouYaw;
         yaw_alvo = geo::limita(yaw_alvo, -c_.yaw_max, c_.yaw_max);
         vx_alvo = geo::limita(vx_alvo, -c_.vx_max, c_.vx_max);
+        if (geo::absf(vy_alvo) > c_.vy_max) flags |= kFlagSaturouLateral;
+        vy_alvo = geo::limita(vy_alvo, -c_.vy_max, c_.vy_max);
         vz_alvo = geo::limita(vz_alvo, -c_.vz_max, c_.vz_max);
         if (dt > 0.0f) {
             const float yaw_ant = cmd_yaw_;
             cmd_yaw_ = ibvs_detalhe::desliza(cmd_yaw_, yaw_alvo, c_.yaw_acel_max * dt);
             if (geo::absf(cmd_yaw_ - yaw_ant) >= c_.yaw_acel_max * dt * 0.999f) flags |= kFlagSaturouYaw;
             cmd_vx_ = ibvs_detalhe::desliza(cmd_vx_, vx_alvo, c_.acel_x_max * dt);
+            const float vy_ant = cmd_vy_;
+            cmd_vy_ = ibvs_detalhe::desliza(cmd_vy_, vy_alvo, c_.acel_y_max * dt);
+            if (geo::absf(cmd_vy_ - vy_ant) >= c_.acel_y_max * dt * 0.999f) flags |= kFlagSaturouLateral;
             cmd_vz_ = ibvs_detalhe::desliza(cmd_vz_, vz_alvo, c_.acel_z_max * dt);
         }
 
         // ---- saneamento: nada de NaN para a cascata
-        bool bom = finito(cmd_vx_) && finito(cmd_vz_) && finito(cmd_yaw_) && finito(i_yaw_) && filtro_.saudavel();
+        bool bom = finito(cmd_vx_) && finito(cmd_vy_) && finito(cmd_vz_) && finito(cmd_yaw_) && finito(i_yaw_) &&
+                   finito(incl_f_) && filtro_.saudavel();
         if (!bom) {
             filtro_.zerar();
             estado_ = PERDIDO;
             tem_det_ = false;
             cmd_vx_ = 0.0f;
+            cmd_vy_ = 0.0f;
             cmd_vz_ = 0.0f;
             cmd_yaw_ = 0.0f;
             i_yaw_ = 0.0f;
+            incl_f_ = 0.0f;
+            tem_incl_ = false;
             cont_reaq_ = 0;
             flags |= kFlagFalhaNumerica;
             tem_pred = false;
@@ -384,7 +550,7 @@ public:
         }
 
         o.vx = cmd_vx_;
-        o.vy = 0.0f;
+        o.vy = cmd_vy_;
         o.vz = cmd_vz_;
         o.yaw_taxa = cmd_yaw_;
         o.estado = estado_;
@@ -395,6 +561,11 @@ public:
             o.dist = dist;
             o.taxa_bearing = w_los;
             o.acel_bearing = a_los;
+            o.e_h_cam = e_h_cam;
+            o.e_v_cam = e_v_cam;
+            o.v_alvo_rad = v_rad;
+            o.v_alvo_tan = v_tan;
+            o.v_alvo_vert = v_vert;
         } else {
             o.az_pred = 0.0f;
             o.el_pred = 0.0f;
@@ -456,6 +627,7 @@ private:
     bool tem_n_;
     bool tem_det_;
     bool tem_att_;
+    bool tem_incl_;
     int32_t estado_;
     int32_t n_ant_;
     int32_t cont_reaq_;
@@ -466,8 +638,11 @@ private:
     float lado_;
     float i_yaw_;
     float cmd_vx_;
+    float cmd_vy_;
     float cmd_vz_;
     float cmd_yaw_;
+    float incl_f_;   // rad — parcela de inclinação do eixo óptico no canal vertical (PT1)
+    float pos_[3];   // m — odometria própria (referencial de arranque), só com comp_translacao
 };
 
 // Janela de busca para o PRÓXIMO frame a partir da previsão do seguidor: um quadrado centrado em (u_pred, v_pred)

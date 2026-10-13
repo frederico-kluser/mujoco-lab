@@ -165,23 +165,30 @@ long g_recusadas = 0;
 
 ConfigSeguidor config_aleatoria() {
     ConfigSeguidor c = config_padrao(320.0f, 240.0f, 55.4f, inteiro(0, 2));
+    if ((rnd() % 3) == 0) c = config_versao1(c);  // um terço dos cenários: a lei da versão 1 (v_y = 0, sem compensações)
     if ((rnd() % 4) == 0) {  // perturba e às vezes estraga
         float* campos[] = {&c.f_px, &c.raio_alvo_m, &c.dist_alvo_m, &c.kp_yaw, &c.ki_yaw, &c.yaw_max, &c.vx_max,
                            &c.vz_max, &c.t_gap_s, &c.t_falta_s, &c.q_ang, &c.sigma_px, &c.gate_sigma, &c.kff_yaw,
-                           &c.w_procura, &c.zona_morta_yaw, &c.alfa, &c.beta};
+                           &c.w_procura, &c.zona_morta_yaw, &c.alfa, &c.beta, &c.kp_y, &c.kff_y, &c.vy_max,
+                           &c.acel_y_max, &c.zona_morta_y, &c.k_incl_z, &c.tau_incl_s, &c.q_raio};
         const int32_t k = inteiro(0, static_cast<int32_t>(sizeof(campos) / sizeof(campos[0])) - 1);
         *campos[k] = hostil();
     }
     if ((rnd() % 16) == 0) c.versao = static_cast<uint32_t>(rnd());
     if ((rnd() % 16) == 0) c.modelo = inteiro(-2, 5);
     if ((rnd() % 16) == 0) c.n_reaq = inteiro(-2, 9);
+    if ((rnd() % 16) == 0) c.comp_translacao = inteiro(-1, 2);
+    if ((rnd() % 16) == 0) c.raio_cv = inteiro(-1, 2);
     return c;
 }
 
 void testa_seguidor(long cenarios, long passos_por_cenario) {
     static Seguidor seg;
     for (long ce = 0; ce < cenarios; ++ce) {
-        const ConfigSeguidor cfg = config_aleatoria();
+        ConfigSeguidor cfg = config_aleatoria();
+        // de 40 em 40 cenários: um σ «válido» (finito, > 0) cujo quadrado transborda o float32 — a covariância nasce
+        // infinita e o seguidor TEM de o apanhar (kFlagFalhaNumerica) em vez de mandar lixo
+        if ((ce % 40) == 13) cfg.sigma_px = 1e30f;
         const bool ok = seg.iniciar(cfg);
         if (ok != config_valida(cfg)) viola("iniciar() ≠ config_valida()");
         if (!ok) ++g_recusadas;
@@ -235,7 +242,8 @@ void testa_seguidor(long cenarios, long passos_por_cenario) {
             else viola("estado fora de [0,3]");
             if ((o.flags & kFlagFalhaNumerica) != 0) ++g_falhas_numericas;
             const float campos[] = {o.vx, o.vy, o.vz, o.yaw_taxa, o.e_psi, o.e_elev, o.dist, o.taxa_bearing,
-                                    o.acel_bearing, o.az_pred, o.el_pred, o.u_pred, o.v_pred, o.raio_pred, o.t_sem_det_s};
+                                    o.acel_bearing, o.az_pred, o.el_pred, o.u_pred, o.v_pred, o.raio_pred, o.t_sem_det_s,
+                                    o.e_h_cam, o.e_v_cam, o.v_alvo_rad, o.v_alvo_tan, o.v_alvo_vert};
             for (size_t j = 0; j < sizeof(campos) / sizeof(campos[0]); ++j) {
                 if (!fin(campos[j])) {
                     viola("saída não finita");
@@ -244,14 +252,15 @@ void testa_seguidor(long cenarios, long passos_por_cenario) {
             }
             if (ok) {
                 const ConfigSeguidor& c = seg.config();
-                if (fabsf_(o.vx) > c.vx_max + 1e-4f || fabsf_(o.vz) > c.vz_max + 1e-4f ||
+                if (fabsf_(o.vx) > c.vx_max + 1e-4f || fabsf_(o.vy) > c.vy_max + 1e-4f || fabsf_(o.vz) > c.vz_max + 1e-4f ||
                     fabsf_(o.yaw_taxa) > c.yaw_max + 1e-4f) {
                     viola("comando acima dos limites da Config");
                 }
-            } else if (o.vx != 0.0f || o.vz != 0.0f || o.yaw_taxa != 0.0f || (o.flags & kFlagNaoIniciado) == 0) {
+                if (c.kp_y == 0.0f && c.kff_y == 0.0f && o.vy != 0.0f) viola("lei da versão 1 com vy ≠ 0");
+            } else if (o.vx != 0.0f || o.vy != 0.0f || o.vz != 0.0f || o.yaw_taxa != 0.0f ||
+                       (o.flags & kFlagNaoIniciado) == 0) {
                 viola("seguidor não iniciado devia dar comando nulo + kFlagNaoIniciado");
             }
-            if (o.vy != 0.0f) viola("vy ≠ 0");
         }
     }
 }

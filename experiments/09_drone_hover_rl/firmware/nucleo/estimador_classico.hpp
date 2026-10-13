@@ -14,6 +14,12 @@
 //      fluxo (v̂ − v̂_lenta)/τ;
 //   3. ALTURA DE 3.ª ORDEM: observador (ĥ, v̂_z, viés do acelerómetro vertical) de polos triplos em −ω₀ — com o de
 //      2.ª ordem o viés do acelerómetro (≈ 0,1 m/s²) dava um viés de v̂_z de ≈ 4 cm/s e a altura assentava 3–4 cm abaixo.
+//   4. (interface 3, fase 2) VELOCIDADE DO FLUXO SEM OS ARTEFACTOS DA ROTAÇÃO — é desta velocidade que o observador de
+//      perturbação da cascata vive, e cada manobra de inclinação enganava-o: (i) o sensor de fluxo mede a velocidade
+//      DELE, a `braco_fluxo` do CM: v_cm = v_sensor − ω × r, ou seja v̂_x += b·q e v̂_y −= b·p; (ii) a amostra do fluxo sai
+//      `atraso_fluxo` passos depois do giroscópio do mesmo instante: a rotação que se lhe tira (q − Ω_y) é a do
+//      giroscópio DESSE instante (fila de N amostras), não a de agora. As duas constantes vêm de `c.cascata` (são
+//      derivadas com os ganhos da planta); sem cascata, ou a zero, o estimador é o da interface 2.
 // O resto (cinemática de Euler ZYX, v̂_xy do fluxo no corpo, odometria) é igual ao EstimadorBordo.
 //
 // Fontes (ideias; código próprio): Mahony, Hamel & Pflimlin, «Nonlinear Complementary Filters on the Special
@@ -69,6 +75,8 @@ public:
         n_fluxo_ = -1;
         a_h_ = 0.0f;
         v_lenta_[0] = v_lenta_[1] = 0.0f;
+        n_fila_ = 0;
+        i_fila_ = 0;
     }
 
     // Tudo a zero (estimador corrompido ou reinício): a atitude volta a ser calibrada na leitura seguinte.
@@ -86,6 +94,8 @@ public:
         n_fluxo_ = -1;
         a_h_ = 0.0f;
         v_lenta_[0] = v_lenta_[1] = 0.0f;
+        n_fila_ = 0;
+        i_fila_ = 0;
     }
 
     // `true` abre a janela de calibração (drone PARADO no chão: os passos acumulam em vez de integrar); `false`
@@ -113,6 +123,8 @@ public:
             if (ultimo_tof_ok_) h = ultimo_tof_d_ * cf_ * ct_;
             psi = 0.0f;
             vz = vx = vy = x = y = 0.0f;
+            n_fila_ = 0;
+            i_fila_ = 0;
         }
         calibrando_ = false;
     }
@@ -190,12 +202,35 @@ public:
             }
         }
 
+        // fila do giroscópio sem viés (interface 3): a rotação do instante da amostra de fluxo, N passos atrás
+        int32_t n_atraso = 0;
+        float braco = 0.0f;
+        if (c.usa_cascata != 0) {
+            n_atraso = c.cascata.atraso_fluxo;
+            if (n_atraso < 0) n_atraso = 0;
+            if (n_atraso >= kAtrasoFluxoMax) n_atraso = kAtrasoFluxoMax - 1;
+            braco = c.cascata.braco_fluxo;
+        }
+        if (n_atraso > 0) {  // anel de N + 1 lugares: depois de escrever, o próximo lugar guarda a amostra de há N passos
+            fila_pq_[0][i_fila_] = p;
+            fila_pq_[1][i_fila_] = q;
+            i_fila_ = i_fila_ >= n_atraso ? 0 : i_fila_ + 1;
+            if (n_fila_ <= n_atraso) ++n_fila_;
+        }
+
         // velocidade horizontal pelo fluxo (com a distância medida pelo ToF, mesmo site)
         if (s.n_fluxo != n_fluxo_) {
             n_fluxo_ = s.n_fluxo;
             if (fluxo_ok && tof_ok) {
-                const float vx_m = s.tof_d * (q - s.fluxo[1]);
-                const float vy_m = -s.tof_d * (s.fluxo[0] + p);
+                float p_f = p;  // (enquanto a fila não enche, a rotação de agora)
+                float q_f = q;
+                if (n_atraso > 0 && n_fila_ > n_atraso) {
+                    p_f = fila_pq_[0][i_fila_];
+                    q_f = fila_pq_[1][i_fila_];
+                }
+                // … e a velocidade do CM: v_cm = v_sensor − ω × r, com o sensor `braco` abaixo do CM
+                const float vx_m = s.tof_d * (q_f - s.fluxo[1]) + braco * q_f;
+                const float vy_m = -s.tof_d * (s.fluxo[0] + p_f) - braco * p_f;
                 vx += c.alfa_fluxo * (vx_m - vx);
                 vy += c.alfa_fluxo * (vy_m - vy);
             }
@@ -268,6 +303,9 @@ private:
     float ultimo_tof_d_ = 0.0f;
     float a_h_ = 0.0f;        // m/s² — aceleração horizontal estimada (portão)
     float v_lenta_[2] = {};
+    float fila_pq_[2][kAtrasoFluxoMax] = {};  // rad/s — p, q sem viés dos últimos passos (alinhamento com o fluxo)
+    int32_t n_fila_ = 0;      // amostras válidas na fila (≤ atraso_fluxo + 1)
+    int32_t i_fila_ = 0;      // próximo lugar a escrever
     int32_t n_cal_ = 0;
     int32_t n_tof_ = 0;
     int32_t n_fluxo_ = 0;

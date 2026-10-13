@@ -9,7 +9,7 @@
 //   conformador (acel./jerk-limitado + modelo de seguimento da malha de atitude)
 //          │
 //   posição (P, raiz quadrada) ──▶ velocidade (PI + FF de aceleração e de arrasto) ──▶ aceleração desejada
-//          │
+//          │                         − PERTURBAÇÃO observada (observador de estado estendido; fase 2: vento)
 //   inclinação desejada + EMPUXO COLETIVO ÷ (cosφ·cosθ)   [anti-windup por retro-cálculo]
 //          │
 //   atitude (P) com PRIORIDADE DE INCLINAÇÃO (Brescianini) + PESO DE YAW + FF da taxa de inclinação
@@ -32,6 +32,10 @@
 //   [FAE18] Faessler, Franchi & Scaramuzza, «Differential Flatness of Quadrotor Dynamics Subject to Rotor Drag…»,
 //           RA-L 3(2), 2018 (aceleração desejada → orientação+empuxo; arrasto de rotor linear em v).
 //   [AM08]  Åström & Murray, «Feedback Systems», 2008, §10.4 (windup; retro-cálculo).
+//   [HAN09] Han, «From PID to Active Disturbance Rejection Control», IEEE Trans. Industrial Electronics 56(3), 2009 (o
+//           observador de estado estendido: a perturbação total é um estado a mais, estimado e anulado).
+//   [GAO03] Gao, «Scaling and Bandwidth-Parameterization Based Controller Tuning», American Control Conference 2003 (os
+//           ganhos do observador por UMA banda ω: polos duplos em −ω ⇒ 2ω e ω²).
 //
 // Unidades SI; +Z para cima; ângulos ZYX (yaw ψ, pitch θ, roll φ): θ > 0 inclina o empuxo para +x (acelera para a
 // frente), φ < 0 inclina-o para +y (esquerda); ψ > 0 roda no sentido anti-horário visto de cima.
@@ -195,6 +199,43 @@ public:
         const float vox = cs * vhx - sn * vhy;
         const float voy = sn * vhx + cs * vhy;
 
+        // ---- 1b. OBSERVADOR DE PERTURBAÇÃO horizontal (estado estendido [HAN09]; fase 2: vento), no referencial de arranque
+        // Modelo:      v̇ = a_emp − d_arr·v + d      a_emp = (g + a_z)·(ẑ_b)_xy/(ẑ_b)_z — a aceleração que o EMPUXO dá, lida da
+        //                                           atitude ESTIMADA (não da pedida: o atraso da malha de atitude e a
+        //                                           saturação da inclinação já vêm lá dentro, sem windup)
+        // Observador:  v̂' = a_emp,f − d_arr·v̂ + d̂ + 2ω·(v − v̂)      d̂' = ω²·(v − v̂)       (polos duplos em −ω [GAO03])
+        // `d` é tudo o que o modelo não explica: vento, arrasto mal modelado, viés da atitude estimada. a_emp,f é a_emp
+        // com o atraso da velocidade medida (τ_vel): modelo e medida comparam-se no MESMO instante.
+        if (g.w_pert > 0.0f) {
+            float atx = 0.0f;
+            float aty = 0.0f;
+            if (!(den < g.cos_incl_min)) {  // (quase de cabeça para baixo: sem modelo — nunca acontece em voo)
+                const float fz_emp = (g.g + az_ref_) / den;
+                atx = fz_emp * (cs * st * cf + sn * sf);
+                aty = fz_emp * (sn * st * cf - cs * sf);
+            }
+            if (!tem_v_obs_) {
+                v_obs_[0] = vox;
+                v_obs_[1] = voy;
+                a_emp_[0] = atx;
+                a_emp_[1] = aty;
+                tem_v_obs_ = true;
+            }
+            const float am = dt / (g.tau_vel + dt);
+            const float v_med[2] = {vox, voy};
+            const float a_mod[2] = {atx, aty};
+            for (int i = 0; i < 2; ++i) {
+                a_emp_[i] += am * (a_mod[i] - a_emp_[i]);
+                const float e_o = v_med[i] - v_obs_[i];
+                v_obs_[i] += dt * (a_emp_[i] - g.k_arrasto * v_obs_[i] + d_obs_[i] + 2.0f * g.w_pert * e_o);
+                d_obs_[i] = limita(d_obs_[i] + dt * g.w_pert * g.w_pert * e_o, -g.lim_pert, g.lim_pert);
+            }
+            if (!(e_finito(v_obs_[0]) && e_finito(v_obs_[1]) && e_finito(a_emp_[0]) && e_finito(a_emp_[1]) &&
+                  e_finito(d_obs_[0]) && e_finito(d_obs_[1]))) {
+                zerar_observador();  // entradas gigantes estouraram o modelo: recomeça na decisão seguinte
+            }
+        }
+
         // ---- 2. YAW: conformador da taxa (limite de taxa e de aceleração) + referência de rumo
         float r_des;
         if (cmd.modo == YAW_ALVO) {
@@ -341,14 +382,19 @@ public:
         // verdadeira ainda não chegou à referência: usar v_sp ultrapassa o regime e dá sobressinal)
         aff_x += g.k_arrasto * vsx;
         aff_y += g.k_arrasto * vsy;
-        const float ax = aff_x + g.k_vel * evx + i_vel_[0] - g.kd_vel * d_filt_[0];
-        const float ay = aff_y + g.k_vel * evy + i_vel_[1] - g.kd_vel * d_filt_[1];
+        // … e a perturbação observada é ANULADA (o vento é compensado à velocidade do laço de atitude, sem esperar pelo
+        // integral, que fica só com o resíduo)
+        const float ax = aff_x + g.k_vel * evx + i_vel_[0] - g.kd_vel * d_filt_[0] - d_obs_[0];
+        const float ay = aff_y + g.k_vel * evy + i_vel_[1] - g.kd_vel * d_filt_[1] - d_obs_[1];
 
         // ---- 6. laço vertical: altura (P) → velocidade (PI) → aceleração
         const float ez = z_sp_ - h;
         const float v_corr_z = limita(raiz_quadrada(ez, g.k_pz, g.acc_cmd_z), -g.vel_corr_z_max, g.vel_corr_z_max);
         const float evz = v_mod_z_ + v_corr_z - vz;
-        const float az = a_sp_z_ + g.k_vz * evz + i_z_;
+        // a aceleração vertical PRETENDIDA fica guardada para o modelo do observador (etapa 1b da decisão seguinte); o
+        // integral não entra nela: só adapta o empuxo de pairagem (massa, kf), não é aceleração
+        az_ref_ = a_sp_z_ + g.k_vz * evz;
+        const float az = az_ref_ + i_z_;
 
         // ---- 7. inclinação desejada + empuxo coletivo (÷ cosφ·cosθ)
         // Aceleração desejada [m/s²] (mundo) → direção do empuxo n̂ e EMPUXO COLETIVO normalizado. Força específica
@@ -518,10 +564,24 @@ public:
         o.psi_sp = psi_sp_;
         o.r_ref = r_ref_;
         o.i_z = i_z_;
+        o.pert[0] = d_obs_[0];
+        o.pert[1] = d_obs_[1];
     }
 
 private:
+    // Estados do observador de perturbação (fase 2): recomeça na 1.ª medida de velocidade.
+    void zerar_observador() {
+        for (int i = 0; i < 2; ++i) {
+            v_obs_[i] = 0.0f;
+            d_obs_[i] = 0.0f;
+            a_emp_[i] = 0.0f;
+        }
+        tem_v_obs_ = false;
+    }
+
     void zerar_estados() {
+        zerar_observador();
+        az_ref_ = 0.0f;
         for (int i = 0; i < 2; ++i) {
             v_sp_h_[i] = 0.0f;
             a_sp_h_[i] = 0.0f;
@@ -579,6 +639,11 @@ private:
     float n_ant_[3] = {};     // direção do empuxo do passo anterior (feed-forward de taxa)
     float dn_[3] = {};
     bool tem_n_ant_ = false;
+    float v_obs_[2] = {};     // m/s — observador de perturbação: velocidade horizontal do modelo (referencial de arranque)
+    float d_obs_[2] = {};     // m/s² — perturbação horizontal observada
+    float a_emp_[2] = {};     // m/s² — aceleração do empuxo (da atitude estimada), atrasada como a medida
+    float az_ref_ = 0.0f;     // m/s² — aceleração vertical pretendida na decisão anterior (sem o integral)
+    bool tem_v_obs_ = false;
     Resultado ultimo_ = {};
     float dg_a_des_[3] = {};
     float dg_n_des_[3] = {};

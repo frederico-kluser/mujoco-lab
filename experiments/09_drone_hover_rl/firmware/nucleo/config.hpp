@@ -21,6 +21,13 @@
 //   · Comando  — rumo-alvo, altura-alvo (descolar);
 //   · Saida    — empuxo/taxas pedidos, velocidade efetiva, estado do IBVS, saturações e diagnóstico da cascata.
 // Com `estimador_classico = 0` e `usa_cascata = 0` o núcleo comporta-se EXATAMENTE como na v1 (CTBR).
+//
+// INTERFACE 3 (fase 2 — VENTO): rejeição de perturbação por observador de estado estendido. Ao FIM das structs:
+//   · ConfigCascata — o observador de perturbação do laço de velocidade horizontal (`w_pert`, `lim_pert`, `tau_vel`) e
+//                     a geometria/tempos do sensor de fluxo que o estimador clássico usa (`braco_fluxo`,
+//                     `atraso_fluxo`) — tudo derivado da planta por `ganhos_de_hardware`, como o resto da cascata;
+//   · Saida         — `pert[2]`: a perturbação observada (diagnóstico: o «vento» que o drone sente, em m/s²).
+// Com `w_pert = 0`, `braco_fluxo = 0` e `atraso_fluxo = 0` o núcleo é EXATAMENTE o da interface 2 (fase 1).
 #pragma once
 
 #include <stdint.h>
@@ -29,7 +36,11 @@
 
 namespace nucleo {
 
-constexpr uint32_t kVersaoInterface = 2u;
+constexpr uint32_t kVersaoInterface = 3u;
+
+// Tamanho da fila do giroscópio que alinha a rotação com a amostra do fluxo ótico (estimador clássico):
+// ConfigCascata::atraso_fluxo ∈ [0, kAtrasoFluxoMax − 1] passos.
+constexpr int32_t kAtrasoFluxoMax = 16;
 
 // Modo de comando. CTBR = o que a política manda ao FC (laço interno direto); VELOCIDADE / YAW_ALVO / OLHAR
 // ligam a cascata clássica (velocidade → inclinação+empuxo → atitude → taxas), em resolver_modo().
@@ -133,6 +144,15 @@ struct ConfigCascata {
     float v_trava;           // m/s — |v_sp horizontal| acima disto = em movimento (a referência de posição segue a medida)
     float fz_min_frac;       // fração de g — a força específica vertical desejada nunca desce disto (empuxo ≥ 0)
     float cos_incl_min;      // cosφ·cosθ abaixo disto: sem correção do corpo para o rumo (quase de cabeça para baixo)
+    // --- interface 3 (fase 2: VENTO) — observador de perturbação (estado estendido) no laço de velocidade horizontal: a
+    //     perturbação (vento, arrasto mal modelado, viés da atitude) é estimada da velocidade medida contra a do modelo
+    //     e anulada na aceleração pedida, sem esperar pelo integral
+    float w_pert;            // rad/s — banda do observador (polos duplos em −w_pert); 0 = desligado (fase 1)
+    float lim_pert;          // m/s² — |perturbação| ≤ (o que a inclinação máxima anula: g·tan(tilt_max))
+    float tau_vel;           // s — atraso da velocidade medida pelo fluxo (o modelo do observador leva o mesmo)
+    // --- interface 3: sensor de fluxo ótico no ESTIMADOR CLÁSSICO (geometria e tempos do build)
+    float braco_fluxo;       // m — altura do CM acima do sensor de fluxo: v_cm = v_sensor − ω × r (0 = sem correção)
+    int32_t atraso_fluxo;    // passos — a amostra do fluxo sai N passos depois do giroscópio do mesmo instante (0 = o de agora)
 };
 
 // O que o laço de planeamento (estimador + laços externos) entrega ao laço de taxa. Fica na interface para o
@@ -250,6 +270,8 @@ struct Saida {
     float r_ref;             // rad/s — taxa de yaw conformada
     float i_vel[2];          // m/s² — integrais da velocidade horizontal
     float i_z;               // m/s² — integral vertical
+    // --- interface 3: o observador de perturbação da cascata (diagnóstico)
+    float pert[2];           // m/s² — perturbação horizontal observada, referencial de arranque (o «vento» que o drone sente)
 };
 
 // --- utilitários numéricos básicos (sem libm: com -ffreestanding o compilador NÃO inlina fabsf/sqrtf)
@@ -300,6 +322,10 @@ inline bool config_cascata_valida(const ConfigCascata& c) {
     ok = ok && e_finito(c.v_trava) && c.v_trava >= 0.0f;
     ok = ok && e_finito(c.fz_min_frac) && c.fz_min_frac > 0.0f && c.fz_min_frac < 1.0f;
     ok = ok && e_finito(c.cos_incl_min) && c.cos_incl_min > 0.0f && c.cos_incl_min < 1.0f;
+    // interface 3: observador de perturbação e sensor de fluxo
+    ok = ok && e_finito(c.w_pert) && c.w_pert >= 0.0f && e_finito(c.lim_pert) && c.lim_pert >= 0.0f;
+    ok = ok && e_finito(c.tau_vel) && c.tau_vel >= 0.0f;
+    ok = ok && e_finito(c.braco_fluxo) && c.atraso_fluxo >= 0 && c.atraso_fluxo < kAtrasoFluxoMax;
     return ok;
 }
 
