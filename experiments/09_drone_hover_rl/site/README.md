@@ -1,376 +1,259 @@
-# Site do experimento 09 — drone a pairar (política RL ao vivo)
+# Site do experimento 09 — o COCKPIT do drone
 
-Aplicação **React + TypeScript + Vite + Tailwind/shadcn**, construída com a skill `motion-plus-ui`
-(registry `@motion`) e servida pelo backend `sim_site.py`, que também expõe a API. Uma página, sem
-navegação, organizada em **SECÇÕES selecionáveis** — «eu escolho o que ver, para melhorar a monitoria
-enquanto o drone opera»: **Operação** (vigiar o voo) · **Rede** · **Vento** · **Bordo** (RPi 5) ·
-**Tudo** (layout completo) — mais o botão **«?»** com a ajuda e uma **barra fixa** do topo que nunca se
-esconde (seletor de secções · **REINICIAR** · **LOOP** · estado crítico).
+Aplicação **React 19 + TypeScript + Vite 8 + Tailwind 4** servida pelo backend `sim_site.py` (que também
+expõe a API). Desde 2026-10-12 (contrato **r13**, `../INTERFACE.md` §0) o site é um **cockpit**: um ecrã
+único de 100svw × 100svh, **sem scroll de página**, onde a vista do drone é o fundo e tudo o resto se
+sobrepõe ou se abre a pedido.
+
+O que o dono pediu e onde está:
+
+| pedido | resposta |
+|---|---|
+| «sem scroll, sempre a visão em 1.ª ou 3.ª pessoa» | a **VISTA** (stream MJPEG) cobre o viewport; `F` troca; a outra fica numa miniatura |
+| «chamo os controles como janelas que posso abrir» | a **DOCA** abre **JANELAS** flutuantes (arrastáveis, posição guardada) |
+| «o modo de controlar já vem ativado» | não há ARMAR: as teclas valem desde o arranque (`ativo: true` em todos os `POST /api/voo`) |
+| «não quero opções, quero o melhor» | sem seletor de controlador nem de loop — voa o que ganhou na medição |
+| vento com três botões | janela **Vento**: LIGADO · INTENSIDADE · ALEATORIEDADE (+ a direção numa bússola) |
+| seguir a bola | janela **Bola** / tecla `B`: retículo sobre a bola e erro de centragem no HUD |
+
+A avaliação UX que motivou o redesenho (9 achados) está em `pesquisas/ux-cockpit-avaliacao-antes.json`.
 
 ## Arranque
 
 ```bash
-npm install          # precisa de MOTION_TOKEN (registry @motionplus) — ver .npmrc
-npm run dev          # desenvolvimento (o proxy da API é a mesma origem: usa o sim_site.py)
-npm run build        # tsc -b && vite build → dist/ (index.html + assets/, caminhos absolutos)
-npx tsc -b           # só o type-check
+npm install            # precisa de MOTION_TOKEN (registry @motionplus) — ver .npmrc
+npm run build          # tsc -b && vite build → dist/ (o sim_site.py serve-o na mesma origem)
+npm run dev            # desenvolvimento: /api/* é encaminhado para o sim_site.py (porto 8080)
+SIM_API=http://127.0.0.1:8793 npm run dev   # …ou para outro backend
+npm run lint && npm run typecheck
 ```
 
-Em produção quem serve o `dist/` é o `sim_site.py` (mesma origem ⇒ `fetch("/api/sim")` funciona sem
-CORS nem configuração). Para apontar o `dist/` estático a **outro** porto (testes):
-`index.html?api=http://127.0.0.1:8765` ou `window.__SIM_API_BASE__`. A ajuda também se abre já aberta
-por link: `index.html?ajuda=1` (útil para partilhar e para provas de DOM em headless).
+Em produção quem serve o `dist/` é o `sim_site.py` (mesma origem ⇒ sem CORS). Para apontar um `dist/`
+estático a outro porto: `index.html?api=http://host:porto` ou `window.__SIM_API_BASE__` — só funciona se
+esse servidor anunciar CORS (o `sim_site.py` não anuncia: em desenvolvimento usa-se o proxy do Vite).
 
-## Secções selecionáveis (monitoria em voo)
+## O ecrã
 
-O seletor fica na **barra fixa do topo** (`smooth-tabs` do registry `@motion`) com 5 secções; **só uma
-fica visível de cada vez** e a escolha é **persistente** — guardada em `localStorage` sob
-`09_drone_hover_rl:seccao` e recuperada ao reabrir a página.
+```
+┌ ● A VOAR │ MANUAL            ── fita de rumo ──             ▭ 97 %  24,7 V  62 min ┐
+│  (▲ À PROCURA erro 2,3°)      [ ■ CAIU  manter R ]  ← avisos                      │
+│                                                                                    │
+│        VEL                        ─ ─                             ALT             │
+│        0,4 m/s  (◦)          ──── ─∨─ ────   ← horizonte + mira   1,02 m  ▲ 0,1   │
+│                                   ─ ─        (só 1.ª pessoa)                      │
+│ ┌──────────┐                                                                      │
+│ │ miniatura│                                              ⊙ VENTO 2,1 m/s  Q W E  │
+│ └──────────┘                                                 DE FRENTE     A S D  │
+│ [⇄ 1.ª PESSOA F]        [ 1 2 3 4 5 6 7 8 │ ⟲ REINICIAR R ]                Z X C  │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
 
-| secção | tecla | para que serve |
+1. **VISTA** (`components/cockpit/vista.tsx`) — `<img>` com `GET /api/fpv.mjpg` (1.ª pessoa) ou
+   `GET /api/simulacao.mjpg` (3.ª pessoa), `object-fit: cover`. A miniatura (em baixo à esquerda, a
+   convenção das estações de solo) mostra a OUTRA vista pelos `.jpg` a ~4 fps — não um segundo MJPEG: o
+   HTTP/1.1 só dá 6 ligações por origem e já há um stream e o SSE abertos. Em 3.ª pessoa **arrasta-se a
+   própria vista** para orbitar, a roda aproxima e o duplo clique repõe (`POST /api/camera`, ≤ 20
+   envios/s + envio final). Sem quadros diz-se **SEM IMAGEM** com o motivo (sem ligação · sem câmara ·
+   câmara desligada, com o botão LIGAR · câmara parada · stream caído, a religar).
+2. **HUD** (`components/cockpit/hud.tsx`, `pointer-events: none`) — ver «HUD» abaixo.
+3. **DOCA** (`components/cockpit/doca.tsx`) — 8 ícones com o nome por baixo e o número do atalho no canto e o **REINICIAR** de
+   manter premido (0,9 s; o gesto é o `hold-to-confirm` do Motion UI, que a tecla `R` também conduz).
+4. **JANELAS** (`components/cockpit/janela.tsx` + `janela-*.tsx`):
+
+| tecla | janela | conteúdo | precisa do `/api/sim`? |
+|---|---|---|---|
+| `1` | **Voo** | mapa das teclas (também se primem com o rato), velocidade pedida, rumo: rodar/fixar | não |
+| `2` | **Bola** | interruptor SEGUIR A BOLA, velocidade da bola, alvo ao vivo, erro e distância | não |
+| `3` | **Vento** | LIGADO · INTENSIDADE 0–5 m/s · ALEATORIEDADE · bússola da direção · vento de agora (real) · «o drone sente» (estimado a bordo, `vento_bordo` do HUD) | não |
+| `4` | **Sensores** | `PainelVoo` (estimado vs real, sensores) | sim |
+| `5` | **Energia** | carga, V, A, W, autonomia, 4 motores, RECARREGAR; detalhe (`PainelBateria`, `PainelMotores`) recolhido | só com o detalhe aberto |
+| `6` | **Gráficos** | `Curvas` | sim |
+| `7` | **Sistema** | quem voa (`QuemFazOQue`, sem seletor), streams medidos, `PainelHardware`; com a política RL: `Rede`, `TabelaObs`, `PainelAct`, `PainelRpi5` | só em modo RL |
+| `8` / `?` | **Ajuda** | as teclas e como ler o ecrã | não |
+
+Com tudo fechado o ecrã tem **12 controlos interativos** (8 da doca, REINICIAR, miniatura, fechar
+miniatura, trocar vista).
+
+### Teclas (sempre ativas, exceto com o foco num campo de TEXTO)
+
+`W` `S` `A` `D` frente/trás/esquerda/direita do nariz · `Q` `E` subir/descer · `Z` `C` rodar (manter) ·
+`X` fixar o rumo · `B` seguir a bola · `V` vento · `F` trocar a vista · `R` (manter) reiniciar · `1`–`8`
+janelas · `?` ajuda · `Esc` fecha a janela da frente. Com Ctrl/Meta/Alt nada é interceptado. Um slider
+ou um botão com foco **não** largam o teclado de voo (`eCampoDeTexto`); perder o foco do browser ou
+esconder a página solta todas as teclas.
+
+## De onde vêm os dados (e o que NÃO se sonda)
+
+| fonte | ritmo | para quê |
 |---|---|---|
-| **Operação** | `1` | o cockpit: cabeçalho (estado em linguagem simples, contadores, modelo), **valores atuais** (altura, distância ao alvo, erro de rumo, vento), o **Controlo de voo** (teclas WASD/QE para pilotar o drone), no drone real o **Painel de voo** (instrumentos com estimado vs real) e o resumo **Bateria e motores**, o bloco **Câmara da janela 3D** e as 4 curvas |
-| **Rede** | `2` | a política a decidir: rede com ativações ao vivo (cf2 16→64→64→4; real 21→128→128→4), entradas da rede (no real com nomes simples e unidades do dia a dia) e ação (4 canais) |
-| **Vento** | `3` | comandar o vento: sliders constantes, rosa dos ventos, APLICAR/PARAR e vento dinâmico (rajadas, rajadas aleatórias, Dryden, frente) |
-| **Bordo** | `4` | computador de bordo: painel do Raspberry Pi 5 e, no drone real, Bateria, Motores e potência e Hardware |
-| **Tudo** | `5` | layout completo: todas as secções, com a coluna de controlos à direita (como antes do seletor) |
+| `GET /api/hud` (SSE) | 50 Hz | os instrumentos do HUD e as leituras ao vivo das janelas |
+| `GET /api/hud.json` | 5 Hz, **só** se não chega amostra há > 400 ms | fallback do SSE (a idade é a do servidor) |
+| `GET /api/state` | ~1 Hz, sempre | `vento_simples`, `bola`, `fpv`/`simulacao`, `hardware`, `controlador`, `voo.pedido` |
+| `GET /api/sim` | ~3 Hz, **só com uma janela de detalhe aberta** | histórico de telemetria (200 linhas, ~500 kB por resposta) |
+| `…/fpv.jpg` · `…/simulacao.jpg` | ~4 fps, só com a miniatura aberta | a miniatura |
 
-- **atalhos 1–5** (documentados no «?» e visíveis nas abas): saltam de secção; as setas do teclado
-  percorrem as abas; os atalhos **não atuam** enquanto se escreve num campo (input/textarea/select ou
-  conteúdo editável) nem com o rato/foco sobre um slider (alvo, foco real ou `pointerover` dentro de
-  `[role="slider"], [data-slider], [data-slot="slider"], [aria-valuenow]`) — exceto nas vistas da Câmara
-  (`data-atalhos-livres`: são sliders para leitores de ecrã mas não usam dígitos). Trocar de secção volta
-  ao topo da página.
-- **o que nunca se esconde**: a faixa de **estado crítico** (API em baixo — o único estado com
-  `role="alert"`; o fim do episódio sem reinício é uma linha NEUTRA, porque a física continua; com a API
-  em baixo o alerta de ligação tem prioridade porque o estado do episódio já
-  é velho) e os controlos **REINICIAR/CONTINUIDADE** — ambos na barra fixa, em qualquer secção.
-- **updates continuam com a secção escondida**: os blocos escondem com o atributo `hidden` **sem se
-  desmontarem** (`BlocoSecao`), logo o polling (`GET /api/sim`) continua, os widgets mantêm o estado
-  (sliders e params dinâmicos não perdem o rascunho) e, ao voltar à secção, os valores estão frescos.
+`precisaDeSim` (`lib/cockpit.ts`) decide: Sensores, Gráficos, Energia com o detalhe aberto, ou
+Sistema com a política RL. **Medido** (10 s, tudo fechado): 0 pedidos a `/api/sim`, 8 a `/api/state`.
+Com a página escondida (`document.hidden`) fecha-se o stream, o SSE, a miniatura e as duas sondagens;
+ao voltar reabre tudo.
 
-## Contrato da API (é o que o site consome — **9 rotas** `/api/*`, 2 GET + 7 POST)
+Escritas: `POST /api/voo` (estado COMPLETO, só quando muda), `/api/vento-simples` e `/api/bola`
+(parciais; a arrastar ≤ 10 Hz + envio final), `/api/camera`, `/api/reiniciar`, `/api/bateria`,
+`/api/fpv` (só o LIGAR A CÂMARA do estado «sem imagem»).
 
-| pedido | resposta |
-|---|---|
-| `GET /api/sim` | `{estado:"a_correr"\|"episodio_terminado", ep, passo, retorno, loop?, vento:{vel,azimute,elevacao,ativo}, vento_dinamico:{modo,params,ativo}, vento_atual:{vec,[vel,azimute,elevacao],modo,fonte}, rpi5:{…}, camera_padrao:{azimute,elevacao,distancia}, camera_atual:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null, linhas:[{t,estado,ep,passo,retorno,z,dist_xy,yaw_err,vento_vel,vento_azim,vento_vec[3],vento_modo,loop?,obs[16],act[4],h1[64],h2[64],ctrl?[4],camera:{azimute,elevacao,distancia,alvo:[x,y,z]}\|null,voo:{ativo,teclas,v_ref[3],p_ref[3],erro_xy,erro_z,erro_v,seguindo}\|null}]}` — cada linha de telemetria tem **19 chaves** (`../INTERFACE.md` §4.2) mais as ADITIVAS (`voo`, contrato r11: `null` quando a política em uso não tem modo comando); o `alvo` do `camera`/`camera_atual` é só **LEITURA** (o `lookat` real = drone+offset) e nunca é campo de comando (§4.3). O topo da resposta ganhou também `"voo": {"pedido": {bloco}\|null, "eco": {eco}\|null}` (contrato r11) |
-| `GET /api/state` | resumo; o site lê **`modelo_nome`** primeiro (`pasta/ficheiro.zip`, o rótulo legível) e só depois `modelo`/`model`/… — e, se existirem, `mg`, `thrust_max`, `momento_max`, `tau_escala`, `rpi5`, `camera_atual`/`camera_padrao`, `voo` (contrato r11) e `amostras` (nº de linhas de telemetria publicadas — distingue «à espera da simulação» de «modo comando indisponível») |
-| `POST /api/vento` | `{vel 0–5, azimute 0–360, elevacao −90–90}` → 200/400 |
-| `POST /api/vento-dinamico` | `{modo:"nenhum"\|"rajadas"\|"aleatoria"\|"frente"\|"dryden"\|"rajada_agora", params?, ativo?}` → 200/400 |
-| `POST /api/parar` | **PARAR VENTO — PARA TUDO** numa só escrita atómica: cancela todas as rajadas dinâmicas (a one-shot e os modos contínuos) **e** zera o vento base (mantém azimute/elevação, `ativo: false`) → 200 |
-| `POST /api/reiniciar` | → `{contador: n}` |
-| `POST /api/loop` | `{ativo: bool}` → 200 |
-| `POST /api/camera` | **contrato v2**: subconjunto de `{azimute, elevacao, distancia}` → 200/400 — **sem** `alvo` (o alvo é do backend: `body(CAM_CORPO).xpos + CAM_OFFSET` do `sim_view.py` = drone+offset, seguido a cada frame) nem `seq` no comando (o `seq` do corpo é **ignorado** — o servidor incrementa-o). **Exceções reais do contrato** (`../INTERFACE.md` §4.3): `{}` e `{"seq": n}` são **aceites com 200** («toque»: mantém os valores e carimba `seq` novo); `null` presente → 400 e chave desconhecida (ex. `alvo` do contrato v1) → 400; faixas UI: azimute 0–360 (wrap 360↔0), elevação −90…90, distância 0,1–10 m (o backend aceita ]0,20]) |
-| `POST /api/voo` | **contrato r11 (controlo de voo)**: `{"ativo": bool, "teclas": {w,a,s,d,q,e: bool}}` → 200 `{"ok": true, "voo": {ativo, teclas, seq}}` ou 400 `{"erro": "mensagem", "codigo": 400}`. As **6 teclas sempre presentes** (booleanos) e **sem** `seq` no corpo (o servidor carimba o dele, +1 por pedido); chaves desconhecidas (inclusive `seq`) são recusadas com 400. É ESTADO completo a cada mudança — nunca uma lista de eventos |
+## HUD
 
-Polling de `GET /api/sim` a **2,9 Hz** (350 ms, dentro dos 2–5 Hz do contrato); sem websockets.
-O histórico é acumulado por `ep:passo`, portanto tanto serve um backend que devolva tudo como um que
-devolva só a cauda; episódio novo ⇒ histórico novo.
+- **Disposição** (convenções QGroundControl / DJI Pilot e de fatores humanos): barra de cima = estado e
+  avisos; velocidade à esquerda da mira, altitude à direita; o **centro só leva a mira, o horizonte e o
+  retículo da bola** (nenhum texto); em baixo à direita o vento de agora e as teclas.
+- **Cor**: seis cores com significado e **nunca só cor** — branco leitura ○ · verde ativo ● · ciano = o
+  que o piloto manda (tecla cheia) · magenta = o alvo (a bola) · âmbar atenção ▲ · vermelho perigo ■.
+- **Fontes**: `est` (sensores de bordo) para os instrumentos; `real` só onde não há `est` (cf2) e para
+  rodar o vento do mundo para o nariz.
+- **Estado em linguagem de voo**: A VOAR · NO CHÃO · CAIU · EM PAUSA · A LIGAR · SEM LIGAÇÃO (amostra com
+  mais de 1 s) + MANUAL / A SEGUIR A BOLA. Nunca «episódio». Alertas (um de cada vez, o mais grave):
+  CAIU («manter R para reiniciar») · SEM LIGAÇÃO · BATERIA CRÍTICA/FRACA · BOLA PERDIDA.
+- **Horizonte e retículo CONFORMES**: projetam-se com a focal da câmara de bordo
+  (`(H/2)/tan(fovy/2)` × a escala do `cover`) e com a amostra do instante em que o quadro à vista foi
+  captado (`atrasoDaImagem`: `fpv.latencia_modelada_ms`, ~116 ms, + meio período do `fps_medido`). Os
+  números são sempre os de agora.
+  Medido: `erro_tan` = [−0,34456; 0,02345] com `fovy` = 67° cai em (679, 559) px; a bola estava em
+  (679, 560).
+- **Convenções medidas no runner** (documentadas no cabeçalho de `lib/cockpit.ts`): `roll` > 0 = asa
+  direita em baixo; `pitch` > 0 = nariz em BAIXO; `psi` cresce para a ESQUERDA (a fita de rumo também);
+  `est.vx/vy` no referencial do rumo; `voo.v_ref` e o vento no mundo; `bola.valido` é independente de
+  `bola.estado`.
 
-**Vento em vigor:** o vetor lido é `vento.vec` (contrato) **ou** `vento_atual.vec` (o que o `sim_site.py`
-publica, com `modo` e a indicação de que veio da telemetria do runner); em último recurso usa-se o
-`vento_vec` da última linha. O modo em vigor vem de `vento_atual.modo`, senão de `vento_modo` da linha,
-senão do `vento_dinamico` pedido — por essa ordem, para o mostrador nunca ficar sem saber o que a física
-está a fazer.
+### Desempenho (requisito)
 
-**Parâmetros dinâmicos** (os do treino, `env.valida_vento_dinamico`): `rajadas` `{p:0,02, duracao:10
-passos, u_max:3,0}` · `aleatoria` `{p:0,02, duracao:10 passos}` (só `p` e `duracao` têm semântica: cada
-rajada re-sorteia a direção e a força dentro das faixas disponíveis — `U[0,5]` m/s, azimute `U[0,360°)`,
-elevação `U[±90°]` — e o `u_max` é aceite mas não limita este modo) · `dryden` `{sigma:0,5, L:10, v_min:1}`
-· `rajada_agora` `{duracao:25, u, azimute,
-elevacao}` · `frente` `{vel, azimute, elevacao}` = **degrau IMEDIATO** que substitui o vento base (o
-backend aceita este formato direto; a frente do treino, `{u_max,t_s}`, é outra coisa e não é o que o
-painel envia). O site manda sempre este payload e mostra o 400 do servidor como aviso, sem reescrever o
-pedido noutro formato. Nos modos contínuos (`rajadas`, `aleatoria`, `dryden`) **editar um campo aplica-se
-sozinho**: passados ≈300 ms sem novas edições o site reenvia o modo em vigor com os params atuais (mesmo
-`POST /api/vento-dinamico`, sem reiniciar o episódio); com `PARADO` os valores ficam guardados e só vão no
-POST da ativação seguinte. Ver `INTERFACE.md` §3.5.
+- A amostra de 50 Hz vive num store **fora do React** (`lib/hud-store.ts`); os instrumentos escrevem
+  `transform`/`opacity` em todos os quadros e `textContent` a ≤ 10 Hz, por refs, dentro de **um**
+  `requestAnimationFrame` partilhado (`useDesenhoHud`). Para o React só sai o `ResumoHud` (ligação,
+  fase, seguidor, alerta), via `useSyncExternalStore`, quando muda.
+- Nada mede o DOM por quadro: viewport e focal vêm das props e só mudam no `resize`.
+- Animações só com `transform`/`opacity`; `prefers-reduced-motion` desliga a entrada das janelas e o
+  pulsar dos alertas.
+- Os painéis de detalhe (`components/sim/*`) são carregados a pedido (`components/cockpit/detalhe.tsx`,
+  `React.lazy`): o arranque leva só a vista, o HUD e as três janelas principais.
+- Arrastar uma janela escreve o `transform` diretamente; a posição só entra no estado ao largar.
 
-**Nome do modelo no cabeçalho:** mostra sempre `pasta/ficheiro.zip` (nunca o caminho absoluto — é um
-rótulo de painel, não um explorador de ficheiros, e a página pode ser partilhada). `lib/sim.ts`
-(`nomeModeloLegivel`) aceita `/` e `\`, ignora barras finais e, acima de **34 caracteres**
-(`MODELO_LEGIVEL_MAX`), corta no **miolo** para o fim do ficheiro continuar legível (`final.zip` vs
-`best_model.zip`). 34 e não 26 porque os nomes deste laboratório cabem inteiros
-(`vento_r9_polir_vento3/final.zip` = 31, `out/runs/seed0/best_model.zip` = 29).
+## Controlos: estado otimista e «o último vence»
 
-**Semântica (ronda 11 — LOOP sticky; default revisto em 2026-10-09):** o site **nunca** reinicia sozinho e o
-REINICIAR **nunca é preciso para continuar a trabalhar**. O backend arranca **SEM REINÍCIO** (`loop:false`,
-pedido do dono em 2026-10-09): no fim do episódio a física **nunca para nem reinicia** — continua a correr no
-estado determinado depois do fim —, o `passo`/`t` da telemetria continuam a subir, o `retorno` congela, a
-faixa diz isso mesmo numa linha NEUTRA (sem `role="alert"` e sem anel de alarme no botão) e o **REINICIAR
-explícito** (botão com hold) é o único reset que existe. No modo **CONTÍNUO** (`loop:true`, via
-`POST /api/loop {ativo:true}`; `--com-loop` no arranque é autoritativo e corrige o `loop` do ficheiro de
-controlo) ao terminar o episódio arranca logo o seguinte (ep+1, passo 0), a faixa fica NEUTRA («episódio a
-correr · modo contínuo») e o site limita-se a um **toast discreto** «episódio N · contínuo». O arranque é
-autoritativo nos dois sentidos e, depois dele, só o `POST /api/loop` muda o modo. O que
-exige ação (API em baixo) fica sempre vermelho, em qualquer secção. Nenhum
-controlo de vento (constante ou dinâmico) reinicia o episódio: todos escrevem no ficheiro de controlo e a
-física muda no passo de decisão seguinte — e as escritas parciais (sem `loop`/`reiniciar`) não tocam
-nesses dois campos.
+`lib/cockpit.ts` tem os três controlos (`ControloPiloto`, `ControloVento`, `ControloBola`) e o `Emissor`
+que partilham; `lib/cockpit-controlos.ts` liga-os ao `fetch`. Regras:
 
-## Controlo de voo (teclas WASD/QE)
+- o ecrã muda **no instante** (os keycaps nunca esperam pela rede);
+- nunca há dois POSTs em voo do mesmo controlo, e enquanto um não sai só fica o estado mais recente —
+  a ordem das escritas no servidor é a ordem dos gestos;
+- `pedir` respeita o intervalo (sliders e bússola ≤ 10 Hz), `largar` é o envio final e sai já;
+- o que o `/api/state` diz só é adotado sem gesto local recente (carência de 1,5 s) nem envio a caminho;
+  do voo adotam-se só os MODOS (`segui_alvo`, `yaw_alvo`) — recarregar a página a meio de «seguir a bola»
+  não desliga o modo na primeira tecla —, e se alguém desarmar por fora o cockpit volta a armar;
+- um POST recusado avisa (toast, sem repetir o mesmo erro durante 4 s) e o painel volta ao último que o
+  servidor confirmou.
 
-`components/sim/controlo-voo.tsx` + `lib/voo.ts` (funções puras, testadas por `npm run test:voo`) —
-painel da secção **Operação** (e **Tudo**), nas **duas** plantas, para comandar o drone pelo backend
-(**contrato r11**). Nada de overlays na janela 3D: todo o controlo vive no site.
+## Janelas
 
-- **semântica** (frame MUNDO, yaw alvo 0): `W` = +x (frente) · `S` = −x (trás) · `A` = +y (esquerda) ·
-  `D` = −y (direita) · `Q` = +z (subir) · `E` = −z (descer). Diagonais horizontais normalizadas para
-  **1,0 m/s** (`vRefDeTeclas` divide pela hipotenusa quando ‖[vx,vy]‖ > 1), `|vz|` = **0,7 m/s** e sem
-  teclas `v_ref = [0,0,0]` = o drone **SEGURA** a posição (pares opostos anulam-se).
-- **ARMAR/DESARMAR** primeiro: só ARMADO é que as teclas são captadas em `window` (`keydown`/`keyup`,
-  com `preventDefault` dessas teclas; ignoradas em `input`/`textarea`/`select`/`[contenteditable]` e
-  com modificadores — Ctrl+W etc. nunca se roubam). DESARMAR envia `{"ativo": false, "teclas": <tudo
-  false>}`; `blur` da janela **solta tudo** (e envia o estado zerado se alguma tecla estivesse
-  pressionada); sair do painel desarma.
-- **keycaps** com rato/toque (`pointerdown`/`pointerup`/`pointerleave`/`pointercancel`) com a mesma
-  semântica de tecla pressionada; o ativo fica invertido (fundo, contraste, borda + anel) — nunca só
-  cor. `data-testid="tecla-<letra>"` com `data-estado="ativa"|"inativa"`.
-- **estado otimista + «o último vence»**: os keycaps acendem/apagam IMEDIATAMENTE com o estado local e
-  cada mudança dispara um `POST /api/voo` assíncrono (estado completo das 6 teclas, sem `seq`); havendo
-  um envio em curso guarda-se só o estado MAIS RECENTE e envia-se quando o anterior terminar (os
-  intermédios descartam-se). Falhas → toast + re-sincronização com o eco do servidor.
-- **leitura de estado**: o `v_ref` principal é o **comando local/otimista** (`vRefDeTeclas` — aparece ao
-  instante, no mesmo registo temporal dos keycaps) e ao lado mostra-se o **eco** (`voo` da telemetria:
-  `voo-vref-eco`): `v_ref` aplicado, `p_ref` (m), erros (`xy`/`z` em cm, `v` em m/s) e o selo
-  **«A SEGUIR ✓ / a corrigir»** (`seguindo`); quando o eco diverge do estado local (latência ou **outro
-  cliente** a comandar) mostra-se também o estado do servidor.
-- **estados honestos**: `voo.eco === null` com `amostras > 0` (do `/api/state`) → «modo comando
-  indisponível: esta política não foi treinada com `--comandos`» e controlos desativados
-  (`data-testid="voo-indisponivel"`); sem amostras ainda → «à espera da simulação». Nada é inventado.
-- `data-testid` estáveis: `controlo-voo`, `voo-ativar`, `voo-ativo`, `voo-vref`, `voo-seguindo`,
-  `voo-indisponivel`, `tecla-<letra>` (mais `voo-teclas`, `voo-pref`, `voo-erros`, `voo-eco`,
-  `voo-leitura`, `voo-raw` e `voo-mapa` para provas de DOM).
-
-### Defeitos reparados (2026-10-10, reportados pelo dono durante o voo)
-
-1. **«o site mudava pra modo light»** — o `theme-provider.tsx` do template tinha um atalho de teclado `d`
-   que alternava dark/light; `D` é a tecla de VOAR À DIREITA (WASDQE), logo cada voo à direita mudava o
-   tema (e o `localStorage` ficava a marcar `light`). **Reparado**: atalho removido (as teclas de voo são
-   do piloto) e o tema passou a ser FIXO em escuro com `storageKey="tema"` (ignora os valores `theme`
-   velhos). Regressão no `teste_controle_voo.py` §4: pressionar `d` não muda a classe do `<html>`.
-2. **«a câmara vai mudando a rotação devagar»** — a vista de cima da câmara é desenhada relativa ao
-   nariz (`azimute − rumo`) e o rumo do drone deriva **2–7° devagar** durante o voo (medido: o yaw do
-   estimador sem magnetómetro; a janela 3D está verificada ESTÁVEL — deriva de azimute 0,000°). A vista
-   rodava sozinha. **Reparado**: `estabilizarRumo` (morta-banda de 10°) para a moldura dos desenhos — o
-   desenho fica parado e só acompanha rotações REAIS do nariz; o rótulo do rumo continua ao vivo.
-   7 provas novas em `testes/camera-gestos.mts`.
-
-## Painel do Raspberry Pi 5 (computador de bordo)
-
-`components/sim/rpi5.tsx` — imagem do alvo + especificações + medidores que atualizam com o polling:
-
-- **imagem**: `src/assets/rpi5.webp` (a que o dono indicou, 960×640 com alfa). É uma **ilustração do
-  Raspberry Pi Model B+ (2014)**, não do Pi 5 — fica identificada como ilustração de referência, com a
-  atribuição (Lucasbosch, Wikimedia Commons, **CC BY-SA 3.0**), e é mostrada reduzida (nunca ampliada).
-- **medidores**: p50 e p99 vs orçamento (20 ms @ 50 Hz), % de CPU equivalente, modelo (KB), fator int8,
-  pior caso, núcleos multi-IA, núcleos/NPU do alvo, estado do hardware (`vcgencmd get_throttled` +
-  temperatura, quando o backend os publicar — senão «sem hardware»).
-- **semáforo** derivado: `ERRO` acima de 100 % do orçamento (p99 ou pior caso), `ATENÇÃO` acima de 70 %.
-- **latências** (`fmtLatencia`, a mesma régua no p50, no p99, no pior caso e na latência estimada):
-  abaixo de **100 µs** mostra µs com 1 casa («4,6 µs», «6,8 µs») — a 2 casas em ms sairia «0,00 ms» e o
-  valor medido desaparecia; a partir daí mostra ms com 2 casas («0,16 ms», «2,50 ms»), comparável com o
-  orçamento de 20 ms que está ao lado.
-- **procedência honesta**: o TEXTO da `fonte` é o que o backend manda (ex.: «proxy x86 calibrado (1 núcleo
-  do A76; não é o RPi)»), só a cor é classificada por prefixo; sem `inferencia.p50_us` o painel diz «sem
-  benchmark publicado pelo backend» e **não inventa tempos** (medidores a «—»).
-- se o benchmark for de **outro** `.zip` (`inferencia.modelo_coincide === false`), avisa-se que os tempos
-  são de outra política.
-
-## Ajuda «?»
-
-`components/sim/ajuda.tsx` — botão fixo (canto inferior direito) que abre uma **folha** (`sheet` do
-catálogo, `<dialog>` nativo, arrastável) com uma secção por elemento visível da página: **seletor de
-secções** (o que cada secção serve, atalhos 1–5, persistência e updates com a secção escondida),
-cabeçalho/selos,
-curvas, rede, obs (o que é cada rótulo `dp`/`rpy`/`v`/`ω`/`a_prev`), ação, vento constante, vento
-dinâmico, rosa dos ventos, RPi 5 e episódio/estados. O conteúdo é **estrutura de dados** (`SECOES_AJUDA`)
-e o componente só a percorre: acrescentar uma explicação é acrescentar um objeto, sem tocar em JSX.
+`EstadoJanelas` = as abertas (pela ordem de empilhamento: a última é a da frente, a que o `Esc` fecha) +
+a posição onde o dono deixou cada uma, guardado em `localStorage`
+(`09_drone_hover_rl:cockpit:janelas:v1`; a vista e a miniatura em `…:cockpit:vista:v1`). A posição
+desenhada passa sempre por `encaixar` (dentro do viewport: re-encaixa ao redimensionar) e a altura nunca
+passa do espaço entre a barra de estado e a doca — as janelas de detalhe ganham scroll **interno**; as
+três principais cabem sem scroll a 1366×768 (350, 438 e 397 px). A ordem no DOM é fixa; quem está à
+frente decide-se pelo `z-index` (reordenar nós a meio de um `pointerdown` cancelava o arrasto).
 
 ## Estrutura
 
 ```
 src/
-  main.tsx                    MotionUIThemeProvider (uma vez, tema de ../motion.theme) + ThemeProvider (tema FIXO escuro, `storageKey="tema"` — ver «defeitos reparados»)
-  App.tsx                     barra fixa (seletor · REINICIAR/CONTINUIDADE · estado crítico), `loop` lido da API, aviso de episódio novo + as secções (operacao/rede/vento/bordo/tudo) · ajuda · toasts
-  lib/sim.ts                  tipos do contrato, normalização defensiva, rótulos das 16 obs/4 ações (cf2) e dos 21 canais reais (nome simples, unidade amigável, faixa), `verdade`/`fim`, taxas e coletivo do ctbr
-  lib/voo.ts                  CONTROLO DE VOO (contrato r11): teclas WASD/QE → `v_ref` (m/s, mundo) e parsers tolerantes dos blocos `voo` (puro, testado em testes/voo-teclas.mts)
-  lib/sensores.ts             PAINEL DE VOO da planta real: linha → graus/cm/cm/s/g, estimado (bloco `estimador`) vs real (`verdade`), erro do estimador
-  lib/api.ts                  fetch dos 5 endpoints (erros legíveis; `?api=` para testes)
-  hooks/use-sim.ts            polling, fusão do histórico, estado de ligação, ações (POST)
-  components/sim/seccoes.tsx      seletor de secções (smooth-tabs), persistência (localStorage), atalhos 1–5, faixa de estado, BlocoSecao
-  components/sim/cabecalho.tsx    estado do episódio, contadores, modelo, ligação
-  components/sim/curvas.tsx       valores atuais (altura, distância ao alvo em cm, erro de rumo em graus, vento) + curvas altura · erro de rumo · retorno · vento
-  components/sim/rede.tsx         ativações (cf2 16→64→64→4; real 21→128→128→4 — dimensões pelos dados) (SVG, cor por |a|)
-  components/sim/painel-voo.tsx   PAINEL DE VOO (planta real): horizonte artificial, rumo, fita de altura, mapa de posição estimada vs real, giroscópio, acelerómetro, sensores
-  components/sim/resumo-bordo.tsx resumo «Bateria e motores» na secção Operação (SoC real/estimado, autonomia, V, I, P, rpm, uso do empuxo)
-  components/sim/rpi5.tsx         painel do alvo: imagem, specs, medidores e semáforo
-  components/sim/rosa-ventos.tsx  bússola viva: seta do vetor em vigor, seleção, N/E/S/O, rajada
-  components/sim/ajuda.tsx        botão «?» + SECOES_AJUDA (o que é cada elemento)
-  components/sim/observacoes.tsx  tabela das 16 obs (obs/cru/barra) + ação (empuxo em N e momentos); na planta real «Entradas da rede» (nome simples, valor amigável, na rede, barra centrada) + ação ctbr (× o peso, rad/s e °/s)
-  components/sim/controlos.tsx    ControlosVento (sliders + APLICAR/PARAR + dinâmico) · ControlosEpisodio (REINICIAR hold · continuidade, barra fixa)
-  components/sim/camera.tsx       widget «Câmara da janela 3D» v3: vista de cima (órbita) + vista de lado (altura, chão à escala) + zoom log + vistas rápidas + REPOR VISTA
-  components/sim/controlo-voo.tsx CONTROLO DE VOO: keycaps WASD/QE (teclado + rato/toque), ARMAR/DESARMAR, estado otimista com «o último vence» e leitura do eco do runner
-  lib/camera-gestos.ts            geometria das vistas, vistas rápidas, descrição em português + máquina de gestos (snapshot DEF-1, «—» DEF-2, throttle 150 ms, corpo completo)
-  testes/                         camera-roundtrip.mts + camera-gestos.mts (`npm run test:camera`) · planta-real.mts (`npm run test:planta`, inclui o painel de voo) · voo-teclas.mts (`npm run test:voo`, o controlo de voo)
-  components/sim/avisos.tsx       toasts das ações (toast-stack)
-  assets/rpi5.webp            imagem do alvo (ilustração de referência; CC BY-SA 3.0)
-  components/motion-ui/**     componentes do registry @motion (source do CLI — não editar)
-  components/ui/**            primitivos shadcn (button, card, slider, input)
+  App.tsx                         composição: Vista + Hud + Doca + Janelas; o teclado; as ligações
+  lib/cockpit.ts                  LÓGICA PURA: parser do HUD, projeção (cover), teclas e piloto, vento,
+                                  bola, Emissor, controlos otimistas, janelas, órbita, formatação
+  lib/cockpit-controlos.ts        as instâncias (piloto, vento, bola, câmara) ligadas à API e aos avisos
+  lib/hud-store.ts                SSE + fallback + anel de amostras + o requestAnimationFrame do HUD
+  lib/api.ts                      cliente HTTP (r13: enviarVentoSimples, enviarBola, buscarHudJson,
+                                  lerCameraEmVigor; enviarCamera devolve o bloco confirmado)
+  lib/sim.ts · voo.ts · controlador.ts · camera-gestos.ts · sensores.ts · paragem.ts
+                                  contratos e parsers de sempre (o resumo ganhou ventoSimples e bola)
+  hooks/use-sim.ts                /api/state a 1 Hz sempre; /api/sim só com `useSim({ ativo: true })`
+  hooks/use-cockpit.ts            useResumoHud, useDesenhoHud, usePiloto/useVento/useBola, useJanelas,
+                                  useVista, useViewport, usePaginaVisivel
+  components/cockpit/             vista · hud · doca · janela · janela-{voo,bola,vento,energia,sistema,
+                                  ajuda} · pecas (Interruptor, Deslizador, Tecla, Marca) · detalhe (lazy)
+  components/sim/                 os painéis de detalhe reutilizados: painel-voo, bateria, motores,
+                                  curvas, quem-faz-o-que, hardware, rede, observacoes, rpi5, avisos
+  components/motion-ui/           animated-number, hold-to-confirm, multi-state-button, progress-bar,
+                                  sparkline, toast-stack, ui-theme
 ```
 
-## Controlos
+**Tema**: escuro fixo. Tipos **B612** (algarismos de largura fixa e vírgula estreita — os números) e
+**B612 Mono** (as etiquetas de estado e as teclas) — a família desenhada para ecrãs de cockpit. As
+janelas, a doca e a miniatura são vidro (`.vidro`: fundo translúcido + `backdrop-filter`); o texto do
+HUD é branco com contorno escuro (`.osd`), sem caixas a tapar a vista.
 
-| controlo | o que faz |
-|---|---|
-| **força / azimute / elevação** | sliders do vento CONSTANTE (0–5 m/s · 0–360° · −90…90°) |
-| **APLICAR VENTO** | `POST /api/vento {vel,azimute,elevacao}` (`multi-state-button`) |
-| **PARAR VENTO** | **PARA TUDO** num só pedido (`POST /api/parar`): cancela todas as rajadas dinâmicas (a one-shot e o modo contínuo) **e** zera o vento base (mantém azimute/elevação) |
-| **PARADO · RAJADAS · ALEATÓRIA · DRYDEN** | modo dinâmico CONTÍNUO (`segmented-toggle`); `PARADO` envia `{"modo":"nenhum","ativo":false}` |
-| **p · duração · u_max** | parâmetros das rajadas, editáveis no modo escolhido; `ALEATÓRIA` só usa `p` e `duração` (a força e a direção são sorteadas a cada rajada nas faixas por inteiro — 0–5 m/s, 0–360°, ±90° — e o `u_max` não limita) |
-| **editar um parâmetro** (com um modo contínuo ativo) | live-apply: ≈300 ms depois da última edição o site reenvia o modo em vigor com os params atuais, sem reiniciar o episódio |
-| **sigma · L · v_min** | parâmetros da turbulência Dryden |
-| **RAJADA AGORA** | rajada única imediata com a força/azimute/elevação dos sliders e a duração do campo; fica «RAJADA EM CURSO» enquanto dura |
-| **FRENTE AGORA** | degrau de vento imediato (interruptor: clicar outra vez desliga) |
-| **duração da rajada** | passos de decisão (25 = 0,5 s a 50 Hz) |
-| **PARAR DINÂMICO** | `{"modo":"nenhum","ativo":false}` |
-| **REINICIAR (manter 1 s)** | `hold-to-confirm` — o **único reset que existe** (barra fixa do topo, em qualquer secção; vale com e sem loop) |
-| **CONTINUIDADE · CONTÍNUO / SEM REINÍCIO** | mostra o que o BACKEND faz (campo `loop` da API, não uma preferência do browser): **SEM REINÍCIO** (**por omissão** desde 2026-10-09) deixa a física continuar no estado em que ficou — não para nem reinicia — e só o REINICIAR começa outro episódio; **CONTÍNUO** reinicia sozinho ao terminar (ep+1). `POST /api/loop {ativo}` (barra fixa do topo) |
-| **esfera do pad «Câmara»** | arrastar: horizontal = azimute (a direita aumenta; wrap 360↔0 nas bordas), vertical = elevação (**cima = câmara mais alta**; limites ±90° travam a esfera) |
-| **distância (câmara)** | slider 0,1–10 m — zoom mantendo o alvo |
-| **REPOR VISTA** | envia o `camera_padrao` `{azimute, elevacao, distancia}` (contrato v2) |
-| **ARMAR CONTROLO / DESARMAR** (bloco «Controlo de voo») | ativa/desativa a captura das teclas WASD/QE; DESARMAR envia `{"ativo": false, "teclas": <tudo false>}` (`POST /api/voo`) |
-| **keycaps W/A/S/D/Q/E** | teclado (enquanto armado) ou rato/toque (`pointerdown`/`up`/`leave`): cada mudança manda o estado completo das 6 teclas em `POST /api/voo` («o último vence»); W = +x, S = −x, A = +y, D = −y, Q = +z, E = −z |
+### `data-testid` estáveis
 
-A **rosa dos ventos** (`rosa-ventos.tsx`) mostra duas setas: a **sólida** é o vetor EM VIGOR
-(base + dinâmica, da telemetria) e a **tracejada** é a seleção dos sliders; tem N/E/S/O com graus
-(E 0° · N 90° · O 180° · S 270°, azimute anti-horário a partir de +x), marca de 30° em 30°, anel a pulsar
-enquanto há dinâmica ativa e a elevação no centro.
+`cockpit` · `vista` (`data-vista`, `data-imagem`) · `vista-imagem` · `sem-imagem` · `miniatura` ·
+`miniatura-fechar` · `miniatura-abrir` · `trocar-vista` · `vista-nome` · `hud` (`data-vivo`) ·
+`hud-estado` (`data-estado`, `data-modo`) · `hud-fase` · `hud-modo` · `hud-alerta` · `hud-rumo` ·
+`hud-vel` · `hud-alt` · `hud-vz` · `hud-bateria` · `hud-vento-vel` · `hud-vento-de` · `hud-rajada` ·
+`hud-horizonte` · `hud-mira` · `hud-reticulo` · `hud-linha-bola` · `hud-bola` · `hud-seguidor` ·
+`hud-bola-erro` · `tecla-{q,w,e,a,s,d,z,x,c}` (`data-estado="ativa|inativa"`) · `doca` ·
+`doca-{id}` (`data-aberta`) · `botao-reiniciar` · `janela-{id}` · `janela-{id}-barra` ·
+`janela-{id}-fechar` · `voo-tecla-{…}` · `voo-vref` · `voo-rumo` · `bola-seguir` · `bola-velocidade` ·
+`bola-alvo` · `bola-seguidor` · `bola-erro` · `bola-distancia` · `vento-ligado` · `vento-intensidade` ·
+`vento-aleatorio` · `vento-bussola` · `vento-agora-vel` · `energia-recarregar` · `energia-detalhe` ·
+`sistema-quem-voa` · `sistema-streams`.
 
-## Componentes `@motion` usados
+## Testes
 
-| componente | onde |
-|---|---|
-| `smooth-tabs` (`SmoothTabs`/`SmoothTabsList`/`SmoothTabsTab`) | seletor de secções da barra fixa (pílula deslizante + foco nômade por setas) |
-| `sparkline` | as 4 curvas (`curvas.tsx`), com a linha do alvo na `grid` |
-| `animated-number` | contadores do cabeçalho, valor de cada curva e % dos medidores do RPi 5 |
-| `stagger-reveal` | entrada do título do cabeçalho (`splitText` linha a linha + seguidor) |
-| `progress-bar` | barras da observação/ação e os 3 medidores do RPi 5 (p50, p99, CPU) |
-| `hold-to-confirm` | botão **REINICIAR** (manter 1 s) |
-| `multi-state-button` | **APLICAR VENTO**, **RAJADA AGORA** e **FRENTE AGORA** (pronto/a enviar/ok/erro/ativo) |
-| `segmented-toggle` | **CONTINUIDADE** (**CONTÍNUO/SEM REINÍCIO**) e o modo dinâmico (**PARADO/RAJADAS/ALEATÓRIA/DRYDEN**) |
-| `sheet` (`Sheet`/`SheetBackdrop`/`SheetPanel`/`SheetClose`/`useSheet`) | folha da **ajuda «?»** |
-| `accordion` (`Accordion`/`AccordionItem`/`AccordionTrigger`/`AccordionPanel`/`AccordionChevron`) | secções da ajuda |
-| `toast-stack` | avisos das ações e erros da API |
-| `skeleton` (`SkeletonReveal`) | estado de carregamento antes da primeira linha |
-| `ui-theme`, `motion.theme.ts` | tokens de movimento (`snap`/`ui`/`gentle`/…) |
+```bash
+npm run test:cockpit       # lib/cockpit.ts — 157 verificações + 9 mutações (todas têm de ser apanhadas)
+npm run test:voo           # lib/voo.ts
+npm run test:controlador   # lib/controlador.ts + presença dos painéis (e AUSÊNCIA do seletor e do armar)
+npm run test:camera        # lib/sim.ts (câmara) + lib/camera-gestos.ts
+npm run test:planta        # planta real: parsers e sensores
+npm run test:fpv           # parsers dos módulos de imagem
+npm run test:multi-ia      # parser do custo multi-IA
+```
 
-Passo 4 da cascata (código novo), com justificação de uma linha cada:
+Todos correm em node com type-stripping (≥ 22.6), sem dependências. O `cockpit.mts` corre o mesmo
+conjunto de verificações contra cópias adulteradas do módulo (cover→contain, `ativo: false`, Z/C
+trocados, sinal do pitch, limite de 1 s, janela Voo a obrigar ao `/api/sim`, vento sem teto, emissor sem
+esperar, janelas sem encaixe): um teste que não falha com o código estragado não testa nada.
 
-- **`seccoes.tsx` · painéis das secções (`hidden`)** — o `smooth-tabs` traz o crossfade de painéis com
-  mount/unmount, mas a monitoria exige widgets vivos e estado (sliders) preservado com a secção
-  escondida: usam-se os TABS do catálogo e os blocos escondem com `hidden` sem se desmontarem.
+## O que saiu (2026-10-12)
 
-- **`rede.tsx`** — o catálogo não tem visualizador de ativações (`sparkline` é série temporal,
-  `progress-bar` é barra): grelha SVG por camada, cor por `|a|`. Sem arestas porque o contrato só traz
-  ativações, não pesos — desenhar ligações seria inventar dados.
-- **`rosa-ventos.tsx`** — mostrador polar/bússola também ausente do catálogo (`sparkline` é série
-  temporal, `progress-bar` é barra): SVG só com `transform`/`opacity`, com as duas setas
-  (vigor vs seleção), N/E/S/O em graus e o anel de dinâmica.
-- **`rpi5.tsx`** — o catálogo não tem cartão de especificações de hardware nem indicador de saúde ligado
-  a telemetria: composição com `Card`/`ProgressBar`/`AnimatedNumber` e o semáforo derivado do p99.
-- **`ajuda.tsx` · legenda (`dl` dos itens)** — a `accordion` do catálogo dá as secções mas não uma lista
-  de definições; é texto com classes semânticas, sem CSS de layout próprio.
-- **`controlos.tsx` · `key={geracao}` no REINICIAR** — o `hold-to-confirm` instalado é de **um disparo**
-  (o `done` interno só volta com `reset()`, que ele não expõe em `mode="callback"`): remontar por `key`
-  volta a armar o botão e repõe a escala, sem tocar no source instalado.
-- **`stats-live-panel` (avaliado, descartado)** — foi instalado durante a avaliação da cascata e
-  removido: é uma secção-demo **fechada**, que gera os próprios números de engagement e só aceita
-  `eventsBaseline`/`tickIntervalMs` — não dá para lhe passar telemetria real. Ficou a dependência que
-  ele trouxe, `animated-number`, e o padrão de painel; os valores no ecrã são do MuJoCo.
+Componentes apagados (histórico no git): `sim/controlos.tsx` (vento antigo: 18 botões, 8 campos),
+`sim/controlador.tsx` (seletor RL/clássico), `sim/controlo-voo.tsx` (ARMAR + painel de teclas),
+`sim/camera.tsx` (pads de órbita), `sim/fpv.tsx` (a imagem a 2929 px do topo; `CustoEtapaFpv` foi para
+o `rpi5.tsx`), `sim/cabecalho.tsx`, `sim/seccoes.tsx`, `sim/resumo-bordo.tsx`, `sim/ajuda.tsx`,
+`sim/rosa-ventos.tsx`, `ui/input.tsx`, `ui/slider.tsx` e os `motion-ui` que ficaram órfãos (`accordion`,
+`segmented-toggle`, `sheet`, `skeleton`, `smooth-tabs`, `stagger-reveal`). Saiu também o teste
+`testes/rajadas-ux.mts` (testava a região pura do painel de vento antigo).
 
-## Widget da câmara — v3 com vistas de cima e de lado (bloco «Câmara da janela 3D», Operação e Tudo)
+O `use-sim` continua a expor as ações do contrato antigo (`aplicarVento`, `pararTudo`,
+`aplicarVentoDinamico`, `definirLoop`, `definirControlador`, `aplicarCamera`): a API ainda as aceita, o
+cockpit não as usa.
 
-**Porquê v3 (avaliação de UX de 2026-10-10, `../out/ux/`):** o pad v2 (círculo com o drone ao centro e uma
-esfera de mapeamento LINEAR — horizontal = azimute, vertical = elevação) sugeria «pôr a câmara à volta do
-drone» mas a esfera não ficava onde a câmara está (azimute 90° punha-a em cima de um braço), as diagonais nem
-eram alcançáveis e era preciso ler a legenda. O v3 é geométrico, como num programa 3D, e o efeito continua a
-ser de jogo de terceira-pessoa: a câmara **segue sempre o drone** (o backend faz o seguimento do alvo =
-drone+offset) e o site escolhe **de onde** se olha. Implementação: `src/components/sim/camera.tsx`
-(apresentação) + `src/lib/camera-gestos.ts` (geometria, vistas rápidas e máquina de gestos), contrato v2 em
-`src/lib/sim.ts` (`CameraEstado`, `CorpoCamera`, `lerCamera`, `cameraReflete`).
+**Testes Python do backend que liam o front antigo** (não são deste diretório, ficam por atualizar):
+`teste_parar_vento.py` (copia e conduz `controlos.tsx`: `botao-parar-vento`, `campo-rajadas-p`, …),
+`teste_controlador.py` §4 (testids em `controlador.tsx` e `controlo-voo.tsx`) e `teste_controle_voo.py`
+(`voo-ativar`, `voo-ativo`, `voo-seguindo`, `tecla-*`). O que se manteve com o mesmo nome: `tecla-{letra}`
+(agora no HUD, só desenho), `voo-vref`, `voo-rumo`, `controlo-voo`, `voo-indisponivel`,
+`quem-faz-o-que*`, `bordo-alvo*`.
 
-| elemento | o que faz | geometria |
-|---|---|---|
-| **leitura** | «onde · altura · distância» em português, relativa ao NARIZ do drone | `descreverCamera` (rel = azimute − rumo: 0 = atrás, ±180 = à frente, +90 = à direita) |
-| **vista de cima** | o drone com o NARIZ PARA CIMA e o ícone da câmara ONDE ela está (cone de visão a apontar ao drone); arrastar/clicar = orbitar; ↺/↻ = ±15° | a câmara fica em −(cos a, sin a) do drone (`pos = alvo − d·f`); ecrã: `sx = sin(a − rumo)`, `sy = cos(a − rumo)`; o rumo do desenho é o real (`verdade.yaw`) **ESTABILIZADO com morta-banda de 10°** (`estabilizarRumo`): o rumo deriva 2–7° devagar no voo e fazia a vista rodar sozinha — o desenho só acompanha rotações REAIS do nariz; o rótulo numérico continua ao vivo (2026-10-10) |
-| **vista de lado** | a câmara num arco à volta do drone; arrastar = subir/descer; ▲/▼ = ±10°; o chão à escala (altura ÷ distância) e aviso a vermelho abaixo do chão | ângulo acima do horizonte `h = −elevação` (MuJoCo: elevação negativa = por cima), faixa da UI −30…89° |
-| **zoom** | slider LOGARÍTMICO, −/+ (×1,25) e roda do rato sobre as vistas | `d = d_min·(d_max/d_min)^f`; limites por planta: real 0,6–15 m, cf2 0,1–5 m |
-| **vistas rápidas** | Atrás (perseguição) · Frente · Esquerda · Direita · De cima · À altura; mantêm o zoom | `anguloVistaRapida(vista, rumo)` |
-| **Repor vista** | envia o `camera_padrao` | comando explícito, sempre enviado |
-| **teclado** | foco numa vista: ← → orbitar, ↑ ↓ subir/descer, + − zoom, Home repor; 1–5 continuam a mudar de secção (`data-atalhos-livres`) | — |
+## Limites conhecidos
 
-**Sinal da elevação (a parte contra-intuitiva):** na convenção do MuJoCo a elevação **negativa** vê de cima
-(`pos = alvo − d·f`, `f = [cos e·cos a, cos e·sin a, sin e]` ⇒ `pos_z = alvo_z − d·sin(elev)`); a vista de
-lado mostra o ÂNGULO ACIMA DO HORIZONTE (= −elevação), por isso arrastar para cima sobe a câmara. A fórmula
-está verificada contra o MuJoCo 3.15 (`MjvScene.camera[0/1]`, erro ≤ 2,3e-8 no `forward` — `GROUND_TRUTH` em
-`testes/camera-roundtrip.mts`).
-
-**Comandos e gestos** (`lib/camera-gestos.ts`): comandos ao vivo ENQUANTO se arrasta — throttle de **150 ms**
-com coalescência (1 comando por mudança final de valor) — mais um **commit final imediato ao largar**. O corpo
-de `POST /api/camera` leva SEMPRE os **3 valores** do estado mostrado (que fora de um gesto é a câmara real),
-nunca `alvo` nem `seq`. Medido em 2026-10-10 no ecrã real: com corpos parciais o 1.º comando só com ângulos era
-completado no servidor com a distância do Crazyflie (0,27 m — a câmara do drone real saltava para dentro dele;
-o servidor passou a usar o `camera_padrao` do modelo em uso) e um zoom feito com o rato na janela era desfeito
-pelo comando seguinte do site.
-
-**Estados honestos — os 2 defeitos medidos do bloco v1 (sliders) continuam corrigidos:**
-
-- **DEF-1 (gestos perdidos):** a telemetria (poll de 350 ms) substituía os valores do gesto entre o
-  `pointerup` e o envio agendado e o POST levava valores velhos. Os valores enviados são **sempre os do
-  gesto** (snapshot fixado no fim do gesto e em cada envio) e a **telemetria nunca sobrescreve valores durante
-  o arrasto nem enquanto há envio pendente** (a confirmação fecha-se por igualdade com a câmara real ou por
-  expiração a 1500 ms).
-- **DEF-2 (estados honestos):** `camera`/`camera_atual` a passar a `null` (janela fechada) mostra «—»,
-  explica porquê e desativa o bloco — nunca se retém o valor antigo.
-
-**Testes** (`npm run test:camera`): `testes/camera-roundtrip.mts` (20 — round-trip pos↔alvo, ground truth do
-MuJoCo 3.15, contrato v2) + `testes/camera-gestos.mts` (**75** — a vista de cima posta à prova contra
-`posicaoCamera` para 55 poses (erro 2e-16) e a de lado (1e-14), idas e voltas, travões da UI, zoom
-logarítmico e limites, passos, as vistas rápidas para 4 rumos — «Atrás» fica mesmo atrás do nariz, etc. —,
-mais a morta-banda de `estabilizarRumo` (7 casos, incl. a costura de ±180° e o caso reportado de deriva
-contínua de ±7°),
-a descrição em português, DEF-1/DEF-2, REPOR VISTA, coalescência, o corpo completo e o zoom do rato
-preservado), sem dependências (Node ≥ 22.6, type-stripping).
-
-**Prova no ecrã real (2026-10-10):** `sim_site.py` com a janela 3D do MuJoCo num Xvfb e o site num Chrome
-headless (CDP, arrastos REAIS com `Input.dispatchMouseEvent`): arrastar na vista de cima levou a câmara para
-«à esquerda» e na vista de lado para «à altura do drone» com a distância intacta (1,95 m); «Atrás» + roda do
-rato deram «atrás · 20° por cima · 1,25 m»; «Repor vista» voltou a (90°, −45°, 1,95 m); o selo passou a
-«aplicada na janela 3D» em todos. Capturas antes/depois em `../out/ux/`.
-
-## Testar contra um backend falso
-
-Qualquer servidor stdlib que responda ao contrato serve. O teste feito nesta máquina: mock em `$TMPDIR`
-que serve o `dist/` **e** a API (com `rpi5` em quatro modos: `proxy`, `real`, `sem_benchmark` e
-`ausente`), com os pedidos registados em JSONL, mais:
-
-- `google-chrome-stable --headless=new --dump-dom "…/?ajuda=1"` — prova de DOM: ajuda com todas as
-  secções, bússola, painel dinâmico, 0 `undefined`/`NaN`;
-- **Puppeteer** (headless, `pipe: true`) — imagem do RPi carregada, 3 barras do catálogo, semáforo,
-  arrastar o slider e clicar **RAJADA AGORA** (o payload leva `u` = valor do slider, a direção dos
-  sliders e a duração do campo), **FRENTE AGORA**, **RAJADAS**, **PARAR DINÂMICO**
-  (`{"modo":"nenhum","ativo":false}`), anel da rajada na rosa, e a prova de que **nenhum**
-  `POST /api/reiniciar` sai do site;
-- provas do **seletor de secções** (Puppeteer + mock `/api/sim` que evolui no tempo): as 5 secções
-  presentes, cada uma a mostrar SÓ o seu conteúdo (blocos alheios `hidden`), «Tudo» completo, estado
-  crítico (API em baixo) visível em qualquer secção, persistência da secção após
-  reload, valores frescos com «Operação» escondida, atalhos 1–5 (e a guarda dentro de campos) e
-  REINICIAR/LOOP acessíveis em qualquer secção;
-- contra o **backend real** (`sim_site.py --sem-janela --sem-browser --port N`): os modos pedidos
-  aparecem em `vento_dinamico`, em `vento_atual.modo` e no `vento_modo`/`vento_vec` das linhas da
-  telemetria, o painel mostra os números do benchmark e o contador de reinícios do servidor não mexe.
-  Nesse mesmo backend, o **live-apply** foi provado com Chrome `--headless=new` + CDP (o site a sério,
-  sem cliques de aplicar): `RAJADAS` ligado → `p` de 0,02 para 0,5 no painel → `vento_dinamico.params.p`
-  = 0,5 no `GET /api/sim`; `ALEATÓRIA` ligado → `duração` para 42 → `params.duracao` = 42. Quatro ações do
-  utilizador, exatamente quatro aplicações no log do runner (sem duplicados nem ciclo de POSTs).
+- **FoV da câmara de bordo**: o runner só o publica em `hud.bola.fovy`, depois de o modo bola ligar pela
+  1.ª vez. Até lá o horizonte usa `FOVY_BORDO_OMISSAO` = 67° (o do módulo do build ativo); a janela
+  Sistema diz qual dos dois está em uso.
+- **Câmara da 3.ª pessoa sem janela nativa**: `camera_atual` vem `null` no `/api/sim` e no `/api/state`;
+  o cockpit lê a pose em vigor uma vez com o «toque» `POST /api/camera {}` e depois confia nas respostas
+  dos seus próprios POSTs (outro cliente a mexer na câmara não é visto).
+- **Atraso da imagem**: o HUD compensa a latência do MODELO da câmara (116 ms) e meio período do
+  stream; o que o browser e a rede acrescentam não é medido — em manobras bruscas (e com a máquina
+  carregada) o horizonte e o retículo podem adiantar-se uns píxeis à imagem.
+- **Prova de vida da imagem**: um `<img>` MJPEG não avisa quando os quadros param; o estado «SEM IMAGEM»
+  vem do `/api/state` (1 Hz), logo demora até ~1–2 s a aparecer.
+- O retículo só se desenha em 1.ª pessoa (a posição é no referencial da câmara de bordo).

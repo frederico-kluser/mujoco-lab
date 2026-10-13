@@ -614,7 +614,7 @@ export function PainelVoo({ linha }: PainelVooProps) {
                 aria-hidden="true"
                 className="inline-block size-2.5 rounded-full bg-foreground"
               />
-              estimado a bordo (o que o RPi sabe)
+              estimado a bordo (o que o drone sabe)
             </span>
             {d.temVerdade ? (
               <span className="inline-flex items-center gap-1">
@@ -628,7 +628,7 @@ export function PainelVoo({ linha }: PainelVooProps) {
           </span>
         </CardTitle>
         <p className="text-[0.7rem] text-muted-foreground">
-          a política só vê o estimado — calculado com o giroscópio, o
+          quem pilota só vê o estimado — calculado com o giroscópio, o
           acelerómetro, o sensor de altura (ToF) e o fluxo ótico; o real vem do
           simulador e mostra quanto o drone se engana
         </p>

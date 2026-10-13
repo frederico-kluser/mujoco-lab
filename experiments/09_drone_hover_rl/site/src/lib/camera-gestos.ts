@@ -1,8 +1,13 @@
 /**
  * WIDGET «CÂMARA» (vista 3.ª pessoa, v3 de 2026-10-10) — a GEOMETRIA das duas vistas do bloco, as VISTAS
  * RÁPIDAS e a MÁQUINA DE GESTOS (comandos ao vivo durante o arrasto + commit final, sem perder gestos).
- * Sem DOM nem React: o `camera.tsx` é só a camada de apresentação e os testes (`testes/camera-gestos.mts`)
- * exercitam ESTE código de produção.
+ * Sem DOM nem React: os testes (`testes/camera-gestos.mts`) exercitam ESTE código de produção.
+ *
+ * COCKPIT (r13, 2026-10-12): o bloco «Câmara» com os dois pads (`camera.tsx`) saiu — em 3.ª pessoa
+ * arrasta-se a PRÓPRIA vista (`components/cockpit/vista.tsx`). O que o cockpit usa daqui é a
+ * `MaquinaCamera` (instância em `lib/cockpit-controlos.ts`, a ~20 envios/s) e `limitesDistancia`; a
+ * conversão do arrasto em ângulos é `orbitarPorArrasto` (`lib/cockpit.ts`). A geometria das vistas de
+ * cima/de lado e as vistas rápidas ficam aqui, testadas, para quem as quiser voltar a desenhar.
  *
  * Porquê v3: o pad v2 (círculo com uma esfera, horizontal = azimute e vertical = elevação, linear) pedia
  * para ler a legenda — a esfera não ficava onde a câmara está (azimute 90° punha-a em cima de um braço).

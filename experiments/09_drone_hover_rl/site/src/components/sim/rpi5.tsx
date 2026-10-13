@@ -27,7 +27,6 @@ import rpi5Url from "@/assets/rpi5.webp"
 import { AnimatedNumber } from "@/components/motion-ui/animated-number"
 import { ProgressBar } from "@/components/motion-ui/progress-bar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { CustoEtapaFpv } from "@/components/sim/fpv"
 import { ALVOS_BORDO, type AlvoBordo } from "@/lib/controlador"
 import {
   budgetMs,
@@ -35,7 +34,9 @@ import {
   fmtInteiro,
   fmtLatencia,
   pctDoBudget,
+  rotuloEtapaCustoFpv,
   type FpvEstado,
+  type FpvEtapaCusto,
   type MultiIaCusto,
   type Rpi5,
   type TipoFonteRpi5,
@@ -58,6 +59,38 @@ const TOM_FONTE: Record<TipoFonteRpi5, string> = {
 /** Texto de um número opcional (nunca "undefined"/"NaN" no DOM). */
 function ouTraco(valor: string | null): string {
   return valor ?? "—"
+}
+
+/**
+ * Uma etapa do custo de CPU do Pi 5 (MODELO): «JPEG software 65 % (faixa 50–80)» com a fonte do
+ * backend no `title`. (Vivia no bloco «Câmara FPV»; no cockpit a câmara é a VISTA e o custo só se
+ * mostra aqui.)
+ */
+function CustoEtapaFpv({
+  etapa,
+  testid,
+}: {
+  etapa: FpvEtapaCusto
+  testid?: string
+}) {
+  return (
+    <li
+      className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
+      data-testid={testid ?? `fpv-custo-etapa-${etapa.id}`}
+      title={etapa.fonte ?? undefined}
+    >
+      <span className="text-[0.65rem] text-muted-foreground">
+        {rotuloEtapaCustoFpv(etapa.id)}
+      </span>
+      <span className="font-mono text-[0.65rem] tabular-nums">
+        {etapa.pct === null ? "—" : `${fmt(etapa.pct, 1)} %`} (faixa{" "}
+        {ouTraco(etapa.faixa)})
+        {etapa.dominio === null
+          ? ""
+          : ` · ${etapa.dominio === "saida" ? "saída" : etapa.dominio}`}
+      </span>
+    </li>
+  )
 }
 
 type Saude = "ok" | "aviso" | "erro"

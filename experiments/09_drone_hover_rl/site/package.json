@@ -14,13 +14,14 @@
     "test:planta": "node testes/planta-real.mts",
     "test:voo": "node testes/voo-teclas.mts",
     "test:fpv": "node testes/fpv.mts && node testes/simulacao.mts",
-    "test:rajadas": "node testes/rajadas-ux.mts",
+    "test:cockpit": "node testes/cockpit.mts",
     "test:multi-ia": "node testes/multi-ia.mts",
     "test:controlador": "node testes/controlador.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
-    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource/b612": "^5.3.0",
+    "@fontsource/b612-mono": "^5.3.0",
     "@tailwindcss/vite": "^4",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",

@@ -1,8 +1,11 @@
 # INTERFACE.md — tudo o que é visível no experimento 09
 
-Guia das duas interfaces do drone a pairar (política RL do `experiments/09_drone_hover_rl/`):
-a **janela do MuJoCo** (só a simulação, limpa) e o **SITE** (todas as métricas e todos os controlos).
-Escrito para se ler ao lado do ecrã: o que é cada número, cada botão, cada tecla e cada ficheiro por baixo.
+Guia da interface do drone do `experiments/09_drone_hover_rl/`. **Desde 2026-10-12 (contrato r13) a
+interface é o COCKPIT** — um ecrã único no browser, sem scroll, com a vista em 1.ª ou 3.ª pessoa sempre
+visível e os controlos em janelas que se abrem: é a **secção 0**, e é ela que descreve o que se vê. As
+secções 1–7 ficam como referência dos contratos por baixo (API, ficheiro de controlo, telemetria) e da
+página anterior; onde falam de cartões, separadores, «ARMAR», seletor de controlador ou botões «PARAR
+VENTO», descrevem a página que o cockpit substituiu.
 
 > Princípio do laboratório (padrão CoALA `padrao-simulacao-clean-site`): **a janela mostra a simulação;
 > o site mostra tudo o resto.** Nada de HUD sobre o 3D. O **LOOP** decide o que acontece no fim do
@@ -11,6 +14,133 @@ Escrito para se ler ao lado do ecrã: o que é cada número, cada botão, cada t
 > que existe; **CONTÍNUO** (`--com-loop` no arranque, ou o `POST /api/loop` depois) reinicia sozinho
 > (ep+1). O arranque é **autoritativo** (corrige o `loop` do ficheiro de controlo) e depois só o
 > `POST /api/loop` o muda (*sticky*).
+
+---
+
+## 0. COCKPIT — a interface desde 2026-10-12 (contrato r13)
+
+> **Lê isto primeiro.** O dono pediu (2026-10-12): *«está tudo inozado e confuso; quero algo que não tenha
+> scroll, eu tenha sempre a visão primeira pessoa ou terceira, e chamo os controles como janelas que posso
+> abrir»*, *«o modo de controlar já vem ativado»*, *«não quero opções, quero o melhor»* e o vento com três
+> botões (*«ligar, definir a intensidade e a aleatoriedade ativar ou não»*). As secções 2–7 abaixo descrevem
+> os contratos por baixo (continuam válidos na API); **o que se vê no ecrã é o que esta secção descreve.**
+
+### 0.1 O que mudou no arranque
+
+`uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py` passa a:
+
+| antes | agora (r13) |
+|---|---|
+| abria a janela nativa do MuJoCo + o site | **só o site** — ele É o cockpit (a vista ocupa o ecrã). `--com-janela` volta a abrir a janela nativa |
+| `--controlador rl` por omissão + seletor no site | `--controlador auto`: voa **o que ganhou na medição** — a cascata clássica C++ do firmware na planta real (pairar 3,9 cm vs 13,0 cm da política, yaw livre, seguir a bola); `rl` no cf2. **Sem seletor no site** |
+| teclas só depois de «ARMAR CONTROLO» | **controle de voo ATIVO** desde o arranque (`voo.ativo = true`, teclas soltas) |
+| o vento de uma sessão anterior continuava ligado | **vento DESLIGADO** em cada arranque (as preferências — intensidade, direção, aleatoriedade — ficam guardadas) |
+
+### 0.2 O ecrã (sem scroll de página, nunca)
+
+1. **VISTA** — o fundo permanente, a 100 % do viewport: o stream da câmara **FPV** (1.ª pessoa, `GET
+   /api/fpv.mjpg`) ou da **simulação** (3.ª pessoa, `GET /api/simulacao.mjpg`). `F` troca; a outra vista fica
+   numa miniatura clicável. Em 3.ª pessoa **arrasta-se a própria vista para orbitar**, a roda aproxima/afasta
+   e o duplo clique repõe (`POST /api/camera`).
+2. **HUD** — sobreposto à vista, a 50 Hz (`GET /api/hud`): estado em linguagem de voo (A VOAR · NO CHÃO ·
+   CAIU), horizonte, rumo, altitude, velocidade, bateria, vento que a física leva agora, as teclas premidas e,
+   no modo bola, o retículo sobre a bola com o erro de centragem.
+3. **DOCA** — em baixo ao centro: oito ícones **com o nome por baixo** e o número do atalho, que abrem as
+   **JANELAS** flutuantes (arrastáveis pela barra de título, fecháveis no × ou com `Esc`, posição guardada):
+   Voo · Bola · Vento (as principais) e Sensores · Energia · Gráficos · Sistema · Ajuda (o detalhe, só
+   carregado quando se abre). REINICIAR (manter premido) vive aqui.
+
+Com tudo fechado o ecrã tem **12 controlos e ~80 palavras** (a página anterior: 51 botões, ~2200 palavras,
+4,4 ecrãs de scroll, a câmara a 2929 px do topo). Medido a 1920×1080, 1366×768 e 1280×720: nunca há scroll
+de página. Avaliação com a skill `uxui-evaluator`: **29/100 antes → 84/100 depois**
+(`pesquisas/ux-cockpit-avaliacao-{antes,depois}.json`).
+
+A janela **Gráficos** mostra as quatro curvas de quem pilota — altura, velocidade horizontal, inclinação e
+vento; o «retorno» (recompensa de treino) e o «erro de rumo» saíram do ecrã (continuam na telemetria).
+
+### 0.3 Teclas (sempre ativas, exceto com o foco num campo de texto)
+
+| tecla | faz |
+|---|---|
+| `W` `S` / `A` `D` | frente · trás / esquerda · direita, **relativos ao nariz** (1,0 m/s) |
+| `Q` `E` | subir · descer (0,7 m/s) |
+| `Z` `C` | rodar para a esquerda · direita (±0,5 rad/s); `X` fixa o rumo atual |
+| `B` | **SEGUIR A BOLA** liga/desliga |
+| `V` | vento liga/desliga |
+| `F` | troca a vista (1.ª ↔ 3.ª pessoa) |
+| `R` (manter) | REINICIAR (volta ao chão e descola) |
+| `1`…`8` · `Esc` | abre/fecha janelas · fecha a janela em foco |
+
+Sem teclas premidas o drone **segura a posição**. Perder o foco do browser solta todas as teclas.
+
+### 0.4 SEGUIR A BOLA
+
+Com o modo ligado (`segui_alvo: true` no `POST /api/voo`) a bola — o corpo mocap `ponto` — passa a **mover-se
+aleatoriamente** à velocidade do bloco `bola` e o seguidor visual do núcleo de firmware (detetor + IBVS em C++)
+comanda **guinada e translação** para a manter **centrada na câmara FPV**. Desligado, a bola pára onde estiver
+e o WASD/QE volta a mandar. É o algoritmo clássico que ganhou na medição; o HUD mostra o que o DETETOR de
+bordo vê (não a verdade do simulador).
+
+A bola: velocidade de Ornstein–Uhlenbeck com teto (o slider), suavizada, que muda de rumo em ~2,5 s; é
+reprodutível pela semente do episódio (`env_real.py`, `_ponto_aleatorio`). Medido (12 sementes, 30 s, câmara
+de 116 ms): erro de centragem mediano 1,2° / 2,0° / 4,0° a 0,3 / 0,5 / 0,8 m/s, bola no campo 100 % do tempo,
+0 quedas; o tracker de IA (PPO) fica em 13,5° / 21,9° / 25,2° e cai — ver o README, «Seguir a bola».
+
+### 0.5 VENTO (três botões)
+
+`POST /api/vento-simples` — qualquer subconjunto de `{ligado, intensidade, aleatorio, direcao}`:
+
+| campo | faixa | significado |
+|---|---|---|
+| `ligado` | bool | liga/desliga (entra e sai em rampa de ~0,6 s — o ar não dá degraus) |
+| `intensidade` | 0–5 m/s | velocidade **média** do vento |
+| `aleatorio` | bool | `false` = vento constante · `true` = a mesma média **+ turbulência** (forma Dryden, σ = 0,2·W) **+ rajadas** «1 − cos» (0,3–0,7·W, 1–3 s, ~1 a cada 8 s) **+ direção a deambular** (σ = 15°) — `vento_natural.py` |
+| `direcao` | graus | para onde o vento sopra (0° = +x, 90° = +y) |
+
+A janela Vento mostra dois ventos: **«agora»** — o que a física leva (a verdade do simulador) — e **«o drone
+sente»** — o que o controlador estima a bordo, sem anemómetro (`vento_bordo` do HUD: o observador de
+perturbação da cascata convertido em m/s; «calmo» abaixo de 0,6 m/s). Envelope medido da cascata: até 3 m/s
+com aleatoriedade segura o sítio e a altitude; a 4–5 m/s não cai mas desvia e perde altitude (README, «Aguentar
+o vento»).
+
+O bloco `vento_simples` do `/api/sim` e do `/api/state` devolve o estado guardado; o vento que a física leva
+está sempre em `vento_atual` e no HUD. Enquanto este bloco existir no ficheiro de controlo é ele que manda —
+os endpoints antigos (`/api/vento`, `/api/vento-dinamico`) continuam a funcionar e, se usados, retomam a
+autoridade; `POST /api/parar` desliga os dois.
+
+### 0.6 API nova (aditiva — nada do que existia mudou de forma)
+
+| rota | corpo / resposta |
+|---|---|
+| `GET /api/hud` | **Server-Sent Events**: um evento `data: {json}` por passo de decisão (50 Hz) com o HUD (ver abaixo); `: vivo` a cada 1 s sem amostras |
+| `GET /api/hud.json` | `{"hud": {...}\|null, "idade_s", "velho"}` — a última amostra (para testes e para o fallback do site) |
+| `POST /api/vento-simples` | ver 0.5 → `{"ok": true, "vento_simples": {ligado, intensidade, aleatorio, direcao, seq}}` · 400 com o motivo |
+| `POST /api/bola` | `{"velocidade": 0.1–0.8}` (m/s) → `{"ok": true, "bola": {velocidade, seq}}` |
+| `GET /api/sim`, `/api/state` | ganham `vento_simples` (ou `null`) e `bola: {velocidade, min, max}` |
+
+Amostra do HUD (o runner manda-a por UDP local ao servidor; nada toca no disco):
+
+```jsonc
+{"t": 13.06, "passo": 603, "ep": 1, "pausado": false,
+ "fase": "a_voar",                    // a_voar | no_chao | caiu  (nunca «episódio»)
+ "vento": [vx, vy, vz], "vento_modo": "nenhum|natural|…", "rajada": false,
+ "fovy": 67.0,                        // FoV vertical da câmara de bordo (graus), SEMPRE publicado; null sem câmara
+ "vento_bordo": null | {"acc": [ax, ay], "vel", "direcao"},  // o vento que o drone SENTE (observador de perturbação da
+                                      // cascata, m/s² no mundo → m/s equivalentes e para onde empurra); null com a política RL
+ "est":  {"roll","pitch","psi","h","vx","vy","vz"},          // o que os SENSORES de bordo dizem (rad, m, m/s)
+ "real": {"x","y","z","roll","pitch","yaw","vx","vy","vz"},  // a verdade do simulador (vx,vy no referencial do rumo)
+ "bateria": {"soc": 0..1, "v", "i", "p", "autonomia_min", "alerta"},
+ "motores": [duty×4],
+ "voo": {"ativo", "teclas": {w,a,s,d,q,e}, "v_ref": [x,y,z]},
+ "controlador": {"modo", "estado", "motivo", "segui_alvo", "rumo", "yaw_taxa", "yaw_alvo"},
+ "bola": null | {"seguir", "valido", "estado",              // estado do seguidor: 0 A_SEGUIR · 1 EM_FALTA · 2 PERDIDO · 3 REAQUISIÇÃO
+                 "erro_px": [dx, dy], "raio_px", "camara": [larg, alt], "fovy",
+                 "erro_tan": [x, y], "raio_tan",            // erro de centragem ÷ distância focal (x direita, y baixo)
+                 "dist", "vel", "alvo_mundo": [x, y, z]}}
+```
+
+`erro_tan` é o que o site usa para desenhar o retículo em qualquer resolução: no stream de altura `H` e FoV
+vertical `fovy`, a bola está a `erro_tan × (H/2)/tan(fovy/2)` píxeis do centro.
 
 ---
 

@@ -198,10 +198,11 @@ import json
 import math
 import os
 import signal
+import socket
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
@@ -215,6 +216,7 @@ from lab import crazyflie as cf
 from lab import camera_rpi as cam_rpi
 from env import VOO_TECLAS, HoverEnv, teclas_para_velocidade
 from env_real import OBS_ATOR_DIM, OBS_ATOR_DIM_COMANDO, DroneRealEnv
+import vento_natural
 
 import numpy as np
 
@@ -269,7 +271,9 @@ CAM_DIST_MAX = 20.0              # m — teto do contrato para a `distancia` (a 
 # muda só o ponto olhado — a física nunca é tocada (a câmara é apresentação).
 CAM_CORPO = "cf2"                # nome do corpo do drone no cf2.xml (acesso por NOME, nunca por índice);
 #                                  na planta REAL o `main` troca-o para "drone" (corpo do modelo gerado)
-PASTA_BATERIA = _AQUI / "out" / "bateria"   # estado PERSISTENTE de cada pack (desgaste + carga) — planta real
+# estado PERSISTENTE de cada pack (desgaste + carga) — planta real. `DRONE_PASTA_BATERIA` desvia-o (sessões de
+# teste/desenvolvimento não gastam o pack do dono: sem a variável é a pasta de sempre)
+PASTA_BATERIA = Path(os.environ.get("DRONE_PASTA_BATERIA") or (_AQUI / "out" / "bateria"))
 ACOES_BATERIA = ("recarregar", "nova")      # comando `bateria` do controlo: fecha o ciclo / troca de pack
 CAM_OFFSET = (0.0, 0.0, 0.0)     # m — SOMADO elemento a elemento a body(CAM_CORPO).xpos (frame MUNDO)
 # MÓDULO DE CÂMARA FPV (`lab/camera_rpi`): pasta do stream (o `sim_site.py` serve-a) e nomes dos
@@ -293,6 +297,40 @@ LATENCIA_CAMERA_PI_S, LATENCIA_CAMERA_DCMI_S = 0.116, 0.021
 # «OLHAR» (r12): enquanto o IBVS estiver ligado o alvo descreve o círculo — os valores do protocolo da B0
 # (`avaliar_nucleo.RAIO_TRAJETORIA_M` = 1,5 m; `vel` 0,5 m/s) — e a guinada segue-o.
 CIRCULO_VEL, CIRCULO_RAIO = 0.5, 1.5
+# «SEGUIR A BOLA» (contrato r13, 2026-10-12): com `voo.segui_alvo` a bola (o ponto mocap) passa a mover-se
+# ALEATORIAMENTE à velocidade do bloco `"bola"` do controlo e o IBVS do núcleo mantém-na centrada na câmara
+# FPV (guinada + translação). A faixa é a do `env_real.definir_trajetoria_ponto`; o padrão é o do protocolo.
+BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.1, 0.8, 0.5
+# HUD AO VIVO (r13): a cada passo de decisão (50 Hz) o runner manda um datagrama UDP com o essencial do voo
+# para a porta que o `sim_site.py` abriu (variável de ambiente abaixo) — é o que alimenta os instrumentos do
+# site sem passar pelo disco nem esperar pelos ~10 Hz da telemetria. Sem a variável nada é enviado.
+ENV_HUD_PORTA = "DRONE_HUD_PORTA"
+HUD_Z_CHAO_MARGEM = 0.06          # m acima da altura de repouso (medida no reset) ⇒ ainda «no chão»
+
+
+# VENTO SENTIDO A BORDO (r13): o observador de perturbação da cascata (`Saida.pert`, m/s²) convertido numa
+# velocidade de vento APROXIMADA. Ajuste do `avaliar_vento.py` (build ativo, vento de lado constante a
+# 1/3/5 m/s → 0,29/1,09/2,16 m/s² observados; a verdade 0,32/1,12/2,09): |a| ≈ A1·W + A2·W². É uma
+# estimativa de bordo (o drone não tem anemómetro) — o site mostra-a ao lado do vento real do simulador.
+VENTO_BORDO_A1, VENTO_BORDO_A2 = 0.30, 0.0245
+VENTO_BORDO_PISO = 0.10        # m/s² — o que o observador marca em ar parado (abaixo disto: «não sente vento»)
+
+
+def vento_sentido(pert, yaw0: float) -> dict:
+    """`Saida.pert` (m/s², referencial de ARRANQUE) → o vento que o drone SENTE, no MUNDO.
+
+    Devolve `{"acc": [ax, ay], "vel": W, "direcao": graus}`: a aceleração de perturbação rodada por `yaw0`,
+    a velocidade de vento equivalente (inversa do ajuste `A1·W + A2·W²`; 0 abaixo do piso) e para onde o ar
+    empurra (0° = +x, 90° = +y — a convenção do vento do cockpit).
+    """
+    p0, p1 = float(pert[0]), float(pert[1])
+    c, s_ = math.cos(yaw0), math.sin(yaw0)
+    ax, ay = c * p0 - s_ * p1, s_ * p0 + c * p1
+    a = math.hypot(ax, ay)
+    vel = 0.0 if a <= VENTO_BORDO_PISO else (
+        (-VENTO_BORDO_A1 + math.sqrt(VENTO_BORDO_A1 ** 2 + 4.0 * VENTO_BORDO_A2 * a)) / (2.0 * VENTO_BORDO_A2))
+    return {"acc": [round(ax, 4), round(ay, 4)], "vel": round(vel, 3),
+            "direcao": round(math.degrees(math.atan2(ay, ax)) % 360.0, 1)}
 
 
 # ---------------------------------------------------------------------------------------------- controlo
@@ -398,6 +436,42 @@ class SelControlador:
 
 
 @dataclass
+class VentoSimples:
+    """Bloco `"vento_simples"` do controlo (contrato r13): `{ligado, intensidade, aleatorio, direcao, seq}`.
+
+    Os TRÊS botões do dono — ligar · intensidade (m/s) · aleatoriedade — mais a direção. Quando o bloco
+    existe é ELE que manda no vento: o runner gera-o passo a passo com o `vento_natural.VentoNatural`
+    (média + turbulência + rajadas quando `aleatorio`) e escreve-o em `opt.wind` por `env.definir_vento`.
+    O servidor neutraliza os campos antigos (`vel` 0 e `dinamico` nenhum) na MESMA escrita, por isso nunca
+    há dois ventos somados; um POST do contrato antigo (`/api/vento`, `/api/vento-dinamico`) remove o bloco
+    e devolve a autoridade aos campos antigos.
+    """
+
+    ligado: bool = False
+    intensidade: float = 0.0
+    aleatorio: bool = False
+    direcao: float = 0.0
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        return json.dumps({"ligado": self.ligado, "intensidade": self.intensidade,
+                           "aleatorio": self.aleatorio, "direcao": self.direcao, "seq": self.seq},
+                          sort_keys=True)
+
+
+@dataclass
+class Bola:
+    """Bloco `"bola"` do controlo (contrato r13): `{velocidade, seq}` — a velocidade da bola aleatória.
+
+    O interruptor do modo é o `voo.segui_alvo` (o «olhar» do r12); este bloco só diz A QUE VELOCIDADE a
+    bola deambula enquanto o modo está ligado (m/s, cortada a [BOLA_VEL_MIN, BOLA_VEL_MAX]).
+    """
+
+    velocidade: float = BOLA_VEL_PADRAO
+    seq: int | None = None
+
+
+@dataclass
 class Registo:
     """Conteúdo validado do ficheiro de controlo (vento base + comandos de episódio + vento dinâmico)."""
 
@@ -412,6 +486,8 @@ class Registo:
     fpv: Fpv | None = None           # None = campo ausente: não mexe no módulo de câmara FPV
     voo: "Voo | None" = None         # None = campo ausente: não mexe no controle de voo
     controlador: SelControlador | None = None     # None = campo ausente: não mexe no seletor (r12)
+    vento_simples: VentoSimples | None = None     # None = campo ausente: manda o vento do contrato antigo
+    bola: Bola | None = None                      # None = campo ausente: velocidade padrão da bola (r13)
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -649,6 +725,40 @@ def _ler_controlador(bruto) -> SelControlador | None:
     return SelControlador(str(modo), seq)
 
 
+def _ler_vento_simples(bruto) -> VentoSimples | None:
+    """`"vento_simples"` do controlo → `VentoSimples` validado (`None` se o campo não vier ou vier `null`).
+
+    A validação é a do gerador (`vento_natural.validar`: booleanos estritos, intensidade em
+    [0, INTENSIDADE_MAX] m/s, direção finita) — fora disso `ValueError`, como nos outros blocos.
+    """
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`vento_simples` tem de ser um objeto JSON {ligado, intensidade, aleatorio, direcao}")  # noqa: TRY004
+    bloco = vento_natural.validar(bruto.get("ligado", False), bruto.get("intensidade", 0.0),
+                                  bruto.get("aleatorio", False), bruto.get("direcao", 0.0))
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`vento_simples.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return VentoSimples(bloco["ligado"], bloco["intensidade"], bloco["aleatorio"], bloco["direcao"], seq)
+
+
+def _ler_bola(bruto) -> Bola | None:
+    """`"bola"` do controlo → `Bola` validada (`None` se o campo não vier) — contrato r13."""
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`bola` tem de ser um objeto JSON {velocidade}")  # noqa: TRY004
+    vel = _numero(bruto, "velocidade", BOLA_VEL_PADRAO)
+    if not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
+        raise ValueError(f"`bola.velocidade` tem de estar em [{BOLA_VEL_MIN}, {BOLA_VEL_MAX}] m/s "
+                         f"(recebido {vel!r})")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`bola.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return Bola(float(vel), seq)
+
+
 def ler_registo(dados) -> Registo:
     """Ficheiro de controlo → `Registo` validado (mesmas regras do net_probe/dashboard).
 
@@ -675,7 +785,8 @@ def ler_registo(dados) -> Registo:
     return Registo(vel, azimute, elevacao, True if ativo is None else ativo, reiniciar,
                    _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")),
                    _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
-                   _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")))
+                   _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")),
+                   _ler_vento_simples(dados.get("vento_simples")), _ler_bola(dados.get("bola")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -864,6 +975,10 @@ class Controlo:
         self.pedido_bateria: str | None = None  # "recarregar" | "nova" por consumir
         self.controlador: SelControlador | None = None   # seletor (r12) EM VIGOR no ficheiro (None: nunca pedido)
         self._assinatura_controlador: str | None = None
+        self.vento_simples: VentoSimples | None = None   # os 3 botões do vento (r13); None = contrato antigo
+        self._assinatura_vento_simples: str | None = None
+        self.gerador_vento = vento_natural.VentoNatural(semente=0)   # o vento dos 3 botões, passo a passo
+        self.bola_vel = BOLA_VEL_PADRAO                  # m/s — velocidade da bola aleatória (bloco `bola`)
         self._le_contador_inicial()
 
     def _le_contador_inicial(self) -> None:
@@ -1014,16 +1129,29 @@ class Controlo:
         ordem antiga restaurava o anterior (um PARAR que também mexe no vento — o do botão PARAR VENTO —
         escrevia a base velha em `opt.wind`).
         """
+        if registo.vento_simples is not None:
+            # r13: com o bloco `vento_simples` são os 3 botões que mandam no vento — os campos do contrato
+            # antigo (`vel`/`azimute` + `dinamico`) ficam no ficheiro como estavam mas NÃO se aplicam (o
+            # registo em vigor passa a tê-los neutros), para nunca haver dois ventos somados nem uma
+            # rajada de uma sessão anterior a atuar por baixo. Um POST do contrato antigo remove o bloco.
+            registo = replace(registo, vel=0.0, ativo=False, dinamico=None)
         self.ultimo = registo
         self._aplica_base(env, registo)
         self._aplica_dinamico(env, registo.dinamico)
         self._aplica_camera(registo)                     # apresentação: 1x por mudança de assinatura
         self._aplica_fpv(registo)                        # módulo de câmara FPV: 1x por mudança de assinatura
         self._aplica_voo(env, registo.voo)               # controle de voo: estado das teclas (contrato r11)
+        self._aplica_vento_simples(registo.vento_simples)   # os 3 botões do vento (r13)
+        if registo.bola is not None:
+            self.bola_vel = float(registo.bola.velocidade)
         self.n_ventos += 1                               # o controlo está APLICADO (contador de auditoria)
-        print(f"[sim] vento -> {registo.vel:.2f} m/s @ {registo.azimute:.1f} deg"
-              + (f" (elev {registo.elevacao:+.1f} deg)" if registo.elevacao else "")
-              + ("" if registo.ativo else " [desligado]"), flush=True)
+        # o ficheiro muda a CADA tecla/arrasto de câmara: só se anuncia o vento quando ELE mudou
+        resumo_vento = (registo.vel, registo.azimute, registo.elevacao, registo.ativo)
+        if resumo_vento != getattr(self, "_vento_anunciado", None):
+            self._vento_anunciado = resumo_vento
+            print(f"[sim] vento -> {registo.vel:.2f} m/s @ {registo.azimute:.1f} deg"
+                  + (f" (elev {registo.elevacao:+.1f} deg)" if registo.elevacao else "")
+                  + ("" if registo.ativo else " [desligado]"), flush=True)
 
     def _aplica_base(self, env: HoverEnv, registo: Registo | None = None) -> None:
         """Escreve o VENTO BASE do registo em vigor (`definir_vento`); não toca no vento dinâmico."""
@@ -1174,6 +1302,43 @@ class Controlo:
         print(f"[sim] voo -> {'ATIVO' if voo.ativo else 'em espera'} · teclas {ligadas} (seq {voo.seq})",
               flush=True)
 
+    def _aplica_vento_simples(self, bloco: VentoSimples | None) -> None:
+        """Bloco `vento_simples` (r13) → gerador `VentoNatural` — 1x por mudança de assinatura.
+
+        `None` (bloco ausente: um POST do contrato antigo removeu-o) devolve a autoridade aos campos
+        antigos: o gerador é REPOSTO a zero (`repor` — sem `passo` a rampa não desce sozinha e o nível velho
+        voltava como «vento fantasma» no bloco seguinte), e o vento volta a ser `vel`/`azimute` + `dinamico`.
+        Com o bloco presente o gerador recebe os três botões; o vento em si é escrito a cada passo de
+        decisão por `passo_vento_simples` (a rampa da intensidade e a turbulência evoluem no tempo).
+        """
+        assinatura = None if bloco is None else bloco.assinatura()
+        if assinatura == self._assinatura_vento_simples:
+            return
+        self._assinatura_vento_simples = assinatura
+        self.vento_simples = bloco
+        if bloco is None:
+            self.gerador_vento.repor()
+            return
+        self.gerador_vento.definir(bloco.ligado, bloco.intensidade, bloco.aleatorio, bloco.direcao)
+        print(f"[sim] vento (3 botões) -> {'LIGADO' if bloco.ligado else 'desligado'} · "
+              f"{bloco.intensidade:.1f} m/s @ {bloco.direcao:.0f} deg · aleatoriedade "
+              f"{'LIGADA' if bloco.aleatorio else 'desligada'} (seq {bloco.seq})", flush=True)
+
+    def passo_vento_simples(self, env: HoverEnv) -> bool:
+        """Escreve em `opt.wind` o vento dos 3 botões DESTE passo de decisão; `True` se é ele que manda.
+
+        Sem o bloco `vento_simples` devolve `False` e não toca em nada (manda o contrato antigo). Com o
+        bloco, o vento do passo é o do gerador (`VentoNatural.passo`) e entra na física pela MESMA porta de
+        sempre — `env.definir_vento(vel, azimute, elevação)` —, por isso o `env.vento_atual`, a telemetria
+        e o arrasto do MuJoCo veem-no como qualquer outro vento. Enquanto a rampa de desligar não chega a
+        zero continua a escrever (o vento não pára de repente).
+        """
+        if self.vento_simples is None:
+            return False
+        vec = self.gerador_vento.passo(env.dt_decisao)
+        env.definir_vento(*vento_natural.polar_do_vetor(vec))
+        return True
+
     def _aplica_degrau(self, env: HoverEnv, params: dict) -> None:
         """`frente` formato (a): degrau IMEDIATO do vento base, sem passar pelo validador do env.
 
@@ -1265,6 +1430,8 @@ class Controlo:
         `rajada_agora` só enquanto a rajada one-shot está a decorrer: depois de terminar o modo em vigor é
         `nenhum` (o vento já voltou ao base), mesmo que o bloco do controlo continue a dizer `rajada_agora`.
         """
+        if self.vento_simples is not None:              # r13: mandam os 3 botões
+            return "natural" if (self.vento_simples.ligado and self.vento_simples.aleatorio) else "nenhum"
         if self.rajada is not None:
             return "rajada_agora"
         if self.dinamico is None or not self.dinamico.ativo:
@@ -1739,6 +1906,13 @@ def montar_multi_ia(args, politica, env, caminho_seg=None):
                    (caminho_seg or getattr(args, "seguimento_model", None)
                     or descobrir_seguimento(Path(__file__).resolve().parent / "out")))
     ia_seg = None
+    if caminho_seg is not None and not isinstance(env, DroneRealEnv):
+        # A IA-2 foi treinada na planta REAL: a observação dela lê o estimador de bordo (`env.estimador`), que
+        # o cf2 não tem. Descoberta em `out/` com uma política do cf2, rebentava no 1.º passo (AttributeError)
+        # e o site ficava de pé com o runner morto — achado da revisão das suítes antigas, 2026-10-12.
+        print(f"[sim] multi-IA: a IA-2 «seguimento» ({_relativo(Path(caminho_seg))}) é da planta real e esta "
+              "planta não tem estimador de bordo — fica de fora", flush=True)
+        caminho_seg = None
     if caminho_seg is not None:
         try:
             politica_seg = carregar_politica(Path(caminho_seg))
@@ -1966,6 +2140,8 @@ class ControladorDeVoo:
         self.nucleo: NucleoClassico | None = None
         self._recusado: str | None = None           # último pedido recusado (não se repete a cada passo)
         self._voo: Voo | None = None                # bloco `voo` em vigor (para o eco `"controlador"`)
+        self.bola_vel = BOLA_VEL_PADRAO             # m/s — velocidade da bola aleatória (o `correr` atualiza-a)
+        self._bola: tuple[bool, float] | None = None   # (a seguir?, velocidade) já aplicados à trajetória
 
     # ------------------------------------------------------------------ estado
     def requisitar(self, modo: str) -> bool:
@@ -2004,6 +2180,7 @@ class ControladorDeVoo:
 
     def pos_reset(self) -> None:
         """Depois de um `env.reset` com o núcleo instalado (calibração + armar a cascata)."""
+        self._bola = None                           # a lei da bola volta a ser aplicada no passo seguinte
         if self.modo == "classico" and self.nucleo is not None:
             self.nucleo.pos_reset()
 
@@ -2059,25 +2236,29 @@ class ControladorDeVoo:
                 self.motivo = str(erro)
                 self._aviso_olhar()
         cmd = comando_classico(voo, alvo=alvo)
-        self._alternar_circulo(cmd.get("modo") == "olhar")
+        self._alternar_bola(cmd.get("modo") == "olhar")
         self.nucleo.comando(cmd)
         return cmd
 
-    def _alternar_circulo(self, olhar: bool) -> None:
-        """«OLHAR» = o alvo passa a descrever o CÍRCULO (o cenário do dono: «olhar para o círculo»).
+    def _alternar_bola(self, seguir: bool) -> None:
+        """«SEGUIR A BOLA» (r13): com o modo ligado a bola move-se ALEATORIAMENTE; desligado, fica parada.
 
-        Enquanto `segui_alvo` estiver aplicado, o ponto mocap descreve um círculo (`CIRCULO_VEL` m/s com
-        `CIRCULO_RAIO` m — os valores do protocolo da B0/`avaliar_nucleo`) e o IBVS segue-o com a guinada;
-        ao sair do olhar, o alvo fica PARADO onde estiver (`definir_trajetoria_ponto` só muda a lei de
-        movimento — nada de teleportes). Sem alvo no modelo não há o que mexer.
+        É o cenário que o dono pediu em 2026-10-12 («a bola movimenta-se aleatoriamente e ele precisa de
+        mudar a rotação/posição para a bola estar sempre centralizada na câmara de FPV»): enquanto
+        `segui_alvo` estiver aplicado, o ponto mocap deambula (`definir_trajetoria_ponto("aleatorio")`) à
+        velocidade `bola_vel` do bloco `"bola"` e o IBVS do núcleo segue-o; ao sair do modo a bola fica
+        PARADA onde estiver (a chamada só muda a lei de movimento — nada de teleportes). Mudar a velocidade
+        a meio re-aplica a lei com a velocidade nova, a partir da posição atual. Sem alvo no modelo não há
+        o que mexer.
         """
-        if olhar == getattr(self, "_olhar_ativo", False):
+        pedido = (bool(seguir), round(float(self.bola_vel), 3) if seguir else 0.0)
+        if pedido == self._bola:
             return
-        self._olhar_ativo = olhar
+        self._bola = pedido
         if not getattr(self.env, "com_alvo", False):
             return
-        self.env.definir_trajetoria_ponto("circulo" if olhar else "parado",
-                                          vel=CIRCULO_VEL, raio=CIRCULO_RAIO)
+        self.env.definir_trajetoria_ponto("aleatorio" if seguir else "parado",
+                                          vel=float(self.bola_vel), raio=CIRCULO_RAIO)
 
     def _aviso_olhar(self) -> None:
         if getattr(self, "_olhar_avisado", False):
@@ -2197,6 +2378,134 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         linha.update(campos_planta_real(env, gestor))
         linha["verdade"] = verdade_planta_real(env, est.origem)
     return linha
+
+
+class EmissorHud:
+    """HUD AO VIVO (r13): um datagrama UDP por passo de decisão para o `sim_site.py` (sem disco, sem espera).
+
+    A telemetria JSONL fica como está (~10 Hz, linhas completas para os painéis e os testes); isto é o
+    canal RÁPIDO dos instrumentos do site — 50 Hz, só o essencial do voo (~0,5 kB). É `localhost`, sem
+    ligação e à prova de falhas: sem a variável `ENV_HUD_PORTA` (runner lançado à mão, testes) não se
+    envia nada, e um erro de envio (servidor a fechar) é ignorado — o voo nunca depende do HUD.
+    """
+
+    def __init__(self, porta: int | None = None) -> None:
+        bruto = os.environ.get(ENV_HUD_PORTA) if porta is None else porta
+        try:
+            self.porta = int(bruto) if bruto else 0
+        except (TypeError, ValueError):
+            self.porta = 0
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.porta > 0 else None
+        self.n = 0
+
+    def enviar(self, dados: dict) -> None:
+        if self.sock is None:
+            return
+        try:
+            self.sock.sendto(json.dumps(dados, separators=(",", ":")).encode("utf-8"),
+                             ("127.0.0.1", self.porta))
+            self.n += 1
+        except OSError:
+            pass                                     # servidor a fechar/porta morta: o voo continua
+
+    def fechar(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+
+
+def _fovy_fpv(env) -> float | None:
+    """FoV vertical (graus) da câmara `fpv` do modelo, ou `None` se o modelo não a tem (cf2 sem câmara)."""
+    try:
+        cam = env.model.camera("fpv").id
+    except KeyError:
+        return None
+    return round(float(env.model.cam_fovy[cam]), 3)
+
+
+def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, controlo: Controlo,
+                gestor: GestorBateria | None, z_chao: float | None) -> dict:
+    """O ESSENCIAL do voo para os instrumentos do site (r13) — compacto, a cada passo de decisão.
+
+    `fase` é o estado em linguagem de VOO (o site nunca mostra «episódio»): `caiu` quando o env deu o
+    episódio por terminado por queda/capotamento (fica assim até ao REINICIAR), `no_chao` enquanto a
+    altura do CM está a menos de `HUD_Z_CHAO_MARGEM` da altura de repouso medida no reset, e `a_voar`
+    no resto. `est` = o que os SENSORES de bordo dizem (o que um piloto real veria); `real` = a verdade
+    do simulador nos mesmos eixos — o HUD mostra a primeira e o site pode comparar com a segunda.
+    Vento = o vetor que a física leva AGORA; `bola` = o que o detetor de bordo vê (px da câmara do
+    detetor + o erro de centragem em tangentes do ângulo, para o site desenhar o marcador em qualquer
+    resolução de stream) — `null` enquanto o modo nunca foi ligado. Nada aqui é inventado: campos sem
+    fonte (cf2 sem estimador, sem bateria) vêm `null`.
+    """
+    info = est.info if est.info else {}
+    real = isinstance(env, DroneRealEnv)
+    z = float(info.get("z", 0.0))
+    if est.motivo_fim == "queda":
+        fase = "caiu"
+    elif z_chao is not None and z <= z_chao + HUD_Z_CHAO_MARGEM:
+        fase = "no_chao"
+    else:
+        fase = "a_voar"
+    vento = np.asarray(env.vento_atual, dtype=float).reshape(-1)
+    hud = {"t": round(float(env.data.time), 3), "passo": int(env.passos), "ep": int(est.ep), "fase": fase,
+           "pausado": bool(est.pausado),
+           "vento": [round(float(v), 3) for v in vento[:3]],
+           "vento_modo": controlo.modo_efetivo(), "rajada": bool(controlo.gerador_vento.em_rajada),
+           # FoV vertical da câmara de bordo (graus): o site precisa dele para assentar o horizonte e o
+           # retículo na imagem ANTES de o modo bola ligar (`bola.fovy` só existe depois); `None` sem câmara
+           "fovy": _fovy_fpv(env),
+           # o vento que o drone SENTE (observador de perturbação da cascata clássica); `None` com a política
+           "vento_bordo": None,
+           "est": None, "real": None, "bateria": None, "voo": None, "bola": None, "controlador": None}
+    if real:
+        d = env._derivados()
+        e = env.estimador
+        cy, sy = math.cos(d["yaw"]), math.sin(d["yaw"])
+        vx_w, vy_w, vz_w = (float(v) for v in d["v_vec"])
+        hud["est"] = {k: round(float(getattr(e, k)), 4) for k in ("roll", "pitch", "psi", "h", "vx", "vy", "vz")}
+        hud["real"] = {"x": round(d["x"], 3), "y": round(d["y"], 3), "z": round(d["z"], 3),
+                       "roll": round(d["phi"], 4), "pitch": round(d["theta"], 4), "yaw": round(d["yaw"], 4),
+                       "vx": round(cy * vx_w + sy * vy_w, 3), "vy": round(-sy * vx_w + cy * vy_w, 3),
+                       "vz": round(vz_w, 3)}
+        b = gestor.telemetria() if gestor is not None else env.planta.bat.telemetria()
+        hud["bateria"] = {"soc": b.get("soc"), "v": b.get("v"), "i": b.get("i"), "p": b.get("p"),
+                          "autonomia_min": b.get("autonomia_min"), "alerta": b.get("alerta")}
+        m = env.planta.prop
+        hud["motores"] = [round(float(v), 3) for v in np.asarray(m.duty, dtype=float).reshape(-1)[:4]]
+    else:
+        hud["real"] = {"z": round(z, 3), "yaw": round(float(info.get("yaw_err", 0.0)), 4)}
+    voo = info.get("voo")
+    if isinstance(voo, dict):
+        hud["voo"] = {"ativo": voo.get("ativo"), "teclas": voo.get("teclas"), "v_ref": voo.get("v_ref")}
+    if piloto is not None:
+        eco = piloto.amostra(_rumo_de(env), None)
+        hud["controlador"] = {"modo": eco["modo"], "estado": eco["estado"], "motivo": eco["motivo"],
+                              "segui_alvo": eco["segui_alvo"], "rumo": eco["rumo"],
+                              "yaw_taxa": eco["yaw_taxa"], "yaw_alvo": eco["yaw_alvo"]}
+        if eco["modo"] == "classico" and piloto.nucleo is not None and real:
+            pert = getattr(piloto.nucleo.nucleo.saida, "pert", None)
+            if pert is not None:
+                hud["vento_bordo"] = vento_sentido(pert, float(env.yaw0))
+        olhar = eco.get("olhar")
+        if isinstance(olhar, dict) and piloto.nucleo is not None:
+            larg, alt = piloto.nucleo.LARGURA, piloto.nucleo.ALTURA
+            fovy = float(env.model.cam_fovy[env.model.camera("fpv").id])
+            f_px = 0.5 * alt / math.tan(math.radians(0.5 * fovy))
+            erro = olhar.get("erro_px")
+            alvo = olhar.get("alvo_mundo")
+            dist = None
+            if alvo is not None and hud["real"] is not None and "x" in hud["real"]:
+                dist = round(math.dist(alvo, (hud["real"]["x"], hud["real"]["y"], hud["real"]["z"])), 3)
+            hud["bola"] = {"seguir": bool(eco["segui_alvo"]), "valido": bool(olhar.get("valido")),
+                           "estado": olhar.get("estado"), "erro_px": erro, "raio_px": olhar.get("raio_px"),
+                           # erro de centragem em TANGENTES (x direita, y baixo): px ÷ distância focal
+                           "erro_tan": (None if erro is None else
+                                        [round(erro[0] / f_px, 5), round(erro[1] / f_px, 5)]),
+                           "raio_tan": (None if olhar.get("raio_px") is None else
+                                        round(float(olhar["raio_px"]) / f_px, 5)),
+                           "camara": [larg, alt], "fovy": round(fovy, 3), "dist": dist,
+                           "vel": round(float(piloto.bola_vel), 3), "alvo_mundo": alvo}
+    return hud
 
 
 def _tamanho(vetor) -> int:
@@ -2426,6 +2735,9 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     # Sem módulo (modelo sem a câmara `fpv`, `--sem-fpv`) fica tudo a `None` e a telemetria publica
     # `"fpv": null` — nunca se inventa uma câmara.
     modulo, modulo_sim, parar_fpv, threads_fpv = montar_fpv(env, args, controlo)
+    # HUD AO VIVO (r13): canal rápido dos instrumentos do site (UDP local, 50 Hz) — ver `EmissorHud`
+    hud = EmissorHud()
+    z_chao = {"z": float((est.info or {}).get("z", 0.0))}   # altura de repouso (o reset assenta no chão)
 
     def publica() -> dict:
         """Linha de telemetria com o seguimento 3.ª-pessoa já atualizado (`camera.alvo` = drone+offset).
@@ -2441,6 +2753,9 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             modulo_sim.apontar(env.data)
         if controlo.alvo_simulacao is not None:
             controlo.alvo_simulacao["alvo"] = alvo_do_drone(env.data)  # thread do simulador: sem corrida
+        if env.passos == 0:
+            z_chao["z"] = float((est.info or {}).get("z", 0.0))        # reset: nova altura de repouso
+        hud.enviar(hud_amostra(env, est, piloto, controlo, gestor, z_chao["z"]))
         return amostra(env, est, cam, gestor, fpv=modulo, simulacao=modulo_sim,
                        # a cascata multi-IA só existe no modo RL (em clássico a perceção é o detetor+IBVS
                        # do núcleo — publicar IAs paradas seria mentir; o bloco fica `null`)
@@ -2546,6 +2861,8 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
 
         # 3) passo de decisão: quem pilota (política RL ou cascata C++) -> ação -> física (10 passos a 500 Hz)
         controlo.passo_rajada(env)                       # rajada one-shot: base+envelope DESTE passo
+        controlo.passo_vento_simples(env)                # r13: o vento dos 3 botões DESTE passo (se mandar)
+        piloto.bola_vel = controlo.bola_vel              # r13: velocidade da bola aleatória (bloco `bola`)
         try:
             est.acao = piloto.passo(est, controlo.voo)   # RL: a política · clássico: zeros (o C++ manda)
             est.h1, est.h2 = sonda.escondidas()
@@ -2598,6 +2915,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
         if args.max_segundos and time.perf_counter() - t_ini >= args.max_segundos:
             print("[sim] --max-segundos atingido", flush=True)
             break
+    hud.fechar()
     if parar_fpv is not None:                          # as threads das câmaras fecham os seus contextos GL
         parar_fpv.set()
         for thread_fpv in threads_fpv:
