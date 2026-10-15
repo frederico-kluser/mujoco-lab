@@ -16,7 +16,15 @@
 //   3. PREVER para o instante ATUAL: x(t_agora) = F(t_agora − t_filtro)·x — a previsão é o que a lei IBVS usa, a
 //      rotação própria dentro do atraso é EXATA (vem do histórico de atitude), só o movimento do alvo é
 //      extrapolado. Dá também a taxa de bearing (feedforward do yaw) e a aceleração (KF-CA: avanço de fase).
-// Limite: o deslocamento (translação) do próprio drone durante o atraso não é compensado — fica no ruído de processo.
+// TRANSLAÇÃO PRÓPRIA (opcional, `ConfigSeguidor::comp_translacao`). O drone também ANDA (o modo «seguir a bola» usa v_x, v_y e
+// v_z), e o bearing muda tanto por o alvo se mexer como por o drone se deslocar. Sem compensação essa parte fica no ruído de
+// processo e — pior — a «velocidade do alvo» que a lei usa como feedforward tem de se reconstruir somando a velocidade própria
+// de AGORA a uma taxa de bearing que o filtro só vê ATRASADA: a diferença de atrasos é um termo ∝ aceleração própria com sinal
+// de realimentação POSITIVA (medido no simulador completo: v_z a oscilar a 0,87 Hz e o pitch a 0,5–0,7 Hz). Com a compensação
+// o histórico guarda também a POSIÇÃO própria (odometria de bordo integrada pelo seguidor) e o estado do filtro é reposto
+// GEOMETRICAMENTE sempre que o ponto de observação muda (`deslocar`): r' = D·d(α, ε) − Δp_próprio ⇒ (α', ε', ρ'). As taxas do
+// filtro passam a ser SÓ do alvo (o feedforward sai limpo, sem somar a velocidade própria) e a previsão para «agora» desconta o
+// que o drone andou durante o atraso da câmara. É a entrada conhecida do filtro de Kalman (Kalman 1960; Bar-Shalom, cap. 6).
 //
 // Convenções: referencial do corpo = frente x · esquerda y · cima z (FLU); rotação ZYX R = Rz(ψ)·Ry(θ)·Rx(φ)
 // (a MESMA do estimador de bordo, estimador.hpp: pitch > 0 = nariz para baixo); câmara montada à frente com
@@ -174,6 +182,8 @@ constexpr float kDtMax = 1.5f;      // s — medidas mais espaçadas que isto: o
 constexpr int32_t kDtMinUs = 2000;  // µs — medidas mais coladas que isto (2 ms) ignoram-se
 constexpr float kDtPrevMax = 1.0f;  // s — a previsão satura aqui
 constexpr int32_t kRecusasParaReiniciar = 3;
+constexpr float kRhoMinDesloca = 1e-4f;   // raio normalizado mínimo para converter em distância (guarda numérica)
+constexpr float kDistMinDesloca = 0.05f;  // m — alvo a menos disto do ponto de observação: a geometria degenera (guarda)
 // σ da incerteza de MODELO do α-β para o gate (rad, rad, raio normalizado): ≈ taxa·T ≈ 0,5 rad/s × 0,04 s
 inline float sigma_modelo_ab(int32_t canal) { return canal == 2 ? 0.004f : 0.03f; }
 }  // namespace alvo_detalhe
@@ -189,11 +199,15 @@ public:
     void zerar() {
         cab_ = 0;
         n_ = 0;
+        for (int32_t i = 0; i < kN; ++i) {
+            for (int32_t e = 0; e < 3; ++e) pos_[i][e] = 0.0f;
+        }
     }
 
     int32_t tamanho() const { return n_; }
 
-    void empurrar(uint32_t t_us, float roll, float pitch, float psi) {
+    // `pos` (opcional) = posição PRÓPRIA no referencial de arranque (m; odometria integrada pelo seguidor) nesse instante
+    void empurrar(uint32_t t_us, float roll, float pitch, float psi, const float* pos = nullptr) {
         // só avança no tempo e com ≥ 4 ms entre amostras: o seguidor pode ser chamado a 50–500 Hz e o anel de 64 amostras
         // cobre sempre ≥ 256 ms (o atraso da câmara cabe)
         if (n_ > 0 && static_cast<int32_t>(t_us - t_[indice(0)]) < alvo_detalhe::kPassoHistMinUs) return;
@@ -201,11 +215,13 @@ public:
         roll_[cab_] = roll;
         pitch_[cab_] = pitch;
         psi_[cab_] = psi;
+        for (int32_t e = 0; e < 3; ++e) pos_[cab_][e] = pos != nullptr ? pos[e] : 0.0f;
         cab_ = (cab_ + 1) % kN;
         if (n_ < kN) ++n_;
     }
 
-    bool consultar(uint32_t t_us, float* roll, float* pitch, float* psi, bool* fora) const {
+    // `pos` (opcional) recebe a posição própria interpolada no mesmo instante
+    bool consultar(uint32_t t_us, float* roll, float* pitch, float* psi, bool* fora, float* pos = nullptr) const {
         if (n_ == 0) return false;
         for (int32_t k = 0; k < n_; ++k) {
             const int32_t i = indice(k);
@@ -215,6 +231,9 @@ public:
                 *roll = roll_[i];
                 *pitch = pitch_[i];
                 *psi = psi_[i];
+                if (pos != nullptr) {
+                    for (int32_t e = 0; e < 3; ++e) pos[e] = pos_[i][e];
+                }
                 *fora = d > 20000;  // > 20 ms à frente da última amostra: extrapolação
                 return true;
             }
@@ -224,6 +243,9 @@ public:
             *roll = roll_[i] + f * (roll_[j] - roll_[i]);
             *pitch = pitch_[i] + f * (pitch_[j] - pitch_[i]);
             *psi = geo::envolve(psi_[i] + f * geo::envolve(psi_[j] - psi_[i]));
+            if (pos != nullptr) {
+                for (int32_t e = 0; e < 3; ++e) pos[e] = pos_[i][e] + f * (pos_[j][e] - pos_[i][e]);
+            }
             *fora = false;
             return true;
         }
@@ -231,8 +253,18 @@ public:
         *roll = roll_[i];
         *pitch = pitch_[i];
         *psi = psi_[i];
+        if (pos != nullptr) {
+            for (int32_t e = 0; e < 3; ++e) pos[e] = pos_[i][e];
+        }
         *fora = true;
         return true;
+    }
+
+    // Soma `d` a TODAS as posições guardadas (o seguidor recentra a odometria para o float32 não perder resolução)
+    void transladar(const float d[3]) {
+        for (int32_t i = 0; i < kN; ++i) {
+            for (int32_t e = 0; e < 3; ++e) pos_[i][e] += d[e];
+        }
     }
 
 private:
@@ -243,6 +275,7 @@ private:
     float roll_[kN];
     float pitch_[kN];
     float psi_[kN];
+    float pos_[kN][3];
     int32_t cab_;
     int32_t n_;
 };
@@ -269,14 +302,25 @@ public:
         r_[1] = sigma_ang * sigma_ang;
         r_[2] = sigma_raio * sigma_raio;
         gate_ = gate_sigma;
+        raio_alvo_ = 0.0f;
+        raio_cv_ = false;
         zerar();
     }
+
+    // Com KF_CA, o canal do RAIO (2) passa a velocidade constante (o `q_raio` configurado é então o do CV). Os ângulos
+    // medem-se a ~0,1° e aguentam o CA; o raio de um blob pequeno tem ~5 % de ruído e o CA só lhe acrescenta ressonância.
+    void raio_em_cv(bool ligado) { raio_cv_ = ligado; }
+
+    // Liga a compensação da translação própria: `raio_alvo_m` > 0 converte o raio normalizado em distância (D = R/ρ);
+    // 0 desliga (o `pos` de medir()/prever() é ignorado e o filtro é EXATAMENTE o de sempre).
+    void compensar_translacao(float raio_alvo_m) { raio_alvo_ = raio_alvo_m > 0.0f ? raio_alvo_m : 0.0f; }
 
     void zerar() {
         init_ = false;
         t_ = 0u;
         n_aceites_ = 0;
         rej_seg_ = 0;
+        for (int32_t e = 0; e < 3; ++e) ref_[e] = 0.0f;
         for (int32_t c = 0; c < 3; ++c) {
             for (int32_t i = 0; i < 3; ++i) {
                 x_[c][i] = 0.0f;
@@ -291,10 +335,15 @@ public:
 
     // Resultado de medir(): 0 aceite · 1 recusada pelo gate · 2 ignorada (instante não posterior ao do filtro)
     //                       · 3 filtro (re)iniciado com esta medida
-    NUCLEO_VISAO_KERNEL int32_t medir(uint32_t t_us, float az, float el, float rho) {
+    // `pos` (só com compensar_translacao) = posição PRÓPRIA no instante da captura: o estado propagado é reposto para esse
+    // ponto de observação antes da inovação.
+    NUCLEO_VISAO_KERNEL int32_t medir(uint32_t t_us, float az, float el, float rho, const float* pos = nullptr) {
         if (!(geo::finito(az) && geo::finito(el) && geo::finito(rho))) return 2;
+        const bool comp = raio_alvo_ > 0.0f && pos != nullptr && geo::finito(pos[0]) && geo::finito(pos[1]) &&
+                          geo::finito(pos[2]);
         if (!init_) {
             iniciar_com(t_us, az, el, rho);
+            if (comp) fixar_ref(pos);
             return 3;
         }
         const int32_t dt_us = static_cast<int32_t>(t_us - t_);
@@ -302,15 +351,21 @@ public:
         const float dt = static_cast<float>(dt_us) * 1e-6f;
         if (dt > alvo_detalhe::kDtMax) {  // medidas demasiado espaçadas: a previsão não vale — recomeça
             iniciar_com(t_us, az, el, rho);
+            if (comp) fixar_ref(pos);
             return 3;
         }
         const float z[3] = {az, el, rho};
         // inovação e gate (com a covariância PROPAGADA); só depois se atualiza
         float xp[3][3];
         float pp[3][3][3];
+        for (int32_t c = 0; c < 3; ++c) propagar(c, dt, xp[c], pp[c]);
+        if (comp) {  // o drone andou entre as duas capturas: o mesmo alvo visto do NOVO ponto de observação
+            const float d[3] = {pos[0] - ref_[0], pos[1] - ref_[1], pos[2] - ref_[2]};
+            deslocar(d, &xp[0][0], &xp[1][0], &xp[2][0]);
+            fixar_ref(pos);
+        }
         bool aceita = true;
         for (int32_t c = 0; c < 3; ++c) {
-            propagar(c, dt, xp[c], pp[c]);
             float y = z[c] - xp[c][0];
             if (c == 0) y = geo::envolve(y);
             const float s = pp[c][0][0] + r_[c];
@@ -327,6 +382,7 @@ public:
             ++rej_seg_;
             if (rej_seg_ >= alvo_detalhe::kRecusasParaReiniciar) {
                 iniciar_com(t_us, az, el, rho);
+                if (comp) fixar_ref(pos);
                 return 3;
             }
             return 1;
@@ -341,8 +397,10 @@ public:
     }
 
     // Previsão (sem alterar o estado) para o instante t_us (≥ t do filtro; antes disso devolve o estado atual):
-    // posição, taxa e aceleração dos 3 canais. O azimute sai envolvido.
-    NUCLEO_VISAO_KERNEL void prever(uint32_t t_us, float pos[3], float vel[3], float acc[3]) const {
+    // posição, taxa e aceleração dos 3 canais. O azimute sai envolvido. `proprio` (só com compensar_translacao) = posição
+    // PRÓPRIA em t_us: a previsão desconta o que o drone andou desde a última captura (as taxas são só do alvo).
+    NUCLEO_VISAO_KERNEL void prever(uint32_t t_us, float pos[3], float vel[3], float acc[3],
+                                    const float* proprio = nullptr) const {
         int32_t d = static_cast<int32_t>(t_us - t_);
         if (d < 0) d = 0;
         float dt = static_cast<float>(d) * 1e-6f;
@@ -353,10 +411,23 @@ public:
             vel[c] = x[1] + x[2] * dt;
             acc[c] = x[2];
         }
+        if (raio_alvo_ > 0.0f && proprio != nullptr && geo::finito(proprio[0]) && geo::finito(proprio[1]) &&
+            geo::finito(proprio[2])) {
+            const float dp[3] = {proprio[0] - ref_[0], proprio[1] - ref_[1], proprio[2] - ref_[2]};
+            deslocar(dp, &pos[0], &pos[1], &pos[2]);
+        }
         pos[0] = geo::envolve(pos[0]);
     }
 
+    // Soma `d` ao ponto de observação guardado (o seguidor recentra a odometria)
+    void transladar_ref(const float d[3]) {
+        for (int32_t e = 0; e < 3; ++e) ref_[e] += d[e];
+    }
+
     int32_t modelo() const { return modelo_; }
+
+    // o modelo efetivo do canal c (o raio pode ir em CV com os ângulos em CA)
+    int32_t modelo_do_canal(int32_t c) const { return (c == 2 && raio_cv_ && modelo_ == KF_CA) ? KF_CV : modelo_; }
 
     // estado e covariância atuais (diagnóstico/testes)
     float estado(int32_t canal, int32_t i) const { return x_[canal][i]; }
@@ -375,6 +446,29 @@ public:
     }
 
 private:
+    void fixar_ref(const float pos[3]) {
+        for (int32_t e = 0; e < 3; ++e) ref_[e] = pos[e];
+    }
+
+    // O MESMO alvo visto de um ponto de observação deslocado de `d` (m, referencial de arranque): com D = R/ρ,
+    //   r = D·(cos ε·cos α, cos ε·sen α, sen ε) − d   ⇒   α' = atan2(r_y, r_x), ε' = atan2(r_z, ‖r_xy‖), ρ' = R/‖r‖.
+    // Sem deslocamento, com ρ ≈ 0 ou com o alvo «em cima» do drone (‖r‖ ≈ 0) não mexe em nada.
+    void deslocar(const float d[3], float* az, float* el, float* rho) const {
+        if (d[0] == 0.0f && d[1] == 0.0f && d[2] == 0.0f) return;
+        if (!(*rho > alvo_detalhe::kRhoMinDesloca)) return;
+        const float dist = raio_alvo_ / *rho;
+        const float ce = cosf(*el);
+        const float rx = dist * ce * cosf(*az) - d[0];
+        const float ry = dist * ce * sinf(*az) - d[1];
+        const float rz = dist * sinf(*el) - d[2];
+        const float rh = sqrtf(rx * rx + ry * ry);
+        const float n = sqrtf(rx * rx + ry * ry + rz * rz);
+        if (!(n > alvo_detalhe::kDistMinDesloca) || !geo::finito(n)) return;
+        *az = atan2f(ry, rx);
+        *el = atan2f(rz, rh);
+        *rho = raio_alvo_ / n;
+    }
+
     void iniciar_com(uint32_t t_us, float az, float el, float rho) {
         const float z[3] = {az, el, rho};
         // incerteza inicial da taxa e da aceleração (rad/s, rad/s²; ρ: 1/s)
@@ -389,7 +483,7 @@ private:
             }
             p_[c][0][0] = r_[c];
             p_[c][1][1] = sv[c] * sv[c];
-            if (modelo_ == KF_CA) p_[c][2][2] = sa[c] * sa[c];
+            if (modelo_do_canal(c) == KF_CA) p_[c][2][2] = sa[c] * sa[c];
         }
         x_[0][0] = geo::envolve(x_[0][0]);
         t_ = t_us;
@@ -410,7 +504,8 @@ private:
     void propagar(int32_t c, float dt, float xo[3], float po[3][3]) const {
         const float* x = x_[c];
         const float dt2 = dt * dt;
-        if (modelo_ == ALFA_BETA) {
+        const int32_t modelo_c = modelo_do_canal(c);
+        if (modelo_c == ALFA_BETA) {
             xo[0] = x[0] + x[1] * dt;
             xo[1] = x[1];
             xo[2] = 0.0f;
@@ -437,7 +532,7 @@ private:
         }
         const float q = q_[c];
         const float dt3 = dt2 * dt;
-        if (modelo_ == KF_CA) {
+        if (modelo_c == KF_CA) {
             const float dt4 = dt3 * dt;
             const float dt5 = dt4 * dt;
             po[0][0] += q * dt5 / 20.0f;
@@ -461,7 +556,8 @@ private:
     void atualizar_canal(int32_t c, float dt, float z, const float xp[3], const float pp[3][3]) {
         float y = z - xp[0];
         if (c == 0) y = geo::envolve(y);
-        if (modelo_ == ALFA_BETA) {
+        const int32_t modelo_c = modelo_do_canal(c);
+        if (modelo_c == ALFA_BETA) {
             x_[c][0] = xp[0] + alfa_ * y;
             x_[c][1] = xp[1] + (beta_ / dt) * y;
             x_[c][2] = 0.0f;
@@ -495,7 +591,7 @@ private:
             }
             if (p_[c][i][i] < 0.0f) p_[c][i][i] = 0.0f;
         }
-        if (modelo_ == KF_CV) {  // a 3.ª componente fica a zero
+        if (modelo_c == KF_CV) {  // a 3.ª componente fica a zero
             x_[c][2] = 0.0f;
             for (int32_t i = 0; i < 3; ++i) {
                 p_[c][2][i] = 0.0f;
@@ -511,6 +607,9 @@ private:
     float q_[3];
     float r_[3];
     float gate_;
+    float raio_alvo_;  // m — > 0 liga a compensação da translação própria (D = raio_alvo_/ρ)
+    bool raio_cv_;     // o canal do raio em CV (com os ângulos em CA)
+    float ref_[3];     // m — posição própria (ponto de observação) a que o estado se refere
     bool init_;
     uint32_t t_;
     int32_t n_aceites_;

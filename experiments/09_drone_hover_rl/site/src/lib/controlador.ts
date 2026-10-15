@@ -14,6 +14,11 @@
  *  · `olhar` = o alvo na imagem do IBVS (`erro_px` = offset face ao CENTRO da imagem, convenção ÍNDICE
  *    do detetor) — «alvo centrado» quer dizer `erro_px ≈ [0, 0]`.
  *
+ * COCKPIT (r13, 2026-10-12): o seletor saiu do site (voa o que ganhou na medição — `POST
+ * /api/controlador` continua a existir na API) e o mapa de teclas passou para `lib/cockpit.ts`
+ * (`acaoDaTecla`): Z/C/X mantêm-se, mas SEGUIR A BOLA é a tecla **B** e a tecla **V** liga o VENTO.
+ * `TECLAS_YAW`/`ROTULOS_TECLAS_YAW` abaixo ficam como o registo do contrato r12 (V = «olhar»).
+ *
  * Semântica de yaw (teclas novas do painel de voo): Z = rodar à ESQUERDA (`yaw_taxa` +0,5 rad/s),
  * C = rodar à DIREITA (−0,5), X = FIXAR RUMO (`yaw_alvo` = `rumo` atual), V = SEGUIR/OLHAR (alterna
  * `segui_alvo`). Z/C voltam ao modo taxa (`yaw_alvo: null`). Os campos só VOAM no modo CLÁSSICO (a

@@ -17,6 +17,15 @@ Por eixo (p, q, r): PID de taxa com D sobre a MEDIDA, filtros PT1 no giroscópio
 Mistura em X com "airmode" (como o Betaflight): se a soma sai de [idle, 1], desloca-se o coletivo para
 preservar a autoridade de atitude; só se o diferencial pedido não couber é que ele é escalado.
 Desarmado: tudo a 0 (motores parados).
+
+IMPLEMENTAÇÃO (2026-10-12): o `passo` corre a 500 Hz com vetores de 3–4 elementos, onde o custo do NumPy é só
+despacho — a conta faz-se em `float` do Python, pela MESMA ordem de operações (resultado bit a bit igual ao vetorial;
+prova em `bench_treino.py identidade`). O estado e os ganhos vivem em listas; por fora continuam a ser `ndarray`
+(`integral`, `giro_f`, `d_f`, `giro_ant`, `kp`, `ki`, `kd`, `mix`: ler devolve uma cópia só de leitura, atribuir um
+vetor novo funciona). A mistura `mix @ u` é um `dgemv` do BLAS: com a matriz de sinais (±1/0) a linha
+`0 + ((m0·u0 + m1·u1) + m2·u2)` é exata (o `0 +` fixa o sinal de um resultado nulo, como o acumulador do BLAS), e isso
+é VERIFICADO contra o NumPy desta máquina sempre que a `mix` é definida (amostras fixas, com zeros de ambos os sinais)
+— se não bater, o `passo` usa o `mix @ u` de origem.
 """
 from __future__ import annotations
 
@@ -35,8 +44,51 @@ def _alfa_pt1(fc_hz: float, dt: float) -> float:
     return dt / (rc + dt)
 
 
+_F64 = np.dtype(np.float64)
+_nan = math.isnan
+
+
+def _tres(v) -> list:
+    """Vetor de 3 (ndarray de qualquer tipo real, lista ou tuplo) → lista de floats (`np.asarray(v, dtype=float)`)."""
+    if type(v) is np.ndarray and v.dtype is _F64:
+        return v.tolist()
+    return np.asarray(v, dtype=float).tolist()
+
+
+class _Vetor:
+    """Atributo vetorial guardado como LISTA de floats em `_<nome>` (o laço de 500 Hz lê a lista, sem NumPy).
+
+    Por fora é um `ndarray`: LER devolve uma cópia só de leitura (alterá-la no sítio dá erro, em vez de se perder em
+    silêncio); ATRIBUIR um vetor novo substitui a lista.
+    """
+
+    def __init__(self, forma: tuple = (3,)):
+        self.forma = forma
+
+    def __set_name__(self, dono, nome: str) -> None:
+        self.privado = "_" + nome
+
+    def __get__(self, obj, tipo=None):
+        if obj is None:
+            return self
+        a = np.array(getattr(obj, self.privado), dtype=float)
+        a.flags.writeable = False
+        return a
+
+    def __set__(self, obj, valor) -> None:
+        setattr(obj, self.privado, np.broadcast_to(np.asarray(valor, dtype=float), self.forma).tolist())
+
+
 class ControladorFC:
     """Malha de taxa + mistura + airmode, a correr a cada passo de física."""
+
+    integral = _Vetor()
+    giro_f = _Vetor()
+    d_f = _Vetor()
+    giro_ant = _Vetor()
+    kp = _Vetor()
+    ki = _Vetor()
+    kd = _Vetor()
 
     def __init__(self, hw, model, dt: float):
         self.hw = hw
@@ -80,6 +132,29 @@ class ControladorFC:
         self.a_d = _alfa_pt1(FILTRO_D_HZ, self.dt)
         self.reiniciar()
 
+    @property
+    def mix(self) -> np.ndarray:
+        """Matriz de mistura (4, 3): acelerador diferencial por motor = mix @ (u_roll, u_pitch, u_yaw)."""
+        return self._mix
+
+    @mix.setter
+    def mix(self, valor) -> None:
+        self._mix = np.array(valor, dtype=float).reshape(4, 3)
+        self._mix.flags.writeable = False
+        self._mix_l = self._mix.tolist()
+        # a linha escalar 0 + ((m0·u0 + m1·u1) + m2·u2) reproduz o `mix @ u` (dgemv) desta máquina? (amostras fixas)
+        g = np.random.default_rng(20261012)
+        self._mix_escalar = True
+        for _ in range(64):
+            u = g.normal(size=3) * 10.0 ** g.uniform(-3.0, 1.0)
+            nulos = g.random(3) < 0.33
+            u[nulos] = g.choice([0.0, -0.0], size=int(nulos.sum()))
+            u0, u1, u2 = u.tolist()
+            meu = np.array([0.0 + ((m0 * u0 + m1 * u1) + m2 * u2) for m0, m1, m2 in self._mix_l])
+            if meu.tobytes() != (self._mix @ u).tobytes():
+                self._mix_escalar = False
+                break
+
     def reiniciar(self) -> None:
         self.integral = np.zeros(3)
         self.giro_f = np.zeros(3)
@@ -90,7 +165,7 @@ class ControladorFC:
 
     def armar(self, armado: bool) -> None:
         if armado and not self.armado:
-            self.integral[:] = 0.0
+            self._integral = [0.0, 0.0, 0.0]
         self.armado = bool(armado)
 
     def passo(self, acelerador: float, taxas_sp, giro_medido) -> np.ndarray:
@@ -98,25 +173,46 @@ class ControladorFC:
         if not self.armado:
             self.saida = np.zeros(4)
             return self.saida
-        g = np.asarray(giro_medido, dtype=float)
-        self.giro_f += self.a_giro * (g - self.giro_f)
-        erro = np.asarray(taxas_sp, dtype=float) - self.giro_f
-        deriv = (self.giro_f - self.giro_ant) / self.dt
-        self.giro_ant = self.giro_f.copy()
-        self.d_f += self.a_d * (deriv - self.d_f)
-        self.integral = np.minimum(np.maximum(self.integral + self.ki * erro * self.dt, -LIMITE_I), LIMITE_I)
-        u_eixos = self.kp * erro + self.integral - self.kd * self.d_f
-        dif = self.mix @ u_eixos                              # (4,) diferencial por motor
+        a_giro, a_d, dt = self.a_giro, self.a_d, self.dt
+        u_eixos, giro_f, d_f, integral = [], [], [], []
+        for g, sp, gf, ga, df, itg, kp, ki, kd in zip(_tres(giro_medido), _tres(taxas_sp), self._giro_f,
+                                                      self._giro_ant, self._d_f, self._integral, self._kp,
+                                                      self._ki, self._kd, strict=True):
+            gf = gf + a_giro * (g - gf)                           # PT1 do giroscópio
+            erro = sp - gf
+            df = df + a_d * ((gf - ga) / dt - df)                 # derivada da MEDIDA, com PT1
+            itg = itg + ki * erro * dt
+            itg = itg if (itg > -LIMITE_I or _nan(itg)) else -LIMITE_I       # anti-windup (np.maximum/minimum)
+            itg = itg if (itg < LIMITE_I or _nan(itg)) else LIMITE_I
+            giro_f.append(gf)
+            d_f.append(df)
+            integral.append(itg)
+            u_eixos.append(kp * erro + itg - kd * df)
+        self._giro_f, self._giro_ant, self._d_f, self._integral = giro_f, giro_f, d_f, integral
+        if self._mix_escalar:
+            u0, u1, u2 = u_eixos
+            d0, d1, d2, d3 = [0.0 + ((m0 * u0 + m1 * u1) + m2 * u2) for m0, m1, m2 in self._mix_l]
+        else:
+            d0, d1, d2, d3 = (self._mix @ np.array(u_eixos)).tolist()        # (4,) diferencial por motor
         col = min(max(float(acelerador), 0.0), 1.0)
-        span = float(dif.max() - dif.min())
-        faixa = 1.0 - self.idle
+        span = max(d0, d1, d2, d3) - min(d0, d1, d2, d3)
+        idle = self.idle
+        faixa = 1.0 - idle
         if span > faixa:                                      # o diferencial não cabe: escala-o
-            dif *= faixa / span
-            span = faixa
-        u = col + dif
-        if u.max() > 1.0:                                     # airmode: desloca o coletivo para baixo
-            u -= u.max() - 1.0
-        if u.min() < self.idle:                               # ... ou para cima (nunca abaixo do idle)
-            u += self.idle - u.min()
-        self.saida = np.minimum(np.maximum(u, self.idle), 1.0)
+            k = faixa / span
+            d0, d1, d2, d3 = d0 * k, d1 * k, d2 * k, d3 * k
+        u0, u1, u2, u3 = col + d0, col + d1, col + d2, col + d3
+        teto = max(u0, u1, u2, u3)
+        if teto > 1.0:                                        # airmode: desloca o coletivo para baixo
+            k = teto - 1.0
+            u0, u1, u2, u3 = u0 - k, u1 - k, u2 - k, u3 - k
+        piso = min(u0, u1, u2, u3)
+        if piso < idle:                                       # ... ou para cima (nunca abaixo do idle)
+            k = idle - piso
+            u0, u1, u2, u3 = u0 + k, u1 + k, u2 + k, u3 + k
+        saida = []
+        for u in (u0, u1, u2, u3):
+            u = u if (u > idle or _nan(u)) else idle           # np.maximum(u, idle)
+            saida.append(u if (u < 1.0 or _nan(u)) else 1.0)   # np.minimum(u, 1.0)
+        self.saida = np.array(saida)
         return self.saida

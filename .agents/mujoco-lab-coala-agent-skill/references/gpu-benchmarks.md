@@ -147,6 +147,16 @@ cd "$TMPDIR" && /home/ondokai/Projects/MuJoCo/.venv-gpu/bin/python $S --backend 
 Para os modelos do lab, o mesmo script com o XML do modelo (`models/boston_dynamics_spot/spot.xml`, `models/bitcraze_crazyflie_2/cf2.xml`) — mas para o Spot em MJX-JAX espere o `RESOURCE_EXHAUSTED` da §6.
 Imprime SPS (mediana/mín/máx), VRAM (processo e dispositivo), saúde (NaN, overflow) e `RESULT_JSON`. Vigia: encerra (exit 3) se a VRAM livre < `--min-free-mib` (500). Rode **um** por vez e confira `nvidia-smi` antes.
 
+## 12. Treino PPO em CPU (drone real do exp. 09): onde estava o tempo ✔ (2026-10-12/13)
+Não é uma medição de GPU — fica aqui porque responde à pergunta «a GPU acelera o treino?». A política é uma MLP 64×64 e o gargalo é a simulação por ambiente, não a rede: 80 % de cada passo do ambiente era o modelo Python da planta (NumPy em vetores de 3–4 elementos a 500 Hz), e só 5,5 % o MuJoCo. Reescrita em escalares com a trajetória idêntica byte a byte (`experiments/09_drone_hover_rl/bench_treino.py identidade`). Passos de treino por segundo com o update incluído, máquina livre (i9-14900HX, 8 P + 16 E, 32 threads; `bench_treino.py escala`):
+
+| n_envs | 1 | 4 | 8 | 16 | 24 |
+|---|---|---|---|---|---|
+| antes | 278 | 918 | 1345 | 2294 | 2935 |
+| depois | 524 | 1736 | 2417 | **3578** | 3405 |
+
+16 ambientes (os hyperthreads dos núcleos P) é o joelho: +48 % sobre 8, e 24 já perde — o `SubprocVecEnv` é síncrono e os núcleos E marcam o passo. Com os padrões: 1345 → 3578 passos/s (2,7×). Treinar na GPU não foi medido; migrar esta planta para MJX/Warp obrigaria a reescrever o modelo elétrico, a bateria e os sensores. Hiperparâmetros: `lr` 3× maior (com ou sem trava de KL) não ganhou ao atual num A/B de arranque a quente (2 sementes) — `experiments/09_drone_hover_rl/ab_treino.py`.
+
 ## Armadilhas
 | Sintoma | Causa | Correção |
 |---|---|---|

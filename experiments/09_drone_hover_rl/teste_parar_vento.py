@@ -35,8 +35,40 @@ além de desligar a dinâmica põe o vento base a 0).
     uv run --group hover-rl python experiments/09_drone_hover_rl/teste_parar_vento.py --mutacao
     uv run --group hover-rl python experiments/09_drone_hover_rl/teste_parar_vento.py --legado   # FALHA (bug)
 
-Este script é também a prova de FIABILIDADE do PARAR — dois defeitos PRÉ-EXISTENTES (não regressões da
-correção acima) que faziam o PARAR falhar no uso real:
+COCKPIT (contrato r13, 2026-10-12) — o PARAR que o dono tem hoje. O painel de vento antigo (18 botões, 8
+campos) saiu do site; o vento são TRÊS botões (`POST /api/vento-simples {ligado, intensidade, aleatorio,
+direcao}`, gerador `vento_natural.py`) e pára-se pelo interruptor VENTO / tecla V (`{ligado: false}`) ou por
+`POST /api/parar` (desliga os dois contratos). A garantia é a mesma — nenhuma rajada sobrevive —, medida
+agora também para esse vento:
+
+  · ao nível do runner (`CENARIOS_SIMPLES`): depois da paragem a rajada, a turbulência e a deriva de direção
+    do gerador morrem NO PASSO SEGUINTE (o vetor passa a ser `w·[cos d, sin d, 0]` exato), a intensidade só
+    DESCE pela rampa de 1.ª ordem (τ = 0,6 s) — conferida amostra a amostra pela fórmula fechada
+    `|v_j| = |v_i|·e^(−Δk·Δt/τ)` — e passa a zero EXATO quando ela cai abaixo do resíduo; o vento do
+    contrato antigo que estivesse por baixo NÃO volta; e, se o contrato antigo retomar a autoridade com os
+    3 botões a soprar, desligá-los a seguir não faz reaparecer vento nenhum (o «vento fantasma» medido a
+    2026-10-12: a rampa congelada do gerador voltava a 4,84 m/s — `correr_cenario_autoridade`);
+  · `--http`: as duas paragens pelo servidor real;
+  · `--navegador`: o COCKPIT real num Chrome headless — o envio do slider da intensidade (pendente no
+    emissor, e largado DEPOIS da paragem) não ressuscita o vento, nem quando quem pára é OUTRO cliente; e o
+    interruptor adota o que o servidor diz quando outro cliente liga o vento;
+  · `--mutacao`: cada garantia do backend e cada defesa do front desligada (em CÓPIAS em `$TMPDIR`: as
+    fontes pelo `--fontes`, o site compilado à parte) tem de fazer falhar os cenários dela.
+
+O que SAIU com o painel antigo (a decisão é do dono: «três botões» e «não quero opções»), um ponto cada:
+  · a matriz `--navegador` dos botões PARAR VENTO / PARAR DINÂMICO / toggle PARADO × a corrida do debounce
+    de 300 ms do `campo-rajadas-p` — esses controlos foram apagados (`controlos.tsx`); substitui-a a matriz
+    do cockpit (interruptor / tecla V × o envio pendente do slider), aqui mesmo;
+  · a paragem por uma 2.ª ABA real e o aviso «outra aba» (`BroadcastChannel`) — o cockpit não tem canal
+    entre abas: outra aba é só mais um cliente HTTP, coberto pelo POST cru que o interruptor dela mandaria;
+  · as mutações `sem-revalidacao` / `sem-desbloqueio-remoto` de `lib/paragem.ts` (defesas do live-apply do
+    painel antigo, que o cockpit não usa) — substituem-nas as três mutações de `lib/cockpit.ts`;
+  · `--front DIR` e `--atraso-poll` (compilar o painel antigo na árvore / atrasar o poll do `/api/sim`) —
+    substitui-os `--dist DIR` (servir outro bundle já compilado, sem tocar na árvore).
+A lógica pura do painel novo (emissor «o último vence», corpos parciais, adoção) prova-se em
+`site/testes/cockpit.mts`; o contrato do servidor/runner em `teste_cockpit.py` §1–§4.
+
+Este script é também a prova de FIABILIDADE do PARAR:
 
   (1) **POSTs concorrentes → HTTP 500.** O servidor é `ThreadingHTTPServer` e o temporário da escrita
       atómica tinha o MESMO nome em todas as threads (`.{nome}.tmp{pid}`): dois POSTs simultâneos
@@ -44,57 +76,35 @@ correção acima) que faziam o PARAR falhar no uso real:
       que devolve 500 não para rajada nenhuma). A prova in-process corre SEMPRE (120 escritas simultâneas
       na mesma função do servidor; medido com o código de antes: 59 falhas e o contador de REINICIAR a
       perder incrementos — 0 falhas e contador exato com o de agora) e o `--http` acrescenta ~100 pares de
-      POSTs concorrentes (`rajada_agora`/`nenhum`/`parar`/`reiniciar`/`loop`) contra o servidor REAL, com um
-      leitor em paralelo a fazer `json.loads` ao ficheiro — 0 HTTP 500, 0 JSON partido, `loop`/`reiniciar`
-      intactos, 0 `.tmp` órfãos;
-  (2) **corrida do debounce do front → o modo voltava a ligar-se.** O live-apply dos params é um
-      `setTimeout` de ~300 ms que só era cancelado quando o `modoContinuo` mudava (o que depende do
-      polling). Um clique dentro dessa janela deixava sair `{modo:"rajadas", ativo:true, params}` DEPOIS do
-      `POST /api/parar`, e o servidor+runner honravam-no. Pior: só o PARAR VENTO invalidava os applies
-      pendentes — o PARAR DINÂMICO e o toggle PARADO não, e por isso o modo VOLTAVA 0,3–0,7 s depois de
-      parar (medido: o controlo fica `nenhum` e volta a `rajadas/ativo` com os params editados). O
-      `--navegador` dirige o FRONT real (bundle de `site/dist`) num Chrome headless por CDP, com o servidor
-      real: liga RAJADAS, edita um param (o que agenda o apply), espera a janela pedida
-      (0/50/100/300/600/1000 ms) e clica o controlo de paragem do cenário — os TRÊS caminhos (`PARAGENS`:
-      PARAR VENTO, PARAR DINÂMICO e o toggle PARADO) — amostrando o estado do servidor durante 2,6 s com o
-      poll do site a correr. Imprime os POSTs que o front mandou, com o instante relativo à edição — é aí
-      que se vê o defeito (no código de antes: `/api/parar` aos 4 ms e `/api/vento-dinamico {modo:rajadas}`
-      aos 300 ms) e a correção (nenhum POST de apply depois da paragem). Cada janela corre também SEM a
-      paragem (controlo positivo): aí o apply TEM de aparecer com o `p` novo, senão o cenário da paragem não
-      estaria a testar nada.
-
-  (3) **paragens de OUTRO cliente (multi-cliente).** As defesas locais (época/cancelamento/bloqueio de
-      `site/src/lib/paragem.ts`) são estado de MÓDULO por *realm*: uma paragem vinda de outro cliente — um
-      `POST /api/parar` cru (sem browser nenhum) ou o botão PARAR DINÂMICO de uma **2.ª aba real** — não
-      lhes toca, e o poll do site (~350 ms + o atraso da resposta) chega sempre depois do debounce de
-      300 ms. Medido: a aba A edita um parâmetro, a paragem externa acontece aos ~100 ms, e o debounce
-      local dispara aos ~300 ms com os params editados — o servidor fica outra vez `rajadas/ativo` (física
-      em rajadas) durante ≥2,5 s. A correção é REVALIDAR ao disparar: antes de escrever, o front confirma
-      no servidor (`GET /api/state`, barato) que o modo que ia religar ainda está ativo; se não estiver, o
-      apply é suprimido e o painel DIZ que a edição não foi aplicada (nenhum estado morto sem feedback). O
-      canal `BroadcastChannel` (paragem de outra aba) complementa — cancela já os temporizadores pendentes
-      e faz o painel reler o servidor — mas não é a garantia (um POST cru não passa por canal nenhum).
-      O mesmo sítio tinha o **painel preso**: depois de uma paragem LOCAL + um religamento feito por OUTRO
-      cliente, o bloqueio do live-apply nunca era levantado (a adoção do modo vindo do poll não o limpava, e
-      clicar no modo já pressionado é um no-op do base-ui): editar um campo mudava só o estado do React,
-      não saía POST nenhum e o servidor ficava com o valor antigo, sem feedback. Agora o bloqueio é
-      levantado pela leitura FRESCA do servidor. Os cenários `--navegador` cobrem os dois (paragem crua a
-      0/100/200 ms, 2.ª aba a 0/100 ms, e o painel preso) e a prova de NÃO-TAUTOLOGIA corre-os com o front
-      MUTADO (`--mutacao`: desliga a revalidação → os cenários de paragem externa falham; desliga o
-      desbloqueio remoto → o cenário do painel preso falha).
+      POSTs concorrentes (`rajada_agora`/`nenhum`/`parar`/`reiniciar`/`loop`/`vento-simples`) contra o
+      servidor REAL, com um leitor em paralelo a fazer `json.loads` ao ficheiro — 0 HTTP 500, 0 JSON
+      partido, `loop`/`reiniciar` intactos, 0 `.tmp` órfãos;
+  (2) **um envio atrasado do front religava o vento** (no painel antigo: o debounce de 300 ms do
+      live-apply dos params). No cockpit o envio que pode chegar depois da paragem é o do slider da
+      intensidade: `--navegador` arrasta-o (um envio fica pendente no emissor), pára pelo caminho do
+      cenário (`PARAGENS`: interruptor VENTO, tecla V) 0/50/100/300 ms depois, larga o slider 150 ms
+      DEPOIS da paragem e amostra o servidor durante 2,6 s; imprime os POSTs que o front mandou com o
+      instante relativo à edição. Cada janela corre também SEM paragem (controlo positivo): aí a
+      intensidade arrastada TEM de chegar ao servidor;
+  (3) **paragens de OUTRO cliente (multi-cliente).** Um `POST /api/parar` cru (ou o `{ligado: false}` que o
+      interruptor de outra aba manda) com o painel local a meio de um arrasto: o servidor fica parado e o
+      painel adota-o. A defesa do cockpit é estrutural — o painel manda SÓ o que mudou —, e a mutação que
+      o põe a mandar o estado inteiro faz o cenário falhar. O mesmo sítio tinha o **painel preso**; a
+      versão do cockpit é o **interruptor desatualizado** (paragem local + religamento por outro cliente).
 
 `--legado [REV]` materializa as fontes de `env.py`/`sim_view.py`/`sim_site.py` dessa revisão do git (padrão
 `HEAD`, ou seja o código de antes da correção) e corre o MESMO teste contra elas — é a prova repetível do
 bug, com um comando e sem tocar na árvore de trabalho. `--fontes DIR` faz o mesmo com uma pasta de fontes
-(pode estar FORA do repo: é estagiada dentro da árvore e apagada no fim), e `--front DIR` troca as fontes do
-FRONT (`controlos.tsx`/`use-sim.ts`/`App.tsx`/`lib/paragem.ts`), compila o site com elas, corre a prova
-`--navegador` e repõe+recompila no fim — é a prova do defeito (2)/(3) contra o front de antes, num comando.
+(pode estar FORA do repo: é estagiada dentro da árvore e apagada no fim). Fontes de antes do r13 não têm o
+vento dos 3 botões: os cenários dele são saltados com um aviso (`TEM_SIMPLES`).
 
 Exit 0 = todas as checagens passam; 1 = alguma falha (diz qual e mostra o diagnóstico).
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -107,16 +117,15 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 _AQUI = Path(__file__).resolve().parent
 _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
 SITE = _AQUI / "site"                       # o front (React + vite) que o sim_site.py serve de `site/dist`
-# Ficheiros do front que as defesas tocam — os que `--front` troca e repõe (prova do código de antes) e os
-# que a prova de mutação (`--mutacao`) reescreve. `lib/paragem.ts` é o módulo das paragens (época/bloqueio/
-# revalidação): a defesa multi-cliente vive lá.
-FRONT_RELATIVOS = ("src/components/sim/controlos.tsx", "src/hooks/use-sim.ts", "src/App.tsx",
-                   "src/lib/paragem.ts")
+# O ficheiro do front onde vivem as defesas do vento do cockpit (emissor «o último vence», corpos parciais,
+# adoção do servidor): é o que a prova de mutação (`--mutacao`) adultera — numa CÓPIA, nunca na árvore.
+FRONT_COCKPIT = "src/lib/cockpit.ts"
 
 
 def _estagiar_fontes(origem: Path) -> Path:
@@ -197,35 +206,37 @@ import env as modulo_env
 import sim_site
 import sim_view
 
+try:                                        # o gerador do vento dos 3 botões (r13) — fontes antigas não o têm
+    import vento_natural
+except ImportError:                         # pragma: no cover  (só com `--legado` de antes do r13)
+    vento_natural = None
+
 BASE_PADRAO = {"vel": 3.0, "azimute": 90.0, "elevacao": 0.0}     # vento base dos cenários (m/s, graus)
 BASE_ZERO = {"vel": 0.0, "azimute": 0.0, "elevacao": 0.0}
 NENHUM = {"modo": "nenhum", "ativo": False}
 TOL = 1e-12                       # tolerância da física (`opt.wind` vs vento base comandado, em memória)
 TOL_TELE = 2e-6                   # a telemetria arredonda a 6 casas: 1e-6 + folga de arredondamento
-TOL_APOS_CLIQUE_MS = 50           # folga do «apply depois do clique» (fila de POSTs do front, ver abaixo)
+TOL_RAMPA = 5e-6                  # norma de um vetor arredondado a 6 casas, prevista a partir de outra igual
+TOL_APOS_CLIQUE_MS = 50           # folga do «POST depois da paragem» (um envio que já ia em voo)
 PARAR_ATOMICO = hasattr(sim_site, "validar_parar")   # rota nova; sem ela emula-se o PARAR VENTO antigo
+# r13: o vento dos 3 botões (`POST /api/vento-simples` + gerador). Fontes de antes do r13 não o têm.
+TEM_SIMPLES = hasattr(sim_site, "validar_vento_simples") and vento_natural is not None
 
-# Os TRÊS caminhos de paragem do front (o defeito era os dois últimos não invalidarem o apply pendente):
-#   · "vento"    — botão PARAR VENTO (`POST /api/parar`: dinâmica desligada + vento base a 0) — já correto;
-#   · "dinamico" — botão PARAR DINÂMICO (`POST /api/vento-dinamico {modo:"nenhum", ativo:false}`);
-#   · "parado"   — a opção PARADO do toggle do modo contínuo (o MESMO corpo, noutro controlo).
-PARAGENS = ("vento", "dinamico", "parado")
-ROTULO_PARAGEM = {"vento": "PARAR VENTO", "dinamico": "PARAR DINÂMICO", "parado": "toggle PARADO"}
-# Modos em que o painel faz live-apply dos params (é o apply que não pode sobreviver a uma paragem).
-MODOS_ATIVOS = ("rajadas", "aleatoria", "dryden")
-# Todos os modos dinâmicos: se a telemetria acabar num destes, a física continua a fazer dinâmica.
-MODOS_DINAMICOS = MODOS_ATIVOS + ("rajada_agora", "frente")
-
-
-def _envio_apply_ativo(envio: dict) -> bool:
-    """O POST registado no browser é um apply de um modo CONTÍNUO ativo (`{modo, ativo: true}`)?"""
-    if "/api/vento-dinamico" not in str(envio.get("url", "")):
-        return False
-    try:
-        corpo = json.loads(envio.get("corpo") or "{}")
-    except (TypeError, ValueError):
-        return False
-    return corpo.get("ativo") is True and corpo.get("modo") in MODOS_ATIVOS
+# As DUAS paragens do cockpit (r13) — as duas mandam `POST /api/vento-simples {ligado: false}`:
+#   · "interruptor" — o interruptor VENTO da janela Vento (`data-testid="vento-ligado"`);
+#   · "tecla_v"     — a tecla V (o mesmo controlo, sem abrir janela nenhuma).
+PARAGENS = ("interruptor", "tecla_v")
+ROTULO_PARAGEM = {"interruptor": "interruptor VENTO", "tecla_v": "tecla V"}
+# Todos os modos dinâmicos do contrato antigo: se a telemetria acabar num destes, a física faz dinâmica.
+MODOS_DINAMICOS = ("rajadas", "aleatoria", "dryden", "rajada_agora", "frente")
+# Prova `--http` (esperas pelo relógio do RUNNER — amostras de telemetria —, com um teto de parede largo):
+ESPERA_HTTP_S = 60.0              # teto de parede de cada espera (a máquina pode estar ocupada)
+ATRASO_MAX_AMOSTRAS = 3           # a paragem tem de estar na física até à 3.ª amostra (~0,3 s) depois do 200
+AMOSTRAS_PARADO = 12              # amostras seguidas LIMPAS exigidas depois da paragem (~1,2 s de telemetria)
+# Prova `--navegador` (tempos de parede do browser):
+LARGAR_MS = 150                   # o slider é largado 150 ms DEPOIS da paragem (o envio final do gesto)
+ADOCAO_MS = 8000                  # o painel adota o servidor em ≤ 1,5 s de carência + a sondagem de 1 Hz
+ZERO_MS = 40000                   # teto para a rampa de desligar (≈ 5 s de simulação) chegar a zero
 
 
 # ---------------------------------------------------------------------------------------------- utilidades
@@ -297,8 +308,16 @@ class Banco:
         self.env = modulo_env.HoverEnv()
         self.controlo = sim_view.Controlo(self.controlo_caminho)
         self.telemetria = sim_view.Telemetria(self.telemetria_caminho, truncar=True)
-        self.args = sim_view.analisar_argumentos(["--sem-janela", "--fator-tempo", f"{fator_tempo:g}",
-                                                 "--max-segundos", f"{max_segundos:g}"])
+        argv = ["--sem-janela", "--fator-tempo", f"{fator_tempo:g}", "--max-segundos", f"{max_segundos:g}"]
+        # SEM os módulos de câmara (`--sem-fpv`): a prova é do VENTO. Este runner corre num fio que fica vivo
+        # até ao fim do processo, e os fios de render das câmaras (EGL) apanhados a meio de um quadro pelo
+        # `exit` rebentavam com SIGSEGV DEPOIS de o teste dizer «N/N OK» (medido: exit 139, `mjr_readPixels`
+        # contra o fecho do EGL); de caminho, o stream deixa de se escrever em `out/fpv`, a pasta do dono.
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):       # o argparse escreve o uso em stderr
+                self.args = sim_view.analisar_argumentos([*argv, "--sem-fpv"])
+        except SystemExit:                    # fontes de antes do módulo FPV (`--legado`): não há câmara
+            self.args = sim_view.analisar_argumentos(argv)
         self.falha: list[str] = []
         self.thread = threading.Thread(target=self._correr, name="sim-view", daemon=True)
 
@@ -347,6 +366,12 @@ class Banco:
         else:
             novo = sim_site.validar_vento({"vel": 0.0, "azimute": atual.get("azimute", 0.0),
                                            "elevacao": atual.get("elevacao", 0.0)}, atual)
+        self._escrever(novo)
+        return novo
+
+    def comandar_vento_simples(self, corpo: dict) -> dict:
+        """`POST /api/vento-simples` (r13): os 3 botões — qualquer subconjunto, pela via do servidor."""
+        novo = sim_site.validar_vento_simples(corpo, sim_site.ler_controlo(self.controlo_caminho))
         self._escrever(novo)
         return novo
 
@@ -405,6 +430,13 @@ class Banco:
             "base_env": np.round(self.env._base_vento, 12).tolist(),
             "opt_wind": np.round(self.env.vento_atual, 12).tolist(),
         }
+
+    def residuos_gerador(self) -> dict:
+        """Estado do gerador do vento dos 3 botões (r13) que NÃO pode sobreviver a uma paragem."""
+        g = self.controlo.gerador_vento
+        return {"ligado": g.ligado, "em_rajada": g.em_rajada, "w": float(g._w),
+                "turb": np.round(g._turb, 12).tolist(), "deriva": float(g._deriva),
+                "vetor": np.round(g.vetor, 12).tolist()}
 
 
 # ---------------------------------------------------------------------------------------------- cenários
@@ -570,6 +602,191 @@ def correr_cenario(banco: Banco, cen: Cenario) -> dict:
             "passo_parar": passo_parar, "base": np.round(base, 9).tolist()}
 
 
+# ------------------------------------------------------------------ cenários do vento dos 3 botões (r13)
+@dataclass
+class CenarioSimples:
+    """Um cenário do cockpit: o vento dos 3 botões a soprar e a paragem que o dono tem (r13)."""
+
+    nome: str
+    simples: dict                      # o bloco dos 3 botões, LIGADO, que vai ser parado
+    antes: list[tuple] = field(default_factory=list)   # contrato antigo a soprar ANTES de os 3 botões mandarem
+    parar: str = "desligar"            # desligar = POST /api/vento-simples {ligado:false} · parar = POST /api/parar
+    a_meio_de_rajada: bool = False     # só pára quando o gerador tem uma rajada «1 − cos» em curso
+
+
+CENARIOS_SIMPLES = [
+    CenarioSimples("3 BOTOES constante 3 m/s @ 90 -> DESLIGAR (interruptor VENTO / tecla V)",
+                   {"ligado": True, "intensidade": 3.0, "aleatorio": False, "direcao": 90.0}),
+    CenarioSimples("3 BOTOES aleatorio 4 m/s @ 200 -> DESLIGAR a meio de uma RAJADA do gerador",
+                   {"ligado": True, "intensidade": 4.0, "aleatorio": True, "direcao": 200.0},
+                   a_meio_de_rajada=True),
+    CenarioSimples("3 BOTOES aleatorio 5 m/s @ 45 -> PARAR VENTO (POST /api/parar) a meio de uma RAJADA",
+                   {"ligado": True, "intensidade": 5.0, "aleatorio": True, "direcao": 45.0},
+                   parar="parar", a_meio_de_rajada=True),
+    CenarioSimples("contrato antigo a soprar (3 m/s + RAJADAS continuas) + 3 BOTOES por cima -> DESLIGAR "
+                   "(o vento antigo NAO volta)",
+                   {"ligado": True, "intensidade": 2.0, "aleatorio": True, "direcao": 0.0},
+                   antes=[("vento", BASE_PADRAO, 3),
+                          ("dinamico", continuo("rajadas", p=1.0, duracao=40, u_max=4.0), 40)]),
+]
+
+
+def correr_cenario_simples(banco: Banco, cen: CenarioSimples) -> dict:
+    """Corre um cenário dos 3 botões e devolve o relatório, com as checagens (a), (b) e (c) já avaliadas.
+
+    Depois da paragem o gerador ESQUECE a rajada, a turbulência e a deriva (o vetor passa a ser
+    `w·[cos d, sin d, 0]` exato) e a intensidade desce pela rampa de 1.ª ordem até ao resíduo, onde passa a
+    zero EXATO. Confere-se pela FÓRMULA FECHADA, amostra a amostra e pelo contador de passos da telemetria
+    (não pelo relógio): entre duas amostras a `Δk` passos de decisão, `|v_j| = |v_i|·e^(−Δk·Δt/τ)` — uma
+    rajada ou um resto de turbulência a somar-se partiam esta igualdade — e o zero aparece na 1.ª amostra em
+    que a rampa prevista cai abaixo do resíduo (`t_zero = τ·ln(w/resíduo)` depois da paragem).
+    """
+    banco.limpar()
+    banco.comandar_vento(BASE_ZERO)
+    banco.esperar_passos(3)
+    for tipo, corpo, passos in cen.antes:
+        if tipo == "vento":
+            banco.comandar_vento(corpo)
+        elif tipo == "dinamico":
+            banco.comandar_dinamico(corpo)
+        if passos:
+            banco.esperar_passos(passos)
+    gerador = banco.controlo.gerador_vento
+    dt = float(banco.env.dt_decisao)
+    tau, residuo = float(vento_natural.TAU_RAMPA_S), float(vento_natural.RESIDUO)
+    banco.comandar_vento_simples(cen.simples)                      # LIGAR: os 3 botões passam a mandar
+    banco.esperar_passos(int(4.0 * tau / dt))                      # a rampa sobe (98 % ao fim de 4 τ)
+    if cen.a_meio_de_rajada:
+        banco.esperar(lambda: gerador.em_rajada, 120.0, "uma rajada do gerador dos 3 botões começar")
+    rajada_no_parar = bool(gerador.em_rajada)
+    w_antes = float(gerador._w)
+    vento_antes = float(np.linalg.norm(banco.env.vento_atual))
+    modo_antes = banco.controlo.modo_efetivo()
+    # ---- a PARAGEM (é este o objeto do teste)
+    if cen.parar == "parar":
+        banco.comandar_parar()
+    else:
+        banco.comandar_vento_simples({"ligado": False})
+    linha_parar = len(linhas_telemetria(banco.telemetria_caminho))
+    t_zero = tau * float(np.log(max(w_antes, residuo) / residuo))  # fórmula fechada da rampa a descer
+    banco.esperar_passos(int((t_zero + 1.5) / dt), limite=180.0)   # a rampa toda + 1,5 s já em zero
+    amostras = linhas_telemetria(banco.telemetria_caminho)[linha_parar:]
+    direcao = np.radians(float(cen.simples["direcao"]))
+    eixo = np.array([np.cos(direcao), np.sin(direcao), 0.0])
+    vetores = [np.array(a["vento_vec"], dtype=float) for a in amostras if isinstance(a.get("vento_vec"), list)]
+    normas = [float(np.linalg.norm(v)) for v in vetores]
+    fora_do_eixo = max((float(np.linalg.norm(v - n * eixo)) for v, n in zip(vetores, normas)), default=np.inf)
+    modos = sorted({str(a.get("vento_modo")) for a in amostras})
+    primeiro_zero = next((i for i, n in enumerate(normas) if n == 0.0), None)
+    t_medido = (float(amostras[primeiro_zero]["t"]) - float(amostras[0]["t"])
+                if primeiro_zero is not None else float("inf"))
+    # a rampa pela fórmula fechada: cada amostra prevista a partir da anterior, pelo nº de passos entre elas
+    passos = [int(a["passo"]) for a in amostras if isinstance(a.get("vento_vec"), list)]
+    previstas = [n * float(np.exp(-(pj - pi) * dt / tau))
+                 for n, pi, pj in zip(normas, passos, passos[1:])]         # previsão de normas[1:]
+    vivas = [(obtida, prevista) for obtida, prevista in zip(normas[1:], previstas) if obtida > 0.0]
+    erro_rampa = max((abs(obtida - prevista) for obtida, prevista in vivas), default=float("inf"))
+    zero_na_hora = (primeiro_zero is not None and primeiro_zero >= 1
+                    and previstas[primeiro_zero - 1] < residuo + TOL_RAMPA)
+    residuos, ger = banco.residuos(), banco.residuos_gerador()
+    # (a) nada ativo nem pendente — no gerador dos 3 botões, no slot do runner e no env
+    checagens_a = {
+        "gerador desligado, sem rajada, sem turbulência e sem deriva":
+            ger["ligado"] is False and ger["em_rajada"] is False and not any(ger["turb"])
+            and ger["deriva"] == 0.0,
+        "gerador em zero EXATO (rampa acabada: w = 0 e vetor = 0)": ger["w"] == 0.0 and not any(ger["vetor"]),
+        "slot da rajada do contrato antigo vazio": residuos["rajada_runner"] is None,
+        "modo do env desligado e env sem rajada/turbulência/frente":
+            residuos["modo_env"] is None and residuos["env_rajada_k"] == 0 and residuos["env_rajada_n"] == 0
+            and not any(residuos["env_rajada_vec"]) and not any(residuos["env_turb"])
+            and not any(residuos["env_frente_vec"]),
+        "vento base do env == 0 (o vento antigo não voltou)": not any(residuos["base_env"]),
+    }
+    # (b) o vento que a física leva: só o da rampa, sempre a descer, até zero exato
+    checagens_b = {
+        "o cenário é válido: o vento soprava antes da paragem"
+        + (" e havia uma rajada em curso" if cen.a_meio_de_rajada else ""):
+            vento_antes > 0.5 and w_antes > 0.9 * float(cen.simples["intensidade"])
+            and (rajada_no_parar or not cen.a_meio_de_rajada),
+        "depois da paragem o vetor é w·[cos d, sin d, 0] em TODAS as amostras (sem rajada, turbulência, "
+        "vertical nem deriva)": bool(vetores) and fora_do_eixo <= 2 * TOL_TELE,
+        "a intensidade só DESCE (nenhuma amostra acima da anterior nem do valor de antes)":
+            bool(normas) and normas[0] <= w_antes + TOL_TELE
+            and all(b <= a + TOL_TELE for a, b in pairwise(normas)),
+        "a rampa é a de 1.ª ordem EXATA: |v_j| = |v_i|·e^(−Δk·Δt/τ) entre TODAS as amostras (nada se soma)":
+            len(vivas) >= 8 and erro_rampa <= TOL_RAMPA,
+        "passa a zero EXATO quando a rampa prevista cai abaixo do resíduo, e FICA em zero":
+            zero_na_hora and all(n == 0.0 for n in normas[primeiro_zero:])
+            and len(normas) - primeiro_zero >= 3,
+        "opt.wind == 0 (fim do cenário)": bool(np.allclose(banco.env.vento_atual, 0.0, atol=TOL)),
+    }
+    # (c) a telemetria não mostra mais o modo «natural» (nem nenhum modo dinâmico antigo)
+    checagens_c = {
+        "vento_modo == nenhum em todas as amostras depois da paragem": modos == ["nenhum"],
+        "há amostras de telemetria ao longo da rampa": len(amostras) >= 10,
+    }
+    return {"nome": cen.nome, "checagens": {**checagens_a, **checagens_b, **checagens_c},
+            "residuos": {**residuos, "gerador": ger}, "modos": modos, "amostras": len(amostras),
+            "antes": f"{vento_antes:.3f} m/s (w = {w_antes:.3f}, modo {modo_antes}, rajada em curso = "
+                     f"{rajada_no_parar})",
+            "t_zero": t_zero, "t_medido": t_medido, "fora_do_eixo": float(fora_do_eixo),
+            "erro_rampa": float(erro_rampa), "vivas": len(vivas)}
+
+
+NOME_AUTORIDADE = ("3 BOTOES a soprar -> o contrato antigo retoma a autoridade (POST /api/vento) -> DESLIGAR "
+                   "os 3 botoes (nenhum vento reaparece)")
+
+
+def correr_cenario_autoridade(banco: Banco) -> dict:
+    """O contrato antigo retoma a autoridade com os 3 botões a soprar e SÓ DEPOIS o dono os desliga.
+
+    Defeito medido (2026-10-12, «vento fantasma»): um POST do contrato antigo tira o bloco `vento_simples`
+    do controlo e daí em diante ninguém avança o gerador — o nível da rampa ficava CONGELADO no valor a que
+    soprava. Quando o bloco voltava (mesmo com `ligado: false`: o dono a DESLIGAR), o 1.º passo escrevia
+    esse nível velho: medido 4,84 m/s a aparecer do nada e a levar ~5 s a morrer. Corrigido no backend com
+    o `VentoNatural.repor()`; a contraprova (`--mutacao`) repõe o código de antes e este cenário TEM de falhar.
+    """
+    banco.limpar()
+    banco.comandar_vento(BASE_ZERO)
+    banco.esperar_passos(3)
+    gerador = banco.controlo.gerador_vento
+    dt, tau = float(banco.env.dt_decisao), float(vento_natural.TAU_RAMPA_S)
+    intensidade = 5.0
+    banco.comandar_vento_simples({"ligado": True, "intensidade": intensidade, "aleatorio": False,
+                                  "direcao": 0.0})
+    banco.esperar_passos(int(4.0 * tau / dt))                      # os 3 botões a soprar (98 % ao fim de 4 τ)
+    w_a_soprar = float(gerador._w)
+    banco.comandar_vento(BASE_ZERO)                                # contrato antigo: vento 0, o bloco SAI
+    banco.esperar_passos(25)
+    vento_no_antigo = float(np.linalg.norm(banco.env.vento_atual))
+    bloco_saiu = banco.controlo.vento_simples is None
+    # ---- a PARAGEM: o dono desliga os 3 botões (o bloco volta ao ficheiro, desligado)
+    banco.comandar_vento_simples({"ligado": False})
+    linha_parar = len(linhas_telemetria(banco.telemetria_caminho))
+    banco.esperar_passos(100, limite=90.0)
+    amostras = linhas_telemetria(banco.telemetria_caminho)[linha_parar:]
+    normas = [float(np.linalg.norm(np.array(a["vento_vec"], dtype=float))) for a in amostras
+              if isinstance(a.get("vento_vec"), list)]
+    modos = sorted({str(a.get("vento_modo")) for a in amostras})
+    residuos, ger = banco.residuos(), banco.residuos_gerador()
+    checagens = {
+        "o cenário é válido: os 3 botões sopravam, o POST antigo tirou o bloco e o vento ficou a 0":
+            w_a_soprar > 0.9 * intensidade and bloco_saiu and vento_no_antigo == 0.0,
+        "DESLIGAR não faz reaparecer vento: TODAS as amostras a zero EXATO (a rampa velha não volta)":
+            len(normas) >= 5 and max(normas) == 0.0,
+        "gerador em zero EXATO, sem nada pendente (w = 0, vetor = 0, sem rajada/turbulência/deriva)":
+            ger["w"] == 0.0 and not any(ger["vetor"]) and ger["em_rajada"] is False
+            and not any(ger["turb"]) and ger["deriva"] == 0.0,
+        "opt.wind == 0 e vento base do env == 0 (fim do cenário)":
+            bool(np.allclose(banco.env.vento_atual, 0.0, atol=TOL)) and not any(residuos["base_env"]),
+        "vento_modo == nenhum em todas as amostras depois da paragem": modos == ["nenhum"],
+    }
+    return {"nome": NOME_AUTORIDADE, "checagens": checagens, "residuos": {**residuos, "gerador": ger},
+            "linha": f"os 3 botões sopravam {w_a_soprar:.3f} m/s · com o contrato antigo: {vento_no_antigo:.3f} "
+                     f"m/s · depois de DESLIGAR: máx {max(normas, default=float('nan')):.3f} m/s em "
+                     f"{len(normas)} amostras · modos = {modos}"}
+
+
 # ---------------------------------------------------------------------------------------------- HTTP (ponta a ponta)
 def _post(base_url: str, rota: str, corpo: dict | None = None) -> tuple[int, dict]:
     dados = None if corpo is None else json.dumps(corpo).encode("utf-8")
@@ -612,7 +829,6 @@ def checa_concorrencia_inprocess(pasta: Path, escritas: int = 120) -> tuple[bool
     # O REINICIAR é um ler-modificar-escrever: quem o faz tem de o fazer sob a trava do servidor
     # (`trava_controlo`), como os handlers do `sim_site.py` fazem. Sem ela, o incremento perde-se — e num
     # código antigo (sem `trava_controlo`) é mesmo isso que se mede.
-    import contextlib
     trava_controlo = getattr(sim_site, "trava_controlo", contextlib.nullcontext)
 
     def escrever(i: int) -> None:
@@ -662,14 +878,15 @@ def checa_concorrencia(base_url: str, controlo: Path, pares: int = 100) -> tuple
     (`.{nome}.tmp{pid}`), por isso dois POSTs simultâneos disputavam o ficheiro e o segundo `os.replace`
     rebentava com `FileNotFoundError` → **HTTP 500**. Um PARAR que devolve 500 não para rajada nenhuma.
 
-    Aqui a mistura é `rajada_agora` · `nenhum` · `parar` · `reiniciar` · `loop`, dois a dois em barreira
+    Aqui a mistura é `rajada_agora` · `nenhum` · `parar` · `reiniciar` · `loop` (+ `vento-simples`, a rota
+    dos 3 botões do r13, quando as fontes a têm), dois a dois em barreira
     (mesmo instante), com um LEITOR em paralelo a fazer `json.loads` ao ficheiro a cada volta — é ele que
     prova que o ficheiro nunca aparece meio-escrito. No fim contam-se as escritas: o contador `reiniciar`
     tem de subir EXATAMENTE o número de POSTs de reinício (nenhum se perde) e o `loop` fica no que foi
     pedido — sem a trava do ler-modificar-escrever, um POST de vento revertia o incremento do outro.
     """
     relatorio: list[str] = []
-    mistura = ("rajada", "nenhum", "parar", "reiniciar", "loop")
+    mistura = ("rajada", "nenhum", "parar", "reiniciar", "loop") + (("simples",) if TEM_SIMPLES else ())
     falhas: list[tuple[int, str]] = []
     trava = threading.Lock()
 
@@ -687,6 +904,8 @@ def checa_concorrencia(base_url: str, controlo: Path, pares: int = 100) -> tuple
                 codigo, resposta = _post(base_url, "/api/parar")
             elif rota == "reiniciar":
                 codigo, resposta = _post(base_url, "/api/reiniciar")
+            elif rota == "simples":
+                codigo, resposta = _post(base_url, "/api/vento-simples", {"intensidade": 1.0})
             else:
                 codigo, resposta = _post(base_url, "/api/loop", {"ativo": False})
         except Exception as erro:  # noqa: BLE001  (rede/JSON: conta como falha do pedido)
@@ -763,11 +982,100 @@ def checa_concorrencia(base_url: str, controlo: Path, pares: int = 100) -> tuple
     return ok, relatorio
 
 
+def _amostras_depois(telemetria: Path, linha: int, minimo: int, limite: float = ESPERA_HTTP_S) -> list[dict]:
+    """Amostras de telemetria escritas DEPOIS da linha `linha` — espera até haver `minimo` (o relógio que
+    conta é o do runner, que escreve ~10 amostras por segundo, não um `sleep` de parede)."""
+    t0 = time.perf_counter()
+    amostras = linhas_telemetria(telemetria)[linha:]
+    while len(amostras) < minimo and time.perf_counter() - t0 < limite:
+        time.sleep(0.1)
+        amostras = linhas_telemetria(telemetria)[linha:]
+    return amostras
+
+
+def _esperar_estado(base_url: str, predicado, limite: float = ESPERA_HTTP_S) -> dict | None:
+    """Sonda o `GET /api/state` até `predicado(estado)`; devolve o estado ou `None` (limite esgotado)."""
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < limite:
+        estado = _get(base_url, "/api/state")
+        if predicado(estado):
+            return estado
+        time.sleep(0.1)
+    return None
+
+
+def _limpas_desde(amostras: list[dict], limpa) -> tuple[int | None, list[dict]]:
+    """`(i, amostras[i:])` da 1.ª amostra LIMPA (já com a paragem aplicada), ou `(None, [])`.
+
+    Entre o `200` do POST e o passo de decisão em que o runner lê o ficheiro de controlo podem sair
+    amostras ainda com o vento antigo (o runner vigia o ficheiro a cada passo; a telemetria sai a ~10 Hz).
+    O invariante não é «zero amostras sujas», é o do dono: a paragem chega DEPRESSA (`ATRASO_MAX_AMOSTRAS`)
+    e, uma vez limpa, NUNCA mais volta — quem chama exige as duas coisas.
+    """
+    primeiro = next((i for i, a in enumerate(amostras) if limpa(a)), None)
+    return primeiro, ([] if primeiro is None else amostras[primeiro:])
+
+
+def _checa_paragem_simples(base_url: str, telemetria: Path, rota: str, corpo: dict | None,
+                           bloco: dict) -> tuple[bool, list[str]]:
+    """r13: liga o vento dos 3 botões (com aleatoriedade), pára-o por `rota` e mede a paragem.
+
+    Depois da paragem: `vento_modo` passa a `nenhum` e nunca mais é `natural`; o vento só DESCE (nenhuma
+    rajada o volta a subir) na direção pedida, sem componente vertical (a turbulência acabou); chega a zero
+    EXATO e fica em zero; e o bloco guardado fica `ligado: false` com as preferências intactas.
+    """
+    relatorio: list[str] = []
+    codigo, resposta = _post(base_url, "/api/vento-simples", bloco)
+    if codigo != 200:
+        return False, [f"POST /api/vento-simples recusado ({codigo}): {resposta}"]
+    soprar = _esperar_estado(base_url, lambda e: e["vento_atual"]["modo"] == "natural"
+                             and float(e["vento_atual"]["vel"]) > 0.5 * bloco["intensidade"])
+    if soprar is None:
+        return False, [f"o vento dos 3 botões não chegou a soprar ({_get(base_url, '/api/state')['vento_atual']})"]
+    relatorio.append(f"3 botões LIGADOS ({bloco['intensidade']:g} m/s @ {bloco['direcao']:g}°, aleatório): "
+                     f"modo={soprar['vento_atual']['modo']} · vento em vigor={soprar['vento_atual']['vel']:.3f} m/s")
+    codigo, resposta = _post(base_url, rota, corpo)
+    if codigo != 200:
+        return False, relatorio + [f"POST {rota} devolveu {codigo}: {resposta}"]
+    linha_parar = len(linhas_telemetria(telemetria))
+    # a rampa de desligar leva τ·ln(W/resíduo) ≈ 5 s de SIMULAÇÃO: espera-se pelo zero, não por um relógio
+    parado = _esperar_estado(base_url, lambda e: float(e["vento_atual"]["vel"]) == 0.0, 4 * ESPERA_HTTP_S)
+    amostras = _amostras_depois(telemetria, linha_parar, 0)
+    amostras = _amostras_depois(telemetria, linha_parar, len(amostras) + AMOSTRAS_PARADO)
+    primeiro, limpas = _limpas_desde(amostras, lambda a: a.get("vento_modo") == "nenhum")
+    normas = [float(np.linalg.norm(a["vento_vec"])) for a in limpas]
+    direcao = np.array([np.cos(np.radians(bloco["direcao"])), np.sin(np.radians(bloco["direcao"])), 0.0])
+    fora = max((float(np.linalg.norm(np.array(a["vento_vec"], dtype=float) - n * direcao))
+                for a, n in zip(limpas, normas)), default=float("inf"))
+    desce = all(b <= a + TOL_TELE for a, b in pairwise(normas))
+    zeros = [n for n in normas if n == 0.0]
+    cauda_zero = bool(normas) and all(n == 0.0 for n in normas[-AMOSTRAS_PARADO:])
+    estado = _get(base_url, "/api/sim")
+    simples = estado.get("vento_simples") or {}
+    ok = (parado is not None and primeiro is not None and primeiro <= ATRASO_MAX_AMOSTRAS
+          and all(a.get("vento_modo") == "nenhum" for a in limpas) and desce and fora <= 2 * TOL_TELE
+          and cauda_zero and simples.get("ligado") is False
+          and simples.get("intensidade") == bloco["intensidade"] and simples.get("aleatorio") is True
+          and simples.get("direcao") == bloco["direcao"]
+          and float(estado["vento_atual"]["vel"]) == 0.0 and estado["vento_atual"]["modo"] == "nenhum")
+    relatorio.append(f"depois de POST {rota}{'' if corpo is None else ' ' + json.dumps(corpo)}: {len(amostras)} "
+                     f"amostras · limpa à {primeiro}.ª · modos={sorted({str(a.get('vento_modo')) for a in limpas})} "
+                     f"· só desce={desce} ({normas[0] if normas else float('nan'):.3f} → "
+                     f"{normas[-1] if normas else float('nan'):.3f} m/s) · desvio da direção pedida "
+                     f"(turbulência/vertical)={fora:.2e} m/s · {len(zeros)} amostras em zero exato · "
+                     f"guardado={simples}")
+    if not ok:
+        relatorio.append(f"a paragem do vento dos 3 botões por {rota} deixou vento/rajada a atuar")
+    return ok, relatorio
+
+
 def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bool, list[str]]:
     """Ponta a ponta pelo SERVIDOR real (`sim_site.py` + runner + POSTs), como o site faz.
 
-    Cobre o que o teste ao nível do runner não cobre: a rota `POST /api/parar` a passar pelo HTTP, com o
-    `seq` a subir no ficheiro de controlo e o vento a chegar à física do runner.
+    Cobre o que o teste ao nível do runner não cobre: as rotas a passar pelo HTTP, com o `seq` a subir no
+    ficheiro de controlo e o vento a chegar à física do runner — o PARAR do contrato antigo
+    (`POST /api/parar`, `POST /api/vento-dinamico {nenhum}`) e as DUAS paragens do cockpit (r13):
+    `POST /api/vento-simples {ligado: false}` (o interruptor VENTO / a tecla V) e o `POST /api/parar`.
     """
     relatorio: list[str] = []
     controlo, telemetria = pasta / "http_controle.json", pasta / "http_telemetria.jsonl"
@@ -793,7 +1101,14 @@ def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bo
                 break
         if base_url is None:
             return False, ["não consegui arrancar o sim_site.py (sem URL no stdout)"]
-        relatorio.append(f"servidor real em {base_url}")
+        # A porta responde ANTES de o runner (que ainda importa o torch e carrega o modelo) publicar a 1.ª
+        # amostra: sem esta espera os POSTs caíam num simulador que ainda não corria e o «antes do PARAR»
+        # era lido do ficheiro de controlo, não da física.
+        arranque = _esperar_estado(base_url, lambda e: int(e.get("passo") or 0) > 0, 180.0)
+        if arranque is None:
+            return False, [f"servidor real em {base_url}, mas o runner não publicou telemetria em 180 s"]
+        relatorio.append(f"servidor real em {base_url} · runner a correr (passo {arranque['passo']}, "
+                         f"controlador {(arranque.get('controlador') or {}).get('modo')!r})")
 
         # 1) vento base 3 m/s @ 90 + 4 rajadas (3 dirigidas + 1 modo contínuo), com o seq a subir
         if _post(base_url, "/api/vento", {"vel": 3.0, "azimute": 90.0, "elevacao": 0.0})[0] != 200:
@@ -803,32 +1118,39 @@ def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bo
             codigo, resposta = _post(base_url, "/api/vento-dinamico", corpo)
             if codigo != 200:
                 return False, relatorio + [f"POST /api/vento-dinamico recusado ({codigo}): {resposta}"]
-        time.sleep(1.0)
-        estado = _get(base_url, "/api/sim")
+        # … e a rajada tem de estar MESMO a atuar na física (telemetria do runner) antes de se parar
+        estado = _esperar_estado(base_url, lambda e: e["vento_atual"]["modo"] in MODOS_DINAMICOS
+                                 and e["vento_atual"].get("fonte", "").startswith("telemetria"))
         pedido = sim_site.ler_controlo(controlo).get("dinamico", {})
+        if estado is None:
+            return False, relatorio + [(f"a rajada pedida (seq={pedido.get('seq')}) nunca chegou à física: "
+                                        f"{_get(base_url, '/api/state')['vento_atual']}")]
         relatorio.append(f"antes do PARAR: modo={estado['vento_atual']['modo']} · vento em vigor="
-                         f"{estado['vento_atual']['vel']:.3f} m/s · pedido={pedido.get('modo')} "
-                         f"(seq={pedido.get('seq')})")
+                         f"{estado['vento_atual']['vel']:.3f} m/s ({estado['vento_atual'].get('fonte')}) · "
+                         f"pedido={pedido.get('modo')} (seq={pedido.get('seq')})")
 
         # 2) PARAR VENTO pelo HTTP (uma rota, uma escrita atómica)
         codigo, corpo = _post(base_url, "/api/parar")
         if codigo != 200:
             return False, relatorio + [f"POST /api/parar devolveu {codigo}: {corpo}"]
         linha_parar = len(linhas_telemetria(telemetria))
-        time.sleep(2.0)
-        amostras = linhas_telemetria(telemetria)[linha_parar:]
+        amostras = _amostras_depois(telemetria, linha_parar, ATRASO_MAX_AMOSTRAS + AMOSTRAS_PARADO)
+        primeiro, limpas = _limpas_desde(
+            amostras, lambda a: a.get("vento_modo") == "nenhum"
+            and float(np.linalg.norm(np.array(a["vento_vec"], dtype=float))) <= TOL_TELE)
         estado = _get(base_url, "/api/sim")
-        pior = max((float(np.linalg.norm(np.array(a["vento_vec"], dtype=float))) for a in amostras),
+        pior = max((float(np.linalg.norm(np.array(a["vento_vec"], dtype=float))) for a in limpas),
                    default=float("inf"))
-        modos = sorted({str(a.get("vento_modo")) for a in amostras})
-        ok = (len(amostras) >= 3 and pior <= TOL_TELE and modos == ["nenhum"]
+        modos = sorted({str(a.get("vento_modo")) for a in limpas})
+        ok = (primeiro is not None and primeiro <= ATRASO_MAX_AMOSTRAS and len(limpas) >= AMOSTRAS_PARADO
+              and pior <= TOL_TELE and modos == ["nenhum"]
               and float(estado["vento"]["vel"]) == 0.0 and estado["vento"]["ativo"] is False
               and estado["vento_dinamico"]["modo"] == "nenhum"
               and estado["vento_dinamico"]["ativo"] is False
               and float(estado["vento_atual"]["vel"]) == 0.0 and estado["vento_atual"]["modo"] == "nenhum")
-        relatorio.append(f"depois do PARAR VENTO: {len(amostras)} amostras · modos={modos} · "
-                         f"pior ‖vento_vec‖={pior:.3e} m/s · API vento={estado['vento']} · "
-                         f"dinamico={estado['vento_dinamico']}")
+        relatorio.append(f"depois do PARAR VENTO: {len(amostras)} amostras · limpa à {primeiro}.ª · "
+                         f"{len(limpas)} seguidas com modos={modos} · pior ‖vento_vec‖={pior:.3e} m/s · API "
+                         f"vento={estado['vento']} · dinamico={estado['vento_dinamico']}")
         if not ok:
             return False, relatorio + ["o PARAR VENTO pelo HTTP deixou vento/rajada a atuar"]
 
@@ -837,25 +1159,42 @@ def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bo
             return False, relatorio + ["POST /api/vento recusado (2.ª volta)"]
         if _post(base_url, "/api/vento-dinamico", rajada(u=5.0, duracao=400))[0] != 200:
             return False, relatorio + ["POST /api/vento-dinamico recusado (2.ª volta)"]
-        time.sleep(0.8)
+        if _esperar_estado(base_url, lambda e: e["vento_atual"]["modo"] == "rajada_agora") is None:
+            return False, relatorio + ["a rajada da 2.ª volta nunca chegou à física"]
         if _post(base_url, "/api/vento-dinamico", {"modo": "nenhum", "ativo": False})[0] != 200:
             return False, relatorio + ["POST /api/vento-dinamico (nenhum) recusado"]
         linha_parar = len(linhas_telemetria(telemetria))
-        time.sleep(2.0)
-        amostras = linhas_telemetria(telemetria)[linha_parar:]
+        amostras = _amostras_depois(telemetria, linha_parar, ATRASO_MAX_AMOSTRAS + AMOSTRAS_PARADO)
         base = np.array([0.0, 3.0, 0.0])
-        pior = max((float(np.linalg.norm(np.array(a["vento_vec"], dtype=float) - base)) for a in amostras),
+        primeiro, limpas = _limpas_desde(
+            amostras, lambda a: a.get("vento_modo") == "nenhum"
+            and float(np.linalg.norm(np.array(a["vento_vec"], dtype=float) - base)) <= TOL_TELE)
+        pior = max((float(np.linalg.norm(np.array(a["vento_vec"], dtype=float) - base)) for a in limpas),
                    default=float("inf"))
-        modos = sorted({str(a.get("vento_modo")) for a in amostras})
+        modos = sorted({str(a.get("vento_modo")) for a in limpas})
         estado = _get(base_url, "/api/sim")
-        ok = (len(amostras) >= 3 and pior <= TOL_TELE and modos == ["nenhum"]
+        ok = (primeiro is not None and primeiro <= ATRASO_MAX_AMOSTRAS and len(limpas) >= AMOSTRAS_PARADO
+              and pior <= TOL_TELE and modos == ["nenhum"]
               and abs(float(estado["vento_atual"]["vel"]) - 3.0) <= TOL_TELE)
-        relatorio.append(f"depois do PARAR DINAMICO: {len(amostras)} amostras · modos={modos} · "
-                         f"pior desvio do vento base={pior:.3e} m/s · vento_atual={estado['vento_atual']}")
+        relatorio.append(f"depois do PARAR DINAMICO: {len(amostras)} amostras · limpa à {primeiro}.ª · "
+                         f"{len(limpas)} seguidas com modos={modos} · pior desvio do vento base={pior:.3e} "
+                         f"m/s · vento_atual={estado['vento_atual']}")
         if not ok:
             return False, relatorio + ["o PARAR DINAMICO pelo HTTP deixou vento/rajada a atuar"]
 
-        # 4) DEFEITO (1): tempestade de POSTs concorrentes (500 / JSON partido / comandos perdidos)
+        # 4) r13 — as paragens do COCKPIT: o interruptor VENTO / tecla V e o PARAR (desliga os dois)
+        if TEM_SIMPLES:
+            for rota, corpo in (("/api/vento-simples", {"ligado": False}), ("/api/parar", None)):
+                ok, linhas = _checa_paragem_simples(
+                    base_url, telemetria, rota, corpo,
+                    {"ligado": True, "intensidade": 3.0, "aleatorio": True, "direcao": 90.0})
+                relatorio += linhas
+                if not ok:
+                    return False, relatorio
+        else:
+            relatorio.append("(estas fontes não têm o vento dos 3 botões: as paragens do cockpit não se medem)")
+
+        # 5) DEFEITO (1): tempestade de POSTs concorrentes (500 / JSON partido / comandos perdidos)
         ok_conc, linhas = checa_concorrencia(base_url, controlo)
         relatorio += linhas
         return ok_conc, relatorio
@@ -870,11 +1209,14 @@ def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bo
             processo.kill()
 
 
-# ------------------------------------------------------------------ defeito (2): corrida do debounce do front
+# ------------------------------------------------------------------ o COCKPIT (r13) num browser a sério
 # Driver CDP mínimo (sem dependências: `WebSocket` global do Node ≥ 22 + o endpoint HTTP do Chrome). O
-# trabalho todo acontece DENTRO da página servida pelo `sim_site.py` (o front real, o bundle de `site/dist`):
-# clica nos botões verdadeiros, escreve nos campos verdadeiros (setter nativo + evento `input`, que é o que
-# o React escuta) e lê o estado pelo `GET /api/sim` do próprio servidor.
+# trabalho todo acontece DENTRO da página servida pelo `sim_site.py` (o front real: o bundle de `site/dist`,
+# ou o de `--dist`): abre a janela Vento pela tecla 3, clica no interruptor verdadeiro, arrasta o slider
+# verdadeiro (setter nativo + evento `input`, que é o que o React escuta; `pointerup` = largar) e lê o
+# estado pelo `GET /api/state` do próprio servidor. O «outro cliente» dos cenários multi-cliente é um
+# `fetch` CRU à API (a referência guardada ANTES da instrumentação: não passa pelos controlos do cockpit
+# nem entra na lista de POSTs do front).
 _DRIVER_CDP = r'''
 const [, , portaArg, urlBase, argsArg] = process.argv
 const args = JSON.parse(argsArg)
@@ -922,221 +1264,215 @@ function ligar(url) {
         pendentes.delete(msg.id)
         if (msg.error) pendente.rej(new Error(JSON.stringify(msg.error)))
         else pendente.res(msg.result)
-        return
       }
     })
   })
 }
 
-// Tudo o que se passa na página: a sequência de cada cenário (editar um param = agendar o live-apply de
-// ~300 ms; esperar a janela pedida; clicar o controlo de paragem do cenário — PARAR VENTO, PARAR DINÂMICO
-// ou a opção PARADO do toggle; amostrar o estado do servidor durante 2,6 s).
+// Tudo o que se passa na página. Cada cenário: deixar o vento LIGADO e a soprar; ARRASTAR o slider da
+// intensidade duas vezes seguidas (a 1.ª sai já, a 2.ª fica PENDENTE no emissor do painel — ≤ 10 Hz); esperar
+// a janela pedida; PARAR (o interruptor, a tecla V, ou OUTRO cliente); largar o slider 150 ms DEPOIS (o
+// envio final do gesto — o «apply atrasado» do cockpit); amostrar o servidor durante a janela.
 const NA_PAGINA = async (args) => {
   const espera = (ms) => new Promise((r) => setTimeout(r, ms))
-  const porTeste = (id) => document.querySelector(`[data-testid="${id}"]`)
-  const opcaoModo = (texto) => {
-    const grupo = document.querySelector('[aria-label="modo dinâmico contínuo"]')
-    if (!grupo) return null
-    const opcoes = Array.from(grupo.querySelectorAll("button"))
-    return opcoes.find((b) => b.textContent.trim() === texto) || null
-  }
-  // É a opção que está PRESSIONADA no toggle? (base-ui marca `aria-pressed`/`data-pressed`). É o que diz se
-  // o painel acha que o modo contínuo está ligado — com o poll atrasado ele pode estar desatualizado, e um
-  // clique em PARADO só manda o comando se o modo em vigor (para o painel) ainda for o RAJADAS.
-  const opcaoPressionada = (texto) => {
-    const b = opcaoModo(texto)
-    if (!b) return false
-    return b.getAttribute("aria-pressed") === "true" || b.getAttribute("data-pressed") === "true"
-  }
-  // O controlo de paragem do cenário, como o utilizador o vê.
-  const alvoParagem = (tipo) => {
-    if (tipo === "vento") return porTeste("botao-parar-vento")
-    if (tipo === "dinamico") return porTeste("botao-parar-dinamico")
-    if (tipo === "parado") return opcaoModo("PARADO")
-    return null
-  }
-  // O alvo está UTILIZÁVEL? (os botões ficam desativados enquanto há um POST em voo; o toggle só troca se
-  // o alvo for diferente do modo que o painel mostra)
-  const alvoLivre = (tipo, el) => {
-    if (!el) return false
-    if (tipo === "parado") return opcaoPressionada("RAJADAS")
-    return !el.disabled
-  }
-  // O polling do PRÓPRIO site conta-se aqui: prova que a corrida foi testada com o poll a correr.
-  const buscar = window.fetch.bind(window)   // referência para a AMOSTRAGEM (nunca atrasada)
-  let polls = 0
-  let atrasarPoll = 0                       // ms de atraso na RESPOSTA do `/api/sim` (por cenário)
-  let ultimoPoll = null                     // último `vento_dinamico` que o PAINEL recebeu (diagnóstico)
-  const envios = []                         // os POSTs que o FRONT manda (vê-se aqui o apply atrasado)
-  // POLL LENTO: o cancelamento do apply agendado (debounce de ~300 ms) depende do POLLING, por isso é o
-  // tempo que a resposta do `GET /api/sim` leva a chegar ao painel que decide se o apply escapa. Medido
-  // nesta máquina: com a telemetria no teto de 4 MB que o `/api/sim` lê do fim, o pedido custa ~65 ms só
-  // de parsing — e o site faz o poll a cada 350 ms; numa máquina/browser carregado (ou com o runner a
-  // competir pelo GIL) passa disso com folga. Aqui o atraso é explícito e determinístico, aplicado à
-  // resposta (o pedido sai já): nenhuma resposta que já reflita o PARAR chega ao painel antes de o
-  // temporizador de ~300 ms do apply disparar.
+  const q = (id) => document.querySelector(`[data-testid="${id}"]`)
+  const tecla = (tipo, key, code, keyCode) =>
+    window.dispatchEvent(new KeyboardEvent(tipo, { key, code, keyCode, bubbles: true, cancelable: true }))
+  const buscar = window.fetch.bind(window)     // a API CRUA: a amostragem e o «outro cliente»
+  const envios = []                            // os POSTs que o FRONT manda (é aqui que se vê um apply atrasado)
   window.fetch = async (...a) => {
     const url = String(a[0])
-    if (url.includes("/api/")) {
-      const opcoes = a[1] || {}
-      if (String(opcoes.method || "GET").toUpperCase() === "POST") {
-        envios.push({ t: performance.now(), url: url.slice(url.indexOf("/api/")), corpo: opcoes.body || null })
-      }
+    const opcoes = a[1] || {}
+    if (url.includes("/api/") && String(opcoes.method || "GET").toUpperCase() === "POST") {
+      envios.push({ t: performance.now(), url: url.slice(url.indexOf("/api/")), corpo: opcoes.body || null })
     }
-    const resposta = await buscar(...a)
-    if (atrasarPoll > 0 && url.includes("/api/sim")) {
-      polls += 1
-      resposta
-        .clone()
-        .json()
-        .then((j) => {
-          ultimoPoll = { t: Math.round(performance.now()), din: (j || {}).vento_dinamico || null }
-        })
-        .catch(() => {})
-      await espera(atrasarPoll)
-    }
-    return resposta
+    return buscar(...a)
   }
-  const escreverCampo = (id, valor) => {
-    const el = porTeste(`campo-${id}`)
-    if (!el) throw new Error(`o campo ${id} não está no DOM`)
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set
-    setter.call(el, String(valor))
-    el.dispatchEvent(new Event("input", { bubbles: true }))
+  const cru = async (rota, corpo) => {
+    const resposta = await buscar(rota, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    })
+    return resposta.status
   }
-  // Amostra pelo `/api/state` (curto, sem as amostras da telemetria): o `/api/sim` é justamente o pedido
-  // que a prova atrasa para simular o poll lento, e a amostragem não pode ficar presa atrás dele.
   const lerEstado = async () => {
     const resposta = await buscar("/api/state", { cache: "no-store" })
     if (!resposta.ok) throw new Error(`GET /api/state devolveu ${resposta.status}`)
     const j = await resposta.json()
-    const din = j.vento_dinamico || {}
+    const simples = j.vento_simples || {}
     const atual = j.vento_atual || {}
     return {
-      modo: din.modo === undefined ? null : din.modo,
-      ativo: din.ativo === true,
-      p: (din.params || {}).p === undefined ? null : (din.params || {}).p,
-      seq: din.seq === undefined ? null : din.seq,
+      ligado: simples.ligado === undefined ? null : simples.ligado,
+      intensidade: simples.intensidade === undefined ? null : simples.intensidade,
       vento_modo: atual.modo === undefined ? null : atual.modo,
       vento_vel: atual.vel === undefined ? null : atual.vel,
+      antigo: (j.vento_dinamico || {}).modo || null,
     }
   }
-  const esperar = async (predicado, limite) => {
+  const esperar = async (predicado, limite, passo = 40) => {
     const t0 = performance.now()
     while (performance.now() - t0 < limite) {
       if (await predicado()) return true
-      await espera(40)
+      await espera(passo)
     }
     return false
   }
-  const pronto = () =>
-    esperar(async () => {
-      const botao = porTeste("botao-parar-vento")
-      return !!botao && !botao.disabled && !!opcaoModo("RAJADAS")
-    }, args.prontidaoMs)
-  if (!(await pronto())) throw new Error("o painel de controlos não ficou pronto (site/dist desatualizado?)")
+  // O painel como o DONO o vê: o interruptor, o valor do slider e os avisos (toasts).
+  const painel = () => {
+    const interruptor = q("vento-ligado")
+    const slider = q("vento-intensidade")
+    return {
+      ligado: interruptor ? interruptor.getAttribute("data-ligado") === "sim" : null,
+      intensidade: slider ? Number(slider.value) : null,
+      avisos: Array.from(document.querySelectorAll('[aria-label="fechar aviso"]')).map((b) =>
+        b.parentElement ? b.parentElement.textContent : ""
+      ),
+    }
+  }
+  const arrastar = (valor) => {
+    const el = q("vento-intensidade")
+    if (!el) throw new Error("o slider da intensidade não está no DOM")
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set
+    setter.call(el, String(valor))
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const largar = () => {
+    const el = q("vento-intensidade")
+    if (el) el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }))
+  }
+  const parar = async (tipo) => {
+    if (tipo === "interruptor") q("vento-ligado").click()
+    else if (tipo === "tecla_v") {
+      tecla("keydown", "v", "KeyV", 86)
+      tecla("keyup", "v", "KeyV", 86)
+    } else if (tipo === "cru_parar") return await cru("/api/parar")
+    else if (tipo === "cru_simples") return await cru("/api/vento-simples", { ligado: false })
+    else throw new Error(`paragem desconhecida: ${tipo}`)
+    return null
+  }
 
-  // O painel só sabe do estado novo quando o POLLING volta (~350 ms): clicar no modo antes disso é um
-  // no-op (o `trocarModo` vê o modo antigo e sai). Por isso os cliques repetem-se até o SERVIDOR confirmar.
-  const garantirParado = async () => {
-    for (let t = 0; t < 120; t++) {
-      const botao = porTeste("botao-parar-vento")
-      if (botao && !botao.disabled) botao.click()
-      if ((await lerEstado()).modo === "nenhum") return true
-      await espera(80)
-    }
-    return false
+  // ---- o cockpit pronto e a janela Vento aberta (tecla 3)
+  if (!(await esperar(() => !!q("cockpit") && !!q("hud") && q("hud").getAttribute("data-vivo") === "sim",
+                      args.prontidaoMs, 200)))
+    throw new Error("o cockpit não ficou pronto: HUD sem ligação (site/dist desatualizado? runner parado?)")
+  if (!q("janela-vento")) {
+    tecla("keydown", "3", "Digit3", 51)
+    tecla("keyup", "3", "Digit3", 51)
   }
-  const garantirModo = async (texto) => {
-    const alvo = texto.toLowerCase()
-    for (let t = 0; t < 120; t++) {
-      const opcao = opcaoModo(texto)
-      if (opcao) opcao.click()
-      if ((await lerEstado()).modo === alvo) return true
-      await espera(80)
-    }
-    return false
+  if (!(await esperar(() => !!q("vento-ligado") && !!q("vento-intensidade"), 15000)))
+    throw new Error("a janela Vento não abriu com a tecla 3 (interruptor e slider fora do DOM)")
+  const antigos = {
+    pararVento: !!q("botao-parar-vento"),
+    pararDinamico: !!q("botao-parar-dinamico"),
+    modos: !!document.querySelector('[aria-label="modo dinâmico contínuo"]'),
   }
 
-  // Deixa o painel ASSENTAR antes da edição: com o poll atrasado, as respostas do PARAR (que ainda dizem
-  // «nenhum») chegam até `atrasoPollMs` depois do clique e, se caírem depois da edição, apagam a linha de
-  // base dos params e o apply agendado nunca sai — o cenário passaria sem testar nada.
-  const assentar = async () => {
-    for (let tentativa = 0; tentativa < 4; tentativa++) {
-      if (!(await garantirParado())) return false
-      if (!(await garantirModo("RAJADAS"))) return false
-      // 1) todas as respostas atrasadas do PARAR (que ainda dizem «nenhum») têm de chegar ANTES da
-      //    edição, senão apagariam a linha de base dos params e o apply agendado nunca sairia;
-      await espera(args.atrasoPollMs + 350)
-      // 2) o painel dos params entra com animação (`AnimatePresence mode="wait"`): dá-se-lhe tempo. O
-      //    toggle tem de mostrar o RAJADAS PRESSIONADO — é ele que diz que o painel julga o modo ligado
-      //    (sem isso, um clique no PARADO seria um no-op e o cenário não testaria paragem nenhuma).
-      const campo = await esperar(async () => !!porTeste("campo-rajadas-p"), args.prontidaoMs)
-      if (campo && opcaoPressionada("RAJADAS") && (await lerEstado()).modo === "rajadas") return true
-      await espera(120)
+  // Deixa o vento LIGADO a `intensidade`, a soprar de facto, e o painel quieto (sem POST em voo nem
+  // gesto recente: senão o cenário seguinte herdava envios do anterior).
+  const assentar = async (intensidade) => {
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      // o painel tem de mostrar o que o SERVIDOR tem (a adoção leva 1,5 s de carência + a sondagem de 1 Hz)
+      await esperar(async () => painel().ligado === (await lerEstado()).ligado, 6000, 150)
+      if (painel().ligado !== true) q("vento-ligado").click()
+      arrastar(intensidade)
+      largar()
+      const ok = await esperar(async () => {
+        const e = await lerEstado()
+        return e.ligado === true && e.intensidade === intensidade && e.vento_vel !== null &&
+          e.vento_vel > 0.6 * intensidade
+      }, args.prontidaoMs, 100)
+      await espera(450)                       // nenhum envio pendente do preparo (o emissor limita a 10 Hz)
+      if (ok && painel().ligado === true) return true
     }
     return false
   }
 
   const resultados = []
   for (const cenario of args.cenarios) {
-    const onde = `janela ${cenario.delta} ms / ${cenario.paragem ? `PARAR ${cenario.paragem}` : "controlo"}`
-    // O atraso do poll só corre nos cenários do PARAR (é a condição que abre a janela do defeito); nos
-    // controlos fica desligado para o painel estar sempre em dia e a edição agendar mesmo o apply.
-    atrasarPoll = cenario.paragem ? args.atrasoPollMs : 0
-    if (!(await assentar())) {
+    const onde = cenario.nome
+    if (!(await assentar(cenario.base))) {
       const estado = await lerEstado()
-      const ultimos = envios.slice(-6).map((e) => `${Math.round(e.t - performance.now())}:${e.url}`)
-      throw new Error(`${onde}: não consegui deixar o painel em RAJADAS (servidor: modo=${estado.modo} ` +
-        `ativo=${estado.ativo}; campo=${!!porTeste("campo-rajadas-p")}; ` +
-        `RAJADAS pressionado=${opcaoPressionada("RAJADAS")}; polls=${polls}; ` +
-        `último poll do painel=${JSON.stringify(ultimoPoll)}; POSTs recentes=${ultimos.join(" ")})`)
+      throw new Error(`${onde}: não consegui deixar o vento LIGADO a ${cenario.base} m/s ` +
+        `(servidor=${JSON.stringify(estado)}; painel=${JSON.stringify(painel())})`)
     }
-    const tParado = performance.now()
-    const tModo = performance.now()
-    if (!(await esperar(async () => !!porTeste("campo-rajadas-p"), args.prontidaoMs)))
-      throw new Error(`${onde}: o painel dos params de rajadas não apareceu`)
-    // O painel desativa o controlo de paragem enquanto tem um POST em voo (o `emCurso`): espera-se que
-    // fique livre ANTES da edição, para o clique da janela medida ser um clique de utilizador a sério.
-    if (!(await esperar(async () => alvoLivre("vento", alvoParagem("vento")), 5000)))
-      throw new Error(`${onde}: o botão PARAR VENTO ficou preso em «a enviar»`)
-    escreverCampo("rajadas-p", cenario.p)                       // agenda o live-apply (≈300 ms)
+    const saida = Object.assign({}, cenario, { antes: await lerEstado() })
+
+    if (cenario.tipo === "desatualizado") {
+      // paragem LOCAL + religamento por OUTRO cliente: o painel tem de ADOTAR o que o servidor diz e o
+      // clique seguinte tem de fazer o que o dono VÊ (desligar), não o contrário
+      q("vento-ligado").click()
+      saida.paragemLocal = await esperar(async () => (await lerEstado()).ligado === false, 8000)
+      saida.religamentoHttp = await cru("/api/vento-simples", { ligado: true, intensidade: cenario.religada })
+      const tRelig = performance.now()
+      saida.adotou = await esperar(() => {
+        const p = painel()
+        return p.ligado === true && p.intensidade === cenario.religada
+      }, args.adocaoMs, 100)
+      saida.adocaoMs = Math.round(performance.now() - tRelig)
+      saida.painelAdotado = painel()
+      const tEdicao = performance.now()
+      arrastar(cenario.p)
+      largar()
+      saida.edicaoChegou = await esperar(async () => {
+        const e = await lerEstado()
+        return e.ligado === true && e.intensidade === cenario.p
+      }, 8000)
+      saida.depoisDaEdicao = await lerEstado()
+      await espera(300)
+      q("vento-ligado").click()               // o dono vê LIGADO e desliga
+      saida.cliqueDesligou = await esperar(async () => (await lerEstado()).ligado === false, 8000)
+      saida.fim = await lerEstado()
+      saida.painelFim = painel()
+      saida.envios = envios.filter((e) => e.t >= tEdicao - 50).map((e) =>
+        Object.assign({}, e, { t: Math.round(e.t - tEdicao) }))
+      resultados.push(saida)
+      continue
+    }
+
+    // ---- o gesto: dois arrastos seguidos (o 2.º fica pendente no emissor) e a paragem na janela pedida
+    arrastar(cenario.intermedia)
+    arrastar(cenario.p)
     const tEdicao = performance.now()
     await espera(cenario.delta)
-    let desativado = false
-    if (cenario.paragem) {
-      if (!alvoParagem(cenario.paragem)) throw new Error(`${onde}: o controlo de paragem não está no DOM`)
-      // O apply pode disparar exactamente na janela do clique e deixar o controlo em «a enviar»: espera-se
-      // uns ms que ele fique livre (é o que o utilizador faria). O instante REAL do clique vai no
-      // relatório, logo a janela medida não se perde; se nunca ficar livre, o evento vai na mesma (direto).
-      const livre = await esperar(
-        () => alvoLivre(cenario.paragem, alvoParagem(cenario.paragem)),
-        1500
-      )
-      desativado = !livre
-      const alvo = alvoParagem(cenario.paragem)
-      if (livre) alvo.click()
-      else alvo.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    }
-    const tClique = performance.now()
+    if (cenario.paragem) saida.paragemHttp = await parar(cenario.paragem)
+    const tParagem = performance.now()
+    let largou = false
     const amostras = []
-    while (performance.now() - tClique < args.janelaMs) {
-      amostras.push(Object.assign({ t: Math.round(performance.now() - tClique) }, await lerEstado()))
+    while (performance.now() - tParagem < args.janelaMs) {
+      if (!largou && performance.now() - tParagem >= args.largarMs) {
+        largar()                              // o envio FINAL do slider chega DEPOIS da paragem
+        largou = true
+      }
+      amostras.push(Object.assign({ t: Math.round(performance.now() - tParagem) }, await lerEstado()))
       await espera(50)
     }
-    resultados.push(
-      Object.assign({}, cenario, {
-        esperaAplicacaoMs: Math.round(tClique - tEdicao),
-        botaoDesativado: desativado,
-        amostras: amostras,
-        envios: envios
-          .filter((e) => e.t >= tEdicao - 2000 && e.t <= tClique + args.janelaMs)
-          .map((e) => Object.assign({}, e, { t: Math.round(e.t - tEdicao) })),
-        marcos: { parado: Math.round(tParado - tEdicao), modo: Math.round(tModo - tEdicao) },
-      })
-    )
+    saida.esperaParagemMs = Math.round(tParagem - tEdicao)
+    saida.amostras = amostras
+    saida.painel = painel()
+    if (cenario.paragem && cenario.externa) {
+      // paragem de OUTRO cliente: o painel tem de acabar a dizer o que o servidor diz (DESLIGADO)
+      saida.painelRefletiu = await esperar(() => painel().ligado === false, args.adocaoMs, 100)
+      saida.adocaoMs = Math.round(performance.now() - tParagem)
+      saida.painel = painel()
+    }
+    if (cenario.paragem && amostras.length > 0 && amostras[amostras.length - 1].ligado === false) {
+      // a FÍSICA: o vento desce em rampa e chega a zero EXATO (o relógio é o do simulador: espera-se por
+      // ele). Com o servidor ainda LIGADO no fim da janela o cenário já falhou: não há zero por que esperar.
+      saida.chegouAZero = await esperar(async () => {
+        const e = await lerEstado()
+        amostras.push(Object.assign({ t: Math.round(performance.now() - tParagem) }, e))
+        return e.ligado === false && e.vento_vel === 0
+      }, args.zeroMs, 150)
+      saida.zeroMs = Math.round(performance.now() - tParagem)
+    }
+    saida.fim = await lerEstado()
+    saida.envios = envios
+      .filter((e) => e.t >= tEdicao - 50)
+      .map((e) => Object.assign({}, e, { t: Math.round(e.t - tEdicao) }))
+    resultados.push(saida)
   }
-  return { polls: polls, cenarios: resultados }
+  return { antigos: antigos, cenarios: resultados }
 }
 
 try {
@@ -1151,7 +1487,7 @@ try {
         expression: expressao,
         awaitPromise: true,
         returnByValue: true,
-        timeout: args.tempoLimiteMs || 240000,
+        timeout: args.tempoLimiteMs || 600000,
       })
       break
     } catch (erro) {
@@ -1199,51 +1535,51 @@ def _esperar_devtools(perfil: Path, processo, limite: float) -> int | None:
     return None
 
 
-def checa_navegador(pasta: Path, modelo: Path | None, fator_tempo: float, deltas: tuple[int, ...],
-                    porta: int = 8431, atraso_poll_ms: int = 500) -> tuple[bool, list[str]]:
-    """Ponta a ponta com o SERVIDOR real + o FRONT real num Chrome headless: o apply atrasado não volta.
+def _comando_do_site(dist: Path | None, argumentos: list[str]) -> list[str]:
+    """Linha de comandos do `sim_site.py` — com o front de `dist` em vez do `site/dist` da árvore, se dado.
 
-    O defeito: o live-apply dos params do painel é um `setTimeout` de ~300 ms que só era cancelado quando o
-    `modoContinuo` mudava — o que depende do polling (350 ms) mais o ida-e-volta do POST. Um clique dentro
-    dessa janela deixava sair `{modo:"rajadas",ativo:true,params}` DEPOIS da paragem e o servidor+runner
-    honravam-no: o modo voltava a `rajadas` depois de parar. Só o PARAR VENTO invalidava o apply pendente;
-    o PARAR DINÂMICO e o toggle PARADO ficavam de fora (era por aí que o modo VOLTava 0,3–0,7 s depois).
+    Servir outro bundle NÃO toca na árvore: o servidor é o mesmo módulo, lançado por um `-c` que só lhe
+    troca as duas constantes do sítio dos ficheiros estáticos (`DIST`/`INDEX`) antes do `main`. É o que
+    deixa a prova de mutação compilar o front adulterado numa CÓPIA em `$TMPDIR` (o `site/` do dono, que
+    pode estar a ser servido por outra sessão, nunca é reescrito).
+    """
+    if dist is None:
+        return [sys.executable, str(_AQUI / "sim_site.py"), *argumentos]
+    codigo = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import sim_site; "
+              "sim_site.DIST = Path(sys.argv[2]); sim_site.INDEX = sim_site.DIST / 'index.html'; "
+              "sys.exit(sim_site.main(sys.argv[3:]))")
+    return [sys.executable, "-c", codigo, str(_FONTES or _AQUI), str(dist), *argumentos]
 
-    Cada cenário liga o modo RAJADAS, EDITA um param (o que agenda o apply), espera a janela pedida
-    (0/50/100/300/600/1000 ms) e clica o controlo de paragem do cenário — os TRÊS caminhos (`PARAGENS`):
-    PARAR VENTO, PARAR DINÂMICO e o toggle PARADO. Depois amostra o `GET /api/state` durante 2,6 s. O
-    invariante, igual para os três: (i) a partir da primeira amostra em `nenhum`/inativo, NENHUMA amostra
-    pode voltar a um modo ativo; (ii) nenhum POST de apply contínuo pode SAIR do front depois do clique;
-    (iii) no fim a dinâmica está desligada (e, no PARAR VENTO, o vento é 0). Cada janela corre também SEM
-    paragem (o controlo positivo), SEMPRE DEPOIS dos três cenários de paragem da mesma janela: além de
-    provar que o apply agendado sai aos ~300 ms com o `p` novo (senão o cenário da paragem podia passar por
-    não haver apply nenhum), prova que um comando NOVO do utilizador volta a armar o live-apply depois de
-    uma paragem — é o «depois de parar, um comando novo funciona normalmente».
 
-    O contador de polling da página vai no resultado: a corrida é testada com o poll do site a correr.
+def _correr_no_cockpit(pasta: Path, nome: str, modelo: Path | None, fator_tempo: float, porta: int,
+                       cenarios: list[dict], janela_ms: int, dist: Path | None) -> tuple[dict | None, list[str]]:
+    """Servidor real + Chrome headless + driver: corre `cenarios` no cockpit e devolve `(dados, relatório)`.
+
+    `dados` é `None` quando a prova não chegou a correr (o relatório diz porquê). O `--controlador` fica no
+    padrão do site (`auto`): é o cockpit tal como o dono o abre, e o vento não depende de quem pilota.
     """
     relatorio: list[str] = []
     node = _binario(("node",))
     chrome = _binario(("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"))
     if node is None or chrome is None:
-        return False, [f"esta prova precisa do node e do Chrome (node={node!r}, chrome={chrome!r})"]
-    if not (SITE / "dist" / "index.html").is_file():
-        return False, [f"{SITE / 'dist' / 'index.html'} não existe — corra `npm run build` em {SITE}"]
+        return None, [f"esta prova precisa do node e do Chrome (node={node!r}, chrome={chrome!r})"]
+    indice = (dist or SITE / "dist") / "index.html"
+    if not indice.is_file():
+        return None, [f"{indice} não existe — corra `npm run build` em {SITE}"]
 
     pasta.mkdir(parents=True, exist_ok=True)
-    controlo, telemetria = pasta / "nav_controle.json", pasta / "nav_telemetria.jsonl"
+    controlo, telemetria = pasta / f"{nome}_controle.json", pasta / f"{nome}_telemetria.jsonl"
     for caminho in (controlo, telemetria):
         caminho.unlink(missing_ok=True)
-    driver = pasta / "driver_cdp.mjs"
+    driver = pasta / "driver_cockpit.mjs"
     driver.write_text(_DRIVER_CDP, encoding="utf-8")
 
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
-               "--port", str(porta), "--controlo", str(controlo), "--telemetria", str(telemetria),
-               "--fator-tempo", f"{fator_tempo:g}"]
+    argumentos = ["--sem-browser", "--sem-janela", "--port", str(porta), "--controlo", str(controlo),
+                  "--telemetria", str(telemetria), "--fator-tempo", f"{fator_tempo:g}"]
     if modelo is not None:
-        comando += ["--model", str(modelo)]
-    servidor = subprocess.Popen(comando, cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, start_new_session=True)
+        argumentos += ["--model", str(modelo)]
+    servidor = subprocess.Popen(_comando_do_site(dist, argumentos), cwd=str(_AQUI), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
     navegador = None
     try:
         base_url = None
@@ -1257,36 +1593,33 @@ def checa_navegador(pasta: Path, modelo: Path | None, fator_tempo: float, deltas
                 base_url = achado.group(1).rstrip("/")
                 break
         if base_url is None:
-            return False, relatorio + [(f"não consegui arrancar o sim_site.py na porta {porta} "
-                                        "(porta ocupada?)")]
-        relatorio.append(f"servidor real em {base_url} · controlo/telemetria em {pasta} · "
-                         f"atraso do poll (GET /api/sim) no browser: {atraso_poll_ms} ms")
+            return None, [f"não consegui arrancar o sim_site.py na porta {porta} (porta ocupada?)"]
+        relatorio.append(f"servidor real em {base_url} · front: {indice.parent} · controlo/telemetria em {pasta}")
 
-        perfil = pasta / "chrome-perfil"
+        perfil = pasta / f"chrome-perfil-{nome}"
         shutil.rmtree(perfil, ignore_errors=True)
         navegador = subprocess.Popen(
             [chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={perfil}",
              "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-dev-shm-usage",
-             "--remote-allow-origins=*", base_url + "/"],
+             "--window-size=1366,768", "--remote-allow-origins=*", base_url + "/"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         porta_cdp = _esperar_devtools(perfil, navegador, 30.0)
         if porta_cdp is None:
-            return False, relatorio + ["o Chrome não abriu a porta de depuração (CDP)"]
-
-        cenarios = [{"delta": int(delta), "p": round(0.2 + 0.03 * i, 3), "paragem": paragem}
-                    for i, (delta, paragem) in enumerate((d, p) for d in deltas
-                                                         for p in PARAGENS + (None,))]
-        argumentos = {"cenarios": cenarios, "janelaMs": 2600, "prontidaoMs": 30000,
-                      "tempoLimiteMs": 600000, "atrasoPollMs": int(atraso_poll_ms)}
+            return None, relatorio + ["o Chrome não abriu a porta de depuração (CDP)"]
+        argumentos_driver = {"cenarios": cenarios, "janelaMs": int(janela_ms), "largarMs": LARGAR_MS,
+                             "prontidaoMs": 90000, "adocaoMs": ADOCAO_MS, "zeroMs": ZERO_MS,
+                             "tempoLimiteMs": 900000}
         try:
-            resultado = subprocess.run([node, str(driver), str(porta_cdp), base_url, json.dumps(argumentos)],
-                                       capture_output=True, text=True, timeout=420, check=False)
+            resultado = subprocess.run([node, str(driver), str(porta_cdp), base_url,
+                                        json.dumps(argumentos_driver)],
+                                       capture_output=True, text=True, timeout=900, check=False)
         except subprocess.TimeoutExpired:
-            return False, relatorio + ["o driver do navegador não terminou em 420 s"]
+            return None, relatorio + ["o driver do navegador não terminou em 900 s"]
         if resultado.returncode != 0:
-            return False, relatorio + [(f"o driver do navegador falhou ({resultado.returncode}):\n"
-                                        f"{(resultado.stderr or resultado.stdout)[-2000:]}")]
-        dados = json.loads(resultado.stdout)
+            return None, relatorio + [(f"o driver do navegador falhou ({resultado.returncode}):\n"
+                                       f"{(resultado.stderr or resultado.stdout)[-2000:]}")]
+        (pasta / f"{nome}_dados.json").write_text(resultado.stdout, encoding="utf-8")   # o diagnóstico cru
+        return json.loads(resultado.stdout), relatorio
     finally:
         for processo in (navegador, servidor):
             if processo is None:
@@ -1300,856 +1633,415 @@ def checa_navegador(pasta: Path, modelo: Path | None, fator_tempo: float, deltas
             except subprocess.TimeoutExpired:
                 processo.kill()
 
+
+def _envio_liga(envio: dict) -> bool:
+    """O POST registado no browser LIGA vento? (`/api/vento-simples` com `ligado: true`, ou qualquer POST
+    aos endpoints do contrato antigo — o cockpit não os usa e eles tiravam a autoridade aos 3 botões)."""
+    url = str(envio.get("url", ""))
+    if url.startswith(("/api/vento-dinamico", "/api/vento")) and not url.startswith("/api/vento-simples"):
+        return True
+    if not url.startswith("/api/vento-simples"):
+        return False
+    try:
+        corpo = json.loads(envio.get("corpo") or "{}")
+    except (TypeError, ValueError):
+        return False
+    return corpo.get("ligado") is True
+
+
+def _envio_desliga(envio: dict) -> bool:
+    if not str(envio.get("url", "")).startswith("/api/vento-simples"):
+        return False
+    try:
+        return json.loads(envio.get("corpo") or "{}").get("ligado") is False
+    except (TypeError, ValueError):
+        return False
+
+
+def _avaliar_paragem(cenario: dict) -> tuple[str | None, str]:
+    """`(falha | None, linha de relatório)` de um cenário de PARAGEM (local ou de outro cliente).
+
+    O invariante, igual para todos os caminhos: (i) a paragem CHEGA ao servidor (há uma amostra com
+    `vento_simples.ligado = false`); (ii) a partir daí NENHUMA amostra volta a `ligado = true`; (iii) nenhum
+    POST que ligue vento SAI do front depois da paragem — o envio final do slider (largado 150 ms depois)
+    leva só a intensidade; (iv) a edição não se perde (a intensidade do servidor é a do slider); (v) o vento
+    que a física leva chega a zero EXATO (espera-se por ele: o relógio é o do simulador, com um teto de
+    parede largo) e, do seu máximo em diante, só DESCE — o máximo pode vir uns instantes depois do `200`,
+    enquanto o runner não lê o ficheiro de controlo; (vi) numa paragem de OUTRO cliente o painel acaba a
+    mostrar DESLIGADO (adota o servidor).
+    """
+    nome, amostras, fim = cenario["nome"], cenario.get("amostras") or [], cenario.get("fim") or {}
+    envios = cenario.get("envios") or []
+    if not amostras:
+        return f"{nome}: nenhuma amostra", f"· {nome}: nenhuma amostra"
+    primeiro = next((i for i, a in enumerate(amostras) if a["ligado"] is False), None)
+    voltou = primeiro is not None and any(a["ligado"] is not False for a in amostras[primeiro:])
+    depois = [e for e in envios if e["t"] > cenario["esperaParagemMs"] + TOL_APOS_CLIQUE_MS]
+    atrasados = [e for e in depois if _envio_liga(e)]
+    velocidades = [float(a["vento_vel"]) for a in amostras[primeiro or 0:] if a["vento_vel"] is not None]
+    pico = velocidades.index(max(velocidades)) if velocidades else 0
+    subiu = any(b > a + 0.05 for a, b in pairwise(velocidades[pico:]))
+    linha = (f"· {nome} · paragem aos {cenario['esperaParagemMs']} ms da edição · {len(amostras)} amostras · "
+             f"servidor desligado aos {amostras[primeiro]['t'] if primeiro is not None else '—'} ms · fim: "
+             f"ligado={fim.get('ligado')!r} intensidade={fim.get('intensidade')!r} (slider {cenario['p']}) "
+             f"vento={fim.get('vento_vel')} m/s modo={fim.get('vento_modo')!r} · POSTs do front depois: "
+             f"{[(e['t'], e['corpo']) for e in depois]}")
+    if primeiro is None:
+        return (f"{nome}: a paragem NUNCA chegou ao servidor (nenhuma amostra com `ligado: false`; "
+                f"POSTs do front={[(e['t'], e['url'], e['corpo']) for e in envios]})"), linha
+    if voltou or fim.get("ligado") is not False:
+        return (f"{nome}: o vento VOLTOU a ligar depois da paragem "
+                f"(amostras={[(a['t'], a['ligado']) for a in amostras[primeiro:primeiro + 14]]}, "
+                f"POSTs do front depois={[(e['t'], e['corpo']) for e in depois]})"), linha
+    if atrasados:
+        return (f"{nome}: o front mandou um POST que LIGA vento depois da paragem "
+                f"({[(e['t'], e['url'], e['corpo']) for e in atrasados]})"), linha
+    if not cenario.get("externa") and not any(_envio_desliga(e) for e in envios):
+        return f"{nome}: o painel não mandou `ligado: false` (POSTs={[(e['t'], e['corpo']) for e in envios]})", linha
+    if fim.get("intensidade") is None or abs(float(fim["intensidade"]) - cenario["p"]) > 1e-9:
+        return (f"{nome}: a edição perdeu-se — o slider ficou em {cenario['p']} m/s e o servidor em "
+                f"{fim.get('intensidade')!r}"), linha
+    if cenario.get("chegouAZero") is not True or fim.get("vento_vel") != 0:
+        return (f"{nome}: o vento não chegou a zero em {ZERO_MS / 1000:g} s de parede "
+                f"(fim: {fim.get('vento_vel')} m/s; velocidades={velocidades[::8][:14]})"), linha
+    if subiu or fim.get("vento_modo") != "nenhum":
+        return (f"{nome}: o vento voltou a SUBIR depois da paragem (modo={fim.get('vento_modo')!r}; "
+                f"velocidades desde o máximo={velocidades[pico:][::4][:16]})"), linha
+    if cenario.get("externa") and cenario.get("painelRefletiu") is not True:
+        return (f"{nome}: o painel NÃO adotou a paragem de outro cliente em {ADOCAO_MS / 1000:g} s — continua a "
+                f"mostrar {cenario.get('painel')}"), linha
+    return None, linha + f" · zero exato aos {cenario.get('zeroMs')} ms" \
+        + (f" · painel em DESLIGADO aos {cenario.get('adocaoMs')} ms" if cenario.get("externa") else "")
+
+
+def cenarios_matriz(deltas: tuple[int, ...]) -> list[dict]:
+    """A matriz do cockpit: cada janela × as DUAS paragens (interruptor, tecla V) + o controlo positivo."""
+    cenarios, i = [], 0
+    for delta in deltas:
+        for paragem in (*PARAGENS, None):
+            i += 1
+            p = round(1.0 + 0.1 * i, 1)
+            nome = (f"{ROTULO_PARAGEM[paragem]} {delta} ms depois de arrastar a intensidade" if paragem
+                    else f"controlo SEM paragem (janela {delta} ms)")
+            cenarios.append({"nome": nome, "tipo": "matriz", "delta": int(delta), "paragem": paragem,
+                             "base": 3.0, "intermedia": round(p + 1.5, 1), "p": p, "externa": False})
+    return cenarios
+
+
+def checa_navegador(pasta: Path, modelo: Path | None, fator_tempo: float, deltas: tuple[int, ...],
+                    porta: int = 8481, dist: Path | None = None) -> tuple[bool, list[str]]:
+    """Ponta a ponta com o SERVIDOR real + o COCKPIT real num Chrome headless: o vento parado não volta.
+
+    No cockpit (r13) o vento pára-se pelo interruptor VENTO da janela Vento ou pela tecla V — os dois mandam
+    `POST /api/vento-simples {ligado: false}`. O que podia ressuscitá-lo é o envio do SLIDER da intensidade:
+    arrastar manda no máximo a ~10 Hz (o resto fica PENDENTE no emissor do painel) e largar manda o valor
+    final. Cada cenário arrasta o slider (deixando um envio pendente), espera a janela pedida
+    (0/50/100/300 ms), pára pelo caminho do cenário e larga o slider 150 ms DEPOIS — ver `_avaliar_paragem`
+    para o invariante. Cada janela corre também SEM paragem (o controlo positivo): aí a intensidade
+    arrastada TEM de chegar ao servidor com o vento ligado, senão os cenários de paragem não estariam a
+    testar envio nenhum.
+    """
+    cenarios = cenarios_matriz(deltas)
+    dados, relatorio = _correr_no_cockpit(pasta, "nav", modelo, fator_tempo, porta, cenarios, 2600, dist)
+    if dados is None:
+        return False, relatorio
     falhas: list[str] = []
+    antigos = dados.get("antigos") or {}
+    relatorio.append(f"controlos do painel antigo no DOM: {antigos} (o cockpit não os tem)")
+    if any(antigos.values()):
+        falhas.append(f"o front servido ainda tem controlos do painel de vento antigo: {antigos}")
     for cenario in dados["cenarios"]:
-        amostras = cenario["amostras"]
-        paragem = cenario.get("paragem")
-        rotulo = (f"{ROTULO_PARAGEM[paragem]} depois de {cenario['esperaAplicacaoMs']} ms "
-                  f"(janela {cenario['delta']} ms)" if paragem
-                  else f"controlo sem PARAR (janela {cenario['delta']} ms)")
-        if not amostras:
-            falhas.append(f"{rotulo}: nenhuma amostra")
-            continue
-        ultima = amostras[-1]
-        modos = sorted({str(a["modo"]) for a in amostras})
-        if paragem:
-            primeiro = next((i for i, a in enumerate(amostras) if a["modo"] == "nenhum" and not a["ativo"]),
-                            None)
-            voltou = primeiro is not None and any(a["modo"] != "nenhum" or a["ativo"]
-                                                  for a in amostras[primeiro:])
-            # A prova DIRETA de que o debounce morreu com o clique: nenhum POST de apply de um modo
-            # contínuo pode SAIR do front depois do instante do clique (a época/cancelamento/bloqueio).
-            # A folga de 50 ms cobre o ida-e-volta da fila de POSTs: um apply que já estava em voo antes do
-            # clique pode só sair uns ms depois — e a fila garante que o PARAR é a ÚLTIMA escrita.
-            atrasados = [e for e in cenario.get("envios", [])
-                         if e["t"] > cenario["esperaAplicacaoMs"] + TOL_APOS_CLIQUE_MS
-                         and _envio_apply_ativo(e)]
-            # PARAR VENTO também põe o vento base a 0; os outros dois só desligam a dinâmica. Para os três
-            # o invariante é o mesmo: depois da paragem a física não pode estar a fazer dinâmica nenhuma.
-            base_ok = (ultima["vento_modo"] == "nenhum" and ultima["vento_vel"] is not None
-                       and abs(float(ultima["vento_vel"])) <= TOL_TELE) if paragem == "vento" \
-                else ultima["vento_modo"] not in MODOS_DINAMICOS
-            ok = (primeiro is not None and not voltou and not atrasados
-                  and ultima["modo"] == "nenhum" and not ultima["ativo"] and base_ok)
-            if primeiro is None:
-                falhas.append(f"{rotulo}: o PARAR nunca chegou ao servidor (nenhuma amostra em "
-                              f"nenhum/inativo) — o controlo «{ROTULO_PARAGEM[paragem]}» não parou nada")
-            elif voltou:
-                falhas.append(f"{rotulo}: o modo VOLTOU a ativar depois do PARAR "
-                              f"(amostras={[(a['t'], a['modo'], a['ativo']) for a in amostras[:14]]})")
-            elif atrasados:
-                falhas.append(f"{rotulo}: o front mandou um apply dinâmico DEPOIS do PARAR "
-                              f"(POSTs={[(e['t'], e['url'], e['corpo']) for e in atrasados]})")
-            elif not base_ok:
-                falhas.append(f"{rotulo}: a dinâmica continua a atuar depois do PARAR "
-                              f"(vento_modo={ultima['vento_modo']!r} vento={ultima['vento_vel']})")
+        if cenario.get("paragem"):
+            falha, linha = _avaliar_paragem(cenario)
         else:
-            ok = (ultima["modo"] == "rajadas" and ultima["ativo"] and ultima["p"] is not None
-                  and abs(float(ultima["p"]) - cenario["p"]) <= 1e-9)
-            if not ok:
-                falhas.append(f"{rotulo}: o apply agendado NÃO chegou (p={ultima['p']!r} != "
-                              f"{cenario['p']}) — o cenário do PARAR não estaria a testar nada")
-        relatorio.append(f"janela {cenario['delta']:>4} ms · "
-                         f"{(ROTULO_PARAGEM[paragem] if paragem else 'controlo'):<22}"
-                         f" · aplicação aos {cenario['esperaAplicacaoMs']} ms · {len(amostras)} amostras · "
-                         f"modos vistos={modos} · fim: modo={ultima['modo']!r} p={ultima['p']!r} "
-                         f"(pedido {cenario['p']}) vento_modo="
-                         f"{ultima['vento_modo']!r} vento={ultima['vento_vel']}"
-                         + (" · (controlo desativado no clique: evento direto)"
-                            if cenario.get("botaoDesativado") else ""))
-    for cenario in dados["cenarios"]:
-        if cenario.get("envios"):
-            paragem = cenario.get("paragem")
-            relatorio.append(f"POSTs do front na janela {cenario['delta']} ms / "
-                             f"{ROTULO_PARAGEM[paragem] if paragem else 'controlo'} (ms desde a edição; "
-                             f"PARADO aos {cenario['marcos']['parado']}, RAJADAS aos "
-                             f"{cenario['marcos']['modo']}): "
-                             + " · ".join(f"{e['t']}:{e['url']} {e['corpo']}" for e in cenario["envios"]))
+            fim = cenario.get("fim") or {}
+            ok = (fim.get("ligado") is True and fim.get("intensidade") is not None
+                  and abs(float(fim["intensidade"]) - cenario["p"]) <= 1e-9)
+            falha = None if ok else (f"{cenario['nome']}: a intensidade arrastada NÃO chegou ao servidor "
+                                     f"(fim={fim}, slider {cenario['p']}) — os cenários de paragem não "
+                                     f"estariam a testar envio nenhum")
+            linha = (f"· {cenario['nome']} · fim: ligado={fim.get('ligado')!r} intensidade="
+                     f"{fim.get('intensidade')!r} (slider {cenario['p']}) · POSTs do front: "
+                     f"{[(e['t'], e['corpo']) for e in cenario.get('envios') or []]}")
+        relatorio.append(linha)
+        if falha:
+            falhas.append(falha)
     for falha in falhas:
         relatorio.append(f"FALHOU: {falha}")
-    relatorio.append(f"polling do site durante a prova: {dados['polls']} GET /api/sim")
-    if dados["polls"] < 10:
-        falhas.append(f"o polling do site quase não correu ({dados['polls']} pedidos): a corrida não foi "
-                      "testada com o poll a correr")
     return not falhas, relatorio
 
 
-# ------------------------------------------- defeito (3): paragens de OUTRO cliente (multi-cliente)
-# As três defesas locais (época, cancelamento, bloqueio) são estado de MÓDULO por *realm*: uma paragem
-# feita por OUTRO cliente — um `POST /api/parar` cru, sem browser nenhum, ou o botão de uma 2.ª ABA real —
-# não lhes toca, e o poll do site (~350 ms + o atraso da resposta) chega sempre depois do debounce de
-# 300 ms. Medido: a aba A edita um parâmetro, outro cliente para aos ~100 ms, e o debounce local dispara
-# aos ~300 ms com os params editados: o servidor fica outra vez `rajadas/ativo` (física em rajadas) durante
-# ≥2,5 s.
-#
-# A defesa é REVALIDAR ao disparar: antes de escrever, o front confirma no servidor (leitura barata de
-# `/api/state`) que o modo que ia religar ainda está ativo; se já não estiver, o apply é suprimido e o
-# painel di-lo ao utilizador. O canal `BroadcastChannel` (paragem de outra aba) complementa — cancela já os
-# temporizadores pendentes — mas não é a garantia: um `POST` cru não passa por canal nenhum.
-#
-# O SEGUNDO defeito medido vive no mesmo sítio: depois de uma paragem LOCAL + um religamento feito por
-# OUTRO cliente, o BLOQUEIO do live-apply ficava preso (só um comando contínuo LOCAL o limpava e clicar no
-# modo já pressionado é um no-op do base-ui): editar um campo mudava só o estado do React, não saía POST
-# nenhum e o servidor ficava com o valor antigo — sem feedback nenhum.
-_MULTI_AJUDANTE = r'''
-(args) => {
-  const espera = (ms) => new Promise((r) => setTimeout(r, ms))
-  const porTeste = (id) => document.querySelector(`[data-testid="${id}"]`)
-  const grupoModo = () => document.querySelector('[aria-label="modo dinâmico contínuo"]')
-  const opcaoModo = (texto) => {
-    const grupo = grupoModo()
-    if (!grupo) return null
-    return Array.from(grupo.querySelectorAll("button")).find((b) => b.textContent.trim() === texto) || null
-  }
-  const pressionada = (texto) => {
-    const b = opcaoModo(texto)
-    if (!b) return false
-    return b.getAttribute("aria-pressed") === "true" || b.getAttribute("data-pressed") === "true"
-  }
-  // Instrumentação: os POSTs do FRONT (é aí que se vê o apply atrasado) e o atraso do `GET /api/sim` (o
-  // poll lento é a condição que abre a janela do defeito: sem ele o painel cancelaria o debounce a tempo).
-  const buscar = window.fetch.bind(window)
-  const envios = []
-  const marcas = {}
-  let polls = 0
-  window.fetch = async (...a) => {
-    const url = String(a[0])
-    const opcoes = a[1] || {}
-    if (url.includes("/api/") && String(opcoes.method || "GET").toUpperCase() === "POST") {
-      envios.push({ t: performance.now(), url: url.slice(url.indexOf("/api/")), corpo: opcoes.body || null })
-    }
-    const resposta = await buscar(...a)
-    if (args.atrasoPollMs > 0 && url.includes("/api/sim")) {
-      polls += 1
-      await espera(args.atrasoPollMs)
-    }
-    return resposta
-  }
-  const lerEstado = async () => {
-    const resposta = await buscar("/api/state", { cache: "no-store" })
-    if (!resposta.ok) throw new Error(`GET /api/state devolveu ${resposta.status}`)
-    const j = await resposta.json()
-    const din = j.vento_dinamico || {}
-    const atual = j.vento_atual || {}
-    return {
-      modo: din.modo === undefined ? null : din.modo,
-      ativo: din.ativo === true,
-      p: (din.params || {}).p === undefined ? null : (din.params || {}).p,
-      vento_modo: atual.modo === undefined ? null : atual.modo,
-      vento_vel: atual.vel === undefined ? null : atual.vel,
-    }
-  }
-  const esperar = async (predicado, limite) => {
-    const t0 = performance.now()
-    while (performance.now() - t0 < limite) {
-      if (await predicado()) return true
-      await espera(40)
-    }
-    return false
-  }
-  const escreverCampo = (id, valor) => {
-    const el = porTeste(`campo-${id}`)
-    if (!el) throw new Error(`o campo ${id} não está no DOM`)
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set
-    setter.call(el, String(valor))
-    el.dispatchEvent(new Event("input", { bubbles: true }))
-  }
-  // O painel como o DONO o vê: modo pressionado, valor no campo, avisos de «não aplicado» e toasts.
-  const painel = () => ({
-    rajadas: pressionada("RAJADAS"),
-    parado: pressionada("PARADO"),
-    aleatoria: pressionada("ALEATORIA"),
-    dryden: pressionada("DRYDEN"),
-    campoP: porTeste("campo-rajadas-p") ? porTeste("campo-rajadas-p").value : null,
-    suprimido: porTeste("apply-suprimido") ? porTeste("apply-suprimido").textContent : null,
-    selo: porTeste("estado-dinamico") ? porTeste("estado-dinamico").textContent.trim() : null,
-    avisos: Array.from(document.querySelectorAll('[aria-label="fechar aviso"]')).map(
-      (b) => (b.parentElement ? b.parentElement.textContent : "")
-    ),
-  })
-  const garantirParado = async () => {
-    for (let t = 0; t < 120; t++) {
-      const botao = porTeste("botao-parar-vento")
-      if (botao && !botao.disabled) botao.click()
-      if ((await lerEstado()).modo === "nenhum") return true
-      await espera(80)
-    }
-    return false
-  }
-  const garantirModo = async (texto) => {
-    const alvo = texto.toLowerCase()
-    for (let t = 0; t < 250; t++) {
-      if ((await lerEstado()).modo === alvo) return true
-      clicarModo(texto)
-      await espera(60)
-    }
-    return false
-  }
-  // Clicar no modo JÁ PRESSIONADO é um no-op do base-ui (`trocarModo` sai quando o alvo é o modo que ele
-  // julga em vigor): com o poll atrasado o painel mostra o modo antigo e um clique desses não fazia NADA —
-  // o servidor nunca ficava no modo pedido. O clique só sai quando o painel já não mostra o alvo pressionado.
-  const clicarModo = (texto) => {
-    const b = opcaoModo(texto)
-    if (!b) return false
-    if (pressionada(texto)) return false
-    b.click()
-    return true
-  }
-  // Deixa o painel ASSENTAR em RAJADAS (servidor confirmado, campo à vista, RAJADAS pressionado) — como o
-  // `assentar()` da matriz: com o poll atrasado, as respostas do PARAR (que ainda dizem «nenhum») têm de
-  // chegar ANTES da edição, senão o cenário passaria sem testar nada.
-  const preparar = async () => {
-    if (!(await esperar(() => !!porTeste("botao-parar-vento"), args.prontidaoMs))) {
-      return { ok: false, motivo: "o painel de controlos não ficou pronto (site/dist desatualizado?)" }
-    }
-    for (let tentativa = 0; tentativa < 4; tentativa++) {
-      if (!(await garantirParado())) return { ok: false, motivo: "não consegui deixar o servidor PARADO" }
-      if (!(await garantirModo("RAJADAS"))) return { ok: false, motivo: "não consegui ligar RAJADAS" }
-      await espera(args.atrasoPollMs + 350)
-      const pronto = await esperar(
-        async () => !!porTeste("campo-rajadas-p") && pressionada("RAJADAS") && (await lerEstado()).modo === "rajadas",
-        args.prontidaoMs
-      )
-      if (pronto) {
-        envios.length = 0
-        return { ok: true, t: performance.now(), estado: await lerEstado(), painel: painel() }
-      }
-      await espera(120)
-    }
-    return { ok: false, motivo: "o painel não ficou em RAJADAS com os params à vista" }
-  }
-  // Edita um parâmetro: agenda o live-apply do painel (≈300 ms). Devolve o instante da edição.
-  // O painel dos params entra com animação (`AnimatePresence mode="wait"`): espera-se que o campo esteja
-  // no DOM antes de escrever (logo a seguir a uma adoção do modo ele ainda pode estar a entrar).
-  const editar = async (valor, limite) => {
-    const pronto = await esperar(() => !!porTeste("campo-rajadas-p"), limite || 15000)
-    if (!pronto) throw new Error("o campo rajadas-p não apareceu no painel")
-    escreverCampo("rajadas-p", valor)
-    return performance.now()
-  }
-  const marcar = (nome) => {
-    marcas[nome] = performance.now()
-    return { nome: nome, t: marcas[nome] }
-  }
-  // Paragem LOCAL pelo painel da própria aba (o clique a sério) + confirmação do servidor.
-  const pararLocal = async (tipo) => {
-    const t = performance.now()
-    for (let i = 0; i < 120; i++) {
-      const alvo = tipo === "dinamico" ? porTeste("botao-parar-dinamico") : porTeste("botao-parar-vento")
-      if (alvo && !alvo.disabled) alvo.click()
-      if ((await lerEstado()).modo === "nenhum") {
-        const adotou = await esperar(() => painel().parado, args.prontidaoMs)
-        return { t: t, tConfirmado: performance.now(), adotou: adotou, estado: await lerEstado(), painel: painel() }
-      }
-      await espera(80)
-    }
-    return { t: t, tConfirmado: null, adotou: false, estado: await lerEstado(), painel: painel() }
-  }
-  // O painel ADOTA o modo que OUTRO cliente ligou (vem no poll): é aqui que ele ficava preso.
-  const esperarAdocao = async (texto, modo, limite) => {
-    const ok = await esperar(
-      async () => pressionada(texto) && (await lerEstado()).modo === modo && (await lerEstado()).ativo,
-      limite
-    )
-    return { ok: ok, t: performance.now(), estado: await lerEstado(), painel: painel() }
-  }
-  // Amostra o servidor durante `ms` (cada amostra é um `GET /api/state` curto) e devolve o painel no fim.
-  const recolher = async (ms) => {
-    const t0 = performance.now()
-    const amostras = []
-    while (performance.now() - t0 < ms) {
-      amostras.push(Object.assign({ t: Math.round(performance.now() - t0) }, await lerEstado()))
-      await espera(50)
-    }
-    marcas.recolha = t0
-    return {
-      amostras: amostras,
-      painel: painel(),
-      polls: polls,
-      marcas: marcas,
-      envios: envios.map((e) => Object.assign({}, e, { t: Math.round(e.t) })),
-      tFim: performance.now(),
-    }
-  }
-  return { lerEstado, preparar, editar, marcar, pararLocal, esperarAdocao, recolher, painel }
-}
-'''
-
-# A 2.ª ABA (o «outro cliente» a sério): só precisa de carregar o bundle e de clicar o botão de paragem.
-_MULTI_ABA_B = r'''
-(() => {
-  const espera = (ms) => new Promise((r) => setTimeout(r, ms))
-  const botao = () => document.querySelector('[data-testid="botao-parar-dinamico"]')
-  return {
-    pronto: async (limite) => {
-      const t0 = performance.now()
-      while (performance.now() - t0 < limite) {
-        if (botao()) return true
-        await espera(50)
-      }
-      return false
-    },
-    pararDinamico: () => {
-      const b = botao()
-      if (!b) return { clicou: false, motivo: "o botão PARAR DINÂMICO não está no DOM" }
-      const t = performance.now()
-      b.click()
-      return { clicou: true, t: t, desativado: b.disabled === true }
-    },
-  }
-})()
-'''
-
-_DRIVER_CDP_MULTI = r'''
-const [, , portaArg, urlBase, argsArg] = process.argv
-const args = JSON.parse(argsArg)
-const espera = (ms) => new Promise((r) => setTimeout(r, ms))
-
-async function listaAlvos() {
-  return await (await fetch(`http://127.0.0.1:${portaArg}/json/list`)).json()
-}
-
-function ligar(url) {
-  return new Promise((resolver, rejeitar) => {
-    const ws = new WebSocket(url)
-    const pendentes = new Map()
-    let id = 0
-    const comando = (method, params) => {
-      id += 1
-      const meu = id
-      return new Promise((res, rej) => {
-        pendentes.set(meu, { res, rej })
-        ws.send(JSON.stringify({ id: meu, method, params: params || {} }))
-      })
-    }
-    ws.addEventListener("open", () => resolver({ ws, comando }))
-    ws.addEventListener("error", () => rejeitar(new Error("falha no WebSocket do CDP")))
-    ws.addEventListener("message", (evento) => {
-      const msg = JSON.parse(evento.data)
-      const pendente = pendentes.get(msg.id)
-      if (pendente) {
-        pendentes.delete(msg.id)
-        if (msg.error) pendente.rej(new Error(JSON.stringify(msg.error)))
-        else pendente.res(msg.result)
-        return
-      }
-    })
-  })
-}
-
-async function alvoDoSite() {
-  for (let i = 0; i < 200; i++) {
-    try {
-      const pagina = (await listaAlvos()).find(
-        (t) => t.type === "page" && String(t.url).startsWith(urlBase) && t.webSocketDebuggerUrl
-      )
-      if (pagina) return pagina.webSocketDebuggerUrl
-    } catch (erro) {
-      /* a porta ainda não abriu */
-    }
-    await espera(100)
-  }
-  throw new Error("não encontrei a página do site no Chrome (CDP)")
-}
-
-// Abre uma ABA NOVA da mesma origem (o `site/dist` do servidor real): é o front limpo, sem instrumentação
-// nenhuma da matriz, e serve de «outro cliente» quando o cenário pede uma 2.ª aba a sério.
-// O `/json/new` deste Chrome IGNORA o `url=` (abre `about:blank`): a navegação é feita por CDP a seguir.
-async function abrirAba(navegarAte) {
-  let alvo = null
-  for (const metodo of ["PUT", "GET"]) {
-    try {
-      const resposta = await fetch(`http://127.0.0.1:${portaArg}/json/new`, { method: metodo })
-      if (!resposta.ok) continue
-      alvo = await resposta.json()
-      if (alvo && alvo.webSocketDebuggerUrl) break
-    } catch (erro) {
-      /* método não suportado: tenta o seguinte */
-    }
-  }
-  if (alvo === null || !alvo.webSocketDebuggerUrl) {
-    // último recurso: a aba que o Chrome abriu no arranque (já está no site)
-    return await ligar(await alvoDoSite())
-  }
-  const ligacao = await ligar(alvo.webSocketDebuggerUrl)
-  await ligacao.comando("Runtime.enable")
-  await ligacao.comando("Page.enable")
-  await ligacao.comando("Page.navigate", { url: navegarAte })
-  return ligacao
-}
-
-// A aba só serve quando o painel de controlos está no DOM (o bundle carregou e o React montou).
-async function esperarPainel(ligacao, limite) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < limite) {
-    try {
-      const pronto = await avaliar(
-        ligacao,
-        `!!document.querySelector('[data-testid="botao-parar-vento"]')`,
-        15000
-      )
-      if (pronto === true) return true
-    } catch (erro) {
-      /* contexto destruído pela navegação: tenta outra vez */
-    }
-    await espera(100)
-  }
-  return false
-}
-
-async function paraFrente(ligacao) {
-  try {
-    await ligacao.comando("Page.bringToFront")   // aba visível: os temporizadores (debounce) não são travados
-  } catch (erro) {
-    /* sem o domínio Page: segue */
-  }
-}
-
-async function avaliar(ligacao, expressao, tempoLimiteMs) {
-  const resposta = await ligacao.comando("Runtime.evaluate", {
-    expression: expressao,
-    awaitPromise: true,
-    returnByValue: true,
-    timeout: tempoLimiteMs || 120000,
-  })
-  if (resposta.exceptionDetails) {
-    const detalhe = resposta.exceptionDetails.exception || {}
-    throw new Error(`na página: ${detalhe.description || resposta.exceptionDetails.text}`)
-  }
-  return resposta.result.value
-}
-
-// Espera (do lado do NODE, sem browser) que o SERVIDOR confirme a paragem: é o que separa a ação externa da
-// janela de amostragem — a partir daí nenhuma amostra pode voltar a um modo ativo.
-async function esperarServidorParado(limite) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < limite) {
-    try {
-      const resposta = await fetch(urlBase + "/api/state", { cache: "no-store" })
-      const j = await resposta.json()
-      const din = j.vento_dinamico || {}
-      if (din.modo === "nenhum" && din.ativo !== true) return Date.now() - t0
-    } catch (erro) {
-      /* servidor ocupado: tenta outra vez */
-    }
-    await espera(20)
-  }
-  return null
-}
-
-try {
-  // A ABA DO PAINEL é a que o Chrome abriu no arranque (fresca, sem instrumentação nenhuma).
-  const ligacaoA = await ligar(await alvoDoSite())
-  await ligacaoA.comando("Runtime.enable")
-  await ligacaoA.comando("Page.enable")
-  await paraFrente(ligacaoA)
-  if (!(await esperarPainel(ligacaoA, 60000))) throw new Error("a aba do painel não carregou o site")
-  await avaliar(ligacaoA, `window.__args = ${JSON.stringify(args)}; null`)
-  await avaliar(ligacaoA, `window.__prova = (${args.ajudante})(${JSON.stringify(args)}); null`)
-
-  let ligacaoB = null
-  if (args.cenarios.some((c) => c.tipo === "aba")) {
-    ligacaoB = await abrirAba(urlBase + "/")
-    await ligacaoB.comando("Runtime.enable")
-    if (!(await esperarPainel(ligacaoB, 60000))) throw new Error("a 2.ª aba não carregou o site")
-    const pronto = await avaliar(ligacaoB, `window.__provaB = ${args.abaB}; window.__provaB.pronto(5000)`, 30000)
-    if (!pronto) throw new Error("a 2.ª aba não ficou pronta (bundle do site não carregou)")
-    await paraFrente(ligacaoA)   // a aba do painel volta à frente (é ela que tem o debounce)
-  }
-
-  const resultados = []
-  for (const cenario of args.cenarios) {
-    const r = Object.assign({}, cenario)
-    if (cenario.tipo === "preso") {
-      r.preparo = await avaliar(ligacaoA, `__prova.preparar()`, 120000)
-      if (!r.preparo.ok) {   // sem o painel em RAJADAS não se mede nada: o Python reporta o motivo
-        resultados.push(r)
-        continue
-      }
-      r.paragemLocal = await avaliar(ligacaoA, `__prova.pararLocal("dinamico")`, 120000)
-      const marca = await avaliar(ligacaoA, `__prova.marcar("religamento")`)
-      const corpo = { modo: "rajadas", ativo: true, params: { p: args.pReligado, duracao: 20, u_max: 1.5 } }
-      const resposta = await fetch(urlBase + "/api/vento-dinamico", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(corpo),
-      })
-      r.religamento = { http: resposta.status, corpo: corpo, t: marca.t }
-      r.adocao = await avaliar(ligacaoA, `__prova.esperarAdocao("RAJADAS", "rajadas", 20000)`, 60000)
-      if (!r.adocao.ok) {    // o painel não adotou: o Python reporta (é um defeito de estado honesto)
-        resultados.push(r)
-        continue
-      }
-      r.tEdicao = await avaliar(ligacaoA, `__prova.editar(${cenario.p})`)
-      r.fim = await avaliar(ligacaoA, `__prova.recolher(${args.janelaMs})`, 180000)
-      resultados.push(r)
-      continue
-    }
-    r.preparo = await avaliar(ligacaoA, `__prova.preparar()`, 120000)
-    if (!r.preparo.ok) {
-      resultados.push(r)
-      continue
-    }
-    r.tEdicao = await avaliar(ligacaoA, `__prova.editar(${cenario.p})`)
-    await espera(cenario.delta)
-    const marca = await avaliar(ligacaoA, `__prova.marcar("externa")`)
-    r.tExterna = marca.t
-    if (cenario.tipo === "cru") {
-      // OUTRO CLIENTE, sem browser nenhum: um `POST /api/parar` cru, como um script/curl faria.
-      const resposta = await fetch(urlBase + "/api/parar", { method: "POST" })
-      r.externa = { tipo: "cru", http: resposta.status, t: marca.t }
-    } else if (cenario.tipo === "aba") {
-      // 2.ª ABA REAL: o MESMO botão do painel, clicado noutra aba do mesmo browser.
-      r.externa = { tipo: "aba", clique: await avaliar(ligacaoB, `__provaB.pararDinamico()`, 60000), t: marca.t }
-    } else {
-      throw new Error(`cenário externo desconhecido: ${cenario.tipo}`)
-    }
-    r.esperaParagemMs = await esperarServidorParado(8000)
-    r.fim = await avaliar(ligacaoA, `__prova.recolher(${args.janelaMs})`, 180000)
-    resultados.push(r)
-  }
-  ligacaoA.ws.close()
-  if (ligacaoB) ligacaoB.ws.close()
-  process.stdout.write(JSON.stringify({ cenarios: resultados }))
-} catch (erro) {
-  process.stderr.write(String((erro && erro.stack) || erro) + "\n")
-  process.exit(2)
-}
-'''
-
-
 def cenarios_multicliente(quais: tuple[str, ...] = ()) -> list[dict]:
-    """Cenários multi-cliente: paragem externa (cru / 2.ª aba) e o painel preso (religamento remoto)."""
+    """Cenários multi-cliente: paragem por OUTRO cliente (POST cru) e o interruptor desatualizado."""
     todos = [
-        {"nome": "POST /api/parar cru (outro cliente) logo após a edição", "tipo": "cru", "delta": 0, "p": 0.31},
-        {"nome": "POST /api/parar cru 100 ms após a edição", "tipo": "cru", "delta": 100, "p": 0.33},
-        {"nome": "POST /api/parar cru 200 ms após a edição", "tipo": "cru", "delta": 200, "p": 0.35},
-        {"nome": "PARAR DINÂMICO numa 2.ª aba real, logo após a edição", "tipo": "aba", "delta": 0, "p": 0.37},
-        {"nome": "PARAR DINÂMICO numa 2.ª aba real 100 ms após a edição", "tipo": "aba", "delta": 100, "p": 0.39},
-        {"nome": "painel preso: paragem LOCAL + religamento por outro cliente", "tipo": "preso", "delta": 0, "p": 0.41},
+        {"nome": "POST /api/parar cru (outro cliente) logo após arrastar", "tipo": "externa",
+         "paragem": "cru_parar", "delta": 0, "p": 2.3},
+        {"nome": "POST /api/parar cru 100 ms após arrastar", "tipo": "externa",
+         "paragem": "cru_parar", "delta": 100, "p": 2.5},
+        {"nome": "POST /api/vento-simples {ligado:false} cru (o que o interruptor de outra aba manda)",
+         "tipo": "externa", "paragem": "cru_simples", "delta": 0, "p": 2.7},
+        {"nome": "interruptor desatualizado: paragem LOCAL + religamento por outro cliente",
+         "tipo": "desatualizado", "paragem": None, "delta": 0, "p": 2.9, "religada": 1.5},
     ]
-    if not quais:
-        return todos
-    return [c for c in todos if c["tipo"] in quais]
+    for cenario in todos:
+        cenario.update({"base": 3.0, "intermedia": round(cenario["p"] + 1.5, 1),
+                        "externa": cenario["tipo"] == "externa"})
+    return [c for c in todos if not quais or c["tipo"] in quais]
 
 
 def checa_multicliente(pasta: Path, modelo: Path | None, fator_tempo: float, porta: int = 8481,
-                       atraso_poll_ms: int = 500, quais: tuple[str, ...] = (),
-                       janela_ms: int = 2600) -> tuple[bool, list[str]]:
-    """Ponta a ponta com o SERVIDOR real + o FRONT real: paragens de OUTRO cliente e o painel preso.
+                       quais: tuple[str, ...] = (), janela_ms: int = 2600,
+                       dist: Path | None = None) -> tuple[bool, list[str]]:
+    """Ponta a ponta com o SERVIDOR real + o COCKPIT real: paragens de OUTRO cliente e o interruptor desatualizado.
 
-    Dois invariantes, medidos como o dono os vê:
+    (a) **paragem externa** (`POST /api/parar` cru, e `POST /api/vento-simples {ligado:false}` cru — o que o
+        interruptor de outra aba manda): com o painel a meio de um arrasto (um envio pendente) e o slider
+        largado 150 ms depois da paragem, o servidor fica `ligado: false` e NÃO volta a ligar em nenhuma
+        amostra da janela; nenhum POST que ligue vento sai do front; e o painel acaba a mostrar DESLIGADO.
+        A defesa do cockpit é mandar SÓ o que mudou (`{intensidade}`): o envio do slider nunca leva o
+        `ligado` que o painel ainda julga em vigor.
+    (b) **interruptor desatualizado**: paragem LOCAL + religamento por OUTRO cliente ⇒ o painel ADOTA o que
+        o servidor diz (LIGADO, com a intensidade nova), uma edição local chega ao servidor e o clique
+        seguinte DESLIGA (faz o que o dono vê). Sem a adoção o interruptor mentia: mostrava DESLIGADO com o
+        vento a soprar e o clique «ligava» o que já estava ligado.
 
-    (a) **paragem externa** (`POST /api/parar` cru, sem browser nenhum; e o botão PARAR DINÂMICO de uma 2.ª
-        ABA real): com a aba A em RAJADAS e o debounce do live-apply agendado (edição + 0/100/200 ms), o
-        servidor tem de ficar em `nenhum` e NÃO PODE voltar a um modo ativo em nenhuma das amostras dos
-        2,6 s seguintes — e nenhum POST de apply pode sair do front depois da paragem. No caso cru o painel
-        ainda tem de DIZER que a edição não foi aplicada (`apply-suprimido`); no caso da 2.ª aba, o aviso
-        cross-tab chega à aba A.
-    (b) **painel preso**: paragem LOCAL pelo painel + religamento do modo por OUTRO cliente (POST cru) + o
-        painel adota o modo (poll) + edição local de um parâmetro ⇒ o POST tem de SAIR e o servidor tem de
-        ficar com o valor editado. Sem isto o campo mostrava o valor novo e o servidor ficava com o antigo.
-
-    A prova de não-tautologia corre com o front mutado (`--mutacao`): desligada a revalidação, (a) falha;
-    desligado o desbloqueio pela adoção do servidor, (b) falha.
+    A prova de não-tautologia corre-os com o front MUTADO (`--mutacao`).
     """
-    relatorio: list[str] = []
     cenarios = cenarios_multicliente(quais)
     if not cenarios:
-        return True, relatorio + ["nenhum cenário multi-cliente pedido"]
-    node = _binario(("node",))
-    chrome = _binario(("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"))
-    if node is None or chrome is None:
-        return False, relatorio + [f"esta prova precisa do node e do Chrome (node={node!r}, chrome={chrome!r})"]
-    if not (SITE / "dist" / "index.html").is_file():
-        return False, relatorio + [f"{SITE / 'dist' / 'index.html'} não existe — corra `npm run build` em {SITE}"]
-
-    pasta.mkdir(parents=True, exist_ok=True)
-    controlo, telemetria = pasta / "multi_controle.json", pasta / "multi_telemetria.jsonl"
-    for caminho in (controlo, telemetria):
-        caminho.unlink(missing_ok=True)
-    driver = pasta / "driver_cdp_multi.mjs"
-    driver.write_text(_DRIVER_CDP_MULTI, encoding="utf-8")
-
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
-               "--port", str(porta), "--controlo", str(controlo), "--telemetria", str(telemetria),
-               "--fator-tempo", f"{fator_tempo:g}"]
-    if modelo is not None:
-        comando += ["--model", str(modelo)]
-    servidor = subprocess.Popen(comando, cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, start_new_session=True)
-    navegador = None
-    try:
-        base_url = None
-        t0 = time.perf_counter()
-        while time.perf_counter() - t0 < 120:
-            linha = servidor.stdout.readline()
-            if not linha:
-                break
-            achado = re.search(r"(http://[\d.]+:\d+/)", linha)
-            if achado:
-                base_url = achado.group(1).rstrip("/")
-                break
-        if base_url is None:
-            return False, relatorio + [(f"não consegui arrancar o sim_site.py na porta {porta} "
-                                        "(porta ocupada?)")]
-        relatorio.append(f"servidor real em {base_url} · 2 abas do site (a do painel e a do «outro "
-                         f"cliente») · atraso do poll (GET /api/sim) na aba do painel: {atraso_poll_ms} ms")
-
-        perfil = pasta / "chrome-perfil-multi"
-        shutil.rmtree(perfil, ignore_errors=True)
-        navegador = subprocess.Popen(
-            [chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={perfil}",
-             "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-dev-shm-usage",
-             "--remote-allow-origins=*", base_url + "/"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        porta_cdp = _esperar_devtools(perfil, navegador, 30.0)
-        if porta_cdp is None:
-            return False, relatorio + ["o Chrome não abriu a porta de depuração (CDP)"]
-
-        argumentos = {"cenarios": cenarios, "janelaMs": janela_ms, "prontidaoMs": 30000,
-                      "atrasoPollMs": int(atraso_poll_ms), "pReligado": 0.5,
-                      "ajudante": _MULTI_AJUDANTE.strip(), "abaB": _MULTI_ABA_B.strip()}
-        try:
-            resultado = subprocess.run([node, str(driver), str(porta_cdp), base_url,
-                                        json.dumps(argumentos)],
-                                       capture_output=True, text=True, timeout=600, check=False)
-        except subprocess.TimeoutExpired:
-            return False, relatorio + ["o driver multi-cliente não terminou em 600 s"]
-        if resultado.returncode != 0:
-            return False, relatorio + [(f"o driver multi-cliente falhou ({resultado.returncode}):\n"
-                                        f"{(resultado.stderr or resultado.stdout)[-2000:]}")]
-        dados = json.loads(resultado.stdout)
-    finally:
-        for processo in (navegador, servidor):
-            if processo is None:
-                continue
-            try:
-                os.killpg(os.getpgid(processo.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                processo.terminate()
-            try:
-                processo.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                processo.kill()
-
+        return True, ["nenhum cenário multi-cliente pedido"]
+    dados, relatorio = _correr_no_cockpit(pasta, "multi", modelo, fator_tempo, porta, cenarios, janela_ms, dist)
+    if dados is None:
+        return False, relatorio
     falhas: list[str] = []
     for cenario in dados["cenarios"]:
         nome = cenario["nome"]
-        preparo = cenario.get("preparo") or {}
-        if not preparo.get("ok"):
-            falhas.append(f"{nome}: o painel não ficou em RAJADAS antes do cenário "
-                          f"({preparo.get('motivo')})")
-            continue
-        fim = cenario["fim"]
-        amostras = fim["amostras"]
-        painel = fim["painel"]
-        envios = fim["envios"]
-        if cenario["tipo"] == "preso":
-            local = cenario.get("paragemLocal") or {}
-            adocao = cenario.get("adocao") or {}
-            religamento = cenario.get("religamento") or {}
-            # O POST local saiu e o painel adotou o PARADO; o religamento é de OUTRO cliente (POST cru).
-            if local.get("tConfirmado") is None:
-                falhas.append(f"{nome}: a paragem LOCAL não chegou ao servidor")
-                continue
-            if religamento.get("http") != 200:
-                falhas.append(f"{nome}: o religamento por outro cliente devolveu HTTP "
-                              f"{religamento.get('http')}")
-                continue
-            if not adocao.get("ok"):
-                falhas.append(f"{nome}: o painel não adotou o modo religado por outro cliente "
-                              f"(estado={adocao.get('estado')}, painel={adocao.get('painel')})")
-                continue
-            ultima = amostras[-1] if amostras else {}
-            editados = [e for e in envios
-                        if e["t"] >= cenario["tEdicao"] - TOL_APOS_CLIQUE_MS and _envio_apply_ativo(e)]
-            ok_painel = painel["rajadas"] and painel["suprimido"] is None
-            if ultima.get("modo") != "rajadas" or ultima.get("ativo") is not True:
-                falhas.append(f"{nome}: o modo não ficou ativo depois da edição "
-                              f"(servidor={ultima.get('modo')}/{ultima.get('ativo')})")
-            elif ultima.get("p") is None or abs(float(ultima["p"]) - cenario["p"]) > 1e-9:
-                falhas.append(f"{nome}: o PAINEL ESTÁ PRESO — a edição (p={cenario['p']}) não chegou ao "
-                              f"servidor (p no servidor={ultima.get('p')!r}; POSTs de apply depois da "
-                              f"edição: {[(e['t'], e['url']) for e in editados]})")
-            elif not editados:
-                falhas.append(f"{nome}: nenhum POST de apply saiu do painel depois da edição")
-            elif not ok_painel:
-                falhas.append(f"{nome}: o painel não mostra o modo ativo ({painel})")
-            relatorio.append(f"· {nome} · paragem local aos {round(local['tConfirmado'] - local['t'])} ms · "
-                             f"religamento (HTTP {religamento['http']}) · adoção do painel aos "
-                             f"{round(adocao['t'] - religamento['t'])} ms · edição p={cenario['p']} -> "
-                             f"servidor p={ultima.get('p')!r} · {len(amostras)} amostras · "
-                             f"POST de apply aos "
-                             f"{[round(e['t'] - cenario['tEdicao']) for e in editados]} ms depois da edição")
-            continue
-        # (a) paragem EXTERNA com um apply agendado pendente
-        externa = cenario["externa"]
-        primeiro = next((i for i, a in enumerate(amostras) if a["modo"] == "nenhum" and not a["ativo"]), None)
-        voltou = [a for a in amostras if a["modo"] != "nenhum" or a["ativo"]]
-        atrasados = [e for e in envios
-                     if e["t"] > cenario["tExterna"] + TOL_APOS_CLIQUE_MS and _envio_apply_ativo(e)]
-        ultima = amostras[-1] if amostras else {}
-        base_ok = (ultima.get("vento_modo") == "nenhum" and ultima.get("vento_vel") is not None
-                   and abs(float(ultima["vento_vel"])) <= TOL_TELE) if externa["tipo"] == "cru" \
-            else ultima.get("vento_modo") not in MODOS_DINAMICOS
-        painel_ok = painel["parado"] and not painel["rajadas"]
-        aviso_ok = (painel["suprimido"] is not None) if externa["tipo"] == "cru" \
-            else any("outra aba" in str(a) for a in painel["avisos"])
-        if cenario["esperaParagemMs"] is None:
-            falhas.append(f"{nome}: a paragem EXTERNA nunca chegou ao servidor (nenhuma amostra em "
-                          f"nenhum/inativo) — o «outro cliente» não parou nada")
-        elif primeiro is None or voltou:
-            falhas.append(f"{nome}: o modo VOLTOU a ativar depois da paragem externa — o debounce local "
-                          f"ressuscitou-o (amostras={[(a['t'], a['modo'], a['ativo']) for a in amostras[:12]]}, "
-                          f"POSTs de apply depois da paragem="
-                          f"{[(e['t'] - cenario['tExterna'], e['corpo']) for e in atrasados]})")
-        elif atrasados:
-            falhas.append(f"{nome}: o front mandou um apply dinâmico DEPOIS da paragem externa "
-                          f"(POSTs={[(e['t'] - cenario['tExterna'], e['url'], e['corpo']) for e in atrasados]})")
-        elif not base_ok:
-            falhas.append(f"{nome}: a dinâmica continua a atuar depois da paragem externa "
-                          f"(vento_modo={ultima.get('vento_modo')!r} vento={ultima.get('vento_vel')})")
-        elif not painel_ok:
-            falhas.append(f"{nome}: o painel não reflete o servidor depois da paragem externa "
-                          f"(painel={painel})")
-        elif not aviso_ok:
-            falhas.append(f"{nome}: o utilizador não foi avisado de que a edição não foi aplicada "
-                          f"(aviso de «não aplicado»={painel['suprimido']!r}; avisos={painel['avisos']})")
+        if cenario["tipo"] == "externa":
+            if cenario.get("paragemHttp") != 200:
+                falha, linha = f"{nome}: a paragem do outro cliente devolveu HTTP {cenario.get('paragemHttp')}", f"· {nome}"
+            else:
+                falha, linha = _avaliar_paragem(cenario)
         else:
-            relatorio.append(
-                f"· {nome} · paragem {'crua' if externa['tipo'] == 'cru' else 'na 2.ª aba'} aos "
-                f"{round(cenario['tExterna'] - cenario['tEdicao'])} ms depois da edição · servidor parado "
-                f"em {cenario['esperaParagemMs']} ms · {len(amostras)} amostras TODAS inativas "
-                f"({round(amostras[-1]['t'] / 1000, 2)} s) · 0 POSTs de apply depois da paragem · "
-                f"painel: PARADO={painel['parado']} RAJADAS={painel['rajadas']} "
-                f"aviso={'sim' if aviso_ok else 'NÃO'} · {fim['polls']} polls atrasados do site")
-    for cenario in dados["cenarios"]:
-        fim = cenario.get("fim") or {}
-        if fim.get("envios"):
-            relatorio.append(f"POSTs do front · {cenario['nome']}: "
-                             + " · ".join(f"{round(e['t'] - cenario['tEdicao'])}ms:{e['url']} {e['corpo']}"
-                                          for e in fim["envios"]))
+            fim, depois = cenario.get("fim") or {}, cenario.get("depoisDaEdicao") or {}
+            linha = (f"· {nome} · paragem local={cenario.get('paragemLocal')} · religamento HTTP "
+                     f"{cenario.get('religamentoHttp')} · painel adotou em {cenario.get('adocaoMs')} ms → "
+                     f"{cenario.get('painelAdotado')} · edição p={cenario['p']} → servidor "
+                     f"{depois.get('intensidade')!r} · clique final → ligado={fim.get('ligado')!r} · POSTs do "
+                     f"front: {[(e['t'], e['corpo']) for e in cenario.get('envios') or []]}")
+            falha = None
+            if cenario.get("paragemLocal") is not True:
+                falha = f"{nome}: a paragem LOCAL não chegou ao servidor"
+            elif cenario.get("religamentoHttp") != 200:
+                falha = f"{nome}: o religamento por outro cliente devolveu HTTP {cenario.get('religamentoHttp')}"
+            elif cenario.get("adotou") is not True:
+                falha = (f"{nome}: o INTERRUPTOR MENTE — o painel não adotou o vento religado por outro "
+                         f"cliente em {ADOCAO_MS / 1000:g} s (painel={cenario.get('painelAdotado')}, servidor "
+                         f"ligado a {cenario['religada']} m/s)")
+            elif cenario.get("edicaoChegou") is not True:
+                falha = (f"{nome}: a edição local (p={cenario['p']}) não chegou ao servidor "
+                         f"(servidor={depois})")
+            elif cenario.get("cliqueDesligou") is not True or fim.get("ligado") is not False:
+                falha = (f"{nome}: o clique no interruptor (que mostrava LIGADO) não desligou o vento "
+                         f"(servidor={fim}, painel={cenario.get('painelFim')})")
+        relatorio.append(linha)
+        if falha:
+            falhas.append(falha)
     for falha in falhas:
         relatorio.append(f"FALHOU: {falha}")
     return not falhas, relatorio
 
 
 # ------------------------------------------------------- prova de NÃO-TAUTOLOGIA (mutação do front)
-# Uma prova nova pode estar verde por não medir nada. Aqui desliga-se UMA defesa de cada vez, nas fontes do
-# front, compila-se o site com elas e correm-se os MESMOS cenários: eles TÊM de FALHAR (o cenário que fica
-# verde é o que não estava a medir a defesa). A troca é textual e CONFERIDA (se a linha já não existir,
-# aborta em vez de fingir que mutou).
+# Uma prova nova pode estar verde por não medir nada. Aqui desliga-se UMA defesa de cada vez no front do
+# cockpit (`site/src/lib/cockpit.ts`), compila-se o site e correm-se os MESMOS cenários: eles TÊM de FALHAR
+# (o cenário que fica verde é o que não estava a medir a defesa). A troca é textual e CONFERIDA (se o texto
+# já não existir, aborta em vez de fingir que mutou). O front mutado é compilado numa CÓPIA em `$TMPDIR`
+# (`site/` sem `node_modules`, que entra por ligação simbólica) e servido de lá: a árvore não é tocada.
 MUTACOES_FRONT = (
-    ("sem-revalidacao", "src/lib/paragem.ts",
-     "        estado = await leitor()",
-     "        estado = { modo: opcoes.modo, ativo: true }",
-     ("cru", "aba"),
-     "a revalidação passa a dizer sempre «ativo»: o apply volta a ressuscitar o modo que OUTRO cliente parou"),
-    ("sem-desbloqueio-remoto", "src/lib/paragem.ts",
-     "  if (emitidoEm >= instanteParagem) bloqueado = false",
-     "  if (emitidoEm >= instanteParagem && emitidoEm < 0) bloqueado = false",
-     ("preso",),
-     "o bloqueio do live-apply deixa de ser levantado pela adoção do modo vindo do servidor (painel preso)"),
+    ("estado-inteiro",
+     "    if (final) this.emissor.largar(corpo)\n    else this.emissor.pedir(corpo)\n",
+     ("    const inteiro = { ligado: this.valor.ligado, intensidade: this.valor.intensidade,\n"
+      "      aleatorio: this.valor.aleatorio, direcao: this.valor.direcao }\n"
+      "    if (final) this.emissor.largar(inteiro)\n    else this.emissor.pedir(inteiro)\n"),
+     "multi", ("externa",),
+     ("o painel passa a mandar o estado INTEIRO em vez de só o que mudou: o envio do slider leva o `ligado: "
+      "true` que o painel ainda julga em vigor e ressuscita o vento que OUTRO cliente parou")),
+    ("sem-adocao",
+     "      v.conhecido &&\n      v.ligado === bloco.ligado &&\n",
+     "      v.conhecido ||\n      v.ligado === bloco.ligado &&\n",
+     "multi", ("desatualizado",),
+     ("o painel deixa de adotar o que o servidor diz depois da 1.ª leitura: o interruptor fica a mentir "
+      "quando outro cliente liga o vento")),
+    ("fundir-perde-o-ultimo",
+     "      fundir: (pendente, novo) => ({ ...pendente, ...novo }),\n",
+     "      fundir: (pendente) => pendente,\n",
+     "matriz", (0, 50),
+     ("o emissor do painel deixa cair o gesto MAIS RECENTE quando há um envio pendente: o `ligado: false` "
+      "da paragem perde-se atrás da intensidade arrastada")),
 )
 
 
-def escrever_front_mutado(destino: Path, arquivo: str, alvo: str, troca: str) -> Path:
-    """Copia as fontes do front para `destino` com UMA linha trocada (a mutação), conferindo a troca."""
-    destino.mkdir(parents=True, exist_ok=True)
-    for rel in FRONT_RELATIVOS:
-        conteudo = (SITE / rel).read_text(encoding="utf-8")
-        if rel == arquivo:
-            if alvo not in conteudo:
-                raise SystemExit(f"[teste] mutação impossível: a linha {alvo!r} já não está em {rel} "
-                                 "(o front mudou? atualize MUTACOES_FRONT)")
-            conteudo = conteudo.replace(alvo, troca, 1)
-        (destino / Path(rel).name).write_text(conteudo, encoding="utf-8")
-    return destino
+def construir_front(destino: Path, mutacao: tuple | None = None) -> tuple[Path | None, str]:
+    """Compila o front numa CÓPIA (`destino/site`) — adulterado por `mutacao` se dada. `(dist | None, saída)`.
+
+    Copia `site/` sem `node_modules` nem `dist` (o `node_modules` entra por ligação simbólica) e corre o
+    `vite build` da cópia (sem o `tsc -b`: uma mutação não tem de passar no verificador de tipos para o
+    bundle existir). A árvore de trabalho não é tocada.
+    """
+    vite = SITE / "node_modules" / ".bin" / "vite"
+    if not vite.is_file():
+        return None, f"{vite} não existe — corra `npm install` em {SITE}"
+    copia = destino / "site"
+    shutil.rmtree(destino, ignore_errors=True)
+    shutil.copytree(SITE, copia, ignore=shutil.ignore_patterns("node_modules", "dist", ".vite*"))
+    (copia / "node_modules").symlink_to(SITE / "node_modules", target_is_directory=True)
+    if mutacao is not None:
+        _nome, alvo, troca = mutacao[:3]
+        fonte = copia / FRONT_COCKPIT
+        conteudo = fonte.read_text(encoding="utf-8")
+        if conteudo.count(alvo) != 1:
+            raise SystemExit(f"[teste] mutação impossível: o texto {alvo!r} aparece {conteudo.count(alvo)}x em "
+                             f"{FRONT_COCKPIT} (o front mudou? atualize MUTACOES_FRONT)")
+        fonte.write_text(conteudo.replace(alvo, troca, 1), encoding="utf-8")
+    feito = subprocess.run([str(copia / "node_modules" / ".bin" / "vite"), "build", "--configLoader", "runner"],
+                           cwd=str(copia), capture_output=True, text=True, timeout=600, check=False)
+    saida = (feito.stdout or "") + (feito.stderr or "")
+    dist = copia / "dist"
+    if feito.returncode != 0 or not (dist / "index.html").is_file():
+        return None, saida
+    return dist, saida
 
 
-def prova_mutacao(pasta: Path, modelo: Path, fator_tempo: float, porta: int, atraso_poll: int,
+def prova_mutacao(pasta: Path, modelo: Path, fator_tempo: float, porta: int,
                   janela_ms: int) -> tuple[bool, list[str]]:
-    """Corre os cenários multi-cliente com o front MUTADO (uma defesa desligada) e espera que FALHEM.
+    """Corre os cenários do cockpit com o front MUTADO (uma defesa desligada) e espera que FALHEM.
 
-    Devolve `(ok, relatorio)`: `ok` = todas as mutações fizeram o cenário correspondente falhar (prova de
-    que o cenário mede mesmo a defesa) e o front da árvore voltou a compilar no fim.
+    Primeiro o CONTROLO: o front da árvore compilado pela MESMA via (cópia + `vite build`) tem de passar os
+    cenários que as mutações vão partir — senão uma falha vinha da via de compilação e não da mutação.
+    Devolve `(ok, relatorio)`: `ok` = o controlo passou e todas as mutações fizeram os cenários delas falhar.
     """
     import tempfile
 
     relatorio: list[str] = []
     falhas: list[str] = []
-    raiz_mutacoes = Path(tempfile.mkdtemp(prefix="front_mutado_", dir=str(pasta)))
-    for nome, arquivo, alvo, troca, quais, descricao in MUTACOES_FRONT:
-        destino = escrever_front_mutado(raiz_mutacoes / nome, arquivo, alvo, troca)
-        relatorio.append(f"· mutação «{nome}» ({arquivo}: {alvo.strip()} -> {troca.strip()}) — {descricao}")
-        with _fontes_front(destino):
-            ok, linhas = checa_multicliente(pasta, modelo, fator_tempo, porta, atraso_poll, quais, janela_ms)
-        for linha in linhas:
-            if linha.startswith(("FALHOU:", "·")):
-                relatorio.append(f"    {linha}")
-        if ok:
-            falhas.append(f"mutação «{nome}»: os cenários {list(quais)} continuaram VERDES com a defesa "
-                          "desligada — o teste não está a medir essa defesa (tautologia)")
-            relatorio.append(f"    PROVA FALHOU: com «{nome}» os cenários deviam falhar e passaram")
-        else:
-            relatorio.append(f"    prova OK: com «{nome}» os cenários {list(quais)} FALHARAM como esperado")
-    shutil.rmtree(raiz_mutacoes, ignore_errors=True)
+    raiz = Path(tempfile.mkdtemp(prefix="front_mutado_", dir=str(pasta)))
+
+    def correr(dist: Path, grupo: str, quais: tuple) -> tuple[bool, list[str]]:
+        if grupo == "multi":
+            return checa_multicliente(pasta, modelo, fator_tempo, porta, quais, janela_ms, dist)
+        return checa_navegador(pasta, modelo, fator_tempo, quais, porta, dist)
+
+    try:
+        dist, saida = construir_front(raiz / "controlo")
+        if dist is None:
+            return False, [f"o `vite build` da cópia SEM mutação falhou:\n{saida[-1500:]}"]
+        for grupo, quais in sorted({(m[3], m[4]) for m in MUTACOES_FRONT}, key=str):
+            ok, linhas = correr(dist, grupo, quais)
+            relatorio.append(f"· controlo (cópia SEM mutação) · {grupo} {list(quais)}: "
+                             f"{'passa' if ok else 'FALHA'}")
+            if not ok:
+                relatorio += [f"    {linha}" for linha in linhas if linha.startswith("FALHOU:")]
+                falhas.append(f"controlo: a cópia SEM mutação falhou os cenários {grupo} {list(quais)} — as "
+                              "falhas das mutações não provariam nada")
+        for nome, alvo, troca, grupo, quais, descricao in MUTACOES_FRONT:
+            dist, saida = construir_front(raiz / nome, (nome, alvo, troca))
+            relatorio.append(f"· mutação «{nome}» ({FRONT_COCKPIT}) — {descricao}")
+            if dist is None:
+                falhas.append(f"mutação «{nome}»: o `vite build` falhou")
+                relatorio.append(f"    o `vite build` falhou:\n{saida[-800:]}")
+                continue
+            ok, linhas = correr(dist, grupo, quais)
+            relatorio += [f"    {linha}" for linha in linhas if linha.startswith("FALHOU:")]
+            if ok:
+                falhas.append(f"mutação «{nome}»: os cenários {grupo} {list(quais)} continuaram VERDES com a "
+                              "defesa desligada — o teste não está a medir essa defesa (tautologia)")
+                relatorio.append(f"    PROVA FALHOU: com «{nome}» os cenários deviam falhar e passaram")
+            else:
+                relatorio.append(f"    prova OK: com «{nome}» os cenários {grupo} {list(quais)} FALHARAM "
+                                 "como esperado")
+    finally:
+        shutil.rmtree(raiz, ignore_errors=True)
     for falha in falhas:
         relatorio.append(f"FALHOU: {falha}")
     return not falhas, relatorio
 
 
-def _fontes_front(front: Path | None):
-    """Contexto que compila o site com as fontes de OUTRA pasta (o front de antes da correção).
+# ------------------------------------------------- prova de NÃO-TAUTOLOGIA (mutação do backend, r13)
+# Os cenários dos 3 botões ao nível do runner também têm de ter dentes: cada mutação desliga UMA garantia
+# do backend numa CÓPIA das fontes (`$TMPDIR`, usada pelo `--fontes`) e o cenário indicado TEM de falhar.
+MUTACOES_BACKEND = (
+    ("parar-sem-os-3-botoes", "sim_site.py",
+     '        novo["vento_simples"] = {**simples, "ligado": False, "seq": int(simples.get("seq", 0) or 0) + 1}\n',
+     "        pass\n",
+     "PARAR VENTO (POST /api/parar)",
+     "o `POST /api/parar` deixa de desligar o vento dos 3 botões (só pára o contrato antigo)"),
+    ("3-botoes-sem-neutralizar-o-antigo", "sim_view.py",
+     "            registo = replace(registo, vel=0.0, ativo=False, dinamico=None)\n",
+     "            registo = replace(registo)\n",
+     "o vento antigo NAO volta",
+     "com os 3 botões no ficheiro o vento do contrato antigo continua a soprar por baixo"),
+    ("sem-repor-o-gerador", "sim_view.py",
+     "            self.gerador_vento.repor()\n",
+     "            self.gerador_vento.definir(False, 0.0, False, 0.0)\n",
+     "o contrato antigo retoma a autoridade",
+     ("o código de ANTES da correção do «vento fantasma»: quando o bloco sai o gerador só é desligado, e a "
+      "rampa congelada reaparece quando o bloco volta")),
+)
 
-    Copia `controlos.tsx`/`use-sim.ts`/`App.tsx`/`paragem.ts` (`FRONT_RELATIVOS`) da pasta indicada para a
-    árvore, corre `npm run build`, devolve o controle e no fim REPÕE as fontes da árvore e volta a compilar.
-    É a prova dos defeitos (2)/(3): o MESMO teste, contra o front de antes. `front=None` = árvore de
-    trabalho (não compila nada). A pasta tem de trazer as QUATRO fontes (as defesas multi-cliente vivem em
-    `lib/paragem.ts`); para a mutação automática use `--mutacao`, que as escreve sozinho.
+
+def prova_mutacao_backend(pasta: Path, fator_tempo: float) -> tuple[bool, list[str]]:
+    """Corre os cenários dos 3 botões (`--so-simples`) contra fontes MUTADAS e espera que FALHEM.
+
+    Primeiro o CONTROLO — uma cópia SEM mutação tem de passar (exit 0), senão as falhas vinham da via
+    (`--fontes`) e não da mutação —, depois cada mutação: exit ≠ 0 E a linha `[FALHA]` do cenário indicado.
     """
-    import contextlib
+    import tempfile
 
-    @contextlib.contextmanager
-    def contexto():
-        if front is None:
-            yield
-            return
-        originais = {rel: (SITE / rel).read_bytes() for rel in FRONT_RELATIVOS}
-        try:
-            for rel in FRONT_RELATIVOS:
-                alternativo = front / Path(rel).name
-                if not alternativo.is_file():
-                    raise SystemExit(f"[teste] --front {front}: falta {alternativo.name} (a pasta tem de "
-                                     f"trazer as fontes {[Path(r).name for r in FRONT_RELATIVOS]})")
-                shutil.copyfile(alternativo, SITE / rel)
-            codigo, saida = _compilar_site()
-            if codigo != 0:
-                raise SystemExit(f"[teste] npm run build falhou com as fontes de {front}:\n{saida[-1500:]}")
-            yield
-        finally:
-            for rel, conteudo in originais.items():
-                (SITE / rel).write_bytes(conteudo)
-            codigo, saida = _compilar_site()
-            if codigo != 0:
-                raise SystemExit(f"[teste] ATENÇÃO: repus as fontes mas o npm run build falhou:\n"
-                                 f"{saida[-1500:]}")
+    relatorio: list[str] = []
+    falhas: list[str] = []
+    raiz = Path(tempfile.mkdtemp(prefix="backend_mutado_", dir=str(pasta)))
+    origem = _FONTES or _AQUI
 
-    return contexto()
+    def correr(nome: str, ficheiro: str | None = None, alvo: str = "", troca: str = ""):
+        destino = raiz / nome
+        destino.mkdir(parents=True)
+        for fonte in ("env.py", "sim_view.py", "sim_site.py"):
+            conteudo = (origem / fonte).read_text(encoding="utf-8")
+            if fonte == ficheiro:
+                if conteudo.count(alvo) != 1:
+                    raise SystemExit(f"[teste] mutação impossível: o texto {alvo!r} aparece "
+                                     f"{conteudo.count(alvo)}x em {fonte} (o backend mudou? atualize "
+                                     "MUTACOES_BACKEND)")
+                conteudo = conteudo.replace(alvo, troca, 1)
+            (destino / fonte).write_text(conteudo, encoding="utf-8")
+        return subprocess.run([sys.executable, str(Path(__file__).resolve()), "--fontes", str(destino),
+                               "--so-simples", "--fator-tempo", f"{fator_tempo:g}",
+                               "--pasta", str(raiz / f"corrida_{nome}")],
+                              capture_output=True, text=True, timeout=900, check=False)
 
-
-def _compilar_site() -> tuple[int, str]:
-    """`npm run build` em `site/` (tsc -b + vite). Devolve `(código, saída)`. Não precisa de `~/.secrets`:
-    o `node_modules/` já está instalado (só o `npm install` do registo privado é que precisa)."""
-    npm = _binario(("npm",))
-    if npm is None:
-        return 1, "npm não encontrado"
-    if not (SITE / "node_modules").is_dir():
-        return 1, f"{SITE / 'node_modules'} não existe — corra `npm install` em {SITE}"
-    feito = subprocess.run([npm, "run", "build"], cwd=str(SITE), capture_output=True, text=True,
-                           timeout=600, check=False)
-    return feito.returncode, (feito.stdout or "") + (feito.stderr or "")
+    try:
+        controlo = correr("controlo")
+        relatorio.append(f"· controlo (cópia SEM mutação, --so-simples): exit {controlo.returncode}")
+        if controlo.returncode != 0:
+            falhas.append("controlo: a cópia SEM mutação falhou os cenários dos 3 botões — as falhas das "
+                          "mutações não provariam nada")
+            relatorio += [f"    {linha}" for linha in controlo.stdout.splitlines() if "FALH" in linha][:8]
+        for nome, ficheiro, alvo, troca, marca, descricao in MUTACOES_BACKEND:
+            feito = correr(nome, ficheiro, alvo, troca)
+            apanhou = [linha.strip() for linha in feito.stdout.splitlines()
+                       if linha.startswith("[FALHA]") and marca in linha]
+            relatorio.append(f"· mutação «{nome}» ({ficheiro}) — {descricao}: exit {feito.returncode} · "
+                             f"{len(apanhou)} cenário(s) com «{marca}» em FALHA")
+            if feito.returncode == 0 or not apanhou:
+                falhas.append(f"mutação «{nome}»: o cenário «{marca}» continuou VERDE com a garantia "
+                              "desligada — o teste não a mede (tautologia)")
+            else:
+                relatorio.append(f"    prova OK: {apanhou[0][:150]}")
+    finally:
+        shutil.rmtree(raiz, ignore_errors=True)
+    for falha in falhas:
+        relatorio.append(f"FALHOU: {falha}")
+    return not falhas, relatorio
 
 
 # ---------------------------------------------------------------------------------------------- main
@@ -2174,37 +2066,35 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                         "de um modelo em out/) e a tempestade de ~100 pares de POSTs concorrentes "
                         "(0 HTTP 500 / 0 JSON partido / comandos intactos / 0 .tmp órfãos)")
     p.add_argument("--navegador", action="store_true",
-                   help="acrescenta a prova ponta a ponta com o FRONT real num Chrome headless: os TRÊS "
-                        "caminhos de paragem (PARAR VENTO, PARAR DINÂMICO e o toggle PARADO) não podem "
-                        "deixar um apply atrasado reativar o modo; janelas 0/50/100/300/600/1000 ms + "
-                        "controlo positivo; e os cenários MULTI-CLIENTE (paragem por `POST /api/parar` cru, "
-                        "paragem por uma 2.ª aba real, religamento remoto + edição local); precisa de node, "
-                        "Chrome e `npm run build` feito")
+                   help="acrescenta a prova ponta a ponta com o COCKPIT real num Chrome headless: as DUAS "
+                        "paragens (interruptor VENTO e tecla V) não podem deixar o envio pendente do slider "
+                        "da intensidade religar o vento; janelas 0/50/100/300 ms + controlo positivo; e os "
+                        "cenários MULTI-CLIENTE (paragem por `POST /api/parar` e `POST /api/vento-simples` "
+                        "crus, e o interruptor desatualizado); precisa de node, Chrome e `npm run build` "
+                        "feito")
     p.add_argument("--so-multi", action="store_true",
-                   help="salta a matriz de janelas × caminhos da prova --navegador e corre só os cenários "
-                        "multi-cliente (é o que a prova de mutação usa)")
+                   help="salta a matriz de janelas × paragens da prova --navegador e corre só os cenários "
+                        "multi-cliente")
     p.add_argument("--mutacao", action="store_true",
-                   help="prova de NÃO-TAUTOLOGIA: corre os cenários multi-cliente com o front da árvore e "
-                        "depois com cada defesa NOVA desligada (fontes mutadas, compiladas e repostas no "
-                        "fim) — cada mutação TEM de fazer falhar os cenários dela (implica --navegador "
-                        "--so-multi)")
+                   help="prova de NÃO-TAUTOLOGIA, em CÓPIAS em $TMPDIR (a árvore não é tocada): (i) o "
+                        "backend com uma garantia do vento dos 3 botões desligada tem de fazer falhar o "
+                        "cenário do runner que a mede; (ii) o front do cockpit compilado sem mutação "
+                        "(controlo) e depois com cada defesa desligada — cada mutação TEM de fazer falhar "
+                        "os cenários de browser dela")
     p.add_argument("--janela-multi", type=int, default=2600, metavar="MS",
                    help="janela de amostragem dos cenários multi-cliente, em ms (padrão: 2600)")
-    p.add_argument("--front", type=Path, default=None, metavar="DIR",
-                   help="pasta com controlos.tsx/use-sim.ts/App.tsx/lib/paragem.ts (o front de ANTES da "
-                        "correção): compila o site com eles, corre as provas de navegador e "
-                        "repõe+recompila no fim — é a prova dos defeitos (2)/(3) com um comando")
+    p.add_argument("--dist", type=Path, default=None, metavar="DIR",
+                   help="pasta de um bundle do site JÁ compilado (com index.html) a servir nas provas "
+                        "--navegador em vez de site/dist — é a prova contra outro front, sem tocar na árvore")
     p.add_argument("--sem-cenarios", action="store_true",
                    help="salta os cenários ao nível do runner (útil para repetir só as provas --http / "
                         "--navegador)")
-    p.add_argument("--atraso-poll", type=int, default=500, metavar="MS",
-                   help="atraso imposto à RESPOSTA do `GET /api/sim` do site na prova --navegador (padrão: "
-                        "500 ms). É o que torna o defeito determinístico: o cancelamento do apply "
-                        "agendado depende do POLLING, e com o poll instantâneo do loopback a janela tem "
-                        "~10 ms (o defeito escapa quase sempre)")
-    p.add_argument("--deltas", default="0,50,100,300,600,1000", metavar="MS,MS,…",
-                   help="janelas da prova --navegador, em ms (padrão: 0,50,100,300,600,1000) — cada janela "
-                        "corre os TRÊS caminhos de paragem e o controlo positivo")
+    p.add_argument("--so-simples", action="store_true",
+                   help="dos cenários ao nível do runner corre SÓ os do vento dos 3 botões (r13) — é o que "
+                        "a contraprova do backend (--mutacao) usa")
+    p.add_argument("--deltas", default="0,50,100,300", metavar="MS,MS,…",
+                   help="janelas da prova --navegador, em ms (padrão: 0,50,100,300) — cada janela corre as "
+                        "DUAS paragens e o controlo positivo")
     p.add_argument("--porta", type=int, default=8481,
                    help="porta do servidor das provas de navegador (padrão: 8481)")
     p.add_argument("--model", type=Path, default=None, help="modelo para a prova --http (padrão: o do site)")
@@ -2213,14 +2103,25 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _imprimir_cenario(relatorio: dict, linha: str, falhas: list[str]) -> None:
+    """Imprime o veredicto de um cenário do runner (e os resíduos, se falhou) e acumula a falha."""
+    ruins = [nome for nome, ok in relatorio["checagens"].items() if not ok]
+    print(f"[{'OK  ' if not ruins else 'FALHA'}] {relatorio['nome']}")
+    print(f"        {linha}")
+    if ruins:
+        for nome in ruins:
+            print(f"        · FALHOU: {nome}")
+        print(f"        resíduos: {json.dumps(relatorio['residuos'], default=str)}")
+        falhas.append(f"{relatorio['nome']}: {', '.join(ruins)}")
+
+
 def main(argv=None) -> int:
     args = analisar_argumentos(argv)
-    if args.mutacao:                 # a prova de mutação corre os cenários multi contra o front mutado
-        args.navegador = True
-        args.so_multi = True
-    if args.navegador and args.front is not None and args.mutacao:
-        raise SystemExit("[teste] --front e --mutacao juntos não fazem sentido: a mutação escreve as "
-                         "próprias fontes")
+    if args.mutacao and args.dist is not None:
+        raise SystemExit("[teste] --dist e --mutacao juntos não fazem sentido: a mutação compila os "
+                         "próprios bundles")
+    if args.dist is not None and not (args.dist / "index.html").is_file():
+        raise SystemExit(f"[teste] --dist {args.dist}: falta o index.html (não é um bundle compilado)")
     if args.fontes is not None:
         faltam = [nome for nome in ("env.py", "sim_view.py", "sim_site.py")
                   if not (args.fontes / nome).is_file()]
@@ -2238,35 +2139,55 @@ def main(argv=None) -> int:
         import tempfile
         pasta = Path(tempfile.mkdtemp(prefix="teste_parar_vento_"))
     print(f"[teste] ficheiros do teste: {pasta}")
+    # o pack de bateria dos servidores lançados aqui (planta real) vive na pasta do TESTE, a não ser que
+    # venha definido de fora: a prova não gasta o pack persistente do dono (`out/bateria/`)
+    os.environ.setdefault("DRONE_PASTA_BATERIA", str(Path(pasta) / "bateria"))
+    simples = [] if (args.sem_cenarios or not TEM_SIMPLES) else CENARIOS_SIMPLES
+    antigos = [] if (args.sem_cenarios or args.so_simples) else CENARIOS
     if not args.sem_cenarios:
-        print(f"[teste] {len(CENARIOS)} cenários ao nível do runner (ciclo REAL do sim_view.correr)\n")
+        print(f"[teste] {len(antigos)} cenários do contrato antigo + {len(simples) + (1 if simples else 0)} do "
+              f"vento dos 3 botões (r13), ao nível do runner (ciclo REAL do sim_view.correr)"
+              + ("" if TEM_SIMPLES else " — estas fontes não têm o vento dos 3 botões: saltados") + "\n")
 
     banco = Banco(pasta, fator_tempo=args.fator_tempo)
     banco.arrancar()
     falhas: list[str] = []
     try:
-        for cen in (() if args.sem_cenarios else CENARIOS):
+        for cen in antigos:
             try:
                 relatorio = correr_cenario(banco, cen)
             except SystemExit as erro:                    # espera estourada: conta como falha do cenário
                 print(f"[FALHA] {cen.nome}\n        {erro}")
                 falhas.append(f"{cen.nome}: {erro}")
                 continue
-            ruins = [nome for nome, ok in relatorio["checagens"].items() if not ok]
-            print(f"[{'OK  ' if not ruins else 'FALHA'}] {relatorio['nome']}")
-            print(f"        base comandada = {relatorio['base']} · modos depois do PARAR = "
-                  f"{relatorio['modos']} · pior desvio = {relatorio['pior_desvio']:.3e} m/s · "
-                  f"{relatorio['amostras']} amostras de telemetria")
-            if ruins:
-                for nome in ruins:
-                    print(f"        · FALHOU: {nome}")
-                print(f"        resíduos: {json.dumps(relatorio['residuos'], default=str)}")
-                falhas.append(f"{relatorio['nome']}: {', '.join(ruins)}")
+            _imprimir_cenario(relatorio,
+                              f"base comandada = {relatorio['base']} · modos depois do PARAR = "
+                              f"{relatorio['modos']} · pior desvio = {relatorio['pior_desvio']:.3e} m/s · "
+                              f"{relatorio['amostras']} amostras de telemetria", falhas)
+        for cen in simples:
+            try:
+                relatorio = correr_cenario_simples(banco, cen)
+            except SystemExit as erro:
+                print(f"[FALHA] {cen.nome}\n        {erro}")
+                falhas.append(f"{cen.nome}: {erro}")
+                continue
+            _imprimir_cenario(relatorio,
+                              f"antes: {relatorio['antes']} · depois: modos = {relatorio['modos']} · fora do "
+                              f"eixo pedido = {relatorio['fora_do_eixo']:.1e} m/s · rampa e^(−t/τ): erro "
+                              f"máx {relatorio['erro_rampa']:.1e} m/s em {relatorio['vivas']} amostras · "
+                              f"zero exato ~{relatorio['t_medido']:.2f} s depois (fórmula "
+                              f"{relatorio['t_zero']:.2f} s) · {relatorio['amostras']} amostras", falhas)
+        if simples:
+            try:
+                relatorio = correr_cenario_autoridade(banco)
+                _imprimir_cenario(relatorio, relatorio["linha"], falhas)
+            except SystemExit as erro:
+                print(f"[FALHA] {NOME_AUTORIDADE}\n        {erro}")
+                falhas.append(f"{NOME_AUTORIDADE}: {erro}")
     finally:
         banco.parar()
 
-    total = 0 if args.sem_cenarios else len(CENARIOS)
-    total += 1
+    total = len(antigos) + len(simples) + (1 if simples else 0) + 1
     print("\n[teste] defeito (1) — escritas concorrentes na mesma via do servidor (in-process)")
     ok_conc, linhas = checa_concorrencia_inprocess(pasta)
     for linha in linhas:
@@ -2275,7 +2196,7 @@ def main(argv=None) -> int:
     if not ok_conc:
         falhas.append("concorrência in-process")
     modelo = args.model
-    if (args.http or args.navegador) and modelo is None:
+    if (args.http or args.navegador or args.mutacao) and modelo is None:
         try:
             modelo, motivo = sim_site.modelo_por_omissao()
             print(f"\n[teste] modelo do runner: {modelo} ({motivo})")
@@ -2291,57 +2212,66 @@ def main(argv=None) -> int:
             ok, relatorio = checa_http(pasta, modelo, args.fator_tempo)
             for linha in relatorio:
                 print(f"        {linha}")
-            print(f"[{'OK  ' if ok else 'FALHA'}] PARAR pelo HTTP + tempestade de POSTs concorrentes")
+            print(f"[{'OK  ' if ok else 'FALHA'}] PARAR pelo HTTP (contrato antigo + 3 botões) + tempestade "
+                  "de POSTs concorrentes")
             if not ok:
                 falhas.append("ponta a ponta pelo HTTP / concorrência")
+    front = "site/dist da árvore de trabalho" if args.dist is None else str(args.dist)
     if args.navegador and not args.so_multi:
         deltas = tuple(int(v) for v in str(args.deltas).replace(" ", "").split(",") if v != "")
-        print(f"\n[teste] ponta a ponta com o FRONT real num Chrome headless (janelas {list(deltas)} ms × "
-              f"{len(PARAGENS)} caminhos de paragem + controlo, atraso do poll {args.atraso_poll} ms)")
+        print(f"\n[teste] ponta a ponta com o COCKPIT real num Chrome headless (janelas {list(deltas)} ms × "
+              f"{len(PARAGENS)} paragens + controlo; o slider é largado {LARGAR_MS} ms depois da paragem)")
         if modelo is None:
             print("        AVISO: sem modelo — o runner não corre e a telemetria não existe; salto")
         else:
             total += 1
-            print(f"        fontes do front: {args.front if args.front is not None else 'árvore de trabalho'}")
-            with _fontes_front(args.front):
-                ok, relatorio = checa_navegador(pasta, modelo, args.fator_tempo, deltas, args.porta,
-                                                args.atraso_poll)
+            print(f"        front: {front}")
+            ok, relatorio = checa_navegador(pasta, modelo, args.fator_tempo, deltas, args.porta, args.dist)
             for linha in relatorio:
                 print(f"        {linha}")
-            print(f"[{'OK  ' if ok else 'FALHA'}] nenhum apply atrasado reativa o modo depois de PARAR VENTO / "
-                  "PARAR DINÂMICO / PARADO")
+            print(f"[{'OK  ' if ok else 'FALHA'}] nenhum envio atrasado do painel religa o vento depois do "
+                  "interruptor VENTO / da tecla V")
             if not ok:
-                falhas.append("corrida do debounce do front (--navegador)")
+                falhas.append("envio pendente do slider depois da paragem (--navegador)")
     if args.navegador:
-        print(f"\n[teste] MULTI-CLIENTE: paragem por OUTRO cliente (POST /api/parar cru e PARAR DINÂMICO "
-              f"numa 2.ª aba real) com um apply agendado, e o painel preso (religamento remoto + edição "
-              f"local), atraso do poll {args.atraso_poll} ms, janela {args.janela_multi} ms")
+        print(f"\n[teste] MULTI-CLIENTE: paragem por OUTRO cliente (POST /api/parar e POST /api/vento-simples "
+              f"crus) a meio de um arrasto, e o interruptor desatualizado (religamento por outro cliente), "
+              f"janela {args.janela_multi} ms")
         if modelo is None:
             print("        AVISO: sem modelo — o runner não corre e a telemetria não existe; salto")
         else:
-            print(f"        fontes do front: {args.front if args.front is not None else 'árvore de trabalho'}")
+            print(f"        front: {front}")
             total += 1
-            with _fontes_front(args.front):
-                ok, relatorio = checa_multicliente(pasta, modelo, args.fator_tempo, args.porta,
-                                                   args.atraso_poll, (), args.janela_multi)
+            ok, relatorio = checa_multicliente(pasta, modelo, args.fator_tempo, args.porta, (),
+                                               args.janela_multi, args.dist)
             for linha in relatorio:
                 print(f"        {linha}")
-            print(f"[{'OK  ' if ok else 'FALHA'}] uma paragem de OUTRO cliente mata o apply pendente e o "
-                  "painel volta a aplicar depois de um religamento remoto")
+            print(f"[{'OK  ' if ok else 'FALHA'}] uma paragem de OUTRO cliente não é desfeita pelo painel e o "
+                  "interruptor adota o que o servidor diz")
             if not ok:
-                falhas.append("paragens multi-cliente / painel preso (--navegador)")
+                falhas.append("paragens multi-cliente / interruptor desatualizado (--navegador)")
+    if args.mutacao and TEM_SIMPLES:
+        print("\n[teste] NÃO-TAUTOLOGIA (mutação do backend, em CÓPIAS): cada garantia do vento dos 3 botões "
+              "desligada tem de fazer FALHAR o cenário do runner que a mede")
+        total += 1
+        ok, relatorio = prova_mutacao_backend(Path(pasta), args.fator_tempo)
+        for linha in relatorio:
+            print(f"        {linha}")
+        print(f"[{'OK  ' if ok else 'FALHA'}] os cenários dos 3 botões medem mesmo as garantias do backend "
+              "(mutação → falha)")
+        if not ok:
+            falhas.append("prova de não-tautologia (mutação do backend)")
     if args.mutacao:
-        print("\n[teste] NÃO-TAUTOLOGIA (mutação do front): cada defesa NOVA desligada tem de fazer FALHAR "
-              "os cenários que ela protege")
+        print("\n[teste] NÃO-TAUTOLOGIA (mutação do front, numa CÓPIA): cada defesa desligada tem de fazer "
+              "FALHAR os cenários que ela protege")
         if modelo is None:
             print("        AVISO: sem modelo — salto a prova de mutação")
         else:
             total += 1
-            ok, relatorio = prova_mutacao(pasta, modelo, args.fator_tempo, args.porta, args.atraso_poll,
-                                          args.janela_multi)
+            ok, relatorio = prova_mutacao(pasta, modelo, args.fator_tempo, args.porta, args.janela_multi)
             for linha in relatorio:
                 print(f"        {linha}")
-            print(f"[{'OK  ' if ok else 'FALHA'}] os cenários multi-cliente medem mesmo as defesas novas "
+            print(f"[{'OK  ' if ok else 'FALHA'}] os cenários do cockpit medem mesmo as defesas do front "
                   "(mutação → falha)")
             if not ok:
                 falhas.append("prova de não-tautologia (mutação do front)")

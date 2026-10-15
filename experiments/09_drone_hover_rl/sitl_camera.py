@@ -18,6 +18,15 @@ A esfera passa a BRANCA emissiva (câmara monocromática: o alvo distingue-se po
 
 Não é hardware: sem ruído de sensor, sem rolling shutter, sem desfoque (o render é instantâneo e nítido) — o detetor foi
 provado à parte nesses defeitos (`teste_visao.py` §4). O custo do render (host) mede-se em `estatisticas()`.
+
+MODO «PROJEÇÃO» (`modo="projecao"`, só para o TREINO sem interface — `treinar_bola.py`): em vez de renderizar e detetar, a
+`Camera` sai da projeção EXATA do centro da esfera na câmara `fpv` (pose do estado atual), com o raio aparente f·R/√(D² − R²),
+os MESMOS gates de validade do detetor (área mínima/máxima, disco inteiro dentro da imagem com a margem de borda) e ruído
+gaussiano de `ruido_px` no centróide — o erro que o detetor C++ MEDIU contra a projeção (≈ 0,1 px). Sem GPU (a medida é função
+só do estado); cadência, latência e `Camera.t` são os mesmos. O `teste_bola.py` prova que as duas câmaras dão a mesma medida
+(|Δu|, |Δv| < 0,3 px, |Δraio| < 0,5 px, mesma validade); o mesmo VOO nas duas foi medido à parte (2 sementes × 2 latências:
+centragem RMS 2,13° vs 2,12° e 1,66° vs 1,76° a 0,5 m/s; 5,13° vs 5,37° e 3,72° vs 3,62° a 0,8 m/s). A AVALIAÇÃO usa sempre
+o render.
 """
 from __future__ import annotations
 
@@ -32,6 +41,9 @@ LARGURA, ALTURA, FPS = 320, 240, 30.0
 LATENCIA_PI_S = 0.116          # pipeline Pi (CSI + ISP + JPEG + rede): lab.camera_rpi.latencia_modelada ≈ 118 ms; o enunciado usa 116
 LATENCIA_DCMI_S = 0.021        # caminho DCMI do Arduino (QVGA60: leitura 1 período + processamento + comando M7→M4)
 RAIO_ALVO_M = 0.05             # RAIO_PONTO do lab/camera_rpi.py
+MODOS = ("render", "projecao")
+MODO_OMISSAO = "render"        # o que `CameraSITL(modo=None)` usa — o `treinar_bola.py` põe "projecao" nos seus processos
+RUIDO_PROJECAO_PX = 0.1        # σ do centróide no modo projeção (o erro medido do detetor C++ vs a projeção: 0,085 px médio)
 
 
 def para_cinza(rgb: np.ndarray) -> np.ndarray:
@@ -47,11 +59,15 @@ class CameraSITL:
     """
 
     def __init__(self, env, largura: int = LARGURA, altura: int = ALTURA, fps: float = FPS,
-                 latencia_s: float = LATENCIA_PI_S, alvo_branco: bool = True, detetor=None, camera: str = "fpv"):
+                 latencia_s: float = LATENCIA_PI_S, alvo_branco: bool = True, detetor=None, camera: str = "fpv",
+                 modo: str | None = None, ruido_px: float = RUIDO_PROJECAO_PX, semente: int = 0):
         import mujoco
         import sitl_visao
         if not getattr(env, "com_alvo", False):
             raise ValueError("a câmara do SITL precisa do ponto-alvo: construir o env com `com_alvo=True`")
+        self.modo = MODO_OMISSAO if modo is None else modo
+        if self.modo not in MODOS:
+            raise ValueError(f"modo da câmara tem de ser um de {MODOS} (recebido {self.modo!r})")
         self.mujoco = mujoco
         self.model = env.model
         self.camera = camera
@@ -61,12 +77,16 @@ class CameraSITL:
         self.fovy = float(self.model.cam_fovy[self.cid])        # o do build (Pi Wide 67° · HM0360 55,4°)
         self.focal_px = 0.5 * self.altura / math.tan(math.radians(self.fovy) / 2.0)
         self._local = mujoco.MjData(self.model)                 # cópia privada do estado (o render não toca na simulação)
-        self._renderer = mujoco.Renderer(self.model, height=self.altura, width=self.largura)
         self.detetor = detetor if detetor is not None else sitl_visao.DetetorCpp()
         self.detetor.params_padrao(self.largura, self.altura)
+        self._renderer = None
         self._cor_original = None
-        if alvo_branco:
-            self._cor_original = self._pintar_alvo(True)
+        self.ruido_px, self.semente = float(ruido_px), int(semente)
+        self._mocap = int(self.model.body_mocapid[self.model.body("ponto").id])
+        if self.modo == "render":
+            self._renderer = mujoco.Renderer(self.model, height=self.altura, width=self.largura)
+            if alvo_branco:
+                self._cor_original = self._pintar_alvo(True)
         self.reiniciar()
 
     # ------------------------------------------------------------------ cena
@@ -89,10 +109,52 @@ class CameraSITL:
         self.ms_render: list[float] = []
         self.ms_detetor: list[float] = []
         self.registo: list[tuple] = []        # (t_captura_s, valido, u, v, raio) — só para análise
+        self._rng = np.random.default_rng([self.semente, 0xCA3A])   # ruído do modo projeção: reprodutível por episódio
 
     # ------------------------------------------------------------------ captura e entrega
+    def projetar(self, data) -> tuple:
+        """A medida do modo «projeção»: `(valido, u, v, raio)` EXATOS (convenção do índice), sem render nem detetor.
+
+        Pose da câmara por cinemática numa cópia privada de (qpos, mocap). A esfera (raio angular β = asen(R/D)) vista a um
+        ângulo θ do eixo óptico projeta-se numa ELIPSE: o que o detetor mede é o centro dela — a projeção do centro da esfera
+        afastada do ponto principal pelo fator (1 + tan²β)/(1 − tan²θ·tan²β) — e o raio equivalente √(área/π) =
+        f·tan β/cos^1,5 θ (semi-eixos f·tan β/cos²θ e f·tan β/cos θ). Válido se o disco passa os gates do detetor (área em
+        [area_min, area_max] e inteiro dentro da imagem com `margem_borda`)."""
+        mj, loc = self.mujoco, self._local
+        loc.qpos[:] = data.qpos
+        loc.mocap_pos[:] = data.mocap_pos
+        loc.mocap_quat[:] = data.mocap_quat
+        mj.mj_kinematics(self.model, loc)
+        mj.mj_camlight(self.model, loc)
+        rot = loc.cam_xmat[self.cid].reshape(3, 3)              # colunas = eixos da câmara (x direita, y cima, −z visão)
+        d = rot.T @ (loc.mocap_pos[self._mocap] - loc.cam_xpos[self.cid])
+        xc, yc, zc = float(d[0]), float(d[1]), -float(d[2])
+        dist2 = xc * xc + yc * yc + zc * zc
+        if zc <= RAIO_ALVO_M or dist2 <= RAIO_ALVO_M * RAIO_ALVO_M:
+            return 0, 0.0, 0.0, 0.0
+        f = self.focal_px
+        tb2 = RAIO_ALVO_M * RAIO_ALVO_M / (dist2 - RAIO_ALVO_M * RAIO_ALVO_M)       # tan²β
+        tt2 = (xc * xc + yc * yc) / (zc * zc)                                       # tan²θ
+        k = (1.0 + tb2) / (1.0 - tt2 * tb2)
+        u = 0.5 * (self.largura - 1) + k * f * xc / zc
+        v = 0.5 * (self.altura - 1) - k * f * yc / zc
+        raio = f * math.sqrt(tb2) * (1.0 + tt2) ** 0.75                             # 1/cos^1,5 θ = (1 + tan²θ)^0,75
+        p = self.detetor.params
+        area = math.pi * raio * raio
+        m = float(p.margem_borda) + raio
+        if not (float(p.area_min) <= area <= float(p.area_max) and m <= u <= self.largura - 1 - m
+                and m <= v <= self.altura - 1 - m):
+            return 0, 0.0, 0.0, 0.0
+        if self.ruido_px > 0.0:
+            ru, rv, rr = self._rng.normal(0.0, self.ruido_px, 3)
+            u, v, raio = u + float(ru), v + float(rv), max(raio + 0.5 * float(rr), 0.3)
+        return 1, u, v, raio
+
     def capturar(self, data) -> tuple:
-        """Um frame agora: render → luma → detetor. Devolve `(valido, u, v, raio)` (convenção do índice)."""
+        """Um frame agora: render → luma → detetor (ou a projeção exata, no modo «projeção»). Devolve `(valido, u, v, raio)`
+        (convenção do índice)."""
+        if self.modo == "projecao":
+            return self.projetar(data)
         t0 = time.perf_counter()
         self.mujoco.mj_copyData(self._local, self.model, data)
         self.mujoco.mj_forward(self.model, self._local)          # xpos/cam_xpos do estado ATUAL (o mocap entra aqui)
@@ -132,14 +194,15 @@ class CameraSITL:
                 "frac_validos": self.n_validos / self.n_frames if self.n_frames else float("nan"),
                 "render_ms_mediana": med(self.ms_render), "detetor_ms_mediana": med(self.ms_detetor),
                 "largura": self.largura, "altura": self.altura, "fps": self.fps, "latencia_s": self.latencia_s,
-                "fovy_graus": self.fovy, "focal_px": self.focal_px}
+                "fovy_graus": self.fovy, "focal_px": self.focal_px, "modo": self.modo}
 
     def fechar(self) -> None:
         if self._cor_original is not None:
             with contextlib.suppress(Exception):
                 self._pintar_alvo(False)
-        with contextlib.suppress(Exception):
-            self._renderer.close()
+        if self._renderer is not None:
+            with contextlib.suppress(Exception):
+                self._renderer.close()
         if hasattr(self.detetor, "close"):
             with contextlib.suppress(Exception):
                 self.detetor.close()

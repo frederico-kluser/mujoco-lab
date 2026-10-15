@@ -17,7 +17,8 @@
  *  · `linhasQuemFazOQue`: 4 linhas; o controlador muda com o modo (IA-1 medida × cascata C++
  *    estimada) e o FC/estimador são não-IA nos DOIS; `ALVOS_BORDO` tem os DOIS alvos com os números
  *    medidos do firmware (1438/3016 instruções, 2940 B de RAM, 21 ms DCMI vs 116 ms Pi);
- *  · os painéis novos EXISTEM no front (data-testid estáveis nos componentes certos).
+ *  · os painéis EXISTEM no front (data-testid estáveis nos componentes certos) — desde o cockpit r13
+ *    sem o seletor de controlador nem o botão de armar, que o dono mandou tirar.
  */
 
 import { readFileSync } from "node:fs"
@@ -184,44 +185,54 @@ ok(ard.camera.latencia_ms === 21 && ALVOS_BORDO[1].camera.latencia_ms === 116,
   "latência da câmara: 21 ms (DCMI) no Arduino vs 116 ms (CSI-2) no Pi")
 
 // ------------------------------------------------------------------ §11 painéis presentes no front
-// `[testid, ficheiro, padrao]`: o testid literal OU o padrão dinâmico do componente (ex. os keycaps
-// são `data-testid={`tecla-${tecla}`}` — o que importa é a FAMÍLIA existir no ficheiro certo; a
-// semântica de cada letra já foi provada na §8).
+// `[testid, ficheiro (relativo a src/components), padrao]`: o testid literal OU o padrão dinâmico do
+// componente (ex. `data-testid={`quem-faz-o-que-${linha.id}`}` — o que importa é a FAMÍLIA existir no
+// ficheiro certo).
+//
+// COCKPIT (r13, 2026-10-12): o seletor de controlador (`controlador.tsx`) e o painel de voo com ARMAR
+// (`controlo-voo.tsx`) foram REMOVIDOS a pedido do dono («não quero opções», «o modo de controlar já
+// vem ativado») — as suas entradas saíram daqui. O que o contrato r12 ainda mostra no front ficou:
+// o rumo e as teclas de rodar (agora na janela Voo e no HUD), «quem faz o quê» e os alvos de bordo.
+// A tecla V deixou de ser «olhar»: no cockpit é o VENTO, e seguir a bola é o B (testes/cockpit.mts).
 const testeids: [string, string, string][] = [
-  ["seletor-controlador", "controlador.tsx", 'data-testid="seletor-controlador"'],
-  ["controlador-estado", "controlador.tsx", 'data-testid="controlador-estado"'],
-  ["controlador-motivo", "controlador.tsx", 'data-testid="controlador-motivo"'],
-  ["controlador-modo-rl", "controlador.tsx", 'data-testid="controlador-modo-rl"'],
-  ["controlador-modo-classico", "controlador.tsx", 'data-testid="controlador-modo-classico"'],
-  ["controlador-fonte", "controlador.tsx", 'data-testid="controlador-fonte"'],
-  ["tecla-z", "controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"],
-  ["tecla-c", "controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"],
-  ["tecla-x", "controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"],
-  ["tecla-v", "controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"],
-  ["voo-rumo", "controlo-voo.tsx", 'data-testid="voo-rumo"'],
-  ["voo-rumo-avanco", "controlo-voo.tsx", 'data-testid="voo-rumo-avanco"'],
-  ["quem-faz-o-que", "quem-faz-o-que.tsx", 'data-testid="quem-faz-o-que"'],
-  ["quem-faz-o-que-fc", "quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
-  ["quem-faz-o-que-controlador", "quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
-  ["quem-faz-o-que-percecao", "quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
-  ["quem-faz-o-que-estimador", "quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
-  ["bordo-alvos", "rpi5.tsx", 'data-testid="bordo-alvos"'],
-  ["bordo-alvo-rpi5", "rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"],
-  ["bordo-alvo-arduino", "rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"],
+  ["voo-rumo", "cockpit/janela-voo.tsx", 'data-testid="voo-rumo"'],
+  ["voo-tecla-z", "cockpit/janela-voo.tsx", 'testid="voo-tecla-z"'],
+  ["voo-tecla-x", "cockpit/janela-voo.tsx", 'testid="voo-tecla-x"'],
+  ["voo-tecla-c", "cockpit/janela-voo.tsx", 'testid="voo-tecla-c"'],
+  ["tecla-z", "cockpit/hud.tsx", 'testid="tecla-z"'],
+  ["tecla-x", "cockpit/hud.tsx", 'testid="tecla-x"'],
+  ["tecla-c", "cockpit/hud.tsx", 'testid="tecla-c"'],
+  ["sistema-quem-voa", "cockpit/janela-sistema.tsx", 'data-testid="sistema-quem-voa"'],
+  ["quem-faz-o-que", "sim/quem-faz-o-que.tsx", 'data-testid="quem-faz-o-que"'],
+  ["quem-faz-o-que-fc", "sim/quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
+  ["quem-faz-o-que-controlador", "sim/quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
+  ["quem-faz-o-que-percecao", "sim/quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
+  ["quem-faz-o-que-estimador", "sim/quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"],
+  ["bordo-alvos", "sim/rpi5.tsx", 'data-testid="bordo-alvos"'],
+  ["bordo-alvo-rpi5", "sim/rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"],
+  ["bordo-alvo-arduino", "sim/rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"],
 ]
 const fontes = new Map<string, string>()
 for (const [, ficheiro] of testeids) {
   if (!fontes.has(ficheiro)) {
-    fontes.set(ficheiro, readFileSync(join(RAIZ, "src", "components", "sim", ficheiro), "utf8"))
+    fontes.set(ficheiro, readFileSync(join(RAIZ, "src", "components", ficheiro), "utf8"))
   }
 }
 for (const [testid, ficheiro, padrao] of testeids) {
   const texto = fontes.get(ficheiro) ?? ""
   ok(
     texto.includes(`data-testid="${testid}"`) || texto.includes(padrao),
-    `data-testid="${testid}" presente em src/components/sim/${ficheiro}`
+    `data-testid="${testid}" presente em src/components/${ficheiro}`
   )
 }
+// O que o dono mandou tirar não pode voltar por engano: nem seletor de controlador nem botão de armar.
+const cockpit = ["cockpit/janela-voo.tsx", "cockpit/janela-sistema.tsx", "cockpit/hud.tsx", "cockpit/doca.tsx"]
+  .map((f) => readFileSync(join(RAIZ, "src", "components", f), "utf8"))
+  .join("\n")
+ok(!cockpit.includes("seletor-controlador") && !cockpit.includes("enviarControlador") && !cockpit.includes("definirControlador"),
+  "o cockpit não tem seletor de controlador (voa o que ganhou na medição)")
+ok(!cockpit.includes("voo-ativar") && !/ARMAR CONTROLO/i.test(cockpit),
+  "o cockpit não tem botão de armar (o controlo de voo vem ativo)")
 
 // ------------------------------------------------------------------ §12 leituras de rumo
 ok(grausRumo(null) === "—" && grausRumo(Math.PI / 2) === "90.0°",

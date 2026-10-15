@@ -18,9 +18,14 @@ O que se prova (a cascata só é confiável se a identidade, o fail-safe e a pub
   §3 RUNNER: a telemetria publica a chave aditiva `"multi_ia"` (2 IAs: voo + seguimento; a IA-2
      `sem_politica` quando não há política — e nada rebenta com ela em falta);
   §4 SERVIDOR: `/api/state` publica `multi_ia` e `rpi5.multi_ia` (com semáforo) e as linhas do
-     `/api/sim` levam `multi_ia` — a fronteira site↔API está ligada.
+     `/api/sim` levam `multi_ia` — a fronteira site↔API está ligada. O servidor arranca com
+     `--controlador rl` EXPLÍCITO: desde o r13 o padrão do site é `auto` (cascata clássica na planta
+     real, que nem carrega as redes) e o que aqui se prova é a cascata das POLÍTICAS.
 
 Uso: `uv run --group hover-rl python experiments/09_drone_hover_rl/teste_multi_ia.py`
+
+O pack de bateria dos processos lançados aqui vive na pasta temporária do teste (`DRONE_PASTA_BATERIA`,
+se ainda não vier definida): correr a prova não gasta o pack persistente do dono em `out/bateria/`.
 """
 from __future__ import annotations
 
@@ -227,6 +232,7 @@ def secao_watchdog(c: Checagens) -> None:
 def secao_runner_servidor(c: Checagens) -> None:
     """Runner + servidor reais: a telemetria publica `"multi_ia"` e as rotas levam-no ao site."""
     pasta = Path(tempfile.mkdtemp(prefix="multi_ia_", dir=os.environ.get("TMPDIR")))
+    os.environ.setdefault("DRONE_PASTA_BATERIA", str(pasta / "bateria"))   # herdado pelo runner e pelo site
     telemetria, controlo = pasta / "telemetria.jsonl", pasta / "controlo.json"
     comando = [sys.executable, str(_AQUI / "sim_view.py"), "--sem-janela", "--max-segundos", "4",
                "--controlo", str(controlo), "--telemetria", str(telemetria), "--fpv", str(pasta),
@@ -259,6 +265,7 @@ def secao_runner_servidor(c: Checagens) -> None:
     porta = 8692
     servidor = subprocess.Popen(
         [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela", "--port", str(porta),
+         "--controlador", "rl",
          "--controlo", str(controlo), "--telemetria", str(telemetria), "--model", str(MODELO_VOO)],
         cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     base = None

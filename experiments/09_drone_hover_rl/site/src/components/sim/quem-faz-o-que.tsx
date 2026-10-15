@@ -30,15 +30,20 @@ export interface QuemFazOQueProps {
   multiIa: CustoIa | null
 }
 
-/** Semáforo do orçamento (o mesmo do painel RPi 5): OK · ATENCAO · ERRO · sem dados. */
+/**
+ * Semáforo do orçamento (o mesmo do painel RPi 5): OK · ATENCAO · ERRO. Sem medição (a cascata clássica
+ * a voar, ou o histórico parado) NÃO se desenha: um selo «sem dados» ao lado do título lia-se como uma
+ * avaria (revisão de UX de 2026-10-12).
+ */
 function Semaforo({ valor }: { valor: string | null }) {
+  if (valor === null || valor === "sem dados") return null
   return (
     <span
       className="rounded-full bg-muted px-2 py-0.5 text-[0.68rem] tabular-nums"
       data-testid="quem-faz-o-que-semaforo"
-      data-semaforo={valor ?? "sem dados"}
+      data-semaforo={valor}
     >
-      {valor ?? "sem dados"}
+      {valor}
     </span>
   )
 }

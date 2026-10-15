@@ -655,6 +655,30 @@ def checa_contrato(v: Validador) -> None:
             f"kf ×{p1['kf']:.3f}/×{p2['kf']:.3f} · SoC₀ {p1['soc0']:.2f}/{p2['soc0']:.2f} · "
             f"SoH {p1['soh']:.3f}/{p2['soh']:.3f}")
 
+    # F6 — `reset(seed)` é REPRODUTÍVEL entre instâncias, seja qual for o passado de cada uma. Até 2026-10-13 não
+    # era: a flutuação do VRS (o único estado da planta que nenhum reset repunha) atravessava os episódios, e a mesma
+    # semente com as mesmas ações divergia na 1.ª descida na própria esteira. O perfil abaixo sobe e DESCE de propósito.
+    def _voo(env: DroneRealEnv, semente: int, passos: int = 450) -> tuple[bytes, float]:
+        g = np.random.default_rng(31_000 + semente)
+        env.reset(seed=semente)
+        z_max, estado = 0.0, b""
+        for i in range(passos):
+            acao = g.uniform(-0.1, 0.1, size=4).astype(np.float32)
+            acao[0] = 0.9 if (i // 150) % 2 == 0 else -0.9
+            _, _, term, trunc, _ = env.step(acao)
+            z_max = max(z_max, float(env.data.qpos[2]))
+            estado += env.data.qpos.tobytes() + env.data.qvel.tobytes()
+            if term or trunc:
+                break
+        return estado, z_max
+
+    fresco, usado = DroneRealEnv(), DroneRealEnv()
+    _voo(usado, 999, 300)                              # esta instância já voou outro episódio antes
+    (b1, z1), (b2, _) = _voo(fresco, 4242), _voo(usado, 4242)
+    v.check("F6 reset(seed) reprodutível entre instâncias: a mesma semente e as mesmas ações dão `qpos`/`qvel` IGUAIS "
+            "byte a byte numa instância nova e numa que já voou outro episódio (subida + descida na própria esteira)",
+            b1 == b2 and z1 > 1.5, f"{len(b1)} bytes comparados · z máx. {z1:.2f} m")
+
 
 # ============================================================================================ G. FC
 def checa_fc(v: Validador, hw) -> None:

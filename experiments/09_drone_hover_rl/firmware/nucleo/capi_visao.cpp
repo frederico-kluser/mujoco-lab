@@ -108,6 +108,11 @@ void seguidor_config_padrao(int32_t largura, int32_t altura, float fovy_graus, i
     }
 }
 
+// Repõe em `cfg` a lei da VERSÃO 1 («olhar para o círculo»: v_y = 0, sem compensações) — a referência «antes» do avaliar_bola.py
+void seguidor_config_versao1(nucleo::visao::ConfigSeguidor* cfg) {
+    if (cfg != nullptr) *cfg = nucleo::visao::config_versao1(*cfg);
+}
+
 // 1 = Config aceite, 0 = recusada, -1 = instância inválida
 int32_t seguidor_iniciar(int32_t id, const nucleo::visao::ConfigSeguidor* cfg) {
     Seguidor* s = obter_seguidor(id);

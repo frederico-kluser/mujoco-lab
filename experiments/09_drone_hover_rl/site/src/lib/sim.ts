@@ -6,6 +6,12 @@
  */
 
 import {
+  lerBolaConfig,
+  lerVentoSimples,
+  type BolaConfig,
+  type VentoSimples,
+} from "./cockpit.ts"
+import {
   lerControlador,
   type ControladorEstado,
 } from "./controlador.ts"
@@ -185,6 +191,13 @@ export interface ResumoEstado {
   controlador: ControladorEstado | null
   /** Nº de amostras de telemetria publicadas (`amostras`); `null` se o resumo não as contar. */
   amostras: number | null
+  /**
+   * VENTO de três botões (r13, `vento_simples`): o estado guardado no controlo; `null` = o bloco não
+   * existe (manda o contrato antigo `vento` + `vento_dinamico`) ou o backend ainda não o publica.
+   */
+  ventoSimples: VentoSimples | null
+  /** BOLA aleatória (r13, `bola`): velocidade em vigor e a faixa do slider; `null` se não vier. */
+  bola: BolaConfig | null
 }
 
 /**
@@ -422,6 +435,8 @@ export function lerResumo(bruto: unknown): ResumoEstado {
     voo: lerVooEstado(primeiro("voo")),
     controlador: lerControlador(primeiro("controlador")),
     amostras: numero(primeiro("amostras")),
+    ventoSimples: lerVentoSimples(primeiro("vento_simples")),
+    bola: lerBolaConfig(primeiro("bola")),
   }
 }
 

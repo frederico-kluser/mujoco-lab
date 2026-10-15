@@ -190,6 +190,31 @@ estão na `SKILL.md` gerida.)
   **graus** no XML (`compiler angle="degree"`); acesso por NOME (`data.body('x').xpos`, `model.geom('g')`),
   nunca índices crus; integrador padrão 3.15 = Euler (novo: `discrete`); experimentos em `experiments/NN_nome/`.
 
+## 6b. Regras de processo aprendidas a medir (2026-10-12/13)
+
+- **Decidir por medição e tornar padrão** — o dono não quer escolher entre algoritmos na interface («não quero
+  opções, quero o melhor»): mede-se no simulador com as mesmas sementes, o que ganha passa a ser o padrão
+  (`sim_site.py --controlador auto`) e a escolha não aparece como botão.
+- **Sementes de avaliação ≠ sementes de afinação**, e o resultado de um agente repete-se em sementes que ele não
+  usou antes de ser aceite (foi assim que se confirmou o vento, a bola e a vertical, e se apanhou uma estimativa
+  errada).
+- **Critérios fixos ANTES de medir**; se um candidato falha por pouco e ainda assim se quer adotar, faz-se uma
+  SEGUNDA medição independente (outras sementes, com randomização de domínio, margens de estabilidade) com
+  critérios também fixos antes — e diz-se ao dono que foi contra o critério inicial e como se reverte.
+- **Desempenho só com a máquina livre** — avaliações em paralelo (EGL e CPU) falseiam fps, tempo real e débito
+  de treino: com carga 30 o simulador correu a 0,38× e os streams a 18 fps; livre, 0,999× e 49,7 fps. Uma
+  estimativa de escala feita sob carga («16 ambientes dão +12 %») estava errada (medido livre: +48 %).
+- **Nenhum teste toca em estado persistente do dono** — o pack de bateria do drone (`out/bateria/`) só se usa
+  na sessão real; suítes e instâncias de desenvolvimento definem `DRONE_PASTA_BATERIA` para uma pasta temporária
+  ANTES de importar o runner. Os worktrees de subagentes partilham o `out/` real por symlink.
+- **Um teste de servidor confirma que o runner continua vivo** (amostras a chegar), não só que arrancou: um
+  runner morto atrás de um site de pé passou despercebido até a prova o exigir.
+- **Interface do drone = cockpit** (contrato r13): um ecrã sem scroll, a vista em 1.ª/3.ª pessoa sempre visível,
+  HUD por cima, controlos em janelas que se abrem, controlo já ativo, vocabulário de voo (a voar / no chão /
+  caiu). A janela nativa do MuJoCo deixou de abrir por omissão (`--com-janela`).
+- **Commits**: ramo efémero → PR (o `CONTRIBUTING.md`); `git add` por ficheiro; `.claude/` não se versiona.
+- **Shell**: `pkill -f padrão` mata o próprio shell se o padrão aparecer na linha de comandos — usar `'[x]padrão'`.
+
 ## 7. Manutenção
 
 - **Ficheiros geridos pelo instalador** (`coala-install`): `SKILL.md`, `scripts/coala.py`,

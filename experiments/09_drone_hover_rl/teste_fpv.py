@@ -49,6 +49,11 @@ _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml
 _AQUI = Path(__file__).resolve().parent
 sys.path[:0] = [str(_RAIZ), str(_AQUI)]
 
+# O pack de bateria PERSISTENTE do dono (`out/bateria/`) não é para ser gasto por testes: o `sim_view` importado
+# aqui e tudo o que esta suíte lançar (runner, servidor) usam um pack DESCARTÁVEL numa pasta temporária. Tem de
+# ficar ANTES do `import sim_view` (a pasta lê-se no import) — sem isto cada corrida gastava o pack real.
+os.environ.setdefault("DRONE_PASTA_BATERIA", tempfile.mkdtemp(prefix="bateria_teste_", dir=os.environ.get("TMPDIR")))
+
 import mujoco
 import sim_view
 

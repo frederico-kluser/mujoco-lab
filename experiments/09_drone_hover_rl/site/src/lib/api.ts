@@ -7,9 +7,17 @@
  */
 
 import {
+  lerHudJson,
+  lerVentoSimples,
+  type AmostraHud,
+  type VentoSimples,
+} from "./cockpit.ts"
+import {
+  lerCamera,
   lerResumo,
   lerSim,
   numero,
+  type CameraEstado,
   type CorpoCamera,
   type CorpoFpv,
   type CorpoVento,
@@ -173,7 +181,9 @@ export async function enviarVentoDinamico(
  * O runner aplica o comando ao `viewer.cam` UMA VEZ por mudança de assinatura: o rato da janela 3D
  * continua livre entre comandos. Nenhum campo do controlo (`loop`, `reiniciar`, vento) é tocado.
  */
-export async function enviarCamera(corpo: CorpoCamera): Promise<void> {
+export async function enviarCamera(
+  corpo: CorpoCamera
+): Promise<CameraEstado | null> {
   const bruto = await pedirJson("/api/camera", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -184,6 +194,18 @@ export async function enviarCamera(corpo: CorpoCamera): Promise<void> {
       ? (bruto as Record<string, unknown>)
       : {}
   if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  // O bloco confirmado (`{azimute, elevacao, distancia, seq}`) — sem janela nativa (`camera_atual:
+  // null`) é a ÚNICA confirmação que existe de onde a câmara da simulação ficou.
+  return lerCamera(o.camera)
+}
+
+/**
+ * `POST /api/camera {}` — o «toque» do contrato v2: um corpo vazio mantém os valores e devolve o bloco
+ * em vigor. O cockpit usa-o UMA vez ao arrancar para saber onde está a câmara da simulação, porque
+ * sem janela nativa nem o `/api/sim` nem o `/api/state` a publicam (`camera_atual: null`).
+ */
+export async function lerCameraEmVigor(): Promise<CameraEstado | null> {
+  return enviarCamera({})
 }
 
 /**
@@ -341,4 +363,54 @@ export async function enviarBateria(
     acao: typeof bateria.acao === "string" ? bateria.acao : null,
     seq: numero(bateria.seq),
   }
+}
+
+/**
+ * `POST /api/vento-simples` (r13 — os três botões do vento) com um SUBCONJUNTO de `{ligado,
+ * intensidade, aleatorio, direcao}` → o bloco confirmado (`seq` do servidor fica de fora), ou 400 com
+ * o motivo. O corpo já vem validado por `corpoVentoSimples` (`lib/cockpit.ts`).
+ */
+export async function enviarVentoSimples(
+  corpo: Partial<VentoSimples>
+): Promise<VentoSimples | null> {
+  const bruto = await pedirJson("/api/vento-simples", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(corpo),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  return lerVentoSimples(o.vento_simples)
+}
+
+/** `POST /api/bola {"velocidade"}` (r13) → a velocidade confirmada (m/s), ou 400 com o motivo. */
+export async function enviarBola(velocidade: number): Promise<number | null> {
+  const bruto = await pedirJson("/api/bola", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ velocidade }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const bola =
+    typeof o.bola === "object" && o.bola !== null
+      ? (o.bola as Record<string, unknown>)
+      : {}
+  return numero(bola.velocidade)
+}
+
+/**
+ * `GET /api/hud.json` — a última amostra do HUD com a idade que o servidor lhe dá. É o FALLBACK do
+ * SSE (`GET /api/hud`): quando o `EventSource` cai, o HUD continua a mexer por sondagem.
+ */
+export async function buscarHudJson(
+  sinal?: AbortSignal
+): Promise<{ hud: AmostraHud | null; idadeS: number | null; velho: boolean }> {
+  return lerHudJson(await pedirJson("/api/hud.json", { signal: sinal }))
 }

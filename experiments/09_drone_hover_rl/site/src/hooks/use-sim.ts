@@ -3,6 +3,12 @@
  *
  * O backend manda `linhas` (o histórico dele); aqui acumula-se por `ep:passo` para sobreviver tanto a um
  * servidor que só devolva a cauda como a um que devolva tudo outra vez. Episódio novo ⇒ histórico novo.
+ *
+ * COCKPIT (r13): o `/api/sim` devolve 200 linhas de telemetria (centenas de kB) e só interessa às
+ * janelas de detalhe — por isso a sondagem dele é OPCIONAL (`useSim({ ativo })`). O que o cockpit
+ * precisa sempre (`vento_simples`, `bola`, `fpv`/`simulacao`, `hardware`, `controlador`, `voo`) vem de
+ * um `GET /api/state` por segundo, que corre com ou sem o `/api/sim`. Com a página escondida
+ * (`document.hidden`) nenhum dos dois sonda.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -22,6 +28,7 @@ import {
   type AcaoBateria,
   type RespostaBateria,
 } from "@/lib/api"
+import type { BolaConfig, VentoSimples } from "@/lib/cockpit"
 import type { ControladorEstado } from "@/lib/controlador"
 import {
   definirLeitorEstadoDinamico,
@@ -54,8 +61,16 @@ import {
 export const INTERVALO_POLLING_MS = 350
 /** Pontos máximos guardados por curva (10 s de episódio a 50 Hz de decisão = 500). */
 export const MAX_PONTOS = 600
-/** Recarregar o resumo (`/api/state`) a cada N polls. */
-const POLLS_POR_RESUMO = 40
+/** Período da sondagem do resumo (`GET /api/state`, sem amostras: leve) em ms — ~1 Hz. */
+export const INTERVALO_ESTADO_MS = 1000
+
+export interface OpcoesSim {
+  /**
+   * Sondar o `GET /api/sim` (histórico de telemetria)? Por omissão `true` — o comportamento de sempre.
+   * O cockpit passa `false` enquanto nenhuma janela de detalhe está aberta: fica só o `/api/state`.
+   */
+  ativo?: boolean
+}
 
 export type Ligacao = "a_ligar" | "ligado" | "sem_ligacao"
 
@@ -112,6 +127,10 @@ export interface SimStream {
    * `motivo`). `null` = backend que ainda não publica o bloco.
    */
   controlador: ControladorEstado | null
+  /** VENTO de três botões (r13) tal como o `/api/state` o publica; `null` = o bloco não existe. */
+  ventoSimples: VentoSimples | null
+  /** BOLA aleatória (r13): velocidade em vigor + faixa do slider; `null` enquanto o resumo não chega. */
+  bola: BolaConfig | null
   resumo: ResumoEstado | null
   ligacao: Ligacao
   erro: string | null
@@ -166,7 +185,13 @@ const VENTO_ZERO: VentoEstado = {
   modo: null,
 }
 
-export function useSim(): SimStream {
+export function useSim(opcoes: OpcoesSim = {}): SimStream {
+  const ativo = opcoes.ativo ?? true
+  /** Espelho de `ativo` para os callbacks estáveis (`pollAgora`) — lido só fora do render. */
+  const ativoRef = useRef(ativo)
+  useEffect(() => {
+    ativoRef.current = ativo
+  }, [ativo])
   const [linhas, setLinhas] = useState<LinhaSim[]>([])
   const [cabecalho, setCabecalho] = useState<{
     estado: EstadoEpisodio
@@ -301,15 +326,55 @@ export function useSim(): SimStream {
     []
   )
 
+  /**
+   * O resumo (`/api/state`) entra no estado. É o REFORÇO do `/api/sim` quando este está a ser sondado
+   * e a ÚNICA fonte quando não está (cockpit sem janelas de detalhe) — nesse caso propaga também os
+   * `null` dos módulos de câmara, que de outro modo ficariam presos no último valor.
+   */
+  const aplicarResumo = useCallback((dados: ResumoEstado, fonteUnica: boolean) => {
+    setResumo(dados)
+    setCabecalho((anterior) => ({
+      ...anterior,
+      // O `rpi5` pode vir só no `/api/state` (o `/api/sim` é a fonte principal): aproveita-se o que
+      // existir, sem apagar números já mostrados quando este resumo não os traz.
+      rpi5: dados.rpi5 ?? anterior.rpi5,
+      loop: dados.loop ?? anterior.loop,
+      planta: dados.planta ?? anterior.planta,
+      voo: dados.voo ?? anterior.voo,
+      controlador: dados.controlador ?? anterior.controlador,
+      // Sem o `/api/sim` a correr, o modo dinâmico em vigor só chega por aqui.
+      ventoDinamico: fonteUnica ? dados.ventoDinamico : anterior.ventoDinamico,
+      // Câmara: a MESMA fusão honesta do `/api/sim` (o `null` explícito propaga para «—»; só
+      // respostas sem câmara nenhuma retêm o anterior).
+      camera: fundirCamera(
+        anterior.camera,
+        dados.cameraAtual,
+        dados.camera,
+        dados.cameraPublicada
+      ),
+      cameraPadrao: dados.cameraPadrao ?? anterior.cameraPadrao,
+      // Câmara FPV / simulação: como reforço só se escreve quando o resumo publica um módulo.
+      fpv: fonteUnica ? dados.fpv : (dados.fpv ?? anterior.fpv),
+      simulacao: fonteUnica
+        ? dados.simulacao
+        : (dados.simulacao ?? anterior.simulacao),
+    }))
+  }, [])
+
   /** Um fetch imediato (usado depois de cada ação para o ecrã não esperar o próximo ciclo). */
   const pollAgora = useCallback(async () => {
-    const { leitura, emitidoEm, dados } = await lerSimFresco()
-    aplicar(dados, leitura, emitidoEm)
+    if (ativoRef.current) {
+      const { leitura, emitidoEm, dados } = await lerSimFresco()
+      aplicar(dados, leitura, emitidoEm)
+    } else {
+      // Sem janelas de detalhe não se vai buscar o histórico só para confirmar um comando.
+      aplicarResumo(await buscarEstado(), true)
+    }
     setLigacao("ligado")
     setErro(null)
     setAtualizadoEm(Date.now())
     setRespostas((n) => n + 1)
-  }, [aplicar, lerSimFresco])
+  }, [aplicar, aplicarResumo, lerSimFresco])
 
   /**
    * Leitura BARATA do estado do vento dinâmico (`GET /api/state`, sem as amostras da telemetria).
@@ -345,70 +410,63 @@ export function useSim(): SimStream {
     return proximo
   }, [])
 
+  // RESUMO (`GET /api/state`) a ~1 Hz, SEMPRE: é leve (sem amostras) e traz o que o cockpit mostra
+  // com todas as janelas fechadas. Quando o `/api/sim` não está a ser sondado é também ele que diz se
+  // há ligação à API.
   useEffect(() => {
     let vivo = true
     let temporizador = 0
     const controlador = new AbortController()
-    let ciclos = 0
-
-    const carregarResumo = async () => {
-      try {
-        const dados = await buscarEstado(controlador.signal)
-        if (!vivo) return
-        setResumo(dados)
-        // O `rpi5` pode vir só no `/api/state` (o `/api/sim` é a fonte principal): aproveita-se o que
-        // existir, sem apagar números já mostrados quando este resumo não os traz.
-        if (dados.rpi5 !== null) {
-          setCabecalho((anterior) => ({ ...anterior, rpi5: dados.rpi5 }))
-        }
-        if (dados.loop !== null) {
-          setCabecalho((anterior) => ({ ...anterior, loop: dados.loop }))
-        }
-        // Planta (reforço do `/api/sim`): só escreve quando o resumo a anuncia.
-        if (dados.planta !== null) {
-          setCabecalho((anterior) => ({ ...anterior, planta: dados.planta }))
-        }
-        // Controlo de voo (reforço do `/api/sim`): só escreve quando o resumo publica o bloco.
-        if (dados.voo !== null) {
-          setCabecalho((anterior) => ({ ...anterior, voo: dados.voo }))
-        }
-        // Seletor de controlador (reforço do `/api/sim`): só escreve quando o resumo publica o bloco.
-        if (dados.controlador !== null) {
-          setCabecalho((anterior) => ({ ...anterior, controlador: dados.controlador }))
-        }
-        // Câmara (reforço do `/api/sim`, como o rpi5): o `/api/state` também publica
-        // `camera_atual`/`camera_padrao` — a MESMA fusão honesta do `/api/sim` (o `null` explícito
-        // propaga para «—»; só respostas sem câmara nenhuma retêm o anterior).
-        setCabecalho((anterior) => ({
-          ...anterior,
-          camera: fundirCamera(
-            anterior.camera,
-            dados.cameraAtual,
-            dados.camera,
-            dados.cameraPublicada
-          ),
-        }))
-        if (dados.cameraPadrao !== null) {
-          setCabecalho((anterior) => ({
-            ...anterior,
-            cameraPadrao: dados.cameraPadrao,
-          }))
-        }
-        // Câmara FPV (reforço do `/api/sim`, que é a fonte principal e propaga o `null`): só se
-        // escreve quando o resumo publica um módulo — um resumo sem `fpv` não apaga o que se sabe.
-        if (dados.fpv !== null) {
-          setCabecalho((anterior) => ({ ...anterior, fpv: dados.fpv }))
-        }
-        if (dados.simulacao !== null) {
-          setCabecalho((anterior) => ({ ...anterior, simulacao: dados.simulacao }))
-        }
-      } catch {
-        /* o resumo é acessório: a falta dele não derruba a página */
-      }
-    }
 
     const ciclo = async () => {
       try {
+        // Página escondida: não se sonda (o HUD também fecha o SSE) — retoma-se no ciclo seguinte.
+        if (document.hidden) return
+        const dados = await buscarEstado(controlador.signal)
+        if (!vivo) return
+        aplicarResumo(dados, !ativoRef.current)
+        if (!ativoRef.current) {
+          setLigacao("ligado")
+          setErro(null)
+          setAtualizadoEm(Date.now())
+          setRespostas((n) => n + 1)
+        }
+      } catch (falha) {
+        if (
+          !vivo ||
+          (falha instanceof DOMException && falha.name === "AbortError")
+        )
+          return
+        // Com o `/api/sim` a correr é ele que dá a ligação por perdida; o resumo é acessório.
+        if (!ativoRef.current) {
+          setLigacao("sem_ligacao")
+          setErro(
+            falha instanceof Error ? falha.message : "falha desconhecida na API"
+          )
+        }
+      } finally {
+        if (vivo) temporizador = window.setTimeout(ciclo, INTERVALO_ESTADO_MS)
+      }
+    }
+
+    void ciclo()
+    return () => {
+      vivo = false
+      window.clearTimeout(temporizador)
+      controlador.abort()
+    }
+  }, [aplicarResumo])
+
+  // HISTÓRICO (`GET /api/sim`) a ~2,9 Hz — só enquanto `ativo` (alguma janela de detalhe aberta).
+  useEffect(() => {
+    if (!ativo) return
+    let vivo = true
+    let temporizador = 0
+    const controlador = new AbortController()
+
+    const ciclo = async () => {
+      try {
+        if (document.hidden) return
         const { leitura, emitidoEm, dados } = await lerSimFresco(controlador.signal)
         if (!vivo) return
         aplicar(dados, leitura, emitidoEm)
@@ -416,7 +474,6 @@ export function useSim(): SimStream {
         setErro(null)
         setAtualizadoEm(Date.now())
         setRespostas((n) => n + 1)
-        if (ciclos % POLLS_POR_RESUMO === 0) void carregarResumo()
       } catch (falha) {
         if (
           !vivo ||
@@ -428,7 +485,6 @@ export function useSim(): SimStream {
           falha instanceof Error ? falha.message : "falha desconhecida na API"
         )
       } finally {
-        ciclos += 1
         if (vivo) temporizador = window.setTimeout(ciclo, INTERVALO_POLLING_MS)
       }
     }
@@ -439,7 +495,7 @@ export function useSim(): SimStream {
       window.clearTimeout(temporizador)
       controlador.abort()
     }
-  }, [aplicar, lerSimFresco])
+  }, [ativo, aplicar, lerSimFresco])
 
   const reiniciar = useCallback(async () => {
     const contador = await encadear(() => enviarReiniciar())
@@ -568,6 +624,8 @@ export function useSim(): SimStream {
     planta: cabecalho.planta ?? resumo?.planta ?? null,
     voo: cabecalho.voo ?? resumo?.voo ?? null,
     controlador: cabecalho.controlador ?? resumo?.controlador ?? null,
+    ventoSimples: resumo?.ventoSimples ?? null,
+    bola: resumo?.bola ?? null,
     resumo,
     ligacao,
     erro,

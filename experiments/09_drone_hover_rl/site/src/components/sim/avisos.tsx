@@ -65,19 +65,21 @@ interface PilhaAvisosProps {
   toasts: number[]
   conteudo: Aviso[]
   fechar: (id: number) => void
+  /** Classes extra do contentor fixo (o cockpit sobe a pilha para cima da doca). */
+  className?: string
 }
 
-export function PilhaAvisos({ toasts, conteudo, fechar }: PilhaAvisosProps) {
+export function PilhaAvisos({ toasts, conteudo, fechar, className }: PilhaAvisosProps) {
   const porId = new Map(conteudo.map((a) => [a.id, a]))
   return (
-    <ToastStack maxVisible={4}>
+    <ToastStack maxVisible={4} className={className}>
       {toasts
         .filter((id) => porId.has(id))
         .map((id) => {
           const aviso = porId.get(id)!
           return (
             <Toast key={id}>
-              <div className="flex items-start gap-2 rounded-xl border border-border bg-card px-3 py-2.5 text-xs shadow-sm">
+              <div className="vidro flex items-start gap-2 rounded-xl px-3 py-2.5 text-xs">
                 <span className={`mt-0.5 font-medium ${TOM_CLASSE[aviso.tom]}`} aria-hidden="true">
                   {aviso.tom === "ok" ? "✓" : aviso.tom === "erro" ? "!" : "·"}
                 </span>

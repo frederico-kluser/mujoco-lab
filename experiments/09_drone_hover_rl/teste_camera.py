@@ -142,6 +142,11 @@ for _caminho in (_RAIZ, _AQUI, _FONTES):
     if _caminho is not None:
         sys.path.insert(0, str(_caminho))
 
+# O pack de bateria PERSISTENTE do dono (`out/bateria/`) não é para ser gasto por testes: o `sim_view` importado
+# aqui e tudo o que esta suíte lançar (runner, servidor) usam um pack DESCARTÁVEL numa pasta temporária. Tem de
+# ficar ANTES do `import sim_view` (a pasta lê-se no import) — sem isto cada corrida gastava o pack real.
+os.environ.setdefault("DRONE_PASTA_BATERIA", tempfile.mkdtemp(prefix="bateria_teste_", dir=os.environ.get("TMPDIR")))
+
 from lab import mjkit  # noqa: F401, I001  (define MUJOCO_GL=egl ANTES do `import mujoco`, como no sim_view)
 
 import mujoco

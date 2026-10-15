@@ -160,6 +160,7 @@ from pathlib import Path
 _RAIZ = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
 _AQUI = Path(__file__).resolve().parent
 sys.path[:0] = [str(_RAIZ), str(_AQUI)]      # para o `env.valida_vento_dinamico` (importado só quando usado)
+import vento_natural  # noqa: I001  (só NumPy: o validador/gerador do vento dos 3 botões, contrato r13)
 SIM_VIEW = _AQUI / "sim_view.py"
 DIST = _AQUI / "site" / "dist"
 INDEX = DIST / "index.html"
@@ -244,7 +245,22 @@ ENV_LOOP_ARRANQUE = "DRONE_LOOP_ARRANQUE"
 # é o MESMO do `loop` (token no ficheiro + ambiente do filho) para um POST durante o arranque não ser
 # revertido pelo `fixar_controlador` do runner.
 MODOS_CONTROLADOR = ("rl", "classico")
-CONTROLADOR_OMISSAO = "rl"
+CONTROLADOR_OMISSAO = "rl"            # o que o RUNNER faz sem `--controlador` (contrato r12, inalterado)
+# COCKPIT (contrato r13, 2026-10-12 — «não quero opções, quero o melhor»): o comando único do dono deixa de
+# perguntar quem pilota. `--controlador auto` (o PADRÃO do site) resolve para o que GANHOU NA MEDIÇÃO
+# (`out/classico` + `out/nucleo`, 2026-10-12): a cascata clássica C++ do firmware na planta REAL em CTBR; no
+# cf2 (que só tem a política) fica `rl`. `rl`/`classico` explícitos continuam a existir para testes e medição.
+CONTROLADOR_AUTO = "auto"
+# «SEGUIR A BOLA» (r13): faixa e padrão da velocidade da bola aleatória (os mesmos do `sim_view.py`)
+BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.1, 0.8, 0.5
+# HUD AO VIVO (r13): o runner manda um datagrama UDP por passo de decisão (50 Hz) para a porta que este
+# servidor abre e passa-lhe por `ENV_HUD_PORTA`; o site lê-o por `GET /api/hud` (Server-Sent Events) —
+# instrumentos a 50 Hz sem disco e sem polling. `HUD_VELHO_S` = sem datagramas há isto, o HUD está parado.
+ENV_HUD_PORTA = "DRONE_HUD_PORTA"
+HUD_VELHO_S = 1.0
+HUD_HZ_MAX = 60.0                     # teto de eventos por segundo por cliente SSE (o runner manda 50)
+# VENTO DOS 3 BOTÕES (r13): o que o painel mostra antes de o dono mexer — desligado, 2 m/s prontos a ligar
+VENTO_SIMPLES_PADRAO = {"ligado": False, "intensidade": 2.0, "aleatorio": False, "direcao": 0.0}
 YAW_TAXA_MAX = 2.0                    # rad/s — teto do contrato r12 para `voo.yaw_taxa` (validação estrita)
 CAMPO_ARRANQUE_CONTROLADOR = "controlador_arranque"
 ENV_CONTROLADOR_ARRANQUE = "DRONE_CONTROLADOR_ARRANQUE"
@@ -517,10 +533,25 @@ def controlador_em_vigor(resumo: dict, controlo: dict, modo_cli: str = CONTROLAD
     return bloco
 
 
+def vento_base_do_controlo(controlo: dict) -> dict:
+    """Vento BASE do contrato antigo em vigor: `{vel, azimute, elevacao, ativo}`.
+
+    Com o bloco dos 3 botões (`vento_simples`, r13) no ficheiro os campos antigos não se aplicam: o eco
+    diz `vel: 0`/`ativo: false` (mantendo azimute/elevação guardados) — o vento que a física leva está
+    sempre em `vento_atual`, venha de onde vier.
+    """
+    base = {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")}
+    if isinstance(controlo.get("vento_simples"), dict):
+        base.update({"vel": 0.0, "ativo": False})
+    return base
+
+
 def vento_do_controlo(controlo: dict) -> dict:
     """Bloco `vento_dinamico` do controlo em vigor (o que o site pediu): `{modo, params, ativo}`."""
     din = controlo.get("dinamico")
-    if not isinstance(din, dict):
+    if not isinstance(din, dict) or isinstance(controlo.get("vento_simples"), dict):
+        # r13: com o bloco dos 3 botões no ficheiro, o `dinamico` antigo NÃO está em vigor (o runner
+        # ignora-o) — publicá-lo como ativo era mostrar uma rajada de uma sessão anterior que não existe
         return {"modo": "nenhum", "params": {}, "ativo": False}
     return {"modo": str(din.get("modo", "nenhum")), "params": din.get("params") or {},
             "ativo": bool(din.get("ativo", False))}
@@ -761,7 +792,65 @@ def validar_vento(dados, atual: dict) -> dict:
     ativo = dados.get("ativo")
     if ativo is not None and not isinstance(ativo, bool):
         raise ValueError(f"`ativo` tem de ser booleano (recebido {ativo!r})")
-    return {**atual, **novos, "ativo": (vel > 0.0) if ativo is None else ativo}
+    # r13: um POST do contrato antigo devolve a autoridade aos campos antigos (o bloco dos 3 botões sai)
+    return {**atual, **novos, "ativo": (vel > 0.0) if ativo is None else ativo, "vento_simples": None}
+
+
+# ---------------------------------------------------------------------------------------------- HUD ao vivo
+class CanalHud:
+    """Recetor do HUD AO VIVO (r13): o último datagrama UDP do runner + quem espera por um novo.
+
+    O runner (`sim_view.EmissorHud`) manda um JSON compacto por passo de decisão (50 Hz) para a porta
+    UDP local que este canal abre; uma thread guarda SÓ o último (um cliente lento perde amostras em vez
+    de acumular atraso — a mesma política do stream MJPEG) e acorda os `GET /api/hud` à espera. Nada toca
+    no disco. `porta` = a porta escolhida pelo sistema (vai no ambiente do runner: `ENV_HUD_PORTA`).
+    """
+
+    def __init__(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.settimeout(0.5)
+        self.porta = int(self.sock.getsockname()[1])
+        self._cond = threading.Condition()
+        self._dados: bytes | None = None
+        self._seq = 0
+        self._t = 0.0
+        self._parar = threading.Event()
+        self._thread = threading.Thread(target=self._receber, name="hud-udp", daemon=True)
+        self._thread.start()
+
+    def _receber(self) -> None:
+        while not self._parar.is_set():
+            try:
+                dados, _ = self.sock.recvfrom(65535)
+            except TimeoutError:
+                continue
+            except OSError:
+                break                                   # socket fechado: a thread acaba
+            if not dados.startswith(b"{"):
+                continue                                # só JSON do runner (nunca se reenvia lixo ao site)
+            with self._cond:
+                self._dados, self._seq, self._t = dados, self._seq + 1, time.time()
+                self._cond.notify_all()
+
+    def esperar(self, visto: int, limite: float = 1.0) -> tuple[int, bytes | None]:
+        """Bloqueia até haver uma amostra com `seq > visto` (ou `limite` s); devolve `(seq, json)`."""
+        with self._cond:
+            if self._seq <= visto:
+                self._cond.wait(limite)
+            return self._seq, self._dados
+
+    def ultimo(self) -> tuple[bytes | None, float | None]:
+        """`(json, idade_s)` da última amostra — `(None, None)` se o runner ainda não mandou nada."""
+        with self._cond:
+            return self._dados, (None if self._dados is None else time.time() - self._t)
+
+    def fechar(self) -> None:
+        self._parar.set()
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------------------------- servidor
@@ -790,6 +879,7 @@ class Servidor:
         self.hardware = hardware_do_modelo(self.modelo)               # planta real: peças do modelo em uso
         self.fpv = Path(fpv) if fpv is not None else FPV_OMISSAO      # pasta do stream da câmara FPV
         self.controlador = str(controlador)                           # modo do arranque (`--controlador`, r12)
+        self.hud: CanalHud | None = None                              # HUD ao vivo (r13); o `main` liga-o
         self._ritmo = {"t": None, "passo": None, "valor": 0.0}       # decisoes/s medidos entre pedidos
         self._bench = {"t": 0.0, "dados": None}                      # cache do relatório do deploy.py
         self._fpv_estado: dict = {}        # cache do estado dos módulos (por nome de ficheiro)
@@ -922,6 +1012,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._simulacao_jpeg()
             elif rota == "/api/simulacao/estado":
                 self._simulacao_estado_rota()
+            elif rota == "/api/hud":
+                self._stream_hud()
+            elif rota == "/api/hud.json":
+                self._hud_json()
             elif rota.startswith("/api/"):
                 self._erro(404, f"rota desconhecida: {rota}")
             else:
@@ -944,9 +1038,11 @@ class Handler(BaseHTTPRequestHandler):
             "retorno": resumo["retorno"],
             "loop": loop_em_vigor(resumo, controlo),    # efetivo: o runner publica-o na telemetria
             "reiniciar": int(controlo.get("reiniciar", 0) or 0),
-            "vento": {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")},
+            "vento": vento_base_do_controlo(controlo),
             "vento_dinamico": vento_do_controlo(controlo),
             "vento_atual": vento_em_vigor(resumo, controlo),
+            "vento_simples": vento_simples_do_controlo(controlo),   # os 3 botões do vento (r13) ou null
+            "bola": bola_do_controlo(controlo),                     # velocidade da bola aleatória (r13)
             "voo": {"pedido": controlo.get("voo"),
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
@@ -971,9 +1067,11 @@ class Handler(BaseHTTPRequestHandler):
             "ep": resumo["ep"],
             "passo": resumo["passo"],
             "retorno": resumo["retorno"],
-            "vento": {campo: controlo.get(campo) for campo in ("vel", "azimute", "elevacao", "ativo")},
+            "vento": vento_base_do_controlo(controlo),
             "vento_dinamico": vento_do_controlo(controlo),
             "vento_atual": vento_em_vigor(resumo, controlo),
+            "vento_simples": vento_simples_do_controlo(controlo),   # os 3 botões do vento (r13) ou null
+            "bola": bola_do_controlo(controlo),                     # velocidade da bola aleatória (r13)
             "voo": {"pedido": controlo.get("voo"),
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
@@ -1053,6 +1151,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_controlador(dados)
             elif rota == "/api/bateria":
                 self._post_bateria(dados)
+            elif rota == "/api/vento-simples":
+                self._post_vento_simples(dados)
+            elif rota == "/api/bola":
+                self._post_bola(dados)
             else:
                 self._erro(404, f"rota desconhecida: {rota}")
         except _PedidoInvalido as erro:
@@ -1327,6 +1429,93 @@ class Handler(BaseHTTPRequestHandler):
         """`GET /api/simulacao/estado`: o estado da vista da simulação, ou `null` sem módulo."""
         self._json(200, {"simulacao": self.servidor.simulacao_estado()})
 
+    # ----------------------------------------------------------------------------------- HUD ao vivo (r13)
+    def _stream_hud(self) -> None:
+        """`GET /api/hud`: Server-Sent Events com o HUD do runner (um evento por passo de decisão, ≤ 60 Hz).
+
+        Cada evento é `data: {json do runner}`; sem amostras novas durante 1 s sai um comentário `: vivo`
+        (mantém a ligação e deixa o servidor dar por um cliente morto). SÓ a última amostra conta — um
+        cliente lento perde amostras em vez de acumular atraso. Sem canal (servidor de teste) → 404.
+        """
+        canal = self.servidor.hud
+        if canal is None:
+            self._erro(404, "HUD ao vivo indisponível neste servidor")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        visto, periodo, ultimo_envio = 0, 1.0 / HUD_HZ_MAX, 0.0
+        try:
+            self.wfile.write(b"retry: 1000\n\n")
+            while True:
+                seq, dados = canal.esperar(visto)
+                if seq > visto and dados is not None:
+                    espera = periodo - (time.perf_counter() - ultimo_envio)
+                    if espera > 0:
+                        time.sleep(espera)
+                        seq, dados = canal.esperar(visto, 0.0)      # o MAIS recente depois da espera
+                    visto, ultimo_envio = seq, time.perf_counter()
+                    self.wfile.write(b"data: " + dados + b"\n\n")
+                else:
+                    self.wfile.write(b": vivo\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass                                    # o cliente desligou: o stream morre com ele
+
+    def _hud_json(self) -> None:
+        """`GET /api/hud.json`: a última amostra do HUD (`{"hud": {...}|null, "idade_s": s|null}`)."""
+        canal = self.servidor.hud
+        dados, idade = (None, None) if canal is None else canal.ultimo()
+        try:
+            hud = None if dados is None else json.loads(dados.decode("utf-8"))
+        except ValueError:
+            hud = None
+        self._json(200, {"hud": hud, "idade_s": None if idade is None else round(idade, 3),
+                         "velho": bool(idade is None or idade > HUD_VELHO_S)})
+
+    # ----------------------------------------------------------------------------------- vento dos 3 botões
+    def _post_vento_simples(self, dados) -> None:
+        """VENTO DOS 3 BOTÕES (contrato r13): `{ligado, intensidade, aleatorio, direcao}` → 200/400.
+
+        Qualquer subconjunto no corpo (o que falta mantém o valor em vigor); o bloco escrito é SEMPRE
+        completo e o `seq` é do servidor. Com este bloco no ficheiro é ele que manda no vento (o runner
+        ignora os campos do contrato antigo). Leitura+escrita sob a mesma trava (ver `trava_controlo`).
+        """
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_vento_simples(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["vento_simples"]
+        print(f"[site] vento: {'LIGADO' if bloco['ligado'] else 'desligado'} · {bloco['intensidade']:.1f} m/s "
+              f"@ {bloco['direcao']:.0f} deg · aleatoriedade {'LIGADA' if bloco['aleatorio'] else 'desligada'} "
+              f"(seq {bloco['seq']})", flush=True)
+        self._json(200, {"ok": True, "vento_simples": bloco})
+
+    def _post_bola(self, dados) -> None:
+        """VELOCIDADE DA BOLA aleatória (contrato r13): `{"velocidade": m/s}` → 200/400.
+
+        O interruptor do modo é o `segui_alvo` do `POST /api/voo`; aqui só se escolhe a que velocidade a
+        bola deambula enquanto o modo está ligado ([BOLA_VEL_MIN, BOLA_VEL_MAX] m/s; `seq` do servidor).
+        """
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_bola(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["bola"]
+        print(f"[site] bola: {bloco['velocidade']:.2f} m/s (seq {bloco['seq']})", flush=True)
+        self._json(200, {"ok": True, "bola": bloco})
+
     def _post_voo(self, dados) -> None:
         """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
 
@@ -1438,6 +1627,69 @@ def validar_voo(dados, atual: dict) -> dict:
     seq = int(anterior.get("seq", 0) or 0) + 1
     return {"voo": {"ativo": ativo, "teclas": teclas, "yaw_taxa": float(yaw_taxa),
                     "yaw_alvo": yaw_alvo, "segui_alvo": bool(segui_alvo), "seq": seq}}
+
+
+def vento_simples_do_controlo(controlo: dict) -> dict | None:
+    """Bloco `vento_simples` em vigor no controlo (`{ligado, intensidade, aleatorio, direcao}`) ou `None`.
+
+    `None` = o bloco não existe (manda o contrato antigo: `vento` + `vento_dinamico`); um bloco
+    malformado escrito à mão também dá `None` (o runner ignora-o com aviso — não se publica lixo).
+    """
+    bloco = controlo.get("vento_simples")
+    if not isinstance(bloco, dict):
+        return None
+    try:
+        return vento_natural.validar(bloco.get("ligado", False), bloco.get("intensidade", 0.0),
+                                     bloco.get("aleatorio", False), bloco.get("direcao", 0.0))
+    except ValueError:
+        return None
+
+
+def bola_do_controlo(controlo: dict) -> dict:
+    """Bloco `bola` em vigor (`{velocidade}`) — o padrão quando o ficheiro não o tem (ou tem lixo)."""
+    bloco = controlo.get("bola")
+    vel = bloco.get("velocidade") if isinstance(bloco, dict) else None
+    if isinstance(vel, bool) or not isinstance(vel, (int, float)) or not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
+        vel = BOLA_VEL_PADRAO
+    return {"velocidade": float(vel), "min": BOLA_VEL_MIN, "max": BOLA_VEL_MAX}
+
+
+def validar_vento_simples(dados, atual: dict) -> dict:
+    """`POST /api/vento-simples` → `{"vento_simples": {ligado, intensidade, aleatorio, direcao, seq}}`.
+
+    Corpo = qualquer SUBCONJUNTO dos 4 campos (pelo menos um); o que falta mantém o valor em vigor (ou
+    o padrão: desligado, `VENTO_SIMPLES_PADRAO`). Chave desconhecida → 400 (gralha num painel de piloto
+    não pode ser silenciosa); as faixas e os tipos são os do gerador (`vento_natural.validar`: booleanos
+    estritos, intensidade em [0, INTENSIDADE_MAX] m/s, direção finita reduzida a [0, 360)°).
+    """
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON")  # noqa: TRY004
+    campos = ("ligado", "intensidade", "aleatorio", "direcao")
+    desconhecidas = set(dados) - set(campos)
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita {sorted(campos)}")
+    if not any(campo in dados for campo in campos):
+        raise ValueError(f"indique pelo menos um de {sorted(campos)}")
+    anterior = atual.get("vento_simples") if isinstance(atual.get("vento_simples"), dict) else {}
+    base = {**VENTO_SIMPLES_PADRAO, **{c: anterior[c] for c in campos if c in anterior}}
+    bloco = vento_natural.validar(*({**base, **dados}[c] for c in campos))
+    return {"vento_simples": {**bloco, "seq": int(anterior.get("seq", 0) or 0) + 1}}
+
+
+def validar_bola(dados, atual: dict) -> dict:
+    """`POST /api/bola` → `{"bola": {"velocidade", "seq"}}` (r13; `seq` do servidor, +1 por pedido)."""
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON {velocidade}")  # noqa: TRY004
+    desconhecidas = set(dados) - {"velocidade"}
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita só ['velocidade']")
+    vel = _numero_finito(dados, "velocidade")
+    if vel is None:
+        raise ValueError("indique `velocidade` (m/s)")
+    if not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
+        raise ValueError(f"`velocidade` tem de estar em [{BOLA_VEL_MIN}, {BOLA_VEL_MAX}] m/s (recebido {vel!r})")
+    anterior = atual.get("bola") if isinstance(atual.get("bola"), dict) else {}
+    return {"bola": {"velocidade": float(vel), "seq": int(anterior.get("seq", 0) or 0) + 1}}
 
 
 def validar_controlador(dados, atual: dict) -> dict:
@@ -1615,8 +1867,12 @@ def validar_parar(atual: dict) -> dict:
     """
     anterior = atual.get("dinamico")
     seq = int(anterior.get("seq", 0) or 0) + 1 if isinstance(anterior, dict) else 1
-    return {**atual, "vel": 0.0, "ativo": False,
+    novo = {**atual, "vel": 0.0, "ativo": False,
             "dinamico": {"modo": "nenhum", "params": {}, "ativo": False, "seq": seq}}
+    simples = atual.get("vento_simples")
+    if isinstance(simples, dict):                    # r13: PARAR também desliga o vento dos 3 botões
+        novo["vento_simples"] = {**simples, "ligado": False, "seq": int(simples.get("seq", 0) or 0) + 1}
+    return novo
 
 
 def validar_vento_dinamico(dados, atual: dict) -> dict:
@@ -1657,7 +1913,9 @@ def validar_vento_dinamico(dados, atual: dict) -> dict:
         params = {}
     anterior = atual.get("dinamico")
     seq = int(anterior.get("seq", 0) or 0) + 1 if isinstance(anterior, dict) else 1
-    novo = {**atual, "dinamico": {"modo": modo, "params": params, "ativo": bool(ativo), "seq": seq}}
+    # r13: um POST do contrato antigo devolve a autoridade aos campos antigos (o bloco dos 3 botões sai)
+    novo = {**atual, "dinamico": {"modo": modo, "params": params, "ativo": bool(ativo), "seq": seq},
+            "vento_simples": None}
     if base_novo is not None:
         novo.update(base_novo)                           # o degrau do `frente` passa a ser o vento base
     return novo
@@ -1982,6 +2240,10 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
         comando += ["--model", str(alvo)]
     if args.sem_janela:
         comando.append("--sem-janela")
+    if str(getattr(args, "controlador", "")) == "classico":
+        # em modo clássico quem segue a bola é o detetor+IBVS do núcleo: a IA-2 «seguimento» (PPO) não voa,
+        # por isso nem se carrega (arranque mais rápido e nada parado a fingir que trabalha)
+        comando.append("--sem-seguimento")
     if args.fator_tempo is not None:
         comando += ["--fator-tempo", f"{args.fator_tempo:g}"]
     if args.com_loop:
@@ -1992,7 +2254,7 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
 
 
 def lancar_runner(args, modelo: Path | None = None, arranque: str | None = None,
-                  arranque_controlador: str | None = None) -> subprocess.Popen:
+                  arranque_controlador: str | None = None, porta_hud: int | None = None) -> subprocess.Popen:
     """Arranca o `sim_view.py` no seu PRÓPRIO grupo de processos (para o SIGTERM apanhar tudo).
 
     `arranque`/`arranque_controlador` são os tokens dos carimbos de arranque (`CAMPO_ARRANQUE` do `loop` e
@@ -2006,9 +2268,12 @@ def lancar_runner(args, modelo: Path | None = None, arranque: str | None = None,
         ambiente[ENV_LOOP_ARRANQUE] = str(arranque)
     if arranque_controlador is not None:
         ambiente[ENV_CONTROLADOR_ARRANQUE] = str(arranque_controlador)
+    if porta_hud:
+        ambiente[ENV_HUD_PORTA] = str(int(porta_hud))        # HUD ao vivo (r13): para onde o runner manda
+    else:
+        ambiente.pop(ENV_HUD_PORTA, None)                    # nunca herdar a porta de outra sessão
     print(f"[site] runner: {' '.join(comando)}", flush=True)
-    return subprocess.Popen(comando, cwd=str(_AQUI), start_new_session=True,
-                            env=ambiente if (arranque or arranque_controlador) else None)  # herda stdout/stderr
+    return subprocess.Popen(comando, cwd=str(_AQUI), start_new_session=True, env=ambiente)  # herda stdout/stderr
 
 
 def terminar_runner(filho: subprocess.Popen | None, limite: float = 5.0) -> None:
@@ -2082,8 +2347,12 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                         "-> vento_*/final.zip mais recente (sem _seed) -> vento_*_seed*/final.zip -> "
                         "runs/*/final.zip -> best_model.zip; passa-o explícito ao runner e anuncia-o "
                         "(com o motivo) em /api/state e /api/sim")
+    p.add_argument("--com-janela", action="store_true",
+                   help="abre TAMBÉM a janela nativa do MuJoCo (GLFW). Por omissão (contrato r13) não se "
+                        "abre: o site é o cockpit — a vista em 1.ª/3.ª pessoa ocupa o ecrã inteiro lá")
     p.add_argument("--sem-janela", action="store_true",
-                   help="só site + API (o runner corre sem viewer: nada de GLFW/GL) — é o modo dos testes")
+                   help="(já é o PADRÃO desde o r13; aceite como pedido explícito) só site + API — o runner "
+                        "corre sem viewer: nada de GLFW/GL")
     p.add_argument("--port", type=int, default=8080, metavar="PORTA",
                    help="porta do site; 0 = uma porta livre escolhida pelo sistema (padrão: 8080; se estiver "
                         "ocupada tenta as 10 seguintes)")
@@ -2093,9 +2362,10 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                    help=f"ficheiro de controlo (vento/reiniciar/loop); padrão: {CONTROLO_OMISSAO}")
     p.add_argument("--telemetria", type=Path, default=TELEMETRIA_OMISSAO, metavar="CAMINHO",
                    help=f"ficheiro JSONL de telemetria do runner; padrão: {TELEMETRIA_OMISSAO}")
-    p.add_argument("--fpv", type=Path, default=FPV_OMISSAO, metavar="PASTA",
-                   help="pasta do stream do módulo de câmara FPV (quadro.jpg + estado.json); padrão: "
-                        f"{FPV_OMISSAO}")
+    p.add_argument("--fpv", type=Path, default=None, metavar="PASTA",
+                   help="pasta do stream das câmaras (quadro*.jpg + estado*.json). Padrão (r13): uma pasta em "
+                        "MEMÓRIA ($XDG_RUNTIME_DIR/mujoco-lab-drone/fpv-PORTA — os dois streams escrevem ~200 "
+                        f"ficheiros/s e não têm de gastar o disco); sem $XDG_RUNTIME_DIR, {FPV_OMISSAO}")
     p.add_argument("--fator-tempo", type=float, default=None, metavar="F",
                    help="ritmo do runner (1 = tempo real; 0 = sem travão); por omissão usa o do sim_view.py")
     grupo_loop = p.add_mutually_exclusive_group()
@@ -2108,16 +2378,75 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                                  "idempotente): o runner arranca com `--sem-loop` e o arranque corrige para "
                                  "`false` um `loop: true` velho do ficheiro; no fim do episódio a física "
                                  "CONTINUA no estado em que ficou e um REINICIAR recomeça")
-    p.add_argument("--controlador", choices=list(MODOS_CONTROLADOR), default=CONTROLADOR_OMISSAO,
+    p.add_argument("--controlador", choices=[CONTROLADOR_AUTO, *MODOS_CONTROLADOR], default=CONTROLADOR_AUTO,
                    metavar="MODO",
-                   help="quem pilota no arranque (contrato r12): `rl` = a política (PADRÃO — o de sempre) "
-                        "ou `classico` = cascata clássica C++ do firmware (yaw livre, WASDQE relativo ao "
-                        "rumo, olhar IBVS). Mostra-se no arranque e troca-se depois pelo "
-                        "POST /api/controlador (a troca reinicia o episódio e o /api/state diz "
-                        "`trocando` + motivo)")
+                   help="quem pilota. `auto` (PADRÃO, r13) = o que ganhou na medição: `classico` (cascata "
+                        "clássica C++ do firmware — yaw livre, WASDQE relativo ao rumo, seguir a bola) na "
+                        "planta REAL em CTBR, `rl` no cf2. `rl`/`classico` explícitos servem para medir e "
+                        "testar; o site já não tem seletor")
     p.add_argument("--sem-browser", action="store_true", help="não abre o browser (o URL sai na mesma)")
     p.add_argument("--verboso", action="store_true", help="mostra cada pedido HTTP no terminal")
     return p.parse_args(argv)
+
+
+def pasta_fpv_omissao(porta: int, ambiente=None) -> Path:
+    """Pasta do stream das câmaras quando o dono não dá `--fpv`: em MEMÓRIA se houver, senão `out/fpv`.
+
+    Os dois módulos de câmara (FPV + vista da simulação) escrevem cada um ~50 quadros JPEG e ~50
+    `estado.json` por segundo, sempre por cima dos mesmos nomes (só o ÚLTIMO quadro conta). No disco isso
+    são ~4 MB/s de escritas atómicas sem valor nenhum depois de servidas (medido: 2 × 1080p50 ≈ 41 kB por
+    quadro) — num SSD com CoW é desgaste e latência à toa. `$XDG_RUNTIME_DIR` é o tmpfs privado do
+    utilizador (o sítio próprio para estado de execução, apagado no fim da sessão): a pasta leva a PORTA
+    no nome para duas instâncias do site nunca partilharem quadros. Sem a variável (ou sem permissão de
+    escrita) fica a pasta de sempre, `FPV_OMISSAO`.
+    """
+    base = (os.environ if ambiente is None else ambiente).get("XDG_RUNTIME_DIR")
+    if base and os.path.isdir(base) and os.access(base, os.W_OK):
+        return Path(base) / "mujoco-lab-drone" / f"fpv-{int(porta)}"
+    return FPV_OMISSAO
+
+
+def resolver_controlador(pedido: str, hardware: dict | None) -> str:
+    """`--controlador auto` → o controlador que GANHOU NA MEDIÇÃO para a planta que vai voar (r13).
+
+    Planta REAL em CTBR → `classico` (cascata clássica C++ do firmware: em 2026-10-12, com as mesmas 12
+    sementes, pairar 3,9 cm vs 13,0 cm da política, yaw livre, e seguir o alvo com a câmara — ver
+    `out/classico/avaliacao.json`, `out/nucleo/avaliacao.json` e o README); qualquer outra planta (cf2,
+    ou real em modo `motores`) → `rl`, porque a cascata do núcleo só existe para a planta real em CTBR e
+    um pedido clássico seria recusado. `rl`/`classico` explícitos passam tal e qual.
+    """
+    if pedido != CONTROLADOR_AUTO:
+        return str(pedido)
+    if hardware and str(hardware.get("modo_acao", "ctbr")) == "ctbr":
+        return "classico"
+    return "rl"
+
+
+def controlo_de_arranque(atual: dict) -> dict:
+    """Blocos que o ARRANQUE do cockpit (r13) escreve: vento desligado, voo ativo, bola com velocidade.
+
+    Parte do que o ficheiro já tem (as preferências sobrevivem: intensidade, direção, aleatoriedade e
+    velocidade da bola) e fixa só o ESTADO de arranque — `vento_simples.ligado = false`, `voo.ativo = true`
+    com as 6 teclas soltas, sem yaw e sem `segui_alvo`. Os `seq` sobem (o runner reaplica). Um bloco
+    guardado inválido (escrito à mão) volta ao padrão em vez de impedir o arranque.
+    """
+    simples = atual.get("vento_simples") if isinstance(atual.get("vento_simples"), dict) else {}
+    try:
+        base = vento_natural.validar(False, simples.get("intensidade", VENTO_SIMPLES_PADRAO["intensidade"]),
+                                     simples.get("aleatorio", VENTO_SIMPLES_PADRAO["aleatorio"]),
+                                     simples.get("direcao", VENTO_SIMPLES_PADRAO["direcao"]))
+    except ValueError:
+        base = dict(VENTO_SIMPLES_PADRAO)
+    voo = atual.get("voo") if isinstance(atual.get("voo"), dict) else {}
+    bola = atual.get("bola") if isinstance(atual.get("bola"), dict) else {}
+    return {
+        "vento_simples": {**base, "ligado": False, "seq": int(simples.get("seq", 0) or 0) + 1},
+        "voo": {"ativo": True, "teclas": dict.fromkeys(("w", "a", "s", "d", "q", "e"), False),
+                "yaw_taxa": 0.0, "yaw_alvo": None, "segui_alvo": False,
+                "seq": int(voo.get("seq", 0) or 0) + 1},
+        "bola": {"velocidade": bola_do_controlo(atual)["velocidade"],
+                 "seq": int(bola.get("seq", 0) or 0) + 1},
+    }
 
 
 def main(argv=None) -> int:
@@ -2129,6 +2458,18 @@ def main(argv=None) -> int:
     # --telemetria, --model) tem de ser resolvido AQUI, senão o site lia/escrevia num sítio e o filho noutro.
     args.controlo = _absoluto(args.controlo)
     args.telemetria = _absoluto(args.telemetria)
+    # COCKPIT (r13): o site É a interface — a vista em 1.ª/3.ª pessoa ocupa lá o ecrã inteiro, por isso a
+    # janela nativa do MuJoCo deixou de abrir por omissão (`--com-janela` volta a abri-la, ao lado do site).
+    args.sem_janela = not bool(getattr(args, "com_janela", False))
+    if args.fpv is None:
+        # com `--port 0` a porta só se conhece depois de abrir o servidor: o pid dá a mesma unicidade
+        args.fpv = pasta_fpv_omissao(args.port if args.port else os.getpid())
+    args.fpv = _absoluto(args.fpv)
+    # o modelo escolhe-se ANTES do controlador: o `auto` precisa de saber que planta vai voar
+    modelo, motivo = escolher_modelo(args)
+    if not modelo.is_file():
+        raise SystemExit(f"[site] modelo inexistente: {modelo}")
+    args.controlador = resolver_controlador(args.controlador, hardware_do_modelo(modelo))
     if not INDEX.is_file():
         print(f"[site] aviso: {MENSAGEM_SEM_DIST.format(pasta=DIST.parent)}", flush=True)
     # ARRANQUE AUTORITATIVO (pedido do dono, 2026-10-09): o `loop` do arranque é SEM REINÍCIO (default) ou
@@ -2173,14 +2514,25 @@ def main(argv=None) -> int:
              else "")
           + " · troca ao vivo: POST /api/controlador", flush=True)
 
-    # o runner corre com cwd=experiments/09_drone_hover_rl: `--model` relativo resolve-se contra o cwd do SITE
-    modelo, motivo = escolher_modelo(args)
-    if not modelo.is_file():
-        raise SystemExit(f"[site] modelo inexistente: {modelo}")
+    # COCKPIT (r13) — ARRANQUE LIMPO do que o dono mexe ao vivo: o VENTO nasce DESLIGADO (o bloco dos 3
+    # botões passa a existir e a mandar: uma rajada/turbulência deixada por uma sessão anterior nunca
+    # arranca sozinha — os campos do contrato antigo ficam no ficheiro, intactos, mas sem efeito), o
+    # CONTROLE DE VOO nasce ATIVO com as teclas soltas e sem «seguir a bola» (o dono pediu «o modo de
+    # controlar já vem ativado»: W/A/S/D/Q/E funcionam logo, sem armar nada) e a bola fica com a sua
+    # velocidade guardada (ou o padrão). Intensidade/direção/aleatoriedade guardadas ficam como estavam,
+    # prontas para o próximo LIGAR. Uma só escrita atómica (merge: `loop`/`reiniciar`/câmara intactos).
+    escrever_controlo(args.controlo, controlo_de_arranque(ler_controlo_bruto(args.controlo)))
+    print("[site] cockpit: vento DESLIGADO no arranque · controle de voo ATIVO (WASD/QE prontos) · "
+          "seguir a bola desligado", flush=True)
+
     print(f"[site] modelo: {modelo} ({motivo})", flush=True)   # diz SEMPRE qual escolheu e porquê
-    filho = lancar_runner(args, modelo, token_arranque, token_controlador)
+    print(f"[site] stream das câmaras em {args.fpv}"
+          + (" (memória: nada vai ao disco)" if str(args.fpv).startswith("/run/") else ""), flush=True)
+    hud = CanalHud()                                   # HUD ao vivo (r13): porta UDP local para o runner
+    filho = lancar_runner(args, modelo, token_arranque, token_controlador, porta_hud=hud.porta)
     servidor = Servidor(args.controlo, args.telemetria, args.host, args.port, args.verboso, filho, modelo,
                         motivo, memorizados, fpv=args.fpv, controlador=controlador_inicial)
+    servidor.hud = hud
     httpd = abrir_servidor(args.host, args.port, servidor)
     url = f"http://{args.host}:{servidor.porta}/"
     print(f"[site] runner pid {filho.pid} | controlo {args.controlo} | telemetria {args.telemetria}",
@@ -2210,6 +2562,7 @@ def main(argv=None) -> int:
         print("[site] a fechar (servidor + runner)...", flush=True)
         httpd.shutdown()
         httpd.server_close()
+        hud.fechar()
         terminar_runner(filho)
     return 0
 

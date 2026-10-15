@@ -1,7 +1,9 @@
 /**
- * Curvas ao vivo (altura, erro de rumo, retorno e vento) — `Sparkline` do Motion UI + `AnimatedNumber`.
- * Desde a avaliação de UX de 2026-10-10 os títulos dizem o que medem em português (o nome do campo da
- * telemetria fica na nota) e o rumo aparece em GRAUS (a telemetria continua em rad: é só ecrã).
+ * Curvas ao vivo — `Sparkline` do Motion UI + `AnimatedNumber`. Desde a revisão de UX de 2026-10-12
+ * (cockpit r13) são as quatro que contam a história de um voo a quem pilota: ALTURA, VELOCIDADE
+ * horizontal, INCLINAÇÃO e VENTO. Saíram o «retorno» (recompensa acumulada: vocabulário de treino, sem
+ * sentido com a cascata clássica a voar) e o «erro de rumo» (com o rumo livre não é um erro; o rumo
+ * está sempre no HUD).
  *
  * A linha do ALVO é a `grid` do próprio `Sparkline`: a posição vertical sai da MESMA matemática de
  * `buildSparkPath` (`range = max(1, max−min)`), replicada em `yDoValor` para o traço cair exactamente
@@ -116,6 +118,23 @@ function Curva({
   )
 }
 
+/**
+ * Velocidade HORIZONTAL (m/s) de uma linha: a verdade do simulador (`verdade.vx/vy`, planta real). Sem
+ * `verdade` (cf2, runner antigo) devolve 0 — o gráfico fica plano em vez de inventar uma leitura.
+ */
+export function velocidadeHorizontal(linha: LinhaSim): number {
+  const v = linha.verdade
+  return v === null || v.vx === null || v.vy === null ? 0 : Math.hypot(v.vx, v.vy)
+}
+
+/** Inclinação total (graus) = ‖(roll, pitch)‖ da verdade do simulador; 0 sem `verdade`. */
+export function inclinacaoGraus(linha: LinhaSim): number {
+  const v = linha.verdade
+  return v === null || v.roll === null || v.pitch === null
+    ? 0
+    : Math.hypot(v.roll, v.pitch) * GRAUS
+}
+
 interface CurvasProps {
   linhas: LinhaSim[]
   zAlvo: number
@@ -125,8 +144,8 @@ interface CurvasProps {
 
 export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
   const z = linhas.map((l) => l.z)
-  const yawErr = linhas.map((l) => l.yaw_err * GRAUS)
-  const retorno = linhas.map((l) => l.retorno)
+  const velocidade = linhas.map(velocidadeHorizontal)
+  const inclinacao = linhas.map(inclinacaoGraus)
   const vento = linhas.map((l) => l.vento_vel)
   const ultima = linhas.length > 0 ? linhas[linhas.length - 1] : null
   const tickKey = ultima?.passo ?? 0
@@ -136,42 +155,44 @@ export function Curvas({ linhas, zAlvo, grande = false }: CurvasProps) {
       <Curva
         id="z"
         titulo="altura"
-        nota={`z(t) · linha fina = alvo ${fmt(zAlvo, 1)} m`}
+        nota={`linha fina = alvo ${fmt(zAlvo, 1)} m`}
         historico={z}
         valorAtual={ultima?.z ?? 0}
         unidade="m"
-        casas={3}
+        casas={2}
         alvo={zAlvo}
         alvoTexto={`alvo ${fmt(zAlvo, 1)} m ·`}
         tickKey={tickKey}
         grande={grande}
       />
       <Curva
-        id="yaw-err"
-        titulo="erro de rumo"
-        nota="yaw_err(t) em graus · alvo 0°"
-        historico={yawErr}
-        valorAtual={(ultima?.yaw_err ?? 0) * GRAUS}
-        unidade="°"
-        casas={1}
+        id="velocidade"
+        titulo="velocidade"
+        nota="na horizontal · parado = 0 (o vento e as teclas mexem aqui)"
+        historico={velocidade}
+        valorAtual={ultima === null ? 0 : velocidadeHorizontal(ultima)}
+        unidade="m/s"
+        casas={2}
+        alvo={0}
         tickKey={tickKey}
         grande={grande}
       />
       <Curva
-        id="retorno"
-        titulo="retorno"
-        nota="recompensa acumulada do episódio"
-        historico={retorno}
-        valorAtual={ultima?.retorno ?? 0}
-        unidade=""
-        casas={2}
+        id="inclinacao"
+        titulo="inclinação"
+        nota="quanto o drone se inclina para andar ou para aguentar o vento"
+        historico={inclinacao}
+        valorAtual={ultima === null ? 0 : inclinacaoGraus(ultima)}
+        unidade="°"
+        casas={1}
+        alvo={0}
         tickKey={tickKey}
         grande={grande}
       />
       <Curva
         id="vento"
         titulo="vento"
-        nota="vento_vel(t) · velocidade do vento aplicado"
+        nota="velocidade do vento que o simulador está a aplicar"
         historico={vento}
         valorAtual={ultima?.vento_vel ?? 0}
         unidade="m/s"

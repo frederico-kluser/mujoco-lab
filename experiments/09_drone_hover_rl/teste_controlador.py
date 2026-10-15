@@ -60,6 +60,11 @@ for _caminho in (_RAIZ, _AQUI):
     if str(_caminho) not in sys.path:
         sys.path.insert(0, str(_caminho))
 
+# O pack de bateria PERSISTENTE do dono (`out/bateria/`) não é para ser gasto por testes: o `sim_view` importado
+# aqui e tudo o que esta suíte lançar (runner, servidor) usam um pack DESCARTÁVEL numa pasta temporária. Tem de
+# ficar ANTES do `import sim_view` (a pasta lê-se no import) — sem isto cada corrida gastava o pack real.
+os.environ.setdefault("DRONE_PASTA_BATERIA", tempfile.mkdtemp(prefix="bateria_teste_", dir=os.environ.get("TMPDIR")))
+
 import numpy as np
 import sim_site
 import sim_view
@@ -269,37 +274,52 @@ def secao_rumo() -> bool:
 
 
 # ---------------------------------------------------------------------------------------- §4 painéis
+# COCKPIT (contrato r13, 2026-10-12): os painéis do r12 mudaram de sítio — os ficheiros são relativos a
+# `site/src/components/`. O rumo e as teclas de rodar vivem na janela Voo (`voo-tecla-*`, que também se
+# premem com o rato) e no HUD (`tecla-*`, só desenho); «quem voa» abre a janela Sistema.
+# SAIU (decisão do dono, «não quero opções, quero o melhor»): o SELETOR — `seletor-controlador`,
+# `controlador-modo-rl`, `controlador-modo-classico` (o `sim/controlador.tsx` foi apagado); a sua AUSÊNCIA
+# prova-se em `site/testes/controlador.mts` §11 e a escolha `auto` em `teste_cockpit.py` §2/§4.
+# SAIU `tecla-v` como «olhar»: no cockpit V é o VENTO e seguir a bola é o interruptor `bola-seguir`
+# (tecla B) — as duas teclas provam-se em `site/testes/cockpit.mts` e o modo em `teste_cockpit.py` §4.
 TESTIDS_PAINEL = {
-    "seletor-controlador": ("controlador.tsx", 'data-testid="seletor-controlador"'),
-    "controlador-estado": ("controlador.tsx", 'data-testid="controlador-estado"'),
-    "controlador-motivo": ("controlador.tsx", 'data-testid="controlador-motivo"'),
-    "controlador-modo-rl": ("controlador.tsx", 'data-testid="controlador-modo-rl"'),
-    "controlador-modo-classico": ("controlador.tsx", 'data-testid="controlador-modo-classico"'),
-    # os keycaps e as linhas das tabelas usam testids DINÂMICOS (`tecla-${tecla}`, `${linha.id}`,
-    # `${alvo.id}`): o literal ou o padrão contam — a semântica de cada letra/id já é provada em §3
-    "tecla-z": ("controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"),
-    "tecla-c": ("controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"),
-    "tecla-x": ("controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"),
-    "tecla-v": ("controlo-voo.tsx", "data-testid={`tecla-${tecla}`}"),
-    "voo-rumo": ("controlo-voo.tsx", 'data-testid="voo-rumo"'),
-    "quem-faz-o-que": ("quem-faz-o-que.tsx", 'data-testid="quem-faz-o-que"'),
-    "quem-faz-o-que-fc": ("quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"),
-    "bordo-alvos": ("rpi5.tsx", 'data-testid="bordo-alvos"'),
-    "bordo-alvo-rpi5": ("rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"),
-    "bordo-alvo-arduino": ("rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"),
+    # o estado honesto do seletor (`trocando`/`erro` + motivo) deixou de ter painel próprio: lê-se por
+    # baixo de «quem está a voar» (antes `controlador-estado` + `controlador-motivo`)
+    "sistema-quem-voa": ("cockpit/janela-sistema.tsx", 'data-testid="sistema-quem-voa"'),
+    "sistema-controlador-estado": ("cockpit/janela-sistema.tsx", 'data-testid="sistema-controlador-estado"'),
+    # os keycaps passam o testid pela prop `testid` do componente `Tecla` (`pecas.tsx` é quem o põe no
+    # DOM) e as linhas das tabelas usam testids DINÂMICOS (`${linha.id}`, `${alvo.id}`): o literal ou o
+    # padrão contam — a semântica de cada letra/id já é provada em §3
+    "tecla-z": ("cockpit/hud.tsx", 'testid="tecla-z"'),
+    "tecla-c": ("cockpit/hud.tsx", 'testid="tecla-c"'),
+    "tecla-x": ("cockpit/hud.tsx", 'testid="tecla-x"'),
+    "voo-tecla-z": ("cockpit/janela-voo.tsx", 'testid="voo-tecla-z"'),
+    "voo-tecla-c": ("cockpit/janela-voo.tsx", 'testid="voo-tecla-c"'),
+    "voo-tecla-x": ("cockpit/janela-voo.tsx", 'testid="voo-tecla-x"'),
+    "voo-rumo": ("cockpit/janela-voo.tsx", 'data-testid="voo-rumo"'),
+    "bola-seguir": ("cockpit/janela-bola.tsx", 'testid="bola-seguir"'),
+    "quem-faz-o-que": ("sim/quem-faz-o-que.tsx", 'data-testid="quem-faz-o-que"'),
+    "quem-faz-o-que-fc": ("sim/quem-faz-o-que.tsx", "data-testid={`quem-faz-o-que-${linha.id}`}"),
+    "bordo-alvos": ("sim/rpi5.tsx", 'data-testid="bordo-alvos"'),
+    "bordo-alvo-rpi5": ("sim/rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"),
+    "bordo-alvo-arduino": ("sim/rpi5.tsx", "data-testid={`bordo-alvo-${alvo.id}`}"),
 }
+# o que tem de passar a prop `testid` ao DOM para os literais acima serem testids de verdade
+PECAS_COCKPIT = ("cockpit/pecas.tsx", "data-testid={testid}")
 
 
 def secao_paineis() -> bool:
-    """§4: os painéis novos estão NO FRONT (testids estáveis nos componentes certos)."""
-    c = Checagens("§4 painéis: seletor, keycaps de yaw, «quem faz o quê», bordo com 2 alvos")
-    base = _AQUI / "site" / "src" / "components" / "sim"
+    """§4: os painéis do r12 estão NO COCKPIT (testids estáveis nos componentes certos)."""
+    c = Checagens("§4 painéis (cockpit r13): quem voa, keycaps de yaw, rumo, seguir a bola, bordo com 2 alvos")
+    base = _AQUI / "site" / "src" / "components"
     ficheiros = {nome: (base / nome).read_text(encoding="utf-8") if (base / nome).is_file() else ""
-                 for nome in {f for f, _padrao in TESTIDS_PAINEL.values()}}
+                 for nome in {f for f, _padrao in TESTIDS_PAINEL.values()} | {PECAS_COCKPIT[0]}}
     for testid, (ficheiro, padrao) in TESTIDS_PAINEL.items():
         texto = ficheiros.get(ficheiro, "")
-        c.ok(f'data-testid="{testid}" em site/src/components/sim/{ficheiro}',
+        c.ok(f'data-testid="{testid}" em site/src/components/{ficheiro}',
              f'data-testid="{testid}"' in texto or padrao in texto)
+    c.ok(f"a prop `testid` das peças do cockpit chega ao DOM como `data-testid` ({PECAS_COCKPIT[0]})",
+         PECAS_COCKPIT[1] in ficheiros.get(PECAS_COCKPIT[0], ""))
     return c.fechar()
 
 

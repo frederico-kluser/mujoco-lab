@@ -1,6 +1,11 @@
 /**
  * ÉPOCA DAS PARAGENS — a garantia de que um PARAR não é desfeito por um apply atrasado.
  *
+ * COCKPIT (r13, 2026-10-12): o painel do vento dinâmico (`controlos.tsx`) que usava isto saiu do site —
+ * o vento passou a três botões (`POST /api/vento-simples`, `lib/cockpit.ts` `ControloVento`). O módulo
+ * fica porque o `use-sim` continua a expor as ações do contrato antigo (`pararTudo`,
+ * `aplicarVentoDinamico`), que a API ainda aceita; o texto abaixo descreve esse painel.
+ *
  * O painel do vento dinâmico tem um live-apply com debounce (`controlos.tsx`, ≈300 ms): editar um campo
  * agenda um `POST /api/vento-dinamico {modo, ativo: true, params}` para daqui a 300 ms. Cancelar esse
  * temporizador só quando o `modoContinuo` muda (o que depende do POLLING, ~350 ms + o ida-e-volta do POST)

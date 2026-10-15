@@ -1,0 +1,183 @@
+{
+  "_meta": {
+    "skill": "uxui-evaluator",
+    "data": "2026-10-12",
+    "alvo": "experiments/09_drone_hover_rl/site (working tree DEPOIS do redesenho cockpit, contrato r13)",
+    "comparar_com": "pesquisas/ux-cockpit-avaliacao-antes.json (29/100, poor)",
+    "evidencia_medida": {
+      "viewport": "1920x1080, 1366x768 e 1280x720 (Chromium headless, sim_site.py --controlador auto -> classico, sem janela nativa)",
+      "altura_pagina_px": 1080,
+      "ecras_de_scroll": 1.0,
+      "scroll_de_pagina": "nenhum nas tres resolucoes, com tudo fechado e com Voo+Bola+Vento abertas (scrollHeight == clientHeight)",
+      "vista_px": "0,0 -> 1920x1080 (a camara e o fundo do ecra inteiro; a outra vista fica na miniatura)",
+      "cartoes_permanentes": 0,
+      "botoes_com_tudo_fechado": 12,
+      "entradas_com_tudo_fechado": 0,
+      "palavras_visiveis_com_tudo_fechado": 83,
+      "janela_voo": {
+        "caixa_px": "300x350",
+        "botoes": 10,
+        "palavras": 45
+      },
+      "janela_bola": {
+        "caixa_px": "300x438",
+        "interruptores": 1,
+        "sliders": 1,
+        "palavras": 65
+      },
+      "janela_vento": {
+        "caixa_px": "300x440",
+        "interruptores": 2,
+        "sliders": 2,
+        "nota": "ligado, intensidade, aleatoriedade + a seta da direcao; mostra o vento real ('agora') e o estimado a bordo ('o drone sente')"
+      },
+      "menor_letra_px": 10.0,
+      "erros_de_consola": 0,
+      "antes_vs_depois": {
+        "altura_da_pagina_px": "4784 -> 1080",
+        "botoes_a_vista": "51 -> 12",
+        "palavras_a_vista": "2223 -> 83",
+        "posicao_da_imagem_da_camara_px": "2929 -> 0",
+        "controlos_do_vento": "18 botoes + 8 campos -> 2 interruptores + 2 sliders",
+        "passos_ate_voar": "ARMAR CONTROLO + tecla -> tecla"
+      },
+      "menor_letra_nota": "era 8,8 px na primeira entrega do cockpit; subida para 10 px na revisao (sem transbordos a 1280x720)",
+      "desempenho_maquina_livre": {
+        "tempo_real": 0.999,
+        "hud_hz": 50.0,
+        "stream_bordo_fps": 49.7,
+        "stream_3a_pessoa_fps": 49.6,
+        "resolucao_streams": "1920x1080",
+        "pintura_fps": 60,
+        "tecla_ate_keycap_ms": "12-15",
+        "tecla_ate_eco_do_runner_ms_p50": 10.5,
+        "pedidos_api_sim_com_tudo_fechado": 0
+      },
+      "tres_janelas_abertas": {
+        "1280x720": "Voo 12,64 · Bola 968,64 · Vento em cascata 28,108 — 0 instrumentos tapados",
+        "1366x768": "idem (Bola 1054,64) — 0 instrumentos tapados",
+        "1920x1080": "Voo e Vento empilhados a esquerda, Bola a direita — 0 instrumentos tapados"
+      },
+      "browsers": "Chromium 1243 (Playwright), Google Chrome 153 e Brave 152 — sem erros de consola; Firefox/Safari nao instalados, nao testados"
+    },
+    "descricao_avaliada": "Cockpit de pilotagem de um drone simulado num ecra unico de 100svw x 100svh sem scroll. O fundo permanente e a camara de bordo (1.a pessoa) ou a da simulacao (3.a pessoa); a tecla F troca e a outra vista fica numa miniatura em baixo a esquerda. Sobre a imagem ha um HUD: estado do voo e modo em cima a esquerda (A VOAR / NO CHAO / CAIU, MANUAL / A SEGUIR A BOLA), fita de rumo em cima ao centro, bateria em cima a direita, velocidade a esquerda e altitude a direita do centro, horizonte artificial e mira ao centro, vento e as teclas WASD/QE/ZXC (que acendem ao carregar) em baixo a direita. Em baixo ao centro ha uma doca com 8 icones com nome e numero de atalho (Voo, Bola, Vento, Sensores, Energia, Graficos, Sistema, Ajuda) e um botao REINICIAR de manter premido. Cada icone abre uma janela flutuante de vidro escuro, arrastavel, que se fecha no X ou com Esc e lembra a posicao. As teclas de voo valem desde o arranque, sem armar. A janela Vento tem um interruptor ligar, um slider de intensidade 0-5 m/s, um interruptor de aleatoriedade e uma bussola para a direcao. A janela Bola tem um interruptor seguir a bola, um slider de velocidade da bola e um alvo com o erro ao centro. Nao ha seletor de controlador nem de modos de vento. Sensores, Energia, Graficos e Sistema sao janelas de detalhe so carregadas quando se abrem.",
+    "limites_da_avaliacao": "Sem UXUI_API_KEY: principios aplicados por conhecimento interno (api_enriched=false). Medido em Chromium headless; nao houve teste com o dono nem em Firefox/Safari. Estados CAIU, bateria fraca e sem ligacao foram exercitados pelo agente do site com respostas simuladas.",
+    "historico": "84/100 (good) na primeira entrega do cockpit, com 1 aviso; 88/100 depois de corrigido o aviso dos ecras pequenos (2026-10-13)"
+  },
+  "interface_type": "dashboard",
+  "interface_type_note": "Painel de pilotagem em tempo real (dashboard + controlo) com video ao vivo como elemento primario; avaliado como dashboard, com as janelas flutuantes tratadas como divulgacao progressiva.",
+  "overall_score": 88,
+  "band": "excellent",
+  "findings": [
+    {
+      "id": "finding-1",
+      "principle": {
+        "code": "D.2.1.02",
+        "slug": "visual-hierarchy",
+        "title": "Visual Hierarchy",
+        "part": "part-3"
+      },
+      "severity": "suggestion",
+      "message": "Em ecras pequenos (1366x768 e 1280x720) as tres janelas principais nao cabem lado a lado fora do centro. Corrigido em 2026-10-13 o que era um aviso (a janela Vento tapava a leitura de altitude): agora abre em CASCATA por cima da janela Voo e nenhum instrumento do HUD fica tapado (medido nas tres resolucoes). Fica o residuo: a 720p a janela Voo fica meio escondida atras da Vento ate se clicar nela.",
+      "remediation": "Aceitavel como esta (as teclas de voo estao sempre nos keycaps do HUD e as janelas arrastam-se); para eliminar, compactar Voo e Vento (somam 790 px, ha 582 px livres a 720p).",
+      "business_impact": null
+    },
+    {
+      "id": "finding-2",
+      "principle": {
+        "code": "D.1.1.01",
+        "slug": "progressive-disclosure",
+        "title": "Progressive Disclosure",
+        "part": "part-3"
+      },
+      "severity": "suggestion",
+      "message": "As janelas de detalhe Sistema (~600 palavras) e Sensores (~310) continuam a ser paineis de engenharia densos (estimativas llvm-mca/QEMU, orcamento por tick, pecas). Estao atras de um clique deliberado e nao pesam na pilotagem, mas quem as abre recebe tudo de uma vez.",
+      "remediation": "Dobrar Sistema em tres blocos fechados por omissao (quem voa · streams · pecas) e deixar aberto so 'quem esta a voar' + streams medidos.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-3",
+      "principle": {
+        "code": "F.1.1.03",
+        "slug": "mental-model",
+        "title": "Mental Model",
+        "part": "part-1"
+      },
+      "severity": "suggestion",
+      "message": "A linha do horizonte do HUD vem dos SENSORES de bordo e nao coincide ao pixel com o horizonte da imagem (o estimador tem um vies de 1,4-2,3 graus em roll, e o rumo estimado afasta-se do real depois de manobras: -2 graus estimado contra -9 graus real numa medicao). E honesto e a Ajuda explica-o, mas a primeira vista le-se como desalinhamento do ecra.",
+      "remediation": "Mostrar na janela Sensores (ja existe 'estimado vs real') e, se o dono preferir, acrescentar um traco fino do horizonte real na vista para a diferenca ser lida como erro do sensor.",
+      "business_impact": null
+    },
+    {
+      "id": "finding-4",
+      "principle": {
+        "code": "D.2.1.02",
+        "slug": "visual-hierarchy",
+        "title": "Visual Hierarchy",
+        "part": "part-3"
+      },
+      "severity": "suggestion",
+      "message": "Texto secundario pequeno: depois da revisao o minimo e 10 px (atalhos da doca) e as notas das janelas tem 10,4 px. Le-se a 1080p, mas continua no limite em ecras de alta densidade sem escala.",
+      "remediation": "Subir as notas para 11-12 px quando as janelas Voo e Vento forem compactadas (o espaco vertical a 720p e o que impede hoje).",
+      "business_impact": null
+    }
+  ],
+  "strengths": [
+    {
+      "principle": {
+        "code": "D.2.1.02",
+        "slug": "visual-hierarchy",
+        "title": "Visual Hierarchy"
+      },
+      "message": "A vista (1.a ou 3.a pessoa) e o ecra inteiro e esta sempre visivel: o retorno do que as teclas fazem passou de 2929 px abaixo do topo para 0 px. O centro do ecra nao tem texto."
+    },
+    {
+      "principle": {
+        "code": "F.1.1.02",
+        "slug": "cognitive-load",
+        "title": "Cognitive Load"
+      },
+      "message": "Com tudo fechado ha 12 controlos e 83 palavras (antes 51 botoes e 2223 palavras); tudo o resto abre-se a pedido em janelas."
+    },
+    {
+      "principle": {
+        "code": "F.2.2.03",
+        "slug": "hicks-law",
+        "title": "Hick's Law"
+      },
+      "message": "Nao ha escolhas tecnicas: o controlador e o que ganhou na medicao, o vento sao tres controlos (ligar, intensidade, aleatoriedade) em vez de 18 botoes e 8 campos, e seguir a bola e um interruptor."
+    },
+    {
+      "principle": {
+        "code": "C.1.4.01",
+        "slug": "error-prevention",
+        "title": "Error Prevention"
+      },
+      "message": "As teclas valem desde o arranque (sem ARMAR), o arranque apaga vento velho de sessoes anteriores, perder o foco solta todas as teclas e o REINICIAR continua a exigir manter premido."
+    },
+    {
+      "principle": {
+        "code": "F.1.1.03",
+        "slug": "mental-model",
+        "title": "Mental Model"
+      },
+      "message": "Vocabulario de voo (A VOAR, NO CHAO, CAIU, MANUAL, A SEGUIR A BOLA) em vez de episodio/retorno; a doca tem nome por baixo de cada icone e os keycaps acendem no instante em que a tecla desce."
+    },
+    {
+      "principle": {
+        "code": "C.1.1.01",
+        "slug": "consistency-and-standards",
+        "title": "Consistency and Standards"
+      },
+      "message": "Convencoes de HUD de aviacao: velocidade a esquerda, altitude a direita, rumo em cima, avisos na barra de cima, seis cores sempre acompanhadas de forma ou texto."
+    }
+  ],
+  "priority_fixes": [
+    "finding-4",
+    "finding-2",
+    "finding-1",
+    "finding-3"
+  ],
+  "api_enriched": false,
+  "api_note": "Install the uxuiprinciples API key for enriched findings with citations and business impact data. See uxuiprinciples.com/en/checkout"
+}

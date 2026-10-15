@@ -394,6 +394,8 @@ class Hardware:
 
     def q0(self, omega) -> np.ndarray | float:
         """Binário de perdas em vazio Q₀(ω) = K_t·I₀·(½ + ½·ω/ω₀) para ω > 0 (0 parado)."""
+        if type(omega) is float:                     # escalar (chamado a cada passo de decisão): sem NumPy
+            return self.motor.ke * self.motor.i0 * (0.5 + 0.5 * omega / self.omega0) if omega > 0.0 else 0.0
         w = np.asarray(omega, dtype=float)
         q = self.motor.ke * self.motor.i0 * (0.5 + 0.5 * w / self.omega0)
         return np.where(w > 0.0, q, 0.0) if q.ndim else (float(q) if w > 0.0 else 0.0)
@@ -428,7 +430,11 @@ class Hardware:
     def duty_para_acelerador(self, duty) -> float:
         """Inverso da curva do ESC (o acelerador que dá este ciclo útil)."""
         u, d = self.curva_esc
-        return float(np.interp(float(duty), d, u))
+        inversa = self.__dict__.get("_curva_esc_inversa")
+        if inversa is None or inversa[0] is not d:   # tabela escalar do `np.interp(duty, d, u)`, feita uma vez
+            from .escalar import Tabela
+            inversa = self._curva_esc_inversa = (d, Tabela(d, u))
+        return inversa[1](float(duty))
 
     @property
     def duty_max(self) -> float:

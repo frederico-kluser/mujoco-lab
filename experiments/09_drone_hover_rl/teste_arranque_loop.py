@@ -43,10 +43,15 @@ Três camadas, para a prova ser barata e mesmo assim ponta a ponta:
   §3 SERVIDOR REAL — `sim_site.py` + runner + API a sério (3 arranques: fresco, ficheiro velho com
      `loop: true`, e `--com-loop`), com `POST /api/reiniciar`, `POST /api/loop` e `POST /api/vento`, mais o
      §3e: o ficheiro de controlo APAGADO e CORROMPIDO a meio da execução (a escrita parcial que o recria não
-     pode tocar no `loop` nem no contador `reiniciar`);
-  §4 FRONT REAL — o BUNDLE de `site/dist` servido pelo `sim_site.py` num Chrome headless, lido no DOM por
-     CDP: o toggle CONTINUIDADE mostra **SEM REINÍCIO ativo no arranque** e muda mesmo quando o backend muda
-     (`POST /api/loop`) — o controlo negativo que separa «UI a espelhar o backend» de «fallback do React».
+     pode tocar no `loop` nem no contador `reiniciar`). Estes arranques voam o PADRÃO do site (desde o r13,
+     `--controlador auto` = cascata clássica na planta real); o §3f repete o essencial com a POLÍTICA RL
+     pedida EXPLICITAMENTE (`--controlador rl`, o padrão até ao r12);
+  §4 FRONT REAL — o BUNDLE de `site/dist` (o COCKPIT do r13) servido pelo `sim_site.py` num Chrome
+     headless, conduzido por CDP: com o backend em SEM REINÍCIO, o REINICIAR de manter premido (tecla R) é
+     o reset que o front oferece — manter R dispara o `POST /api/reiniciar` (contador +1, episódio novo) e
+     um toque NÃO reinicia. SAIU daqui a leitura do toggle CONTINUIDADE (`CONTÍNUO | SEM REINÍCIO`): o dono
+     mandou tirar os seletores do site («não quero opções»), o cockpit já não o tem — a ausência prova-se
+     aqui mesmo (§4) e o modo em si continua provado pela API no §3 (`/api/sim.loop`, `POST /api/loop`).
   §5 CORRIDA DE ARRANQUE — o servidor real, mas com o POST de `loop` disparado no instante em que a porta
      responde, 3 corridas, cada uma com um atraso artificial imposto ao runner (para a janela de arranque
      ser larga e determinística): o `loop` nunca volta a `false`, o runner diz que RESPEITOU o POST e o modo
@@ -458,6 +463,10 @@ class Ciclo:
         self.env = modulo_env.HoverEnv()
         self.args = sim_view.analisar_argumentos(["--sem-janela", "--fator-tempo", "0"]
                                                  + (["--com-loop"] if com_loop else ["--sem-loop"]))
+        # o stream das câmaras deste ciclo fica na pasta do TESTE: o padrão do runner é `out/fpv`, a pasta
+        # de trabalho do dono (fontes antigas do `--fontes` podem não ter o argumento: aí não há câmara)
+        if hasattr(self.args, "fpv"):
+            self.args.fpv = pasta / f"{nome}_fpv"
         # o MESMO arranque do `main`: o CLI decide e o ficheiro de controlo é corrigido (o §3 prova-o ponta
         # a ponta, com o processo a sério).
         self.corrigiu = sim_view.fixar_loop(self.controlo_caminho, sim_view.loop_do_arranque(self.args))
@@ -871,9 +880,38 @@ def _recriacao(c: Checagens, pasta: Path, modelo: Path, fator_tempo: float, limi
              f"{sim_site.ler_controlo_bruto(s.controlo).get('reiniciar')!r}")
 
 
+def _politica(c: Checagens, pasta: Path, modelo: Path, fator_tempo: float, limite: int) -> None:
+    """§3f: a POLÍTICA RL a voar (`--controlador rl` EXPLÍCITO) — o SEM REINÍCIO não depende de quem pilota.
+
+    Até ao r12 a política era o padrão do site e era ela que os §3a–§3e exercitavam; desde o r13 o padrão é
+    `auto` (a cascata clássica na planta real), por isso a via da política pede-se aqui pela flag.
+    """
+    with Servidor(pasta, "politica", modelo, fator_tempo, flags=("--controlador", "rl")) as s:
+        cmd = _linha_de(s.linhas, "runner:")
+        inicial = s.esperar(lambda e: e["loop"] is False and e["passo"] > 0
+                            and (e.get("controlador") or {}).get("modo") == "rl")
+        c.ok("[§3f] `--controlador rl`: e a POLITICA que voa e o arranque e SEM REINICIO (`loop: false`)",
+             inicial is not None and "--controlador rl" in cmd and "--sem-loop" in cmd,
+             f"controlador={None if inicial is None else (inicial.get('controlador') or {}).get('modo')!r}"
+             f" · loop={None if inicial is None else inicial['loop']!r} · stdout: "
+             f"{_linha_de(s.linhas, 'CONTROLADOR')}")
+
+        fim = s.esperar(lambda e: e["estado"] == "episodio_terminado" and e["passo"] > limite)
+        c.ok("[§3f] com a politica o episodio tambem NAO se auto-reinicia (`ep` 1, `passo` para la do limite)",
+             fim is not None and fim["ep"] == 1,
+             f"ep={None if fim is None else fim['ep']} · passo={None if fim is None else fim['passo']} · "
+             f"t={None if fim is None else _t(fim):.2f}")
+
+        codigo, corpo = s.post("/api/reiniciar")
+        novo = s.esperar(lambda e: e["ep"] == 2 and e["passo"] < limite)
+        c.ok("[§3f] e o REINICIAR e o unico reset (contador 1, ep 2)",
+             codigo == 200 and corpo.get("contador") == 1 and novo is not None,
+             f"HTTP {codigo} {corpo} · ep={None if novo is None else novo['ep']}")
+
+
 def checa_servidor(pasta: Path, modelo: Path, fator_tempo: float) -> Checagens:
-    """§3: ponta a ponta pelo `sim_site.py` REAL — quatro arranques (fresco, ficheiro velho, `--com-loop`,
-    e o §3e do ficheiro apagado/corrompido a meio da execução)."""
+    """§3: ponta a ponta pelo `sim_site.py` REAL — cinco arranques (fresco, ficheiro velho, `--com-loop`,
+    o §3e do ficheiro apagado/corrompido a meio da execução e o §3f com a política RL pedida pela flag)."""
     c = Checagens("§3 ponta a ponta pelo SERVIDOR real (sim_site.py + runner + API)")
     _titulo(c.titulo)
     limite = int(modulo_env.HoverEnv().max_passos)
@@ -881,6 +919,11 @@ def checa_servidor(pasta: Path, modelo: Path, fator_tempo: float) -> Checagens:
     _velho(c, pasta, modelo, fator_tempo, limite)
     _com_loop(c, pasta, modelo, fator_tempo, limite)
     _recriacao(c, pasta, modelo, fator_tempo, limite)
+    if hasattr(sim_site, "MODOS_CONTROLADOR"):
+        _politica(c, pasta, modelo, fator_tempo, limite)
+    else:                                    # fontes de antes do r12 (`--fontes`): só existe a política
+        print("        (§3f saltado: estas fontes nao tem `--controlador` — a politica e o unico piloto)",
+              flush=True)
     return c
 
 
@@ -1016,11 +1059,12 @@ def checa_corrida(pasta: Path, modelo: Path, fator_tempo: float, porta: int,
 
 # ==================================================================================================== §4
 # Driver CDP mínimo (sem dependências: o `WebSocket` global do Node ≥ 22 + o endpoint HTTP do Chrome). O
-# trabalho acontece DENTRO da página servida pelo `sim_site.py` (o BUNDLE real de `site/dist`): lê o DOM do
-# toggle CONTINUIDADE (o grupo tem `aria-label` próprio; a opção ATIVA é a que tem `aria-pressed="true"`) e
-# diz se o front já recebeu dados da API («API ligada»). O Python chama-o uma vez por leitura.
+# trabalho acontece DENTRO da página servida pelo `sim_site.py` (o BUNDLE real de `site/dist`, o COCKPIT do
+# r13). Uma chamada = uma ação: `ler` devolve o que o cockpit mostra (HUD vivo, o botão REINICIAR e se
+# existe algum seletor de continuidade); `tecla_r MS` mantém a tecla R em baixo durante MS milissegundos
+# (o gesto de manter premido do REINICIAR) e larga-a. O Python chama-o uma vez por ação.
 _DRIVER_CDP = r'''
-const [, , portaArg, urlBase] = process.argv
+const [, , portaArg, urlBase, acao = "ler", msArg = "0"] = process.argv
 
 async function listaAlvos() {
   return await (await fetch(`http://127.0.0.1:${portaArg}/json/list`)).json()
@@ -1069,32 +1113,47 @@ function ligar(url) {
 }
 
 const LEITURA = `(() => {
-  const grupo = document.querySelector('[aria-label^="continuidade"]')
-  if (!grupo) return JSON.stringify({pronto: false})
-  const opcoes = Array.from(grupo.querySelectorAll('button')).map((b) => ({
-    texto: b.textContent.trim(), ativo: b.getAttribute('aria-pressed') === 'true',
-  }))
-  const ativo = opcoes.find((o) => o.ativo)
-  const corpo = document.body ? document.body.innerText : ''
-  return JSON.stringify({pronto: true, opcoes, ativo: ativo ? ativo.texto : null,
-                         apiLigada: corpo.includes('API ligada')})
+  const q = (id) => document.querySelector('[data-testid="' + id + '"]')
+  if (!q("cockpit") || !q("hud")) return JSON.stringify({pronto: false})
+  const botao = q("botao-reiniciar"), pilula = q("hud-estado")
+  return JSON.stringify({
+    pronto: true,
+    hudVivo: q("hud").getAttribute("data-vivo") === "sim",
+    fase: pilula ? pilula.getAttribute("data-estado") : null,
+    reiniciar: botao ? { desativado: botao.disabled === true, rotulo: botao.getAttribute("aria-label") } : null,
+    seletorContinuidade: !!document.querySelector('[aria-label^="continuidade"]'),
+  })
+})()`
+
+const TECLA_R = `(async () => {
+  const tecla = (tipo) => window.dispatchEvent(new KeyboardEvent(tipo, {
+    key: "r", code: "KeyR", keyCode: 82, bubbles: true, cancelable: true }))
+  const t0 = performance.now()
+  tecla("keydown")
+  await new Promise((r) => setTimeout(r, ${Number(msArg)}))
+  tecla("keyup")
+  return JSON.stringify({pronto: true, premidaMs: Math.round(performance.now() - t0)})
 })()`
 
 const alvo = await urlDoAlvo()
 const { comando } = await ligar(alvo)
 await comando("Runtime.enable")
-for (let i = 0; i < 240; i++) {
-  const resultado = await comando("Runtime.evaluate", { expression: LEITURA, returnByValue: true })
+for (let i = 0; i < 160; i++) {
+  const resultado = await comando("Runtime.evaluate", {
+    expression: acao === "tecla_r" ? TECLA_R : LEITURA, returnByValue: true, awaitPromise: true })
   const texto = resultado.result && resultado.result.value
   if (texto && JSON.parse(texto).pronto) {
     console.log(texto)
     process.exit(0)
   }
+  if (acao === "tecla_r") break          // o gesto faz-se UMA vez (repeti-lo era carregar duas vezes)
   await new Promise((r) => setTimeout(r, 250))
 }
-console.log("DRIVER: o toggle CONTINUIDADE nao apareceu na pagina")
+console.log(JSON.stringify({pronto: false, erro: "o cockpit nao apareceu na pagina (site/dist desatualizado?)"}))
 process.exit(1)
 '''
+TOQUE_R_MS = 250          # §4: um toque — abaixo dos 0,9 s do gesto (`SEGUNDOS_REINICIAR` do cockpit)
+MANTER_R_MS = 1800        # §4: manter — o dobro do gesto, com folga para um browser sem GPU
 
 
 def _binario(alternativas: tuple[str, ...]) -> str | None:
@@ -1123,38 +1182,47 @@ def _esperar_devtools(perfil: Path, processo, limite: float) -> int | None:
     return None
 
 
-def _ler_toggle(node: str, driver: Path, porta_cdp: int, url: str, limite: float = 60.0) -> dict:
-    """Uma leitura do DOM do toggle pelo driver CDP: `{pronto, opcoes, ativo, apiLigada}`."""
-    resultado = subprocess.run([node, str(driver), str(porta_cdp), url], capture_output=True, text=True,
-                               timeout=limite, check=False)
-    if resultado.returncode != 0:
-        raise SystemExit(f"[teste] o driver CDP falhou ({resultado.returncode}): "
-                         f"{(resultado.stderr or resultado.stdout)[-800:]}")
-    return json.loads(resultado.stdout)
+def _cockpit(node: str, driver: Path, porta_cdp: int, url: str, *acao: str, limite: float = 90.0) -> dict:
+    """Uma ação do driver CDP no cockpit (`ler`, ou `tecla_r MS`): o JSON que ele devolve.
+
+    Nunca rebenta: se o driver falhar ou não acabar a tempo, devolve `{"pronto": False, "erro": ...}` e é a
+    checagem que falha, com o motivo à vista.
+    """
+    try:
+        resultado = subprocess.run([node, str(driver), str(porta_cdp), url, *acao], capture_output=True,
+                                   text=True, timeout=limite, check=False)
+    except subprocess.TimeoutExpired:
+        return {"pronto": False, "erro": f"o driver CDP nao terminou em {limite:g} s"}
+    try:
+        return json.loads(resultado.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return {"pronto": False, "erro": f"driver CDP (exit {resultado.returncode}): "
+                                         f"{(resultado.stderr or resultado.stdout)[-400:]}"}
 
 
-def _esperar_toggle(node: str, driver: Path, porta_cdp: int, url: str, predicado,
-                    limite: float = 30.0) -> dict | None:
-    """Espera (relógio) até uma leitura do DOM satisfazer `predicado`; devolve a leitura ou `None`."""
+def _esperar_cockpit(node: str, driver: Path, porta_cdp: int, url: str, predicado,
+                     limite: float = 90.0) -> dict:
+    """Lê o cockpit até uma leitura satisfazer `predicado` (devolve a ÚLTIMA leitura, boa ou má)."""
     t0 = time.perf_counter()
-    leitura = None
+    leitura: dict = {"pronto": False, "erro": "nenhuma leitura"}
     while time.perf_counter() - t0 < limite:
-        leitura = _ler_toggle(node, driver, porta_cdp, url)
-        if predicado(leitura):
+        leitura = _cockpit(node, driver, porta_cdp, url)
+        if leitura.get("pronto") and predicado(leitura):
             return leitura
-        time.sleep(0.2)
-    return None
+        time.sleep(0.3)
+    return leitura
 
 
 def checa_navegador(pasta: Path, modelo: Path, fator_tempo: float,
                     porta: int = PORTA_NAVEGADOR) -> Checagens:
-    """§4: o FRONT real (bundle de `site/dist`) servido pelo `sim_site.py`, lido no DOM por CDP.
+    """§4: o COCKPIT real (bundle de `site/dist`) servido pelo `sim_site.py`, conduzido por CDP.
 
-    É a prova de que o UI mostra **SEM REINÍCIO como estado ATIVO no arranque**. E, para não ser uma leitura
-    estática do fallback do React, inclui o **controlo negativo**: `POST /api/loop {ativo:true}` liga o
-    CONTÍNUO e o DOM **muda** para CONTÍNUO ativo; desligar volta a SEM REINÍCIO — o UI espelha o backend.
+    O cockpit do r13 não tem seletor de continuidade (decisão do dono: «não quero opções») — o modo é o do
+    arranque, SEM REINÍCIO, e o que o front oferece é o ÚNICO reset que existe: o REINICIAR de manter
+    premido (botão da doca / tecla R). Aqui prova-se, no browser a sério, que esse gesto chega ao backend
+    (`POST /api/reiniciar`: contador +1, episódio novo) e que um toque acidental NÃO reinicia.
     """
-    c = Checagens("§4 front real num Chrome headless (DOM/CDP): SEM REINICIO ativo no arranque")
+    c = Checagens("§4 cockpit real num Chrome headless (CDP): SEM REINICIO no arranque, REINICIAR = manter R")
     _titulo(c.titulo)
     node = _binario(("node",))
     chrome = _binario(("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"))
@@ -1163,7 +1231,7 @@ def checa_navegador(pasta: Path, modelo: Path, fator_tempo: float,
         c.ok("[§4] prova do DOM: node + Chrome + `site/dist/index.html` (npm run build) disponiveis", False,
              f"node={node!r} · chrome={chrome!r} · dist existe={dist.is_file()}")
         return c
-    driver = pasta / "driver_continuidade.mjs"
+    driver = pasta / "driver_cockpit.mjs"
     driver.write_text(_DRIVER_CDP, encoding="utf-8")
     with Servidor(pasta, "navegador", modelo, fator_tempo, porta=porta) as s:
         perfil = pasta / "chrome-perfil"
@@ -1171,7 +1239,7 @@ def checa_navegador(pasta: Path, modelo: Path, fator_tempo: float,
         navegador = subprocess.Popen(
             [chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={perfil}",
              "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-dev-shm-usage",
-             "--remote-allow-origins=*", s.url + "/"],
+             "--window-size=1366,768", "--remote-allow-origins=*", s.url + "/"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         try:
             porta_cdp = _esperar_devtools(perfil, navegador, 30.0)
@@ -1181,29 +1249,47 @@ def checa_navegador(pasta: Path, modelo: Path, fator_tempo: float,
             print(f"        servidor real em {s.url} · CDP na porta {porta_cdp} · driver {driver.name}",
                   flush=True)
 
-            ligado = _esperar_toggle(node, driver, porta_cdp, s.url,
-                                     lambda leitura: leitura.get("apiLigada") is True, 60.0)
-            api = s.get("/api/sim")
-            c.ok("[§4] o front recebeu dados da API e o toggle CONTINUIDADE mostra SEM REINICIO ATIVO",
-                 ligado is not None and ligado.get("ativo") == "SEM REINÍCIO" and api["loop"] is False,
-                 f"ativo={None if ligado is None else ligado.get('ativo')!r} · "
-                 f"opcoes={None if ligado is None else ligado.get('opcoes')} · API.loop={api['loop']!r}")
+            # o botão só fica utilizável com a API ligada (1.º `GET /api/state` do site)
+            visto = _esperar_cockpit(node, driver, porta_cdp, s.url,
+                                     lambda l: l.get("hudVivo") is True and l.get("reiniciar") is not None
+                                     and l["reiniciar"].get("desativado") is False)
+            api = s.esperar(lambda e: e["passo"] > 0) or {}
+            botao = visto.get("reiniciar") or {}
+            c.ok("[§4] o cockpit liga-se (HUD vivo) com o backend em SEM REINICIO e oferece o REINICIAR de "
+                 "manter premido",
+                 visto.get("hudVivo") is True and botao.get("desativado") is False
+                 and "manter" in str(botao.get("rotulo")) and api.get("loop") is False,
+                 f"HUD vivo={visto.get('hudVivo')!r} · fase={visto.get('fase')!r} · botao={botao} · "
+                 f"API.loop={api.get('loop')!r}" + (f" · {visto['erro']}" if visto.get("erro") else ""))
+            c.ok("[§4] o cockpit NAO tem seletor de continuidade: o modo e o do ARRANQUE (r13, sem opcoes)",
+                 visto.get("pronto") is True and visto.get("seletorContinuidade") is False,
+                 f"seletor no DOM = {visto.get('seletorContinuidade')!r}")
 
-            codigo, corpo = s.post("/api/loop", {"ativo": True})
-            mudou = _esperar_toggle(node, driver, porta_cdp, s.url,
-                                    lambda leitura: leitura.get("ativo") == "CONTÍNUO", 30.0)
-            api = s.get("/api/sim")
-            c.ok("[§4] `POST /api/loop {ativo:true}` muda o DOM para CONTINUO ativo (o UI espelha o backend)",
-                 codigo == 200 and mudou is not None and api["loop"] is True,
-                 f"HTTP {codigo} {corpo} · ativo={None if mudou is None else mudou.get('ativo')!r} · "
-                 f"API.loop={api['loop']!r}")
+            antes = s.get("/api/sim")
+            toque = _cockpit(node, driver, porta_cdp, s.url, "tecla_r", str(TOQUE_R_MS))
+            time.sleep(2.0)                              # tempo de sobra para um POST que não devia sair
+            depois = s.get("/api/sim")
+            c.ok(f"[§4] um TOQUE em R ({TOQUE_R_MS} ms) NAO reinicia: contador e `ep` ficam iguais",
+                 toque.get("pronto") is True and depois["reiniciar"] == antes["reiniciar"]
+                 and depois["ep"] == antes["ep"]
+                 and sim_site.ler_controlo_bruto(s.controlo).get("reiniciar") == antes["reiniciar"],
+                 f"tecla em baixo {toque.get('premidaMs')} ms · reiniciar {antes['reiniciar']} -> "
+                 f"{depois['reiniciar']} · ep {antes['ep']} -> {depois['ep']}"
+                 + (f" · {toque['erro']}" if toque.get("erro") else ""))
 
-            codigo, corpo = s.post("/api/loop", {"ativo": False})
-            voltou = _esperar_toggle(node, driver, porta_cdp, s.url,
-                                     lambda leitura: leitura.get("ativo") == "SEM REINÍCIO", 30.0)
-            c.ok("[§4] desligar volta a SEM REINICIO ativo no DOM (o estado que o arranque deixa)",
-                 codigo == 200 and voltou is not None,
-                 f"HTTP {codigo} {corpo} · ativo={None if voltou is None else voltou.get('ativo')!r}")
+            manter = _cockpit(node, driver, porta_cdp, s.url, "tecla_r", str(MANTER_R_MS))
+            novo = s.esperar(lambda e: e["reiniciar"] == antes["reiniciar"] + 1
+                             and e["ep"] == antes["ep"] + 1)
+            c.ok(f"[§4] MANTER R ({MANTER_R_MS} ms) REINICIA pelo front: `POST /api/reiniciar` (contador +1) "
+                 "e episodio novo — o unico reset que existe",
+                 manter.get("pronto") is True and novo is not None
+                 and sim_site.ler_controlo_bruto(s.controlo).get("reiniciar") == antes["reiniciar"] + 1
+                 and novo["loop"] is False,
+                 f"tecla em baixo {manter.get('premidaMs')} ms · reiniciar {antes['reiniciar']} -> "
+                 f"{None if novo is None else novo['reiniciar']} · ep {antes['ep']} -> "
+                 f"{None if novo is None else novo['ep']} · loop="
+                 f"{None if novo is None else novo['loop']!r}"
+                 + (f" · {manter['erro']}" if manter.get("erro") else ""))
         finally:
             if navegador.poll() is None:
                 try:
@@ -1227,7 +1313,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
     p.add_argument("--sem-http", action="store_true",
                    help="salta o §3 (o servidor real): corre so as pecas e o ciclo do runner, sem modelo")
     p.add_argument("--sem-navegador", action="store_true",
-                   help="salta o §4 (o FRONT real num Chrome headless por CDP)")
+                   help="salta o §4 (o COCKPIT real num Chrome headless por CDP)")
     p.add_argument("--model", type=Path, default=None,
                    help="modelo do runner para o §3/§4; por omissao o mesmo que o site escolheria")
     p.add_argument("--fator-tempo", type=float, default=FATOR_TEMPO, metavar="F",
@@ -1254,6 +1340,9 @@ def main(argv=None) -> int:
         pasta = Path(tempfile.mkdtemp(prefix="teste_arranque_loop_"))
     pasta.mkdir(parents=True, exist_ok=True)
     print(f"[teste] ficheiros do teste: {pasta}")
+    # o pack de bateria dos servidores lançados aqui (planta real) vive na pasta do TESTE, a não ser que
+    # venha definido de fora: a prova não gasta o pack persistente do dono (`out/bateria/`)
+    os.environ.setdefault("DRONE_PASTA_BATERIA", str(pasta / "bateria"))
     if _FONTES is not None and _FONTES != _AQUI:
         print(f"[teste] fontes: {_FONTES} (env.py + sim_view.py + sim_site.py desta pasta — as de ANTES do "
               f"reparo; o §3/§5 lancam o servidor DAQUI)")
@@ -1277,7 +1366,7 @@ def main(argv=None) -> int:
             checagens.append(checa_corrida(pasta, modelo, args.fator_tempo, args.porta_corrida,
                                            args.atraso_runner))
             if args.sem_navegador:
-                print("\n[teste] --sem-navegador: salto o §4 (front real no Chrome)")
+                print("\n[teste] --sem-navegador: salto o §4 (cockpit real no Chrome)")
             else:
                 checagens.append(checa_navegador(pasta, modelo, args.fator_tempo, args.porta_navegador))
 

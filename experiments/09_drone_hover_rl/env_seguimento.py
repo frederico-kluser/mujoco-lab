@@ -78,7 +78,10 @@ class _PilotoOnnx:
         from stable_baselines3 import PPO
         modelo = PPO.load(str(caminho), device="cpu")
         self.n_ator = int(getattr(modelo.policy, "_n_ator", 0)) or None
-        self.sessao = ort.InferenceSession(str(onnx), providers=["CPUExecutionProvider"])
+        opcoes = ort.SessionOptions()            # MLP 64-64 a 50 Hz: 1 fio (o pool por omissão = nº de núcleos POR processo,
+        opcoes.intra_op_num_threads = 1          # com espera ativa — esgota a máquina quando há vários envs em paralelo)
+        opcoes.inter_op_num_threads = 1
+        self.sessao = ort.InferenceSession(str(onnx), sess_options=opcoes, providers=["CPUExecutionProvider"])
         self.entrada = self.sessao.get_inputs()[0].name
         self.dim = int(self.sessao.get_inputs()[0].shape[1])
         del modelo                                   # só precisávamos do _n_ator/dimensão
@@ -183,7 +186,7 @@ class EnvSeguimento(gymnasium.Env):
         return np.clip(obs, -10.0, 10.0).astype(np.float32)
 
     # ------------------------------------------------------------------------------ ciclo
-    def definir_trajetoria_ponto(self, modo: str, vel: float = 0.5, raio: float = 1.5) -> None:
+    def definir_trajetoria_ponto(self, modo: str, vel: float = 0.5, raio: float = 1.5, semente: int | None = None) -> None:
         """Encaminha a troca de trajetória do ponto para o env físico (`env_method` do SB3).
 
         SEM este encaminhamento o wrapper não tem o método, os workers do `SubprocVecEnv` morrem na
@@ -193,7 +196,7 @@ class EnvSeguimento(gymnasium.Env):
         """
         self.trajetoria = modo
         self.vel_ponto = float(vel)
-        self.env.definir_trajetoria_ponto(modo, vel=vel, raio=raio)
+        self.env.definir_trajetoria_ponto(modo, vel=vel, raio=raio, semente=semente)
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)

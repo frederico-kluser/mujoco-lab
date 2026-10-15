@@ -106,6 +106,17 @@ ASSENTAR_MAX_S = 1.5
 ASSENTAR_V = 1e-3
 ASSENTAR_QUIETOS = 10
 
+# ponto-alvo `aleatorio` (a «bola» do modo seguir): velocidade de Ornstein–Uhlenbeck com teto, suavizada — ver `_ponto_aleatorio`
+PONTO_VEL_MAX = 0.8        # m/s — teto do `vel` aceite (a banda do desenho do dono é 0,3–0,8 m/s)
+PONTO_TAU_RUMO_S = 2.5     # s — tempo de correlação do OU: a bola muda de rumo/velocidade em ~2,5 s
+PONTO_TAU_SUAVE_S = 0.4    # s — PT1 da velocidade ⇒ aceleração finita, |a| ≤ 2·vel/τ (4 m/s² a 0,8 m/s, no pior caso)
+PONTO_FRAC_Z = 0.3         # a velocidade vertical vai até 0,3·vel (a bola anda sobretudo na horizontal)
+PONTO_ARENA_XY = 20.0      # m — |x|, |y| ≤ 20 m (a arena do drone é ±25 m: sobra margem para o seguir de fora)
+PONTO_MARGEM_XY = 2.0      # m — largura da «parede suave» em xy
+PONTO_Z_MIN, PONTO_Z_MAX = 0.6, 1.6   # m — banda de altura segura (o piso de voo do contrato r11 é 0,25 m)
+PONTO_MARGEM_Z = 0.2       # m — largura da «parede suave» em z
+PONTO_SAL_SEMENTE = 0xB01A  # separa o gerador do ponto dos outros usos da mesma semente
+
 # domain randomization (faixas por episódio; plano §6 P1.5 + SimpleFlight arXiv 2412.11764)
 DR = {
     "massa": (0.95, 1.05), "inercia": (0.90, 1.10), "cm_xy": 0.004,
@@ -427,6 +438,7 @@ class DroneRealEnv(HoverEnv):
             self.ponto_alvo = np.array([2.0, 0.0, 1.0], dtype=float)   # À FRENTE do drone (desenho do dono)
             self.ponto_alvo_vel = np.zeros(3)
             self.ponto_t = 0.0
+            self._semear_ponto()                  # bola `aleatorio` REPRODUTÍVEL: gerador filho da semente do episódio
             self.definir_trajetoria_ponto(getattr(self, "ponto_modo", "parado"),
                                           vel=getattr(self, "ponto_vel", 0.5))
             from lab import camera_rpi as _cam
@@ -500,19 +512,27 @@ class DroneRealEnv(HoverEnv):
         return self.acao_para_ctrl(acao)
 
     # ---------------------------------------------------------------- ponto-alvo (IA de seguimento visual)
-    def definir_trajetoria_ponto(self, modo: str, vel: float = 0.5, raio: float = 1.5) -> None:
+    def definir_trajetoria_ponto(self, modo: str, vel: float = 0.5, raio: float = 1.5,
+                                 semente: int | None = None) -> None:
         """Trajetória do ponto-alvo mocap: `parado` | `aleatorio` | `circulo` | `oito` (0,3–0,8 m/s).
 
         O ponto é CENÁRIO (corpo mocap `ponto`, sem massa/colisão — como o alvo do template `arm`): move-se
-        cinemáticamente por `data.mocap_pos` e a física do drone não sente nada. `vel` fora de
-        [0.3, 0.8] m/s é CLAMPADO à banda do desenho (o dono fixou 0,3–0,8 m/s).
+        cinemáticamente por `data.mocap_pos` e a física do drone não sente nada. `vel` é CLAMPADO a
+        [0; PONTO_VEL_MAX] m/s (a banda do desenho do dono é 0,3–0,8 m/s; `vel = 0` em `aleatorio`/`circulo`/`oito`
+        cai no 0,5 m/s de sempre).
+
+        `aleatorio` = movimento aleatório SUAVE (lei em `_ponto_aleatorio`): `vel` é o TETO da velocidade horizontal
+        (a vertical vai até `PONTO_FRAC_Z·vel`). É REPRODUTÍVEL: o gerador do ponto nasce no `reset` a partir da
+        semente do episódio (`reset(seed=s)` ⇒ a MESMA trajetória, seja qual for o controlador — a bola não vê o drone)
+        e não gasta um único número do `np_random` do env (sensores e DR ficam como estavam); `semente` (opcional)
+        fixa-o à mão nesta chamada — é o que o runner usa para repetir uma bola sem reiniciar o episódio.
         """
         if not self.com_alvo:
             raise RuntimeError("esta instância não foi construída com `com_alvo=True`")
         if modo not in ("parado", "aleatorio", "circulo", "oito"):
             raise ValueError(f"trajetória desconhecida: {modo!r}")
         self.ponto_modo = modo
-        self.ponto_vel = float(np.clip(vel, 0.0, 0.8))
+        self.ponto_vel = float(np.clip(vel, 0.0, PONTO_VEL_MAX))
         self.ponto_raio = float(raio)
         self.ponto_t = 0.0
         # o círculo/oito PARTEM da posição atual do ponto (continuidade: nada de teleports no cenário)
@@ -521,6 +541,58 @@ class DroneRealEnv(HoverEnv):
         else:
             self.ponto_centro = self.ponto_alvo.copy()
         self.ponto_alvo_vel = np.zeros(3)
+        self._ponto_ou = np.zeros(3)             # `aleatorio`: parte do REPOUSO (velocidade contínua desde o zero)
+        if semente is not None or not hasattr(self, "_ponto_rng"):
+            self._semear_ponto(semente)
+
+    def _semear_ponto(self, semente: int | None = None) -> None:
+        """(Re)cria o gerador do ponto `aleatorio`. Com `semente` é função SÓ dela; sem ela é um filho da semente do
+        episódio (`SeedSequence.spawn` do `np_random`: não avança o gerador do env — nenhum sorteio da planta muda)."""
+        if semente is not None:
+            ss = np.random.SeedSequence([int(semente) % (1 << 63), PONTO_SAL_SEMENTE])
+        else:
+            ss = self.np_random.bit_generator.seed_seq.spawn(1)[0]
+        self._ponto_rng = np.random.default_rng(ss)
+
+    def _ponto_aleatorio(self, pos: np.ndarray, dt: float) -> np.ndarray:
+        """Um passo da bola ALEATÓRIA: velocidade-objetivo de Ornstein–Uhlenbeck + teto + suavização (aceleração FINITA).
+
+            g ← g·e^(−dt/τ_r) + σ·√(1 − e^(−2dt/τ_r))·N(0, I)      (OU EXATO em tempo discreto; σ_xy = vel, σ_z = FRAC_Z·vel)
+            g_c = teto(g): ‖g_xy‖ ≤ vel, |g_z| ≤ FRAC_Z·vel         (com σ = vel a bola anda perto do teto e MUDA DE RUMO)
+            g_c ← g_c + parede(pos)                                  (mola para dentro perto do limite da arena / da banda de z)
+            v ← v + (g_c − v)·(1 − e^(−dt/τ_s))                      (PT1 ⇒ |a| ≤ 2·vel/τ_s: nada de saltos de velocidade)
+            pos ← pos + v·dt                                         (contínua; o corte final a ±arena é só uma guarda)
+
+        Ornstein & Uhlenbeck, Phys. Rev. 36 (1930) — processo gaussiano estacionário de tempo de correlação τ_r (aqui o
+        «tempo de mudar de rumo»); o PT1 dá a suavidade de um corpo com massa (a aceleração do OU puro é ruído branco).
+        """
+        vel = self.ponto_vel if self.ponto_vel > 0 else 0.5
+        vz_max = PONTO_FRAC_Z * vel
+        sigma = np.array([vel, vel, vz_max])
+        f = math.exp(-dt / PONTO_TAU_RUMO_S)
+        self._ponto_ou = self._ponto_ou * f + sigma * math.sqrt(1.0 - f * f) * self._ponto_rng.standard_normal(3)
+        g = self._ponto_ou.copy()
+        n = float(math.hypot(g[0], g[1]))
+        if n > vel:
+            g[:2] *= vel / n
+        g[2] = float(np.clip(g[2], -vz_max, vz_max))
+        # paredes suaves: dentro da margem a velocidade-objetivo ganha uma componente para DENTRO que, na parede, vale o
+        # dobro do teto (vence qualquer g) — a bola abranda, encosta e volta, sem teleportes nem cortes de posição
+        for i, (lo, hi, margem, teto) in enumerate(((-PONTO_ARENA_XY, PONTO_ARENA_XY, PONTO_MARGEM_XY, vel),
+                                                    (-PONTO_ARENA_XY, PONTO_ARENA_XY, PONTO_MARGEM_XY, vel),
+                                                    (PONTO_Z_MIN, PONTO_Z_MAX, PONTO_MARGEM_Z, vz_max))):
+            dentro = max(lo + margem - pos[i], 0.0) - max(pos[i] - (hi - margem), 0.0)
+            g[i] += 2.0 * teto * dentro / margem
+        n = float(math.hypot(g[0], g[1]))
+        if n > vel:
+            g[:2] *= vel / n
+        g[2] = float(np.clip(g[2], -vz_max, vz_max))
+        self.ponto_alvo_vel = self.ponto_alvo_vel + (g - self.ponto_alvo_vel) * (1.0 - math.exp(-dt / PONTO_TAU_SUAVE_S))
+        novo = pos + self.ponto_alvo_vel * dt
+        novo[0] = float(np.clip(novo[0], -PONTO_ARENA_XY, PONTO_ARENA_XY))
+        novo[1] = float(np.clip(novo[1], -PONTO_ARENA_XY, PONTO_ARENA_XY))
+        novo[2] = float(np.clip(novo[2], PONTO_Z_MIN, PONTO_Z_MAX))
+        return novo
 
     def _ponto_passo(self) -> None:
         """Avança o ponto-alvo (1× por `step`) e escreve o mocap — só com `com_alvo=True`."""
@@ -533,16 +605,10 @@ class DroneRealEnv(HoverEnv):
         if modo == "parado":
             pass
         elif modo == "aleatorio":
-            if not hasattr(self, "_ponto_rng"):
-                self._ponto_rng = np.random.default_rng()
-            if self.ponto_t % 1.0 < dt or not np.any(self.ponto_alvo_vel):   # novo rumo ~1 s
-                ang = float(self._ponto_rng.uniform(0.0, 2 * math.pi))
-                z = float(self._ponto_rng.uniform(-0.15, 0.15))
-                v = self.ponto_vel if self.ponto_vel > 0 else 0.5
-                self.ponto_alvo_vel = np.array([v * math.cos(ang), v * math.sin(ang), v * z])
-            pos = pos + self.ponto_alvo_vel * dt
-            pos[2] = float(np.clip(pos[2], 0.6, 1.6))
-            pos[0] = float(np.clip(pos[0], -20.0, 20.0)); pos[1] = float(np.clip(pos[1], -20.0, 20.0))
+            if not hasattr(self, "_ponto_rng"):          # `ponto_modo` posto à mão sem `definir_trajetoria_ponto`/`reset`
+                self._semear_ponto()
+                self._ponto_ou = np.zeros(3)
+            pos = self._ponto_aleatorio(np.asarray(pos, dtype=float), dt)
         elif modo == "circulo":
             v = self.ponto_vel or 0.5
             w = v / max(self.ponto_raio, 0.1)
