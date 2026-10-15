@@ -528,6 +528,10 @@ def ler_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "no cf2 e −1,0 na planta real (σ ≈ 0,37: menos ruído de exploração num drone de 1,7 kg)")
     p.add_argument("--ent-coef", type=float, default=0.001, help="coeficiente de entropia (evita colapso)")
     p.add_argument("--lr", type=float, default=1e-4, help="learning rate do PPO")
+    p.add_argument("--target-kl", type=float, default=None,
+                   help="trava de KL do PPO (`target_kl` do SB3): a atualização pára cedo quando a KL aproximada "
+                        "passa 1,5× este valor. Por omissão não há trava (o comportamento de sempre); serve para "
+                        "experimentar `--lr` maiores sem a política saltar (A/B em `ab_treino.py`)")
     p.add_argument("--sucesso", type=float, default=None,
                    help="limiar de retorno médio (StopTrainingOnRewardThreshold); por omissão 450 no cf2 "
                         "(~500 = hover perfeito na v2b), 700 na planta real (~750 = pairagem perfeita na "
@@ -1382,6 +1386,8 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
         "verbose": 0,               # o painel é nosso; sem TensorBoard (tensorboard_log fica None)
         "device": "cpu",
     }
+    if getattr(args, "target_kl", None) is not None:
+        comuns["target_kl"] = float(args.target_kl)   # só entra quando pedido: sem a flag o PPO é o de sempre
     painel.escrever(
         f"PPO · n_steps={n_steps} × n_envs={args.n_envs} = {rollout} passos/rollout · "
         f"batch={BATCH_SIZE} ({rollout // BATCH_SIZE} minilotes × {N_EPOCHS} épocas = "

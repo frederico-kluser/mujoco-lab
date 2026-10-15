@@ -346,6 +346,18 @@ def secao_malha(rapido: bool) -> dict:
          f"5 % ≤ {TOL['comando_assenta']:g} s, e não pior do que a fase 1 (+ 2 pontos)",
          chk["comando"][0] and res["cmd_frente"]["cascata"]["sobressinal"] <= f1["cmd_frente"]["sobressinal"] + 0.02,
          chk["comando"][1] + f" · fase 1: {100 * f1['cmd_frente']['sobressinal']:.1f} % / {f1['cmd_frente']['assenta_5pct_s']:.2f} s")
+    # VERTICAL (2026-10-13): com rajadas a altitude segura-se melhor do que com o laço vertical de antes — e sem pagar
+    # na horizontal nem no degrau de subida (era o único sítio onde a cascata perdia para a política RL)
+    vz = av.avaliar(["natural_3", "cmd_subida"], {"cascata": {"base": "cascata"}, "antiga": {"base": "cascata_vz_antiga"}},
+                    sementes, JOBS, verboso=False)
+    zn, za = vz["natural_3"]["cascata"], vz["natural_3"]["antiga"]
+    sn, sa = vz["cmd_subida"]["cascata"], vz["cmd_subida"]["antiga"]
+    c.ok("VERTICAL com rajadas (vento aleatório de 3 m/s): |Δz| máx. ≤ 70 % do do laço vertical de antes (medido 57 %), sem "
+         "quedas, com o p95 horizontal dentro de +10 % e o sobressinal do degrau de subida não mais de 3 pontos acima",
+         zn["quedas"] + za["quedas"] == 0 and zn["dz_max"] <= 0.70 * za["dz_max"] and zn["xy_p95"] <= 1.10 * za["xy_p95"]
+         and sn["sobressinal"] <= sa["sobressinal"] + 0.03,
+         f"|Δz| {100 * za['dz_max']:.1f} → {100 * zn['dz_max']:.1f} cm · p95 xy {100 * za['xy_p95']:.1f} → {100 * zn['xy_p95']:.1f} cm · "
+         f"subida {100 * sa['sobressinal']:.1f} → {100 * sn['sobressinal']:.1f} %")
     # C++ ≡ Python com vento (as duas primeiras sementes, semente a semente)
     pc = {x["seed"]: x for x in res["degrau_3_lado"]["cascata"]["por_semente"]}
     pp = {x["seed"]: x for x in py["degrau_3_lado"]["python"]["por_semente"]}

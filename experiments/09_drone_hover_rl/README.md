@@ -44,12 +44,13 @@ uv run --group hover-rl python experiments/09_drone_hover_rl/avaliar_bola.py    
 uv run --group hover-rl python experiments/09_drone_hover_rl/avaliar_vento.py                # vento: cascata nova × fase 1 × política RL
 uv run --group hover-rl python experiments/09_drone_hover_rl/train.py --planta real ...      # PPO (ver «Como correr»)
 uv run --group hover-rl python experiments/09_drone_hover_rl/bench_treino.py tudo            # o treino está otimizado? mede e prova
+uv run --group hover-rl python experiments/09_drone_hover_rl/ab_treino.py --help             # A/B de hiperparâmetros (mesmas sementes)
 
 # PROVAR
 uv run --group hover-rl python experiments/09_drone_hover_rl/teste_cockpit.py                # 5 secções + 7 mutações
-uv run --group hover-rl python experiments/09_drone_hover_rl/teste_bola.py                   # 37 checagens + 7 mutações
-uv run --group hover-rl python experiments/09_drone_hover_rl/teste_vento_classico.py         # 34 checagens + 5 mutações
-(cd experiments/09_drone_hover_rl/site && npm run build && npm run test:cockpit)             # 171 verificações + 9 mutações
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_bola.py                   # 38 checagens + 7 mutações
+uv run --group hover-rl python experiments/09_drone_hover_rl/teste_vento_classico.py         # 35 checagens + 5 mutações
+(cd experiments/09_drone_hover_rl/site && npm run build && npm run test:cockpit)             # 175 verificações + 9 mutações
 ```
 
 **O ecrã** — a vista (câmara de bordo ou 3.ª pessoa, `F` troca; a outra fica na miniatura) é o fundo
@@ -67,7 +68,7 @@ seguir a bola, `V` vento, `F` vista, `R` (manter) reiniciar, `1`–`8` janelas, 
 | vento | 18 botões + 8 campos, 5 modos | **2 interruptores + 2 sliders** (ligar · intensidade · aleatoriedade · direção) |
 | até a tecla W fazer efeito | «ARMAR CONTROLO» + tecla | **a tecla** (voo ativo desde o arranque) |
 | quem pilota | seletor RL / Clássico | **sem seletor**: `--controlador auto` = o que ganhou na medição |
-| avaliação `uxui-evaluator` | 29/100 «poor» | **84/100 «good»** (1 aviso + 3 sugestões — `pesquisas/ux-cockpit-avaliacao-depois.json`) |
+| avaliação `uxui-evaluator` | 29/100 «poor» | **84/100 «good»** (1 aviso + 3 sugestões na primeira entrega; **88/100** depois de corrigido o aviso dos ecrãs pequenos — `pesquisas/ux-cockpit-avaliacao-depois.json`) |
 
 **Desempenho medido com a máquina livre** (2026-10-12, RTX 4070 Laptop + i9-14900HX, browser aberto a
 1920×1080, tudo fechado):
@@ -99,42 +100,61 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
 
 **Aguentar o vento — clássico ou IA?** (`avaliar_vento.py`, `teste_vento_classico.py`). A cascata clássica
 da fase 1 (sem vento) perdia para a política RL assim que o vento apertava: a 5 m/s constantes derivava 3,7 m.
-Ganhou três peças, todas clássicas e todas no núcleo C++ que vai para o Arduino: um **observador de
+Ganhou quatro peças, todas clássicas e todas no núcleo C++ que vai para o Arduino: um **observador de
 perturbação** no laço de velocidade horizontal (estima o que o modelo «empuxo − arrasto» não explica e
-anula-o; banda = a da malha de taxa), o **atraso da medida no modelo** (para uma manobra não parecer vento) e
-a **velocidade do fluxo ótico sem a rotação do corpo**. Tentado e rejeitado por medição: observador pelo
-acelerómetro (pairagem em ar parado 5,1 → 6,8 cm), observador vertical (segura a altitude mas troca-a por
-1,6–1,8 m de deriva), banda mais larga (mais inclinação em ar parado).
+anula-o; banda = a da malha de taxa), o **atraso da medida no modelo** (para uma manobra não parecer vento),
+a **velocidade do fluxo ótico sem a rotação do corpo** e, desde 2026-10-13, um **laço vertical duas vezes mais
+rígido** (`k_vz = 1/(2·τ_motor)`, integral `k_vz²/10`, modelo de seguimento `τ_motor + dt/2`; margens: fase
+50,7°, ganho 15,8 dB). Tentado e rejeitado por medição: observador pelo acelerómetro (pairagem em ar parado
+5,1 → 6,8 cm), observador vertical (segura a altitude mas troca-a por 1,6–1,8 m de deriva), banda mais larga
+(mais inclinação em ar parado), antecipação do amortecimento vertical e `k_pz` maior (sobressinal de subida
+19–33 %).
 
-Pairar 30 s a 1 m, 12 sementes (5000–5011), vento já a soprar na descolagem. Desvio horizontal em cm
-(mediana / p95) · |Δz| máx. em cm. **0 quedas em todas as células.**
+Pairar 30 s a 1 m, 12 sementes (5000–5011), vento já a soprar na descolagem, código commitado. Desvio
+horizontal em cm (mediana / p95) · |Δz| máx. em cm. **0 quedas da cascata em 25 regimes × 12 sementes.**
 
 | vento | **cascata nova** | cascata fase 1 | política RL |
 |---|---|---|---|
-| constante de lado, 1 m/s | **3,1 / 4,2** · 1,5 | 4,1 / 9,1 · 1,5 | 13,9 / 17,9 · 3,5 |
-| constante, 3 m/s | **7,2 / 11,3** · 1,4 | 7,8 / 30,0 · 1,5 | 20,5 / 24,0 · 3,5 |
-| constante, 5 m/s | **12,0 / 21,4** · 1,4 | 366 / 374 · 1,5 | 35,2 / 38,5 · 3,8 |
-| aleatório (o do cockpit), 1 m/s | **3,2 / 5,7** · 2,5 | 13,8 / 23,6 · 2,4 | 15,1 / 19,7 · 3,6 |
-| aleatório, 2 m/s | **5,6 / 11,5** · 5,4 | 31,5 / 55,3 · 4,9 | 19,8 / 26,2 · **3,6** |
-| aleatório, 3 m/s | **9,8 / 21,2** · 11,5 | 64,7 / 117 · 8,9 | 26,4 / 37,4 · **4,6** |
-| aleatório, 4 m/s | **18,4 / 46,2** · 23,9 | 266 / 363 · 14,1 | 37,0 / 55,3 · **13,2** |
-| aleatório, 5 m/s | **40,4** / 108 · 40,6 | 951 / 1149 · 20,0 | 62,7 / **106** · **36,0** |
+| constante de lado, 1 m/s | **3,1 / 4,2** · 1,7 | 4,1 / 9,1 · 1,5 | 13,9 / 17,9 · 3,5 |
+| constante, 3 m/s | **7,1 / 11,2** · 1,7 | 7,8 / 30,0 · 1,5 | 20,5 / 24,0 · 3,5 |
+| constante, 5 m/s | **11,8 / 20,1** · 1,7 | 366 / 374 · 1,5 | 35,2 / 38,5 · 3,8 |
+| aleatório (o do cockpit), 1 m/s | **3,2 / 5,7** · **2,0** | 13,8 / 23,6 · 2,4 | 15,1 / 19,7 · 3,6 |
+| aleatório, 2 m/s | **5,7 / 11,4** · **3,2** | 31,5 / 55,3 · 4,9 | 19,8 / 26,2 · 3,6 |
+| aleatório, 3 m/s | **10,1 / 21,2** · 6,5 | 64,7 / 117 · 8,9 | 26,4 / 37,4 · **4,6** |
+| aleatório, 4 m/s | **19,2 / 45,9** · 13,5 | 266 / 363 · 14,1 | 37,0 / 55,2 · 13,2 |
+| aleatório, 5 m/s | **38,8** / 114,5 · **24,8** | 951 / 1149 · 20,0 | 67,6 / **102,3** · 36,0 |
+| ar descendente −30°, 4 m/s | **4,8 / 7,3** · 14,3 | 200 / 233 · 28,3 | 18,1 / 21,4 · **11,6** |
+| ar descendente −30°, 5 m/s | **2,5 / 4,8** · 49,3 | 1101 / 1455 · 78,0 | 27,1 / 30,1 · **18,2** |
 
-Degrau de vento de 3 m/s: pico 20,7 cm e volta em 3,1 s (fase 1: 151 cm e 13,5 s; RL: 25 cm e nunca volta).
-Sem vento não regride: pairar 2,3 cm (antes 3,1), sobressinal do degrau de comando 3,1 % (antes 9,4 %; RL
-18 %). **Verificação independente** em 6 sementes novas (7401–7406): calmo 2,2 cm (fase 1 4,6 · RL 9,4);
-constante 5 m/s 13,1 / 21,6 (316 / 322 · 27,8 / 29,7); aleatório 3 m/s 10,3 / 19,3 (58,5 / 130 · 19,2 / 29,3);
-aleatório 5 m/s 41,4 / 92,8 (825 / 991 · 45,0 / 77,3); degrau de 3 m/s pico 20,7 cm e 3,1 s (151 cm · RL
-22 cm sem voltar); 0 quedas.
+Degrau de vento de 3 m/s: pico 20,8 cm e volta em 3,0 s (fase 1: 151 cm e 13,5 s; RL: 25 cm e nunca volta);
+de 5 m/s: 42,7 cm e 6,3 s (fase 1 e RL não voltam). Sem vento não regride: pairar 2,3 cm (fase 1 3,1; RL
+12,7), sobressinal do degrau de comando 3,2 % (9,4 %; 18 %), seguimento 29,4 cm RMS (36,8; 30,5). No
+seguimento com vento aleatório de 5 m/s a RL cai 3 vezes em 12; a cascata, nenhuma. **Verificação
+independente** do observador em 6 sementes novas (7401–7406, antes da vertical nova): calmo 2,2 cm (fase 1
+4,6 · RL 9,4); constante 5 m/s 13,1 / 21,6 (316 / 322 · 27,8 / 29,7); aleatório 3 m/s 10,3 / 19,3 (58,5 / 130 ·
+19,2 / 29,3); degrau de 3 m/s pico 20,7 cm e 3,1 s (151 cm · RL 22 cm sem voltar); 0 quedas.
+
+**A vertical nova e como foi decidida.** O laço vertical é o que fechou o último sítio onde a cascata perdia
+— a altitude com rajadas: |Δz| a 3 / 4 / 5 m/s aleatório **11,5 / 23,9 / 40,6 → 6,5 / 13,5 / 24,8 cm** (pior
+semente 33,6 / 75,0 / 88,7 → 19,5 / 44,9 / 82,3), ar descendente de 4 m/s 26,9 → 14,3 cm, sem custo horizontal
+nem de esforço dos motores. A decisão teve dois tempos, e fica dita: (1) o candidato foi escolhido nas
+sementes de calibração e medido uma vez nas de avaliação contra critérios fixados **antes** de medir — falhou
+três por pouco (6,5 cm para um alvo de 6; +0,5 cm de desvio num regime de 18; sobressinal do degrau de subida
+12,2 % para um limite de 12) e **não** foi adotado; (2) foi medido de novo em sementes que ninguém tinha usado
+(7401–7406), sem e **com randomização de domínio**, contra critérios de adoção também fixados antes: −42 a
+−46 % de |Δz| (com DR 9,9 / 18,3 / 38,0 → 5,5 / 10,5 / 21,9 cm), 0 quedas, o mesmo desvio horizontal, o mesmo
+esforço (`du_rms` e potência +0,1 %), sobressinal de subida 11,1 → 10,6 % — e passou. Adotou-se **contra o
+critério inicial**; reverte-se com `de_planta(razao_vz=4, razao_integral_z=4, tau_modelo_z=0,
+coletivo_teto=1.8)` (a variante `cascata_vz_antiga` do `avaliar_vento.py`).
 
 **Decisão (por medição): clássico, sem IA** — ganha ou empata com a política na posição em todos os regimes
-horizontais. Onde perde, e fica dito: a **altitude com rajadas** (a vertical ficou a da fase 1 — |Δz| 11,5 cm
-contra 4,6 cm a 3 m/s aleatório; pior semente 34 / 75 / 89 cm a 3 / 4 / 5 m/s), o ar descendente a −30°
-(afunda 27 cm a 4 m/s; RL 11,6) e a deriva de descolagem com vento forte (61 cm a 5 m/s; RL 47). A frente
-seguinte é a vertical (empuxo e integral), não mais uma rede. **Envelope**: até 3 m/s com aleatoriedade o
-drone segura o sítio e a altitude (critério: pior semente com desvio ≤ 0,5 m e |Δz| ≤ 0,3 m — a 3 m/s só o
-|Δz| da pior semente o passa, 33,6 cm); a 4–5 m/s **não cai**, mas a pior semente desvia 1,0–2,5 m e perde
-até 89 cm de altitude. O slider vai até 5 m/s (o máximo medido) para se ver o envelope inteiro.
+horizontais e, na altitude com rajadas, ganha a 1, 2 e 5 m/s e empata a 4. Onde ainda perde, e fica dito:
+|Δz| a **3 m/s aleatório** (6,5 contra 4,6 cm), o **ar descendente** (14,3 contra 11,6 cm a 4 m/s; 49,3 contra
+18,2 a 5) e, a 5 m/s aleatório, a pior semente desvia mais na horizontal (3,3 contra 2,4 m). **Envelope**
+(critério: pior semente com desvio ≤ 0,5 m e |Δz| ≤ 0,3 m): vento constante até 5 m/s; **aleatório até 3 m/s**
+(com a vertical nova os três limites cumprem-se; antes só a 2); ar descendente até 4 m/s. A 4–5 m/s aleatório
+**não cai**, mas a pior semente desvia 1,1–3,3 m e perde 45–82 cm de altitude. O slider vai até 5 m/s (o
+máximo medido) para se ver o envelope inteiro.
 
 **O drone sente o vento** — a única ideia que a pesquisa encontrou para copiar dos drones comerciais (a DJI
 não publica a lei de controlo, mas estima e mostra o vento a bordo): o observador de perturbação dá a
@@ -154,21 +174,36 @@ do alvo, acrescenta translação lateral em paralelo com a guinada e um canal ve
 
 | erro de centragem, graus (mediana / p95) | lei antiga | **lei nova** | tracker de IA (PPO) |
 |---|---|---|---|
-| câmara Pi (116 ms) · bola a 0,3 m/s | 3,28 / 8,15 | **1,19 / 2,54** | 13,49 / 25,47 |
-| câmara Pi (116 ms) · 0,5 m/s | 4,25 / 9,93 | **1,95 / 4,86** | 21,92 / 47,65 (bola no campo 89,5 %) |
-| câmara Pi (116 ms) · 0,8 m/s | 5,40 / 17,03 | **3,98 / 11,61** | 25,21 / 56,71 (81,8 % · **4/12 quedas**) |
-| câmara Arduino (21 ms) · 0,3 m/s | 3,92 / 7,53 | **0,99 / 2,11** | 10,25 / 21,50 (**7/12 quedas**) |
-| câmara Arduino (21 ms) · 0,5 m/s | 3,53 / 7,84 | **1,36 / 3,27** | 13,16 / 42,45 (**5/12 quedas**) |
-| câmara Arduino (21 ms) · 0,8 m/s | 4,39 / 11,00 | **2,41 / 6,31** | 14,60 / 42,48 (**7/12 quedas**) |
+| câmara Pi (116 ms) · bola a 0,3 m/s | 3,48 / 8,73 | **1,01 / 2,32** | 13,68 / 25,78 |
+| câmara Pi (116 ms) · 0,5 m/s | 4,30 / 9,28 | **1,64 / 4,00** | 21,92 / 44,53 (bola no campo 89,9 %) |
+| câmara Pi (116 ms) · 0,8 m/s | 6,15 / 15,15 | **3,26 / 10,30** | 29,69 / 59,39 (77,0 % · **3/12 quedas**) |
+| câmara Arduino (21 ms) · 0,3 m/s | 2,85 / 6,58 | **0,85 / 2,17** | 10,26 / 37,25 (**3/12 quedas**) |
+| câmara Arduino (21 ms) · 0,5 m/s | 3,23 / 7,38 | **1,21 / 3,26** | 14,04 / 28,47 (**6/12 quedas**) |
+| câmara Arduino (21 ms) · 0,8 m/s | 4,32 / 11,45 | **2,28 / 6,15** | 18,18 / 81,23 (**5/12 quedas**) |
 
 12 sementes de avaliação (6200–6211), 30 s de medida depois de 4 s de aquisição, câmara renderizada + detetor
 C++, sem vento; bola no campo de visão 100 % do tempo e **0 quedas** com a lei nova. **Verificação
 independente** em 6 sementes que ninguém tinha usado (7301–7306): 116 ms · 0,5 m/s 4,22/9,98 → 2,11/4,94;
 116 ms · 0,8 m/s 5,92/13,40 → 4,06/10,99; 21 ms · 0,5 m/s 3,69/7,80 → 1,48/3,18; 21 ms · 0,8 m/s 4,87/11,16 →
 2,58/6,88 — a lei nova ganha em 23 dos 24 pares, 0 quedas. **Decisão (por medição): clássico** — o tracker de
-IA erra 6–11× mais e cai (até 7 quedas em 12); não se treinou uma política nova porque não há margem que o justifique. Acima de
-0,8 m/s a câmara de 116 ms começa a perder a bola (a 1,0 m/s: 97,7 % no campo), por isso o slider acaba aí.
-Não medido: seguir a bola COM vento. A lei antiga continua no código (`visao::config_versao1`), para comparar.
+IA erra 8–14× mais e cai (até 6 quedas em 12); não se treinou uma política nova porque não há margem que o
+justifique. Acima de 0,8 m/s a câmara de 116 ms começa a perder a bola (a 1,0 m/s: 97,7 % no campo), por isso
+o slider acaba aí. A lei antiga continua no código (`visao::config_versao1`), para comparar.
+
+**Seguir a bola COM vento** (`avaliar_bola.py --variantes depois --ventos 0,2,3 --json out/bola/avaliacao_vento.json`;
+o vento aleatório do cockpit a soprar de lado durante todo o episódio, 12 sementes, 144 episódios, **0 quedas e
+a bola 100 % do tempo no campo em todas as células**). Erro de centragem, graus (mediana / p95):
+
+| câmara · bola | sem vento | vento 2 m/s | vento 3 m/s |
+|---|---|---|---|
+| Pi (116 ms) · 0,5 m/s | 1,63 / 3,99 | 1,89 / 4,69 | 2,58 / 6,75 |
+| Pi (116 ms) · 0,8 m/s | 3,23 / 10,16 | 3,20 / 8,77 | 3,70 / 9,82 |
+| Arduino (21 ms) · 0,5 m/s | 1,21 / 3,26 | 1,60 / 3,92 | 2,14 / 5,33 |
+| Arduino (21 ms) · 0,8 m/s | 2,25 / 6,14 | 2,46 / 6,67 | 2,97 / 7,62 |
+
+O vento custa cerca de 1° a 3 m/s com a bola lenta e quase nada com a bola rápida (aí quem limita é a bola);
+o que cresce é o erro vertical. `teste_bola.py` passou a exigir isto (vento de 3 m/s: sem quedas, 100 % no
+campo, RMS < 6°).
 
 **Treino — está otimizado?** (`bench_treino.py`). O perfil mostrou que 80 % de cada passo do ambiente era o
 modelo Python da planta (NumPy em escalares a 500 Hz), não a física do MuJoCo. Reescrito em escalares, com a
@@ -189,9 +224,17 @@ padrões passa de 1345 para **3578 passos/s (2,7×)**. O rollout fica fixo em 40
 MJX/Warp obrigaria a reescrever o modelo elétrico, a bateria e os sensores — não compensa. Revisão dos
 hiperparâmetros (medido num treino de 160 k passos): a avaliação gastava 30–46 % do relógio (`--eval-envs N`
 passa a corrê-la em paralelo), `approx_kl` ≈ 0,004 e `clip_fraction` ≈ 2 % dizem que `lr 1e-4` dá passos
-pequenos — os A/B sugeridos (`lr 3e-4` com `target_kl`; normalização da recompensa) **não foram corridos**.
-Achado: `reset(seed)` não é reprodutível entre instâncias — o ruído do VRS avança no construtor com um gerador
-sem semente (não corrigido: mudaria as trajetórias de referência).
+pequenos no arranque do zero. **A/B corrido** (`ab_treino.py`, novo; `train.py` ganhou `--target-kl`): do
+zero não mede nada — com `lr 1e-4` e com `lr 3e-4` os dois braços caem no atrator «sentar no chão» (retorno
+≈ 331 com z ≈ 0,115 m ao fim de 240–560 k passos) —, por isso mediu-se na receita real, o **arranque a quente**
+(`--retomar` da política do frame antigo; 1,5 M passos, 16 ambientes, sementes 0 e 1 — a terceira foi
+interrompida): retorno médio ao longo do treino **582,8** com o `lr 1e-4` atual, 571,2 com `lr 3e-4` e 530,3
+com `lr 3e-4` + `target_kl 0,02` (pior nas duas sementes). Aqui a `approx_kl` do treino atual já é 0,010 com
+11 % de amostras cortadas: o passo não é pequeno. **Os hiperparâmetros ficam** — o gargalo era o débito, não o
+otimizador (evidência de 2 sementes; normalização da recompensa não testada).
+Achado e **corrigido** (2026-10-13): `reset(seed)` não era reprodutível entre instâncias — o ruído do VRS
+avançava no construtor com um gerador sem semente e atravessava os episódios; agora recomeça do zero em cada
+voo (`valida_real.py` F6).
 
 **Passagem final** (2026-10-13, máquina livre, uma suíte de cada vez, estado do dono desviado com
 `DRONE_PASTA_BATERIA`): **20 de 20 com exit 0.**
@@ -216,10 +259,30 @@ ambos corrigidos: o «vento fantasma» (acima) e o runner a **morrer ao 1.º pas
 carregar a IA-2 de seguimento da planta real (`'HoverEnv' object has no attribute 'estimador'` — o site ficava
 de pé com o simulador morto). Não corrido: `teste_fpv.py --mutacao`, `teste_parar_vento.py --legado`.
 
-**Limites conhecidos do cockpit**: a 1280×720 as três janelas principais abertas ao mesmo tempo tapam a
-leitura de altitude (arrastam-se); medido só em Chromium; seguir a bola COM vento não foi avaliado em lote
-(funciona ao vivo: 2,3° de erro com 3 m/s aleatórios numa corrida); a estimativa de vento a bordo usa um
-ajuste de uma só semente; a altitude com rajadas é o ponto fraco da cascata (ver «Aguentar o vento»).
+**Pendências fechadas em 2026-10-13** (as que a primeira entrega deixou abertas):
+- *ecrãs pequenos* — a 1366×768 e 1280×720 a terceira janela (Vento) abre em **cascata** por cima do Voo, em
+  vez de tapar a leitura de altitude: as janelas sobrepõem-se uma à outra, nunca aos instrumentos do HUD
+  (`zonasInstrumentos` em `site/src/lib/cockpit.ts`; medido nas três resoluções: 0 instrumentos tapados);
+- *browsers* — além do Chromium do Playwright, verificado nos browsers instalados nesta máquina, **Google
+  Chrome 153 e Brave 152**: sem scroll, as duas câmaras a 1920×1080, HUD a ~49 Hz, teclas a acender, 0 erros
+  de consola. Firefox e Safari não estão instalados aqui e **não** foram testados;
+- *bola com vento* — avaliada em lote (tabela acima);
+- *bateria* — o pack persistente do dono foi recarregado (estava a 20 %, gasto por corridas de teste) e as três
+  suítes que ainda arrancavam o simulador sem o desviar (`teste_controlador.py`, `teste_camera.py`,
+  `teste_fpv.py`) passaram a usar um pack descartável: nenhum teste toca em `out/bateria/`;
+- *reprodutibilidade* — `reset(seed)` passou a dar a MESMA trajetória em qualquer instância e processo: a
+  flutuação do VRS, o único estado da planta que nenhum reinício repunha, recomeça do zero em cada voo
+  (`valida_real.py` F6, com contraprova; a prova de identidade do treino desliga-o para comparar com o código
+  antigo).
+
+- *altitude com rajadas* — a vertical nova (acima): −43 % de perda de altitude a 3 m/s aleatório;
+- *hiperparâmetros do treino* — A/B corrido (acima): ficam os atuais;
+- *worktrees* dos subagentes — removidos (o conteúdo está todo no ramo).
+
+**Limites que ficam**: a estimativa de vento a bordo usa um ajuste de uma só semente; Firefox/Safari por
+testar; o A/B do treino tem 2 sementes; a 3 m/s aleatório e no ar descendente a política RL ainda segura
+melhor a altitude; a pesquisa foi feita no modo normal (o modo profundo do Tavily só com a flag
+`--deep-research`).
 
 ## Planta REAL — o drone do dono, com peças reais (2026-10-10)
 

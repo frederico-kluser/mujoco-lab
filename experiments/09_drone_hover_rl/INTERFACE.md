@@ -52,8 +52,13 @@ VENTO», descrevem a página que o cockpit substituiu.
 
 Com tudo fechado o ecrã tem **12 controlos e ~80 palavras** (a página anterior: 51 botões, ~2200 palavras,
 4,4 ecrãs de scroll, a câmara a 2929 px do topo). Medido a 1920×1080, 1366×768 e 1280×720: nunca há scroll
-de página. Avaliação com a skill `uxui-evaluator`: **29/100 antes → 84/100 depois**
-(`pesquisas/ux-cockpit-avaliacao-{antes,depois}.json`).
+de página. Avaliação com a skill `uxui-evaluator`: **29/100 antes → 88/100 depois** (84 na primeira entrega;
+88 com o aviso dos ecrãs pequenos corrigido — `pesquisas/ux-cockpit-avaliacao-{antes,depois}.json`).
+
+**Onde as janelas abrem**: Voo à esquerda, Bola à direita, e o Vento por baixo do Voo quando o ecrã tem altura
+para os dois (1080 px); em ecrãs mais baixos (768, 720) o Vento abre em **cascata** por cima do Voo — as
+janelas podem sobrepor-se uma à outra, mas nunca tapam a velocidade, a altitude nem a mira do HUD
+(`zonasInstrumentos`, provado em `site/testes/cockpit.mts`). Verificado em Chromium, Google Chrome e Brave.
 
 A janela **Gráficos** mostra as quatro curvas de quem pilota — altura, velocidade horizontal, inclinação e
 vento; o «retorno» (recompensa de treino) e o «erro de rumo» saíram do ecrã (continuam na telemetria).
@@ -83,8 +88,9 @@ bordo vê (não a verdade do simulador).
 
 A bola: velocidade de Ornstein–Uhlenbeck com teto (o slider), suavizada, que muda de rumo em ~2,5 s; é
 reprodutível pela semente do episódio (`env_real.py`, `_ponto_aleatorio`). Medido (12 sementes, 30 s, câmara
-de 116 ms): erro de centragem mediano 1,2° / 2,0° / 4,0° a 0,3 / 0,5 / 0,8 m/s, bola no campo 100 % do tempo,
-0 quedas; o tracker de IA (PPO) fica em 13,5° / 21,9° / 25,2° e cai — ver o README, «Seguir a bola».
+de 116 ms): erro de centragem mediano 1,0° / 1,6° / 3,3° a 0,3 / 0,5 / 0,8 m/s, bola no campo 100 % do tempo,
+0 quedas — e 2,6° com vento aleatório de 3 m/s; o tracker de IA (PPO) fica em 13,7° / 21,9° / 29,7° e cai —
+ver o README, «Seguir a bola».
 
 ### 0.5 VENTO (três botões)
 
@@ -100,8 +106,8 @@ de 116 ms): erro de centragem mediano 1,2° / 2,0° / 4,0° a 0,3 / 0,5 / 0,8 m/
 A janela Vento mostra dois ventos: **«agora»** — o que a física leva (a verdade do simulador) — e **«o drone
 sente»** — o que o controlador estima a bordo, sem anemómetro (`vento_bordo` do HUD: o observador de
 perturbação da cascata convertido em m/s; «calmo» abaixo de 0,6 m/s). Envelope medido da cascata: até 3 m/s
-com aleatoriedade segura o sítio e a altitude; a 4–5 m/s não cai mas desvia e perde altitude (README, «Aguentar
-o vento»).
+com aleatoriedade segura o sítio (pior caso 39 cm) e a altitude (pior caso 19,5 cm); a 4–5 m/s não cai mas
+desvia 1–3 m e perde 45–82 cm de altitude no pior caso (README, «Aguentar o vento»).
 
 O bloco `vento_simples` do `/api/sim` e do `/api/state` devolve o estado guardado; o vento que a física leva
 está sempre em `vento_atual` e no HUD. Enquanto este bloco existir no ficheiro de controlo é ele que manda —

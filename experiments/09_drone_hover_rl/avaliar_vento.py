@@ -12,6 +12,8 @@ VARIANTES
                   perturbação no laço de velocidade + velocidade do fluxo sem a rotação do corpo;
   `cascata_fase1` o MESMO núcleo com isso desligado (`GANHOS_FASE1`) — o «antes», no mesmo binário e na mesma corrida
                   (conferido contra o código da fase 1: 1584 métricas iguais a 1e-11, o ruído do simulador entre processos);
+  `cascata_vz_antiga` a cascata de 2026-10-12 (com o observador de perturbação) e o laço VERTICAL de antes
+                  (`GANHOS_VERTICAL_ANTIGA`) — o antes × depois da vertical de 2026-10-13;
   `rl`            a política RL no `DroneRealEnv` (FC + estimador de bordo em Python, como na B0);
   `python`        o protótipo de referência (`controlo_classico.py`) com os ganhos de hoje — só para conferir C++ ≡ Python
                   com vento (`--variantes cascata,python`).
@@ -100,7 +102,12 @@ JOBS_MAX = 8                                        # processos em paralelo no m
 
 # o «antes»: a Config da fase 1 no MESMO núcleo — sem observador de perturbação e com a velocidade do fluxo do estimador
 # como estava (sem o braço ao CM nem o alinhamento com o giroscópio). Conferido bit a bit contra o código da fase 1.
-GANHOS_FASE1: dict = {"w_pert": 0.0, "braco_fluxo": 0.0, "atraso_fluxo": 0}
+# a lei da FASE 1 no núcleo de hoje: sem observador de perturbação nem correção do fluxo (2026-10-12) e com o laço
+# vertical de antes de 2026-10-13 (razão 4, integral k²/4, sem modelo de seguimento, teto do coletivo 1,8)
+GANHOS_FASE1: dict = {"w_pert": 0.0, "braco_fluxo": 0.0, "atraso_fluxo": 0,
+                      "razao_vz": 4.0, "razao_integral_z": 4.0, "tau_modelo_z": 0.0, "coletivo_teto": 1.8}
+# só a VERTICAL de antes (o observador de perturbação fica): a cascata publicada em 2026-10-12, para o antes × depois
+GANHOS_VERTICAL_ANTIGA: dict = {"razao_vz": 4.0, "razao_integral_z": 4.0, "tau_modelo_z": 0.0, "coletivo_teto": 1.8}
 
 # critério de «voo aceitável» (para o ENVELOPE): 100 % de sobrevivência E, na pior semente, a pairar…
 CRITERIO = {"xy_max": 0.50,        # m — desvio horizontal máximo na janela de pairagem (¼ do entre-eixos de 1,95 m)
@@ -181,6 +188,8 @@ def _regimes() -> dict:
     # degrau de COMANDO (0 → 1 m/s em frente aos 6 s; o da B0): a resposta ao piloto não pode piorar com o observador
     r["cmd_frente"] = {"tarefa": "comando", "comando": V_COMANDO}
     r["cmd_frente_3"] = {"tarefa": "comando", "comando": V_COMANDO, "base": (3.0, 90.0, 0.0), "w": 3.0}
+    # degrau de SUBIDA (0 → 0,7 m/s, o da B0): a janela é curta porque o ToF só mede até 3,6 m (teto de altitude 3,24 m)
+    r["cmd_subida"] = {"tarefa": "comando", "comando": V_SUBIDA, "janela": JANELA_SUBIDA}
     # o vento ALEATÓRIO do cockpit: o gerador `vento_natural.VentoNatural` (intensidade W, aleatoriedade LIGADA — média W
     # de lado + turbulência + rajadas 1 − cos + direção a deambular), com a semente do episódio; liga-se aos 0 s (rampa)
     for w in INTENSIDADES:
@@ -192,6 +201,7 @@ def _regimes() -> dict:
 
 V_COMANDO = (1.0, 0.0, 0.0)                        # m/s — o degrau de velocidade «frente» da B0
 T_COMANDO, JANELA_COMANDO = 6.0, 8.0               # s — instante do degrau e janela de medida (como `ac.DEGRAUS`)
+V_SUBIDA, JANELA_SUBIDA = (0.0, 0.0, 0.7), 3.0     # m/s, s — o degrau de subida da B0 (1 m → 3,1 m, abaixo do teto do ToF)
 REGIMES = _regimes()
 REGIMES_RAPIDOS = ("calmo", "const_3_lado", "const_5_lado", "degrau_3_lado", "natural_3", "seg_const_3", "cmd_frente")
 # a corrida PUBLICADA (`out/vento_classico/avaliacao.json`): o que o cockpit oferece — vento constante e aleatório
@@ -279,7 +289,7 @@ def criar(variante: str, dados: dict, T: float, aleatorios: bool, ganhos_kw: dic
         env = ac.criar_env(dados, dr=dr, episodio_s=T, aleatorios=aleatorios)
         gn = an.ganhos_nominais(dados, an.u_yaw_identificado()).com(**(ganhos_kw or {}))
         return env, ac.ControladorCascata(ganhos=gn, estimador="melhorado")
-    kw = dict(GANHOS_FASE1) if variante == "cascata_fase1" else {}
+    kw = dict({"cascata_fase1": GANHOS_FASE1, "cascata_vz_antiga": GANHOS_VERTICAL_ANTIGA}.get(variante, {}))
     kw.update(ganhos_kw or {})
     env = an.criar_env_nucleo(dados, dr=dr, episodio_s=T, aleatorios=aleatorios, cascata={"ganhos_kw": kw})
     return env, sitl.ControladorNucleo()
@@ -409,8 +419,9 @@ def _comuns(reg: dict, m) -> dict:
             "w_medio": float(np.mean(reg["w"][m])), "w_dp": float(np.std(reg["w"][m])), "w_max": float(reg["w"][m].max())}
 
 
-def metricas(reg: dict, tarefa: str) -> dict:
+def metricas(reg: dict, tarefa: str, regime: dict | None = None) -> dict:
     t = reg["t"]
+    regime = regime or {}
     if reg["terminou"]:
         return {"terminou": True, "t_fim": float(t[-1]) if len(t) else 0.0}
     if tarefa == "hover":
@@ -442,8 +453,9 @@ def metricas(reg: dict, tarefa: str) -> dict:
         return {"terminou": False, **_comuns(reg, m), "v_rms": _rms(np.linalg.norm(ev, axis=0)), "xy_rms": _rms(exy),
                 "xy_max": float(exy.max()), "z_rms": _rms((reg["z"] - reg["zr"])[m])}
     if tarefa == "comando":                         # as métricas do degrau de velocidade da B0 (`ac.metricas_degrau`)
-        m = (t >= T_COMANDO) & (t <= T_COMANDO + JANELA_COMANDO)
-        d = ac.metricas_degrau(reg, T_COMANDO, np.array(V_COMANDO), JANELA_COMANDO)
+        janela = float(regime.get("janela", JANELA_COMANDO))
+        m = (t >= T_COMANDO) & (t <= T_COMANDO + janela)
+        d = ac.metricas_degrau(reg, T_COMANDO, np.array(regime.get("comando", V_COMANDO), dtype=float), janela)
         return {**{k: d[k] for k in ("terminou", "sobressinal", "subida_10_90_s", "assenta_5pct_s", "erro_regime", "afundamento")},
                 **{k: v for k, v in _comuns(reg, m).items() if k in CHAVES["comando"]}}
     raise ValueError(f"tarefa desconhecida: {tarefa}")
@@ -455,12 +467,12 @@ def episodio(job: dict) -> dict:
     regime = job.get("spec") or REGIMES[job["regime"]]
     tarefa = regime["tarefa"]
     T = job.get("T") or {"hover": T_HOVER, "degrau": T_DEGRAU, "seguimento": T_SEGUIMENTO,
-                         "comando": T_COMANDO + JANELA_COMANDO + 0.5}[tarefa]
+                         "comando": T_COMANDO + float(regime.get("janela", JANELA_COMANDO)) + 0.5}[tarefa]
     dados = ac.carregar_rl_dados()
     env, ctrl = criar(job["variante_base"], dados, T, tarefa == "seguimento", job.get("ganhos_kw"), job.get("dr", False))
     reg = correr(env, ctrl, job["seed"], T, regime)
     env.close()
-    out = metricas(reg, tarefa)
+    out = metricas(reg, tarefa, regime)
     if job.get("series"):
         out["series"] = {c: reg[c].tolist() for c in job["series"]}
     out.update({"regime": job["regime"], "variante": job["variante"], "seed": job["seed"],

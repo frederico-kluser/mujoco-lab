@@ -306,6 +306,18 @@ for rho, mu in ((0, 0), (0, 1.8e-5), (1.225, 0), (1.225, 1.8e-5), (1000, 8.9e-4)
 ```
 ✔ Esperado (Q8): vácuo 10.0000; só μ 9.9957 (−0.04 %); só ρ 3.1206; ar 3.1197 (analítico `v₀/(1+k·v₀·t)` = 3.1201); água 0.0055; força viscosa/quadrática a 10 m/s = 2e-4.
 
+## 7. Medido neste laboratório (2026-10-12/13): vento, alvo móvel e cockpit do drone real
+Tudo no `experiments/09_drone_hover_rl/` (planta real de 2,18 kg / 1950 mm, câmara fixa à frente, núcleo de firmware C++ em SITL). Tabelas completas e comandos: secção «COCKPIT (contrato r13)» do README desse experimento. ✔ = medido aqui, com sementes de avaliação separadas das de afinação e repetido em sementes independentes.
+
+| Problema | O que resolveu (clássico) | Medido ✔ | Contra a política RL (PPO) |
+|---|---|---|---|
+| **Vento horizontal** (constante, rajadas, turbulência) | **observador de perturbação** no laço de velocidade (estado estendido: estima o que «empuxo lido da atitude − arrasto» não explica e anula-o), com o atraso da medida no modelo e a velocidade do fluxo ótico sem a rotação do corpo | 5 m/s constante: 11,8 cm de desvio mediano (sem o observador: 366 cm); aleatório 3 m/s: 10,1 cm; degrau de 3 m/s: pico 20,8 cm, volta em 3,0 s; 0 quedas até 5 m/s | RL 35,2 cm · 26,4 cm · 25 cm sem voltar |
+| **Altitude com rajadas** | laço de velocidade vertical 2× mais rígido (`k_vz = 1/(2·τ_motor)`), integral `k_vz²/10`, modelo de seguimento `τ_motor + dt/2`; margens: fase 50,7°, ganho 15,8 dB | \|Δz\| a 3/4/5 m/s aleatório 11,5/23,9/40,6 → 6,5/13,5/24,8 cm, sem custo horizontal nem de esforço | RL 4,6/13,2/36,0 cm (ainda ganha a 3 m/s e no ar descendente) |
+| **Manter um alvo móvel centrado numa câmara FIXA** | **IBVS** com o filtro do alvo a descontar a translação própria, translação lateral em paralelo com a guinada e canal vertical no erro da imagem; ganhos afinados sem interface (busca em sementes de afinação) | erro de centragem mediano 1,0°/1,6°/3,3° com o alvo a 0,3/0,5/0,8 m/s (câmara com 116 ms de latência), 100 % no campo, 0 quedas; com vento aleatório de 3 m/s: 2,6° | tracker PPO 13,7°/21,9°/29,7° e cai |
+| **Mostrar o vento sem anemómetro** | a perturbação observada (m/s²) convertida em m/s por um ajuste `a ≈ 0,30·W + 0,0245·W²` | 3,0 m/s reais → 2,8 estimados; 5,0 → 4,9; ar parado 0,2–0,5 | — |
+
+Rejeitado por medição (não repetir sem razão nova): observador pelo acelerómetro (piora a pairagem em ar parado), observador vertical com compensação na direção do empuxo (troca altitude por metros de deriva), antecipação do amortecimento vertical do rotor e `k_pz` maior (sobressinal do degrau de subida 19–33 %), `lr` 3× maior no PPO (não ganha). **Vento realista para testar**: média + turbulência de forma Dryden (σ_h 0,20·W, σ_w 0,10·W) + rajadas «1 − cos» + direção a deambular, a entrar e sair em rampa (`vento_natural.py`).
+
 ## Armadilhas
 | Sintoma | Causa | Correção |
 |---|---|---|
@@ -322,4 +334,7 @@ for rho, mu in ((0, 0), (0, 1.8e-5), (1.225, 0), (1.225, 1.8e-5), (1000, 8.9e-4)
 | X2 planeia; CF2 «não gira» | I_xz ≠ 0 inclina a caixa; CF2 com momento 1e-5 N·m | §4: zerar I_xz; `gear` ×100 ou ganhos baixos (kp ≈ 9) |
 | `from_xml_path` do Menagerie falha | espelho sem `assets/` | `sem_malhas()` (§4) ou clone completo do Menagerie |
 | Degrau em referência + `ki` alto: sobressinal, cauda longa | polo lento do integrador (ki 1.2 ⇒ −0.146 s⁻¹) | trajetória min-jerk (template) ou `ki` menor |
+| A mesma semente dá voos diferentes ✔ | um estado da planta que nenhum `reset` repõe (aqui: a flutuação do VRS avançava no construtor com um gerador sem semente) | repor TODO o estado no reinício e provar com duas instâncias (uma nova, uma usada) byte a byte |
+| «Vento fantasma» ao religar ✔ | gerador com rampa que só evolui quando alguém chama `passo()`: ao perder a autoridade o nível fica congelado | ao tirar a autoridade a um gerador com estado, REPOR o estado (não basta desligar o alvo) |
+| Treino do zero «aprende» a ficar no chão ✔ | atrator da recompensa num drone grande (J ×11, T/W 2,6): retorno ≈ 331 com z ≈ 0,115 m | arranque a quente de uma política que já voa (`--retomar`); um A/B de hiperparâmetros do zero não mede nada |
 | MJX: `NotImplementedError('fluid drag not supported for implicitfast')` | MJX sem derivadas de fluido; só caixa de inércia | MJWarp, ou sem fluido (não executado em GPU) |

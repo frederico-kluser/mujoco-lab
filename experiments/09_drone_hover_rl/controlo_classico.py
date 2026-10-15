@@ -319,13 +319,13 @@ class GanhosCascata:
     acc_pos: float = 1.0                   # m/s²  aceleração da aproximação raiz-quadrada (posição → velocidade)
     # vertical
     k_pz: float = 1.12                     # s⁻¹
-    k_vz: float = 4.48                     # s⁻¹   [(m/s²)/(m/s)]
-    ki_vz: float = 5.0                     # s⁻²   (também adapta o empuxo de pairagem: massa/kf)
+    k_vz: float = 8.95                     # s⁻¹   [(m/s²)/(m/s)]
+    ki_vz: float = 8.0                     # s⁻²   (também adapta o empuxo de pairagem: massa/kf)
     vel_corr_z_max: float = 0.7            # m/s
     # limites
     tilt_max: float = math.radians(30.0)   # rad
     coletivo_min: float = 0.3
-    coletivo_max: float = 1.8
+    coletivo_max: float = 2.0
     vel_xy_max: float = 1.0                # m/s   (VOO_VEL)
     vel_z_max: float = 0.7                 # m/s   (VOO_SUBIDA)
     vel_goto_z: float = 1.5                # m/s   velocidade máx. de «ir até z_alvo» (descolar; PX4 MPC_TKO_SPEED = 1,5)
@@ -336,7 +336,7 @@ class GanhosCascata:
     jerk_cmd_xy: float = 8.0               # m/s³   acc·ω_att/2
     k_conf: float = 3.37                   # s⁻¹   ganho do conformador de velocidade (horizontal) = K_att
     k_conf_z: float = 8.95                 # s⁻¹   idem, vertical = 1/(2·τ_m)
-    tau_modelo_z: float = 0.0              # s     modelo de seguimento vertical (0 = sem: a resposta vertical é rápida)
+    tau_modelo_z: float = 0.066            # s     modelo de seguimento vertical (τ_motor + dt/2; 0 = sem, a lei da fase 1)
     acc_cmd_z: float = 3.92                # m/s²   ½·(c_max − 1)·g
     jerk_cmd_z: float = 35.1               # m/s³   acc/(2·τ_m)
     ref_posicao: str = "trava"             # horizontal — "trava": p_sp = p̂ em movimento, trava ao parar (como o PX4); "integrada": p_sp integra a velocidade
@@ -365,18 +365,33 @@ class GanhosCascata:
     def de_planta(cls, p: PlantaLinear, razao: float = 4.0, *, razao_atitude: float = 2.5,
                   razao_posicao: float = 2.5, razao_integral: float = 2.0, tilt_max_graus: float = 30.0,
                   tilt_cmd_graus: float = 17.0, f_yaw: float = 0.6, peso_yaw: float = 0.7, c_max: float = 1.8,
-                  reserva_vertical: float = 1.3, razao_pert: float = 1.0, **extra) -> GanhosCascata:
-        """Ganhos e limites por FÓRMULAS FECHADAS a partir da planta (ver o docstring da classe)."""
+                  reserva_vertical: float = 1.3, razao_pert: float = 1.0, razao_vz: float = 2.0,
+                  razao_integral_z: float = 10.0, coletivo_teto: float = 2.0, **extra) -> GanhosCascata:
+        """Ganhos e limites por FÓRMULAS FECHADAS a partir da planta (ver o docstring da classe).
+
+        VERTICAL (2026-10-13 — a altitude com rajadas era o único sítio onde a cascata perdia para a política RL): o
+        laço de velocidade vertical passa a fechar a `razao_vz` = 2 do motor (era 4 — `k_vz` = 1/(τ_motor·razao_vz),
+        o dobro da rigidez), com o integral a `k_vz²/razao_integral_z` (10: mais lento em relação ao proporcional do
+        que na fase 1, para o degrau de subida não ganhar sobressinal), um modelo de seguimento vertical de constante
+        `τ_motor + dt/2` (a referência chega ao laço ao ritmo a que o rotor consegue responder) e o teto do coletivo
+        em `coletivo_teto` = 2,0 (T/W 2,6: há empuxo). `k_pz` fica onde estava (1/(τ_motor·razao²)). Margens do laço
+        de velocidade vertical com isto (`margens_cascata`, build ativo): fase 57,3° → 50,7°, ganho 21,7 → 15,8 dB.
+        Medido (`avaliar_vento.py`): |Δz| com vento aleatório de 3/4/5 m/s 11,5/23,9/40,6 → 6,5/13,5/24,9 cm, sem
+        custo horizontal nem de esforço dos motores. A lei de antes: `razao_vz=4, razao_integral_z=4,
+        tau_modelo_z=0, coletivo_teto=1.8`.
+        """
         if min(razao, razao_atitude, razao_posicao, razao_integral) <= 1.0:
             raise ValueError("as razões entre laços têm de ser > 1 "
                              f"(recebido {razao!r}, {razao_atitude!r}, {razao_posicao!r}, {razao_integral!r})")
         if razao_pert <= 0.0:
             raise ValueError(f"razao_pert tem de ser > 0 (recebido {razao_pert!r})")
+        if razao_vz <= 1.0 or razao_integral_z <= 1.0:
+            raise ValueError(f"as razões do laço vertical têm de ser > 1 (recebido {razao_vz!r}, {razao_integral_z!r})")
         k_att = p.omega_taxa / razao_atitude
         k_vel = k_att / razao
         k_pos = k_vel / razao_posicao
-        k_vz = 1.0 / (p.tau_motor * razao)
-        k_pz = k_vz / razao
+        k_vz = 1.0 / (p.tau_motor * razao_vz)
+        k_pz = 1.0 / (p.tau_motor * razao * razao)                  # a malha de ALTURA fica onde estava
         tilt_max = min(math.radians(tilt_max_graus), math.acos(min(reserva_vertical / c_max, 1.0)))
         folga = min(1.0 - p.u_pairagem, p.u_pairagem - p.idle)
         u_yaw_max = f_yaw * folga                                   # acelerador diferencial reservado ao yaw
@@ -393,8 +408,9 @@ class GanhosCascata:
             "razao_integral": razao_integral, "omega_taxa": p.omega_taxa,
             "k_att": k_att, "k_yaw": k_att, "peso_yaw": peso_yaw, "folga_yaw": f_yaw,
             "k_vel": k_vel, "ki_vel": k_vel * k_vel / razao_integral, "k_pos": k_pos,
-            "k_vz": k_vz, "k_pz": k_pz, "ki_vz": k_vz * k_vz / razao,
-            "tilt_max": tilt_max, "coletivo_max": c_max,
+            "k_vz": k_vz, "k_pz": k_pz, "ki_vz": k_vz * k_vz / razao_integral_z,
+            "tau_modelo_z": p.tau_motor + 0.5 * p.dt_decisao,
+            "tilt_max": tilt_max, "coletivo_max": coletivo_teto,
             "acel_yaw_max": acel_yaw, "taxa_yaw_max": taxa_yaw, "u_yaw_por_taxa": u_por_taxa,
             "alfa_yaw": p.alfa_yaw, "u_pairagem": p.u_pairagem,
             "acc_cmd_xy": acc_cmd, "jerk_cmd_xy": acc_cmd * omega_att / 2.0, "k_conf": k_att,

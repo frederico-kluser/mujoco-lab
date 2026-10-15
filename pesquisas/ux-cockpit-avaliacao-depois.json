@@ -52,15 +52,22 @@
         "tecla_ate_keycap_ms": "12-15",
         "tecla_ate_eco_do_runner_ms_p50": 10.5,
         "pedidos_api_sim_com_tudo_fechado": 0
-      }
+      },
+      "tres_janelas_abertas": {
+        "1280x720": "Voo 12,64 · Bola 968,64 · Vento em cascata 28,108 — 0 instrumentos tapados",
+        "1366x768": "idem (Bola 1054,64) — 0 instrumentos tapados",
+        "1920x1080": "Voo e Vento empilhados a esquerda, Bola a direita — 0 instrumentos tapados"
+      },
+      "browsers": "Chromium 1243 (Playwright), Google Chrome 153 e Brave 152 — sem erros de consola; Firefox/Safari nao instalados, nao testados"
     },
     "descricao_avaliada": "Cockpit de pilotagem de um drone simulado num ecra unico de 100svw x 100svh sem scroll. O fundo permanente e a camara de bordo (1.a pessoa) ou a da simulacao (3.a pessoa); a tecla F troca e a outra vista fica numa miniatura em baixo a esquerda. Sobre a imagem ha um HUD: estado do voo e modo em cima a esquerda (A VOAR / NO CHAO / CAIU, MANUAL / A SEGUIR A BOLA), fita de rumo em cima ao centro, bateria em cima a direita, velocidade a esquerda e altitude a direita do centro, horizonte artificial e mira ao centro, vento e as teclas WASD/QE/ZXC (que acendem ao carregar) em baixo a direita. Em baixo ao centro ha uma doca com 8 icones com nome e numero de atalho (Voo, Bola, Vento, Sensores, Energia, Graficos, Sistema, Ajuda) e um botao REINICIAR de manter premido. Cada icone abre uma janela flutuante de vidro escuro, arrastavel, que se fecha no X ou com Esc e lembra a posicao. As teclas de voo valem desde o arranque, sem armar. A janela Vento tem um interruptor ligar, um slider de intensidade 0-5 m/s, um interruptor de aleatoriedade e uma bussola para a direcao. A janela Bola tem um interruptor seguir a bola, um slider de velocidade da bola e um alvo com o erro ao centro. Nao ha seletor de controlador nem de modos de vento. Sensores, Energia, Graficos e Sistema sao janelas de detalhe so carregadas quando se abrem.",
-    "limites_da_avaliacao": "Sem UXUI_API_KEY: principios aplicados por conhecimento interno (api_enriched=false). Medido em Chromium headless; nao houve teste com o dono nem em Firefox/Safari. Estados CAIU, bateria fraca e sem ligacao foram exercitados pelo agente do site com respostas simuladas."
+    "limites_da_avaliacao": "Sem UXUI_API_KEY: principios aplicados por conhecimento interno (api_enriched=false). Medido em Chromium headless; nao houve teste com o dono nem em Firefox/Safari. Estados CAIU, bateria fraca e sem ligacao foram exercitados pelo agente do site com respostas simuladas.",
+    "historico": "84/100 (good) na primeira entrega do cockpit, com 1 aviso; 88/100 depois de corrigido o aviso dos ecras pequenos (2026-10-13)"
   },
   "interface_type": "dashboard",
   "interface_type_note": "Painel de pilotagem em tempo real (dashboard + controlo) com video ao vivo como elemento primario; avaliado como dashboard, com as janelas flutuantes tratadas como divulgacao progressiva.",
-  "overall_score": 84,
-  "band": "good",
+  "overall_score": 88,
+  "band": "excellent",
   "findings": [
     {
       "id": "finding-1",
@@ -70,9 +77,9 @@
         "title": "Visual Hierarchy",
         "part": "part-3"
       },
-      "severity": "warning",
-      "message": "Em ecras pequenos (1366x768 e 1280x720 — o caso de um portatil com escala a 200 %) as tres janelas principais abertas ao mesmo tempo nao cabem fora do centro: a janela Vento abre por cima da leitura de altitude do HUD. Um instrumento primario fica tapado por um painel de controlo.",
-      "remediation": "As janelas arrastam-se e lembram a posicao, por isso resolve-se a mao; para resolver de raiz, compactar Voo e Vento (somam 747 px, ha 582 px livres a 720p) ou deslocar as leituras de velocidade/altitude para a faixa livre quando ha uma janela por cima.",
+      "severity": "suggestion",
+      "message": "Em ecras pequenos (1366x768 e 1280x720) as tres janelas principais nao cabem lado a lado fora do centro. Corrigido em 2026-10-13 o que era um aviso (a janela Vento tapava a leitura de altitude): agora abre em CASCATA por cima da janela Voo e nenhum instrumento do HUD fica tapado (medido nas tres resolucoes). Fica o residuo: a 720p a janela Voo fica meio escondida atras da Vento ate se clicar nela.",
+      "remediation": "Aceitavel como esta (as teclas de voo estao sempre nos keycaps do HUD e as janelas arrastam-se); para eliminar, compactar Voo e Vento (somam 790 px, ha 582 px livres a 720p).",
       "business_impact": null
     },
     {
@@ -166,9 +173,9 @@
     }
   ],
   "priority_fixes": [
-    "finding-1",
     "finding-4",
     "finding-2",
+    "finding-1",
     "finding-3"
   ],
   "api_enriched": false,

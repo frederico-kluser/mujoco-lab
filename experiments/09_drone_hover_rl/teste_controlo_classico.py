@@ -99,9 +99,16 @@ def secao_formulas() -> bool:
           and perto(gn.ki_vel, gn.k_vel ** 2 / 2.0))
     c.ok("ganhos: K_att = ωc/razão_atitude, K_vel = K_att/razão, K_pos = K_vel/razão_posicao, K_i = K_vel²/razão_integral",
          ok, f"K_att={gn.k_att:.4f} K_vel={gn.k_vel:.4f} K_pos={gn.k_pos:.4f} K_i={gn.ki_vel:.4f}")
-    ok = (perto(gn.k_vz, 1.0 / (0.05 * 4.0)) and perto(gn.k_pz, gn.k_vz / 4.0) and perto(gn.ki_vz, gn.k_vz ** 2 / 4.0))
-    c.ok("vertical: K_vz = 1/(τ_m·razão), K_pz = K_vz/razão, K_iz = K_vz²/razão", ok,
-         f"K_vz={gn.k_vz:.3f} K_pz={gn.k_pz:.3f} K_iz={gn.ki_vz:.3f}")
+    ok = (perto(gn.k_vz, 1.0 / (0.05 * 2.0)) and perto(gn.k_pz, 1.0 / (0.05 * 4.0 * 4.0)) and perto(gn.ki_vz, gn.k_vz ** 2 / 10.0)
+          and perto(gn.tau_modelo_z, 0.05 + 0.5 * p.dt_decisao) and perto(gn.coletivo_max, 2.0))
+    c.ok("vertical (2026-10-13): K_vz = 1/(τ_m·razão_vz) com razão_vz = 2, K_pz = 1/(τ_m·razão²) (onde estava), K_iz = K_vz²/10, "
+         "modelo de seguimento τ_m + dt/2, teto do coletivo 2,0", ok,
+         f"K_vz={gn.k_vz:.3f} K_pz={gn.k_pz:.3f} K_iz={gn.ki_vz:.3f} τ_z={gn.tau_modelo_z:.4f} c_max={gn.coletivo_max:g}")
+    ga = cc.GanhosCascata.de_planta(p, razao_vz=4.0, razao_integral_z=4.0, tau_modelo_z=0.0, coletivo_teto=1.8)
+    c.ok("vertical: a lei de ANTES continua a um argumento de distância (razão_vz = 4, K_iz = K_vz²/4, sem modelo, teto 1,8)",
+         perto(ga.k_vz, 1.0 / (0.05 * 4.0)) and perto(ga.k_pz, ga.k_vz / 4.0) and perto(ga.ki_vz, ga.k_vz ** 2 / 4.0)
+         and ga.tau_modelo_z == 0.0 and perto(ga.coletivo_max, 1.8) and perto(ga.k_pz, gn.k_pz),
+         f"K_vz={ga.k_vz:.3f} K_pz={ga.k_pz:.3f} K_iz={ga.ki_vz:.3f}")
     g4 = cc.GanhosCascata.de_planta(p, razao=4.0, razao_atitude=4.0, razao_posicao=4.0, razao_integral=4.0)
     c.ok("razão entre laços ≈ 4 (a da pesquisa): K_att/K_vel = K_vel/K_pos = 4 e ωc/K_att = 4",
          perto(g4.k_att / g4.k_vel, 4.0) and perto(g4.k_vel / g4.k_pos, 4.0) and perto(p.omega_taxa / g4.k_att, 4.0))
@@ -287,7 +294,7 @@ def secao_malha_fechada(rapido: bool) -> dict:
     # ---- ganhos derivados do PRÓPRIO env
     _w, _t, _l, wc = cc._malha_taxa_do_env(env0)
     ok = (perto(gn.omega_taxa, wc) and perto(gn.k_att, wc / gn.razao_atitude) and perto(gn.k_vel, gn.k_att / gn.razao_lacos)
-          and perto(gn.k_pos, gn.k_vel / gn.razao_posicao) and perto(gn.k_vz, 1.0 / (env0.fc.tau_motor * gn.razao_lacos))
+          and perto(gn.k_pos, gn.k_vel / gn.razao_posicao) and perto(gn.k_vz, 1.0 / (env0.fc.tau_motor * 2.0))
           and perto(gn.k_arrasto, float(np.mean(env0.planta.aero.d_xy))))
     c.ok("ganhos_de_hardware(env): ωc, K_att, K_vel, K_pos, K_vz e o arrasto vêm das fórmulas aplicadas ao fc.py do env", ok,
          f"ωc={wc:.2f} rad/s K_att={gn.k_att:.2f} K_vel={gn.k_vel:.2f} K_pos={gn.k_pos:.2f} K_vz={gn.k_vz:.2f}")
