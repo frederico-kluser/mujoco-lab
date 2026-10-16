@@ -1,0 +1,68 @@
+<!-- objeto_propulsado — objeto com propulsão multi-eixo + motor + carga explosiva (separação).
+     Serve de BASE a qualquer objeto novo com motores/propulsão/explosivos: copia e adapta.
+     Validação por fórmulas fechadas em `run.py` (exit 0 = física são). -->
+<mujoco model="objeto_propulsado">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <default>
+    <!-- dampratio 1 = contacto crítico: assenta sem quique (ver physics-tuning da skill do lab) -->
+    <geom friction="1 0.005 0.0001" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+  </default>
+
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1"/>
+    <geom name="chao" type="plane" size="5 5 0.1" rgba="0.8 0.8 0.8 1"/>
+
+    <!-- ============================ OBJETO (livre: freejoint) ============================
+         Propulsão "para todos os locais": 3 bocais (um por eixo +X, +Y, +Z). Para mais direções,
+         acrescenta um <site> com a orientação certa (eixo z do site = direção do empuxo) e o
+         respetivo <general site=... gear="0 0 1">. Massa total = 2.0 (corpo) + 0.2 (volante)
+         + 0.2 (tampa) = 2.4 kg. -->
+    <body name="objeto" pos="0 0 1">
+      <freejoint name="objeto_livre"/>
+      <geom name="corpo" type="box" size="0.15 0.10 0.05" mass="2.0" rgba="0.2 0.5 0.9 1"/>
+      <site name="imu" pos="0 0 0" size="0.01"/>
+      <!-- bocais: o eixo z do site é a direção da força (frame do site) -->
+      <site name="bocal_x" pos="0.15 0 0" euler="0 90 0" size="0.02" rgba="1 0.4 0 1"/>
+      <site name="bocal_y" pos="0 0.10 0" euler="-90 0 0" size="0.02" rgba="1 0.4 0 1"/>
+      <site name="bocal_z" pos="0 0 0.05" size="0.02" rgba="1 0.4 0 1"/>
+
+      <!-- MOTOR: volante de reação (hinge + motor). τ é INTERNO ao sistema ⇒ o objeto
+           contra-roda (conservação do momento angular) — é o teste `motor` do run.py. -->
+      <body name="volante" pos="0 0 0">
+        <joint name="volante_hinge" type="hinge" axis="0 0 1"/>
+        <geom name="volante_geom" type="cylinder" size="0.05 0.01" mass="0.2" rgba="0.7 0.7 0.7 1"/>
+      </body>
+    </body>
+
+    <!-- Tampa presa por um "parafuso explosivo" (equality weld, §equality): a carga solta-a
+         (`eq_active = 0`) e empurra os dois corpos em sentidos opostos (ação-reação). -->
+    <body name="tampa" pos="0 0 1.07">
+      <freejoint name="tampa_livre"/>
+      <geom name="tampa_geom" type="box" size="0.15 0.10 0.01" mass="0.2" rgba="0.9 0.5 0.2 1"/>
+    </body>
+  </worldbody>
+
+  <equality>
+    <weld name="parafuso" body1="objeto" body2="tampa" anchor="0 0 0.07"/>
+  </equality>
+
+  <actuator>
+    <!-- Propulsão: atuador por SITE = wrench no frame do site (aqui só a força, gear="0 0 1").
+         ctrl em NEWTON. Torque de reação num rotor real: par `gear="0 0 1"` + `gear="0 0 0 0 0 1"`
+         (padrão de models/drone_rpi/drone_rpi.xml).
+         ctrlrange SIMÉTRICO: o atuador empurra nos dois sentidos (teclado +/−). Para um bocal REAL
+         (só empurra) usa ctrlrange="0 Fmax" e um segundo bocal oposto para o sentido inverso. -->
+    <general name="empuxo_x" site="bocal_x" gear="0 0 1" ctrlrange="-50 50"/>
+    <general name="empuxo_y" site="bocal_y" gear="0 0 1" ctrlrange="-50 50"/>
+    <general name="empuxo_z" site="bocal_z" gear="0 0 1" ctrlrange="-50 50"/>
+    <!-- Motor: torque direto na junta (ctrl em N·m, gear 1) -->
+    <motor name="motor_volante" joint="volante_hinge" gear="1" ctrlrange="-0.5 0.5"/>
+  </actuator>
+
+  <sensor>
+    <accelerometer name="acc" site="imu"/>
+    <gyro name="giro" site="imu"/>
+  </sensor>
+</mujoco>

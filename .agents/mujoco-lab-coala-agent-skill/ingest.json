@@ -1,5 +1,5 @@
 {
-  "_doc": "Fontes do material do projeto para `coala.py ingest`. mode: markdown|text|whole|pdf · type: episodic|semantic|procedural · origin: owner|agent|untrusted|system · tags aceitam {stem} {name} {dir} {rule}. Primeira regra que apanha um ficheiro ganha. O motor exclui `.agents/**` por omissão: por isso a skill ÚNICA (memória + MuJoCo, `.agents/mujoco-lab-coala-agent-skill/`, que aposentou a antiga `mujoco-agent-skill` em 2026-10-08) é ingerida pelo symlink `docs/skill` (→ ../.agents/mujoco-lab-coala-agent-skill): SKILL.md, references/ do MuJoCo, templates e scripts. Ficam de fora pelo `exclude` o motor `scripts/coala.py` e `references/schema.md`, cópia vendorizada privada do autor (não é conhecimento do projeto). Proveniência: relatório = owner; docs oficiais e pesquisa web = untrusted; skill/código/modelos/experimentos nossos = agent.",
+  "_doc": "Fontes do material do projeto para `coala.py ingest`. mode: markdown|text|whole|pdf · type: episodic|semantic|procedural · origin: owner|agent|untrusted|system · tags aceitam {stem} {name} {dir} {rule}. Primeira regra que apanha um ficheiro ganha. O motor exclui `.agents/**` por omissão: por isso a skill ÚNICA (memória + MuJoCo, `.agents/mujoco-lab-coala-agent-skill/`, que aposentou a antiga `mujoco-agent-skill` em 2026-10-08) é ingerida pelo symlink `docs/skill` (→ ../.agents/mujoco-lab-coala-agent-skill): SKILL.md, references/ do MuJoCo, templates e scripts. A skill de TAREFA `mujoco-propulsao-agent-skill` (objetos com motores/propulsão/explosivos + integração em controlos/RPi 5, `.agents/mujoco-propulsao-agent-skill/`) é ingerida pelo symlink `docs/skill-propulsao`. Ficam de fora pelo `exclude` o motor `scripts/coala.py` e `references/schema.md`, cópia vendorizada privada do autor (não é conhecimento do projeto). Proveniência: relatório = owner; docs oficiais e pesquisa web = untrusted; skill/código/modelos/experimentos nossos = agent.",
   "version": 1,
   "key_prefix": "mujoco",
   "path_prefix": "",
@@ -78,6 +78,50 @@
       "type": "procedural",
       "origin": "agent",
       "tags": "codigo,{dir},{stem}"
+    },
+    {
+      "name": "skill-propulsao-core",
+      "include": [
+        "docs/skill-propulsao/SKILL.md",
+        "docs/skill-propulsao/README.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "skill,mujoco-propulsao-agent-skill"
+    },
+    {
+      "name": "skill-propulsao-referencias",
+      "include": [
+        "docs/skill-propulsao/references/*.md"
+      ],
+      "mode": "markdown",
+      "type": "semantic",
+      "origin": "agent",
+      "tags": "skill,referencia,propulsao,{stem}"
+    },
+    {
+      "name": "skill-propulsao-templates-readme",
+      "include": [
+        "docs/skill-propulsao/assets/templates/*/README.md"
+      ],
+      "mode": "markdown",
+      "type": "procedural",
+      "origin": "agent",
+      "tags": "template,propulsao,{dir}"
+    },
+    {
+      "name": "skill-propulsao-codigo",
+      "include": [
+        "docs/skill-propulsao/scripts/*.py",
+        "docs/skill-propulsao/assets/templates/*/run.py",
+        "docs/skill-propulsao/assets/templates/*/objeto_propulsao.py",
+        "docs/skill-propulsao/assets/templates/*/modelo.xml"
+      ],
+      "mode": "whole",
+      "type": "procedural",
+      "origin": "agent",
+      "tags": "codigo,propulsao,{dir},{stem}"
     },
     {
       "name": "modelos",

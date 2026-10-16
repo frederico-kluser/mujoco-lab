@@ -7,6 +7,10 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
 - **Skill única do laboratório**: **`mujoco-lab-coala-agent-skill`** (`.agents/mujoco-lab-coala-agent-skill/SKILL.md`) — a memória CoALA local **e** o
   controle/conhecimento verificado do MuJoCo 3.15 (instalar, modelar MJCF/MjSpec, simular, renderizar, depurar, GPU/MJX, URDF,
   robôs/drones/veículos). A antiga skill `mujoco-agent-skill` foi **unificada** aqui e a pasta `.agents/mujoco-agent-skill/` foi **apagada após a unificação** (histórico no git).
+- **Skill de TAREFA de objetos com motores/propulsão/explosivos**: **`mujoco-propulsao-agent-skill`** (`.agents/mujoco-propulsao-agent-skill/SKILL.md`; criada 2026-10-15) — criar um objeto novo
+  (motores, hélices/jatos, cargas explosivas/separação, propulsão multi-eixo) e integrá-lo em TODOS os locais: MJCF → `lab/` → experimento → **sistema de controlos** (tecla → ação, `POST /api/*`, site/cockpit)
+  → **RPi 5/Arduino** (catálogo `componentes.json`/`builds.json`, ESC/PWM, deploy/SITL). Leva template testado (`assets/templates/objeto-propulsado/`, `run.py` com fórmulas fechadas, exit 0),
+  scaffolder (`scripts/novo_objeto.py <nome>` → `experiments/NN_<nome>/`) e checklists (`references/`). Companheira da skill de memória (o `recall`/`add` CoALA continua a mandar).
 - **Comece SEMPRE pela memória** (primeiro passo de qualquer tarefa): `python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<tarefa>" --budget 1500`
   (e `recall "<tarefa>" --type episodic --budget 600` para as decisões datadas; `search`/`graph` se precisar de fundo) — **depois** as
   referências MuJoCo (`references/*.md`), os scripts e os templates que o tema pedir. No fim, `add` do que for durável.
