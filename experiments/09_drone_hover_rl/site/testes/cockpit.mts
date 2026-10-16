@@ -339,9 +339,85 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
     ct.largar()
     ok(ct.obter().gatilho === false && ct.obter().disparos === 1 && enviadosTiro.join(",") === "true,false",
       "tiro: largar SPACE solta o gatilho sem disparar outro tiro")
-    const hudTiro = m.lerHud({ ...AMOSTRA, tiro: { id: "glock_g25", tiros: 3, gatilho: true, em_recuo: true, impulso_ns: 1.9162, delta_v_teorico_m_s: 0.6457, direcao_soco: [-1, 0, 0], azimute_soco_graus: 180 } })
-    ok(hudTiro?.tiro?.id === "glock_g25" && hudTiro.tiro.tiros === 3 && hudTiro.tiro.gatilho && hudTiro.tiro.emRecuo && aprox(hudTiro.tiro.impulsoNs ?? 0, 1.9162),
-      "lerHud: bloco `tiro` (Glock 25) lido com impulso, recuo e direção do soco")
+    const hudTiro = m.lerHud({
+      ...AMOSTRA,
+      tiro: {
+        id: "glock_g25",
+        tiros: 3,
+        acertos_bola: 3,
+        erros_bola: 0,
+        auto_atirar: true,
+        ultimo_tiro: { resultado: "acertou_bola" },
+        mira: {
+          no_alvo: true,
+          vai_acertar_certeza: true,
+          erro_bola_m: 0.011,
+          raio_colisao_m: 0.0545,
+          tempo_voo_ms: 6.4,
+          distancia_bola_m: 1.9,
+          ponto_impacto_tan: [-0.01, -0.078],
+        },
+        gatilho: true,
+        em_recuo: true,
+        fogo_cano_ativo: true,
+        projetil_visivel: true,
+        caminho_visivel: true,
+        distancia_projetil_m: 18.4,
+        tempo_caminho_s: 0.062,
+        alcance_render_m: 50.0,
+        duracao_caminho_s: 1.0,
+        impulso_ns: 1.9162,
+        delta_v_teorico_m_s: 0.6457,
+        direcao_soco: [-1, 0, 0],
+        azimute_soco_graus: 180,
+      },
+      carga: {
+        massa_sem_carga_g: 2182.6,
+        massa_total_g: 2967.6,
+        carga_atual_g: 785.0,
+        carga_max_voo_seguro_g: 1467.0,
+        carga_max_descolagem_oge_g: 2745.0,
+        carga_max_descolagem_ige_g: 3253.0,
+        t_w_efetivo_oge: 1.66,
+        t_w_efetivo_ige: 1.84,
+        pode_alcar_voo: true,
+        pode_pairar_oge: true,
+        pode_voar_seguro: true,
+        estado_voo: "voo_seguro",
+        vento_max_m_s: 10.8,
+      },
+    })
+    ok(
+      hudTiro?.tiro?.id === "glock_g25" &&
+        hudTiro.tiro.tiros === 3 &&
+        hudTiro.tiro.acertosBola === 3 &&
+        hudTiro.tiro.errosBola === 0 &&
+        hudTiro.tiro.autoAtirar === true &&
+        hudTiro.tiro.ultimoResultado === "acertou_bola" &&
+        hudTiro.tiro.mira?.noAlvo === true &&
+        hudTiro.tiro.mira.vaiAcertarCerteza === true &&
+        hudTiro.tiro.mira.mensagem === "NO ALVO" &&
+        aprox(hudTiro.tiro.mira.erroBolaM ?? 0, 0.011) &&
+        aprox(hudTiro.tiro.mira.pontoImpactoTan?.[1] ?? 0, -0.078) &&
+        hudTiro.tiro.gatilho &&
+        hudTiro.tiro.emRecuo &&
+        hudTiro.tiro.fogoCanoAtivo &&
+        hudTiro.tiro.projetilVisivel &&
+        hudTiro.tiro.caminhoVisivel &&
+        aprox(hudTiro.tiro.distanciaProjetilM ?? 0, 18.4) &&
+        aprox(hudTiro.tiro.alcanceRenderM ?? 0, 50.0) &&
+        aprox(hudTiro.tiro.duracaoCaminhoS ?? 0, 1.0) &&
+        aprox(hudTiro.tiro.impulsoNs ?? 0, 1.9162) &&
+        hudTiro.carga?.podeAlcarVoo === true &&
+        hudTiro.carga.estadoVoo === "voo_seguro" &&
+        aprox(hudTiro.carga.cargaMaxDescolagemOgeG ?? 0, 2745.0),
+      "lerHud: blocos `tiro` (mira balística NO ALVO, acertos na bola, fogo do cano, projétil 50 m, caminho 1 s) e `carga` lidos"
+    )
+    const bolaZero = m.lerBolaConfig({ velocidade: 0.0, min: 0.0, max: 0.8, auto_atirar: true })
+    ok(
+      bolaZero !== null && bolaZero.velocidade === 0.0 && bolaZero.min === 0.0 && bolaZero.autoAtirar === true,
+      "lerBolaConfig: aceita velocidade 0,0 m/s (bola parada) e `auto_atirar: true`"
+    )
   }
   ok(a("w", { ctrl: true }) === "null" && a("r", { meta: true }) === "null" && a("f", { alt: true }) === "null",
     "teclas: com Ctrl/Meta/Alt nunca se rouba o atalho do browser")

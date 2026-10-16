@@ -247,6 +247,7 @@ class DroneRealEnv(HoverEnv):
         self._massa_nom = self.model.body_mass.copy()
         self._inercia_nom = self.model.body_inertia.copy()
         self._ipos_nom = self.model.body_ipos.copy()
+        self.carga_extra_kg = 0.0
 
         self.planta = dr.Planta(self.hw, self.model, self.data, flags_aero=flags_aero, desgaste=desgaste)
         self.fc = ControladorFC(self.hw, self.model, self.dt)
@@ -362,6 +363,11 @@ class DroneRealEnv(HoverEnv):
             for s in self._sensores():
                 s.escala_ruido = 1.0
             self.atraso_comando = self.hw.atraso_comando
+            if getattr(self, "carga_extra_kg", 0.0) > 0.0:
+                pl.definir_carga_extra(self.carga_extra_kg)
+                self.massa = float(m.body_mass.sum())
+                self.mg = self.massa * self.gravidade
+                return
         else:
             c = self.corpo
             m.body_mass[c] = self._massa_nom[c] * p["massa"]
@@ -718,7 +724,23 @@ class DroneRealEnv(HoverEnv):
 
     def tiro_estado(self) -> dict | None:
         """Estado atual e balística da arma montada no drone (`None` sem arma no build)."""
-        return self.planta.telemetria_arma()
+        pos_b = self.ponto_alvo if getattr(self, "com_alvo", False) else None
+        vel_b = self.ponto_alvo_vel if getattr(self, "com_alvo", False) else None
+        return self.planta.telemetria_arma(pos_bola=pos_b, vel_bola=vel_b)
+
+    def definir_carga(self, carga_extra_kg: float) -> dict:
+        """Define a carga útil extra acoplada ao drone (kg ≥ 0) e recalibra massa, inércia e aerodinâmica."""
+        self.carga_extra_kg = max(0.0, float(carga_extra_kg))
+        res = self.planta.definir_carga_extra(self.carga_extra_kg)
+        self.massa = float(self.model.body_mass.sum())
+        self.mg = self.massa * self.gravidade
+        return res
+
+    def carga_estado(self) -> dict:
+        """Estado atual de carga útil, limite de descolagem/voo e impacto do vento e da bateria."""
+        vento_xy = float(np.linalg.norm(self.vento_atual[:2]))
+        massa_atual = float(self.model.body_mass.sum())
+        return self.hw.limites_carga(massa_total=massa_atual, soc=self.planta.bat.soc, vento_m_s=vento_xy)
 
     def observacao(self, d: dict | None = None) -> np.ndarray:
         """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).
@@ -764,6 +786,7 @@ class DroneRealEnv(HoverEnv):
             info["voo"] = self.comando_estado(d)
         if self.hw.arma is not None:
             info["tiro"] = self.tiro_estado()
+        info["carga"] = self.carga_estado()
         return info
 
     def close(self) -> None:

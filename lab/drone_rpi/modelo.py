@@ -34,12 +34,28 @@ ROTORES = ("rotor1", "rotor2", "rotor3", "rotor4")
 REACOES = ("reacao1", "reacao2", "reacao3", "reacao4")
 SITES_ROTOR = ("r1", "r2", "r3", "r4")
 SITE_BOCA_CANO = "boca_cano"
+N_SLOTS_TIRO = 8
+ALCANCE_PROJETIL_M = 50.0
+DURACAO_CAMINHO_TIRO_S = 1.0
+DURACAO_FOGO_CANO_S = 0.060
 
 _COR = {"frame": [0.13, 0.13, 0.15, 1], "motor": [0.72, 0.72, 0.76, 1], "esc": [0.18, 0.22, 0.55, 1],
         "bateria": [0.50, 0.12, 0.10, 1], "rpi": [0.06, 0.45, 0.22, 1], "fc": [0.10, 0.10, 0.10, 1],
         "sensor": [0.85, 0.65, 0.10, 1], "perna": [0.25, 0.25, 0.28, 1],
         "helice_cw": [0.10, 0.55, 0.85, 0.35], "helice_ccw": [0.90, 0.40, 0.10, 0.35]}
-_COR_ARMA = {"glock_od": [0.44, 0.41, 0.30, 1], "glock_aco": [0.18, 0.19, 0.21, 1]}
+_COR_ARMA = {
+    "glock_od": [0.44, 0.41, 0.30, 1.0],
+    "glock_aco": [0.18, 0.19, 0.21, 1.0],
+    "glock_cano_aco": [0.30, 0.31, 0.34, 1.0],
+    "glock_preto": [0.08, 0.08, 0.09, 1.0],
+    "glock_mira": [0.95, 0.96, 0.98, 1.0],
+}
+_COR_EFEITOS_ARMA = {
+    "fogo_nucleo": ([1.0, 0.97, 0.70, 1.0], 1.0),
+    "fogo_labareda": ([1.0, 0.48, 0.08, 1.0], 0.95),
+    "projetil_cobre": ([1.0, 0.82, 0.25, 1.0], 0.90),
+    "rastro_tiro": ([1.0, 0.72, 0.16, 1.0], 0.85),
+}
 
 
 def _caixa_pack(hw: Hardware) -> tuple[float, float, float]:
@@ -62,6 +78,7 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     # o MuJoCo nunca renderiza acima de `<visual><global offwidth/offheight>` (regra do lab)
     spec.visual.global_.offwidth = 4608
     spec.visual.global_.offheight = 2592
+    spec.visual.map.zfar = 80.0
     spec.stat.extent = max(1.0, 2.0 * hw.frame.wheelbase)
 
     tex = spec.add_texture(name="chao", type=mujoco.mjtTexture.mjTEXTURE_2D,
@@ -74,6 +91,9 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     if hw.arma is not None:
         for nome, rgba in _COR_ARMA.items():
             spec.add_material(name=nome, rgba=rgba)
+        for nome, (rgba, emissao) in _COR_EFEITOS_ARMA.items():
+            m_ef = spec.add_material(name=nome, rgba=rgba, emission=emissao, specular=0.0, shininess=0.0)
+            _ = m_ef
 
     wb = spec.worldbody
     wb.add_geom(name="chao", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[50, 50, 0.1], material="chao",
@@ -183,38 +203,145 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                                cam_rpi.fovy_graus(modulo_cam, cam_rpi.modo_omissao(modulo_cam)), nome="fpv")
 
     # ---- ARMA FIXA NO TOPO DO DRONE (ex.: Glock 25 .380 Auto, peça REAL do catálogo `armas`)
-    # Montada por cima da pilha de eletrónica, alinhada com o nariz (+x) e centrada em xy (o CM horizontal
-    # fica sobre o centro do quadrado dos rotores; o CM vertical sobe e a linha do cano fica acima do CM,
-    # gerando impulso linear em -x_corpo e impulso angular de cabragem ΔL_y = -z_cano·J_tiro a cada disparo).
+    # Modelagem anatómica fiel à Glock 25 OD Green (.380 Auto, 187×32×128 mm, cano 102 mm, ferrolho 25,5 mm,
+    # miras 153 mm, gatilho Safe Action® 28 N a 71,2 mm, punho inclinado a 22° com ranhuras Gen3 e base preta
+    # do carregador, janela de ejeção prateada, serrilhas traseiras do ferrolho e berço rígido no topo).
+    # A massa exata `hw.arma.massa` (785 g com 15 tiros) é distribuída entre `arma_quadro` (45 %) e
+    # `arma_ferrolho` (55 %), ambos centrados em (x=0, y=0) para manter o CM horizontal sobre o centro dos
+    # rotores e o tensor de inércia fiel; as restantes peças anatómicas e os geoms de fogo do cano têm mass=0.
     if hw.arma is not None:
         c_a, l_a, a_a = hw.arma.dims                # (187, 32, 128) mm em m
         l_fer = hw.arma.largura_ferrolho            # 25,5 mm em m
         c_cano = hw.arma.comprimento_cano           # 102 mm em m
-        z_base_arma = z + 0.002                     # assente no topo da pilha de eletrónica
+        z_base_arma = z + 0.002                     # topo da pilha de eletrónica
         m_quadro = 0.45 * hw.arma.massa             # quadro de polímero + carregador cheio (45 % da massa)
         m_ferrolho = hw.arma.massa - m_quadro       # ferrolho + cano de aço no topo (55 %; soma exata = hw.arma.massa)
-        z_quadro = z_base_arma + 0.375 * a_a
+        z_quadro = z_base_arma + 0.68 * a_a         # trilho horizontal do quadro (dust cover / frame rail)
         z_cano = z_base_arma + 0.875 * a_a          # eixo do cano / ferrolho (no topo da pistola)
+
+        # 1. Berço rígido de montagem no topo do drone + solenoide de acionamento do gatilho (28 N)
+        corpo.add_geom(name="arma_suporte_base", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.055, 0.022, 0.003], pos=p(0.0, 0.0, z_base_arma + 0.001),
+                       mass=0.0, material="glock_preto", **sem_contacto)
+        corpo.add_geom(name="arma_suporte_frente", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.006, 0.018, 0.32 * a_a], pos=p(0.042, 0.0, z_base_arma + 0.33 * a_a),
+                       mass=0.0, material="glock_preto", **sem_contacto)
+
+        # 2. Quadro horizontal de polímero OD Green (com a massa do quadro+carregador centrada em x=0, y=0)
         corpo.add_geom(name="arma_quadro", type=mujoco.mjtGeom.mjGEOM_BOX,
-                       size=[0.5 * c_a, 0.5 * l_a, 0.375 * a_a], pos=p(0, 0, z_quadro),
+                       size=[0.5 * c_a, 0.5 * l_a, 0.009], pos=p(0.0, 0.0, z_quadro),
                        mass=m_quadro, material="glock_od", **sem_contacto)
+        # Ranhuras do trilho de acessórios Glock na ponta dianteira do quadro
+        for s_y, sufixo in ((1.0, "esq"), (-1.0, "dir")):
+            corpo.add_geom(name=f"arma_trilho_{sufixo}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[0.026, 0.0012, 0.0018],
+                           pos=p(0.5 * c_a - 0.030, s_y * (0.5 * l_a + 0.0005), z_quadro + 0.002),
+                           mass=0.0, material="glock_preto", **sem_contacto)
+
+        # 3. Punho inclinado a 22° (ângulo clássico Glock) + ranhuras dos dedos + base preta do carregador
+        ang_punho = math.radians(22.0)
+        q_punho = [math.cos(0.5 * ang_punho), 0.0, math.sin(0.5 * ang_punho), 0.0]
+        x_punho = -0.052
+        z_punho = z_base_arma + 0.34 * a_a
+        corpo.add_geom(name="arma_punho", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.024, 0.5 * l_a, 0.33 * a_a], pos=p(x_punho, 0.0, z_punho),
+                       quat=q_punho, mass=0.0, material="glock_od", **sem_contacto)
+        corpo.add_geom(name="arma_base_carregador", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.026, 0.5 * l_a + 0.001, 0.005],
+                       pos=p(x_punho - 0.015, 0.0, z_base_arma + 0.005),
+                       quat=q_punho, mass=0.0, material="glock_preto", **sem_contacto)
+        for idx_d, frac_z in enumerate((0.20, 0.34, 0.48), start=1):
+            corpo.add_geom(name=f"arma_dedo_{idx_d}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                           size=[0.004, 0.5 * l_a - 0.001, 0.0],
+                           pos=p(x_punho + 0.025 - (0.34 - frac_z) * 0.04, 0.0, z_base_arma + frac_z * a_a),
+                           quat=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0],
+                           mass=0.0, material="glock_od", **sem_contacto)
+        corpo.add_geom(name="arma_retentor_carregador", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.005, 0.5 * l_a + 0.0015, 0.008],
+                       pos=p(-0.028, 0.0, z_base_arma + 0.52 * a_a),
+                       mass=0.0, material="glock_preto", **sem_contacto)
+
+        # 4. Guarda-mato + gatilho Safe Action® (28 N, a 71,2 mm) + atuador solenoide de disparo
+        corpo.add_geom(name="arma_guarda_mato_baixo", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.022, 0.007, 0.003], pos=p(0.002, 0.0, z_base_arma + 0.44 * a_a),
+                       mass=0.0, material="glock_od", **sem_contacto)
+        corpo.add_geom(name="arma_guarda_mato_frente", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.0035, 0.007, 0.11 * a_a], pos=p(0.022, 0.0, z_base_arma + 0.55 * a_a),
+                       mass=0.0, material="glock_od", **sem_contacto)
+        ang_gat = math.radians(-18.0)
+        corpo.add_geom(name="arma_gatilho", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.003, 0.0035, 0.011], pos=p(0.002, 0.0, z_base_arma + 0.56 * a_a),
+                       quat=[math.cos(0.5 * ang_gat), 0.0, math.sin(0.5 * ang_gat), 0.0],
+                       mass=0.0, material="glock_preto", **sem_contacto)
+        corpo.add_geom(name="arma_solenoide_gatilho", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                       size=[0.005, 0.012, 0.0], pos=p(-0.008, 0.0, z_base_arma + 0.56 * a_a),
+                       quat=[math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0],
+                       mass=0.0, material="glock_aco", **sem_contacto)
+
+        # 5. Ferrolho de aço Tenifer/NDLC (55 % da massa) + janela de ejeção + serrilhas traseiras
         corpo.add_geom(name="arma_ferrolho", type=mujoco.mjtGeom.mjGEOM_BOX,
-                       size=[0.5 * c_a, 0.5 * l_fer, 0.125 * a_a], pos=p(0, 0, z_cano),
+                       size=[0.5 * c_a, 0.5 * l_fer, 0.125 * a_a], pos=p(0.0, 0.0, z_cano),
                        mass=m_ferrolho, material="glock_aco", **sem_contacto)
-        # cano de aço (102 mm) e miras (153 mm entre miras, ficha oficial) — visuais (massa já nos 2 blocos acima)
+        corpo.add_geom(name="arma_janela_ejecao", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.014, 0.5 * l_fer + 0.0006, 0.007],
+                       pos=p(0.006, -0.001, z_cano + 0.005),
+                       mass=0.0, material="glock_cano_aco", **sem_contacto)
+        for idx_s in range(6):
+            x_s = -0.5 * c_a + 0.014 + idx_s * 0.0045
+            corpo.add_geom(name=f"arma_serrilha_{idx_s + 1}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[0.001, 0.5 * l_fer + 0.0007, 0.011],
+                           pos=p(x_s, 0.0, z_cano - 0.001),
+                           mass=0.0, material="glock_preto", **sem_contacto)
+
+        # 6. Cano de aço (102 mm), furo de 9 mm (.380 Auto) e miras (153 mm entre miras, com pontos brancos)
         q_eixo_x = [math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0]
         x_boca = 0.5 * c_a + 0.003
         corpo.add_geom(name="arma_cano", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-                       size=[0.0065, 0.5 * c_cano, 0], pos=p(x_boca - 0.5 * c_cano, 0, z_cano),
-                       quat=q_eixo_x, mass=0.0, material="glock_aco", **sem_contacto)
+                       size=[0.0068, 0.5 * c_cano, 0], pos=p(x_boca - 0.5 * c_cano, 0, z_cano),
+                       quat=q_eixo_x, mass=0.0, material="glock_cano_aco", **sem_contacto)
+        corpo.add_geom(name="arma_boca_furo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                       size=[0.0045, 0.0015, 0], pos=p(x_boca + 0.0005, 0, z_cano),
+                       quat=q_eixo_x, mass=0.0, material="glock_preto", **sem_contacto)
         z_mira = z_base_arma + a_a + 0.0025
         corpo.add_geom(name="arma_mira_frente", type=mujoco.mjtGeom.mjGEOM_BOX,
-                       size=[0.003, 0.002, 0.0025], pos=p(0.5 * 0.153, 0, z_mira),
-                       mass=0.0, material="glock_aco", **sem_contacto)
+                       size=[0.0035, 0.002, 0.0028], pos=p(0.5 * 0.153, 0, z_mira),
+                       mass=0.0, material="glock_preto", **sem_contacto)
+        corpo.add_geom(name="arma_ponto_mira_frente", type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                       size=[0.0013, 0, 0], pos=p(0.5 * 0.153 - 0.003, 0, z_mira + 0.0005),
+                       mass=0.0, material="glock_mira", **sem_contacto)
         corpo.add_geom(name="arma_mira_tras", type=mujoco.mjtGeom.mjGEOM_BOX,
-                       size=[0.004, 0.006, 0.0025], pos=p(-0.5 * 0.153, 0, z_mira),
-                       mass=0.0, material="glock_aco", **sem_contacto)
+                       size=[0.0045, 0.0065, 0.0028], pos=p(-0.5 * 0.153, 0, z_mira),
+                       mass=0.0, material="glock_preto", **sem_contacto)
+        for s_y, sufixo in ((1.0, "esq"), (-1.0, "dir")):
+            corpo.add_geom(name=f"arma_ponto_mira_tras_{sufixo}", type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                           size=[0.0011, 0, 0], pos=p(-0.5 * 0.153 - 0.004, s_y * 0.0028, z_mira + 0.0005),
+                           mass=0.0, material="glock_mira", **sem_contacto)
         corpo.add_site(name=SITE_BOCA_CANO, pos=p(x_boca, 0, z_cano), quat=q_eixo_x, size=[0.005, 0, 0])
+
+        # 7. EFEITO DE FOGO DO CANO (muzzle flash emissivo na boca do cano; alpha=0 em repouso, acende no disparo)
+        corpo.add_geom(name="arma_fogo_nucleo", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+                       size=[0.022, 0.012, 0.012], pos=p(x_boca + 0.020, 0, z_cano),
+                       rgba=[1.0, 0.97, 0.70, 0.0], group=2, mass=0.0, material="fogo_nucleo", **sem_contacto)
+        corpo.add_geom(name="arma_fogo_cone", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+                       size=[0.065, 0.022, 0.022], pos=p(x_boca + 0.062, 0, z_cano),
+                       rgba=[1.0, 0.48, 0.08, 0.0], group=2, mass=0.0, material="fogo_labareda", **sem_contacto)
+        corpo.add_geom(name="arma_fogo_cruz_h", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+                       size=[0.018, 0.048, 0.008], pos=p(x_boca + 0.028, 0, z_cano),
+                       rgba=[1.0, 0.55, 0.12, 0.0], group=2, mass=0.0, material="fogo_labareda", **sem_contacto)
+        corpo.add_geom(name="arma_fogo_cruz_v", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+                       size=[0.018, 0.008, 0.048], pos=p(x_boca + 0.028, 0, z_cano),
+                       rgba=[1.0, 0.55, 0.12, 0.0], group=2, mass=0.0, material="fogo_labareda", **sem_contacto)
+
+        # 8. PROJÉTEIS (.380 ACP, visíveis até 50 m) e CAMINHOS/RASTROS (visíveis por 1,0 s) no mundo
+        # ATENÇÃO: `quat=q_eixo_x` não-identidade obriga o compilador do MuJoCo a pôr `geom_sameframe=0`
+        # (com a identidade punha `geom_sameframe=3` e ignorava `geom_quat`, desenhando uma linha vertical!).
+        for k in range(N_SLOTS_TIRO):
+            wb.add_geom(name=f"projetil_tiro_{k}", type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                        size=[0.018, 0, 0], pos=[0.0, 0.0, -10.0], quat=q_eixo_x,
+                        rgba=[1.0, 0.82, 0.25, 0.0], group=2, mass=0.0, material="projetil_cobre", **sem_contacto)
+            wb.add_geom(name=f"caminho_tiro_{k}", type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+                        size=[0.008, 0.01, 0], pos=[0.0, 0.0, -10.0], quat=q_eixo_x,
+                        rgba=[1.0, 0.72, 0.16, 0.0], group=2, mass=0.0, material="rastro_tiro", **sem_contacto)
 
     # ---- trem de pouso (colisão): 4 pernas sob os braços, mais baixas do que o pack
     h_pernas = max(hw.frame.altura_pernas, -z_baixo + 0.03)

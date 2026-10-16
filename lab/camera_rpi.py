@@ -831,6 +831,7 @@ class ModuloCamera:
         # FONTE DE IMAGEM: a `<camera>` do modelo (com o FoV do modo, escrito aqui — única escritora em
         # `model.cam_fovy`, na thread do render) OU a `MjvCamera` livre de `camera_livre()` (fonte
         # `simulacao`; o seu FoV é o GLOBAL do MuJoCo, `model.vis.global_.fovy` — não há FoV de modo).
+        mujoco.mj_kinematics(self.model, self._local)
         if self.camera_livre is not None:
             self._renderer.update_scene(self._local, camera=self.camera_livre())
         else:

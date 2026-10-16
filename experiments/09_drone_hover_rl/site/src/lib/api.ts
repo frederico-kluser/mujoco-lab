@@ -405,6 +405,27 @@ export async function enviarBola(velocidade: number): Promise<number | null> {
   return numero(bola.velocidade)
 }
 
+/** `POST /api/bola {"auto_atirar": bool}` → ativa/desativa o disparo automático quando no alvo. */
+export async function enviarAutoAtirarBola(
+  autoAtirar: boolean
+): Promise<boolean | null> {
+  const bruto = await pedirJson("/api/bola", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_atirar: Boolean(autoAtirar) }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const bola =
+    typeof o.bola === "object" && o.bola !== null
+      ? (o.bola as Record<string, unknown>)
+      : {}
+  return typeof bola.auto_atirar === "boolean" ? bola.auto_atirar : null
+}
+
 /** `POST /api/tiro {"gatilho": bool}` → dispara 1 tiro da Glock 25 no topo do drone (tecla SPACE). */
 export async function enviarTiro(
   gatilho = true
@@ -428,6 +449,31 @@ export async function enviarTiro(
     gatilho: t.gatilho === true,
     disparos: numero(t.disparos) ?? 0,
     seq: numero(t.seq) ?? 0,
+  }
+}
+
+/** `POST /api/carga {"carga_extra_g"}` → define carga útil extra acoplada ao drone (0..5000 g). */
+export async function enviarCarga(
+  cargaExtraG: number
+): Promise<{ carga_extra_g: number; seq: number } | null> {
+  const bruto = await pedirJson("/api/carga", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ carga_extra_g: Number(cargaExtraG) }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const c =
+    typeof o.carga === "object" && o.carga !== null
+      ? (o.carga as Record<string, unknown>)
+      : null
+  if (c === null) return null
+  return {
+    carga_extra_g: numero(c.carga_extra_g) ?? 0,
+    seq: numero(c.seq) ?? 0,
   }
 }
 

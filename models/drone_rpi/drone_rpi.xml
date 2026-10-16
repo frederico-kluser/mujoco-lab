@@ -10,6 +10,7 @@
 
   <visual>
     <global offwidth="4608" offheight="2592"/>
+    <map zfar="80"/>
   </visual>
 
   <asset>
@@ -27,54 +28,106 @@
     <material name="helice_ccw" rgba="0.9 0.4 0.1 0.35"/>
     <material name="glock_od" rgba="0.44 0.41 0.3 1"/>
     <material name="glock_aco" rgba="0.18 0.19 0.21 1"/>
+    <material name="glock_cano_aco" rgba="0.3 0.31 0.34 1"/>
+    <material name="glock_preto" rgba="0.08 0.08 0.09 1"/>
+    <material name="glock_mira" rgba="0.95 0.96 0.98 1"/>
+    <material name="fogo_nucleo" emission="1" specular="0" shininess="0" rgba="1 0.97 0.7 1"/>
+    <material name="fogo_labareda" emission="0.95" specular="0" shininess="0" rgba="1 0.48 0.08 1"/>
+    <material name="projetil_cobre" emission="0.9" specular="0" shininess="0" rgba="1 0.82 0.25 1"/>
+    <material name="rastro_tiro" emission="0.85" specular="0" shininess="0" rgba="1 0.72 0.16 1"/>
   </asset>
 
   <worldbody>
     <geom name="chao" size="50 50 0.1" type="plane" friction="0.9" material="chao"/>
+    <geom name="projetil_tiro_0" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_0" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_1" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_1" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_2" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_2" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_3" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_3" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_4" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_4" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_5" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_5" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_6" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_6" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
+    <geom name="projetil_tiro_7" size="0.018" pos="0 0 -10" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" group="2" rgba="1 0.82 0.25 0" mass="0" material="projetil_cobre"/>
+    <geom name="caminho_tiro_7" size="0.008 0.01" pos="0 0 -10" quat="0.707107 0 0.707107 0" type="capsule" contype="0" conaffinity="0" group="2" rgba="1 0.72 0.16 0" mass="0" material="rastro_tiro"/>
     <light name="sol" pos="0 0 6" type="directional"/>
     <body name="drone" pos="0 0 0.3">
       <joint name="livre" type="free"/>
-      <geom name="placa" size="0.104 0.104 0.0015" pos="-0.000145842 0 -0.0273152" type="box" mass="0.295" material="frame"/>
-      <geom name="braco1" size="0.4875 0.012 0.005" pos="0.344569 0.344715 -0.0273152" quat="0.92388 0 0 0.382683" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
-      <geom name="braco2" size="0.4875 0.012 0.005" pos="-0.34486 -0.344715 -0.0273152" quat="0.382683 0 0 -0.92388" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
-      <geom name="braco3" size="0.4875 0.012 0.005" pos="-0.34486 0.344715 -0.0273152" quat="0.382683 0 0 0.92388" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
-      <geom name="braco4" size="0.4875 0.012 0.005" pos="0.344569 -0.344715 -0.0273152" quat="0.92388 0 0 -0.382683" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
-      <geom name="motor1" size="0.022175 0.0095" pos="0.689283 0.689429 -0.0128152" type="cylinder" mass="0.074" material="motor"/>
-      <geom name="helice1" size="0.1905 0.0015" pos="0.689283 0.689429 0.00468483" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
-      <geom name="motor2" size="0.022175 0.0095" pos="-0.689575 -0.689429 -0.0128152" type="cylinder" mass="0.074" material="motor"/>
-      <geom name="helice2" size="0.1905 0.0015" pos="-0.689575 -0.689429 0.00468483" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
-      <geom name="motor3" size="0.022175 0.0095" pos="-0.689575 0.689429 -0.0128152" type="cylinder" mass="0.074" material="motor"/>
-      <geom name="helice3" size="0.1905 0.0015" pos="-0.689575 0.689429 0.00468483" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
-      <geom name="motor4" size="0.022175 0.0095" pos="0.689283 -0.689429 -0.0128152" type="cylinder" mass="0.074" material="motor"/>
-      <geom name="helice4" size="0.1905 0.0015" pos="0.689283 -0.689429 0.00468483" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
-      <geom name="esc1" size="0.016 0.011 0.003" pos="0.310097 0.310243 -0.0218152" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
-      <geom name="esc2" size="0.016 0.011 0.003" pos="-0.310389 -0.310243 -0.0218152" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
-      <geom name="esc3" size="0.016 0.011 0.003" pos="-0.310389 0.310243 -0.0218152" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
-      <geom name="esc4" size="0.016 0.011 0.003" pos="0.310097 -0.310243 -0.0218152" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
-      <geom name="el_rpi5" size="0.0425 0.028 0.008" pos="-0.000145842 0 -0.0118152" type="box" contype="0" conaffinity="0" mass="0.052" material="rpi"/>
-      <geom name="el_fc_h7" size="0.018 0.018 0.003" pos="-0.000145842 0 0.00318483" type="box" contype="0" conaffinity="0" mass="0.008" material="fc"/>
-      <geom name="el_cablagem" size="0.03 0.02 0.003" pos="-0.000145842 0 0.0131848" type="box" contype="0" conaffinity="0" mass="0.03" material="sensor"/>
-      <geom name="bateria" size="0.071 0.035 0.022" pos="-0.000145842 0 -0.0548152" type="box" mass="0.8706" material="bateria"/>
-      <geom name="sensores_baixo" size="0.012 0.012 0.002" pos="-0.000145842 0 -0.0788152" type="box" contype="0" conaffinity="0" mass="0.003" material="sensor"/>
-      <geom name="camera" size="0.0062 0.0125 0.012" pos="0.108054 0 -0.0128152" type="box" contype="0" conaffinity="0" mass="0.004" material="sensor"/>
-      <geom name="arma_quadro" size="0.0935 0.016 0.048" pos="-0.000145842 0 0.0701848" type="box" contype="0" conaffinity="0" mass="0.35325" material="glock_od"/>
-      <geom name="arma_ferrolho" size="0.0935 0.01275 0.016" pos="-0.000145842 0 0.134185" type="box" contype="0" conaffinity="0" mass="0.43175" material="glock_aco"/>
-      <geom name="arma_cano" size="0.0065 0.051" pos="0.0453542 0 0.134185" quat="0.707107 0 0.707107 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_aco"/>
-      <geom name="arma_mira_frente" size="0.003 0.002 0.0025" pos="0.0763542 0 0.152685" type="box" contype="0" conaffinity="0" mass="0" material="glock_aco"/>
-      <geom name="arma_mira_tras" size="0.004 0.006 0.0025" pos="-0.0766458 0 0.152685" type="box" contype="0" conaffinity="0" mass="0" material="glock_aco"/>
-      <geom name="perna1" size="0.006 0.058" pos="0.37904 0.379186 -0.0893152" type="capsule" friction="0.9" mass="0.025" material="perna"/>
-      <geom name="perna2" size="0.006 0.058" pos="-0.379332 -0.379186 -0.0893152" type="capsule" friction="0.9" mass="0.025" material="perna"/>
-      <geom name="perna3" size="0.006 0.058" pos="-0.379332 0.379186 -0.0893152" type="capsule" friction="0.9" mass="0.025" material="perna"/>
-      <geom name="perna4" size="0.006 0.058" pos="0.37904 -0.379186 -0.0893152" type="capsule" friction="0.9" mass="0.025" material="perna"/>
-      <site name="r1" size="0.01" pos="0.689283 0.689429 0.00468483"/>
-      <site name="r2" size="0.01" pos="-0.689575 -0.689429 0.00468483"/>
-      <site name="r3" size="0.01" pos="-0.689575 0.689429 0.00468483"/>
-      <site name="r4" size="0.01" pos="0.689283 -0.689429 0.00468483"/>
-      <site name="imu" size="0.006" pos="-0.000145842 0 -0.0138152"/>
-      <site name="baixo" size="0.004" pos="-0.000145842 0 -0.0808152" quat="0 1 0 0"/>
-      <site name="boca_cano" pos="0.0963542 0 0.134185" quat="0.707107 0 0.707107 0"/>
+      <geom name="placa" size="0.104 0.104 0.0015" pos="-0.000145842 0 -0.0319623" type="box" mass="0.295" material="frame"/>
+      <geom name="braco1" size="0.4875 0.012 0.005" pos="0.344569 0.344715 -0.0319623" quat="0.92388 0 0 0.382683" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
+      <geom name="braco2" size="0.4875 0.012 0.005" pos="-0.34486 -0.344715 -0.0319623" quat="0.382683 0 0 -0.92388" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
+      <geom name="braco3" size="0.4875 0.012 0.005" pos="-0.34486 0.344715 -0.0319623" quat="0.382683 0 0 0.92388" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
+      <geom name="braco4" size="0.4875 0.012 0.005" pos="0.344569 -0.344715 -0.0319623" quat="0.92388 0 0 -0.382683" type="box" contype="0" conaffinity="0" mass="0.105" material="frame"/>
+      <geom name="motor1" size="0.022175 0.0095" pos="0.689283 0.689429 -0.0174623" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice1" size="0.1905 0.0015" pos="0.689283 0.689429 3.76803e-05" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
+      <geom name="motor2" size="0.022175 0.0095" pos="-0.689575 -0.689429 -0.0174623" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice2" size="0.1905 0.0015" pos="-0.689575 -0.689429 3.76803e-05" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_cw"/>
+      <geom name="motor3" size="0.022175 0.0095" pos="-0.689575 0.689429 -0.0174623" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice3" size="0.1905 0.0015" pos="-0.689575 0.689429 3.76803e-05" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
+      <geom name="motor4" size="0.022175 0.0095" pos="0.689283 -0.689429 -0.0174623" type="cylinder" mass="0.074" material="motor"/>
+      <geom name="helice4" size="0.1905 0.0015" pos="0.689283 -0.689429 3.76803e-05" type="cylinder" contype="0" conaffinity="0" group="2" mass="0" material="helice_ccw"/>
+      <geom name="esc1" size="0.016 0.011 0.003" pos="0.310097 0.310243 -0.0264623" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc2" size="0.016 0.011 0.003" pos="-0.310389 -0.310243 -0.0264623" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc3" size="0.016 0.011 0.003" pos="-0.310389 0.310243 -0.0264623" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="esc4" size="0.016 0.011 0.003" pos="0.310097 -0.310243 -0.0264623" type="box" contype="0" conaffinity="0" mass="0.026" material="esc"/>
+      <geom name="el_rpi5" size="0.0425 0.028 0.008" pos="-0.000145842 0 -0.0164623" type="box" contype="0" conaffinity="0" mass="0.052" material="rpi"/>
+      <geom name="el_fc_h7" size="0.018 0.018 0.003" pos="-0.000145842 0 -0.00146232" type="box" contype="0" conaffinity="0" mass="0.008" material="fc"/>
+      <geom name="el_cablagem" size="0.03 0.02 0.003" pos="-0.000145842 0 0.00853768" type="box" contype="0" conaffinity="0" mass="0.03" material="sensor"/>
+      <geom name="bateria" size="0.071 0.035 0.022" pos="-0.000145842 0 -0.0594623" type="box" mass="0.8706" material="bateria"/>
+      <geom name="sensores_baixo" size="0.012 0.012 0.002" pos="-0.000145842 0 -0.0834623" type="box" contype="0" conaffinity="0" mass="0.003" material="sensor"/>
+      <geom name="camera" size="0.0062 0.0125 0.012" pos="0.108054 0 -0.0174623" type="box" contype="0" conaffinity="0" mass="0.004" material="sensor"/>
+      <geom name="arma_suporte_base" size="0.055 0.022 0.003" pos="-0.000145842 0 0.0185377" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_suporte_frente" size="0.006 0.018 0.04096" pos="0.0418542 0 0.0597777" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_quadro" size="0.0935 0.016 0.009" pos="-0.000145842 0 0.104578" type="box" contype="0" conaffinity="0" mass="0.35325" material="glock_od"/>
+      <geom name="arma_trilho_esq" size="0.026 0.0012 0.0018" pos="0.0633542 0.0165 0.106578" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_trilho_dir" size="0.026 0.0012 0.0018" pos="0.0633542 -0.0165 0.106578" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_punho" size="0.024 0.016 0.04224" pos="-0.0521458 0 0.0610577" quat="0.981627 0 0.190809 0" type="box" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_base_carregador" size="0.026 0.017 0.005" pos="-0.0671458 0 0.0225377" quat="0.981627 0 0.190809 0" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_dedo_1" size="0.004 0.015" pos="-0.0327458 0 0.0431377" quat="0.707107 0.707107 0 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_dedo_2" size="0.004 0.015" pos="-0.0271458 0 0.0610577" quat="0.707107 0.707107 0 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_dedo_3" size="0.004 0.015" pos="-0.0215458 0 0.0789777" quat="0.707107 0.707107 0 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_retentor_carregador" size="0.005 0.0175 0.008" pos="-0.0281458 0 0.0840977" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_guarda_mato_baixo" size="0.022 0.007 0.003" pos="0.00185416 0 0.0738577" type="box" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_guarda_mato_frente" size="0.0035 0.007 0.01408" pos="0.0218542 0 0.0879377" type="box" contype="0" conaffinity="0" mass="0" material="glock_od"/>
+      <geom name="arma_gatilho" size="0.003 0.0035 0.011" pos="0.00185416 0 0.0892177" quat="0.987688 0 -0.156434 0" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_solenoide_gatilho" size="0.005 0.012" pos="-0.00814584 0 0.0892177" quat="0.707107 0 0.707107 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_aco"/>
+      <geom name="arma_ferrolho" size="0.0935 0.01275 0.016" pos="-0.000145842 0 0.129538" type="box" contype="0" conaffinity="0" mass="0.43175" material="glock_aco"/>
+      <geom name="arma_janela_ejecao" size="0.014 0.01335 0.007" pos="0.00585416 -0.001 0.134538" type="box" contype="0" conaffinity="0" mass="0" material="glock_cano_aco"/>
+      <geom name="arma_serrilha_1" size="0.001 0.01345 0.011" pos="-0.0796458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_serrilha_2" size="0.001 0.01345 0.011" pos="-0.0751458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_serrilha_3" size="0.001 0.01345 0.011" pos="-0.0706458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_serrilha_4" size="0.001 0.01345 0.011" pos="-0.0661458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_serrilha_5" size="0.001 0.01345 0.011" pos="-0.0616458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_serrilha_6" size="0.001 0.01345 0.011" pos="-0.0571458 0 0.128538" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_cano" size="0.0068 0.051" pos="0.0453542 0 0.129538" quat="0.707107 0 0.707107 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_cano_aco"/>
+      <geom name="arma_boca_furo" size="0.0045 0.0015" pos="0.0968542 0 0.129538" quat="0.707107 0 0.707107 0" type="cylinder" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_mira_frente" size="0.0035 0.002 0.0028" pos="0.0763542 0 0.148038" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_ponto_mira_frente" size="0.0013" pos="0.0733542 0 0.148538" contype="0" conaffinity="0" mass="0" material="glock_mira"/>
+      <geom name="arma_mira_tras" size="0.0045 0.0065 0.0028" pos="-0.0766458 0 0.148038" type="box" contype="0" conaffinity="0" mass="0" material="glock_preto"/>
+      <geom name="arma_ponto_mira_tras_esq" size="0.0011" pos="-0.0806458 0.0028 0.148538" contype="0" conaffinity="0" mass="0" material="glock_mira"/>
+      <geom name="arma_ponto_mira_tras_dir" size="0.0011" pos="-0.0806458 -0.0028 0.148538" contype="0" conaffinity="0" mass="0" material="glock_mira"/>
+      <geom name="arma_fogo_nucleo" size="0.022 0.012 0.012" pos="0.116354 0 0.129538" type="ellipsoid" contype="0" conaffinity="0" group="2" rgba="1 0.97 0.7 0" mass="0" material="fogo_nucleo"/>
+      <geom name="arma_fogo_cone" size="0.065 0.022 0.022" pos="0.158354 0 0.129538" type="ellipsoid" contype="0" conaffinity="0" group="2" rgba="1 0.48 0.08 0" mass="0" material="fogo_labareda"/>
+      <geom name="arma_fogo_cruz_h" size="0.018 0.048 0.008" pos="0.124354 0 0.129538" type="ellipsoid" contype="0" conaffinity="0" group="2" rgba="1 0.55 0.12 0" mass="0" material="fogo_labareda"/>
+      <geom name="arma_fogo_cruz_v" size="0.018 0.008 0.048" pos="0.124354 0 0.129538" type="ellipsoid" contype="0" conaffinity="0" group="2" rgba="1 0.55 0.12 0" mass="0" material="fogo_labareda"/>
+      <geom name="perna1" size="0.006 0.058" pos="0.37904 0.379186 -0.0939623" type="capsule" friction="0.9" mass="0.025" material="perna"/>
+      <geom name="perna2" size="0.006 0.058" pos="-0.379332 -0.379186 -0.0939623" type="capsule" friction="0.9" mass="0.025" material="perna"/>
+      <geom name="perna3" size="0.006 0.058" pos="-0.379332 0.379186 -0.0939623" type="capsule" friction="0.9" mass="0.025" material="perna"/>
+      <geom name="perna4" size="0.006 0.058" pos="0.37904 -0.379186 -0.0939623" type="capsule" friction="0.9" mass="0.025" material="perna"/>
+      <site name="r1" size="0.01" pos="0.689283 0.689429 3.76803e-05"/>
+      <site name="r2" size="0.01" pos="-0.689575 -0.689429 3.76803e-05"/>
+      <site name="r3" size="0.01" pos="-0.689575 0.689429 3.76803e-05"/>
+      <site name="r4" size="0.01" pos="0.689283 -0.689429 3.76803e-05"/>
+      <site name="imu" size="0.006" pos="-0.000145842 0 -0.0184623"/>
+      <site name="baixo" size="0.004" pos="-0.000145842 0 -0.0854623" quat="0 1 0 0"/>
+      <site name="boca_cano" pos="0.0963542 0 0.129538" quat="0.707107 0 0.707107 0"/>
       <site name="cm" size="0.004"/>
-      <camera name="fpv" quat="-0.5 -0.5 0.5 0.5" pos="0.115254 0 -0.0128152" fovy="67"/>
+      <camera name="fpv" quat="-0.5 -0.5 0.5 0.5" pos="0.115254 0 -0.0174623" fovy="67"/>
     </body>
   </worldbody>
 

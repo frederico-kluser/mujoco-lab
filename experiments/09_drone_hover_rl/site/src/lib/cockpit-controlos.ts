@@ -10,6 +10,7 @@
  */
 
 import {
+  enviarAutoAtirarBola,
   enviarBola,
   enviarCamera,
   enviarTiro,
@@ -60,6 +61,7 @@ export const vento = new ControloVento({
 
 export const bola = new ControloBola({
   enviar: enviarBola,
+  enviarAuto: enviarAutoAtirarBola,
   aoFalhar: (erro) => avisarErro("POST /api/bola", erro),
 })
 

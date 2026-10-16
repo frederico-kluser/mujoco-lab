@@ -251,8 +251,8 @@ CONTROLADOR_OMISSAO = "rl"            # o que o RUNNER faz sem `--controlador` (
 # (`out/classico` + `out/nucleo`, 2026-10-12): a cascata clássica C++ do firmware na planta REAL em CTBR; no
 # cf2 (que só tem a política) fica `rl`. `rl`/`classico` explícitos continuam a existir para testes e medição.
 CONTROLADOR_AUTO = "auto"
-# «SEGUIR A BOLA» (r13): faixa e padrão da velocidade da bola aleatória (os mesmos do `sim_view.py`)
-BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.1, 0.8, 0.5
+# «SEGUIR A BOLA» (r13): faixa e padrão da velocidade da bola (0,0 m/s = bola parada; 0,1–0,8 = aleatória)
+BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.0, 0.8, 0.5
 # HUD AO VIVO (r13): o runner manda um datagrama UDP por passo de decisão (50 Hz) para a porta que este
 # servidor abre e passa-lhe por `ENV_HUD_PORTA`; o site lê-o por `GET /api/hud` (Server-Sent Events) —
 # instrumentos a 50 Hz sem disco e sem polling. `HUD_VELHO_S` = sem datagramas há isto, o HUD está parado.
@@ -465,7 +465,8 @@ def resumo_telemetria(caminho: Path) -> dict:
     if not linhas:
         return {"estado": "desconhecido", "ep": 0, "passo": 0, "retorno": 0.0, "linhas": 0, "t": None,
                 "loop": None, "vento_vec": None, "vento_vel": None, "vento_azim": None, "vento_modo": None,
-                "camera_atual": None, "voo": None, "multi_ia": None, "controlador": None, "tiro": None}
+                "camera_atual": None, "voo": None, "multi_ia": None, "controlador": None, "tiro": None,
+                "carga": None}
     ultima = linhas[-1]
     vec = ultima.get("vento_vec")
     loop = ultima.get("loop")
@@ -473,6 +474,7 @@ def resumo_telemetria(caminho: Path) -> dict:
     voo = ultima.get("voo")
     controlador = ultima.get("controlador")
     tiro = ultima.get("tiro")
+    carga = ultima.get("carga")
     return {"estado": str(ultima.get("estado", "desconhecido")), "ep": int(ultima.get("ep", 0) or 0),
             "passo": int(ultima.get("passo", 0) or 0), "retorno": float(ultima.get("retorno", 0.0) or 0.0),
             "linhas": len(linhas), "t": ultima.get("t"),
@@ -485,7 +487,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "voo": voo if isinstance(voo, dict) else None,
             "multi_ia": (ultima.get("multi_ia") if isinstance(ultima.get("multi_ia"), dict) else None),
             "controlador": (controlador if isinstance(controlador, dict) else None),
-            "tiro": (tiro if isinstance(tiro, dict) else None)}
+            "tiro": (tiro if isinstance(tiro, dict) else None),
+            "carga": (carga if isinstance(carga, dict) else None)}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -1049,6 +1052,8 @@ class Handler(BaseHTTPRequestHandler):
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "tiro": {"pedido": tiro_do_controlo(controlo),
                      "eco": resumo.get("tiro")},  # tiro Glock 25 (SPACE): pedido × eco do runner
+            "carga": {"pedido": carga_do_controlo(controlo),
+                      "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1080,6 +1085,8 @@ class Handler(BaseHTTPRequestHandler):
                     "eco": resumo.get("voo")},   # controle de voo (contrato r11): pedido × eco do runner
             "tiro": {"pedido": tiro_do_controlo(controlo),
                      "eco": resumo.get("tiro")},  # tiro Glock 25 (SPACE): pedido × eco do runner
+            "carga": {"pedido": carga_do_controlo(controlo),
+                      "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1163,6 +1170,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_bola(dados)
             elif rota == "/api/tiro":
                 self._post_tiro(dados)
+            elif rota == "/api/carga":
+                self._post_carga(dados)
             else:
                 self._erro(404, f"rota desconhecida: {rota}")
         except _PedidoInvalido as erro:
@@ -1544,6 +1553,20 @@ class Handler(BaseHTTPRequestHandler):
               f"disparos={bloco['disparos']} (seq {bloco['seq']})", flush=True)
         self._json(200, {"ok": True, "tiro": bloco})
 
+    def _post_carga(self, dados) -> None:
+        """CARGA ÚTIL EXTRA (`{"carga_extra_g": 0..5000}`): 200/400."""
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_carga(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["carga"]
+        print(f"[site] carga extra: {bloco['carga_extra_g']:.0f} g (seq {bloco['seq']})", flush=True)
+        self._json(200, {"ok": True, "carga": bloco})
+
     def _post_voo(self, dados) -> None:
         """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
 
@@ -1674,12 +1697,15 @@ def vento_simples_do_controlo(controlo: dict) -> dict | None:
 
 
 def bola_do_controlo(controlo: dict) -> dict:
-    """Bloco `bola` em vigor (`{velocidade}`) — o padrão quando o ficheiro não o tem (ou tem lixo)."""
+    """Bloco `bola` em vigor (`{velocidade[, auto_atirar]}`) — o padrão quando o ficheiro não o tem (ou tem lixo)."""
     bloco = controlo.get("bola")
     vel = bloco.get("velocidade") if isinstance(bloco, dict) else None
     if isinstance(vel, bool) or not isinstance(vel, (int, float)) or not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
         vel = BOLA_VEL_PADRAO
-    return {"velocidade": float(vel), "min": BOLA_VEL_MIN, "max": BOLA_VEL_MAX}
+    out = {"velocidade": float(vel), "min": BOLA_VEL_MIN, "max": BOLA_VEL_MAX}
+    if isinstance(bloco, dict) and isinstance(bloco.get("auto_atirar"), bool):
+        out["auto_atirar"] = bool(bloco["auto_atirar"])
+    return out
 
 
 def validar_vento_simples(dados, atual: dict) -> dict:
@@ -1705,19 +1731,37 @@ def validar_vento_simples(dados, atual: dict) -> dict:
 
 
 def validar_bola(dados, atual: dict) -> dict:
-    """`POST /api/bola` → `{"bola": {"velocidade", "seq"}}` (r13; `seq` do servidor, +1 por pedido)."""
+    """`POST /api/bola` → `{"bola": {"velocidade"[, "auto_atirar"], "seq"}}` (`seq` do servidor, +1 por pedido).
+
+    Aceita `velocidade` em [0,0; 0,8] m/s (0,0 = bola parada) e/ou `auto_atirar` booleano (disparo automático
+    quando o tiro for literalmente acertar a bola na chegada).
+    """
     if not isinstance(dados, dict):
-        raise ValueError("o corpo tem de ser um objeto JSON {velocidade}")  # noqa: TRY004
-    desconhecidas = set(dados) - {"velocidade"}
+        raise ValueError("o corpo tem de ser um objeto JSON {velocidade, auto_atirar?}")  # noqa: TRY004
+    desconhecidas = set(dados) - {"velocidade", "auto_atirar"}
     if desconhecidas:
-        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita só ['velocidade']")
-    vel = _numero_finito(dados, "velocidade")
-    if vel is None:
-        raise ValueError("indique `velocidade` (m/s)")
-    if not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
-        raise ValueError(f"`velocidade` tem de estar em [{BOLA_VEL_MIN}, {BOLA_VEL_MAX}] m/s (recebido {vel!r})")
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['auto_atirar', 'velocidade']")
+    if "velocidade" not in dados and "auto_atirar" not in dados:
+        raise ValueError("indique `velocidade` (m/s) ou `auto_atirar` (bool)")
     anterior = atual.get("bola") if isinstance(atual.get("bola"), dict) else {}
-    return {"bola": {"velocidade": float(vel), "seq": int(anterior.get("seq", 0) or 0) + 1}}
+    if "velocidade" in dados:
+        vel = _numero_finito(dados, "velocidade")
+        if vel is None:
+            raise ValueError("indique `velocidade` (m/s)")
+        if not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
+            raise ValueError(f"`velocidade` tem de estar em [{BOLA_VEL_MIN}, {BOLA_VEL_MAX}] m/s (recebido {vel!r})")
+    else:
+        vel_ant = anterior.get("velocidade", BOLA_VEL_PADRAO)
+        vel = float(vel_ant) if isinstance(vel_ant, (int, float)) and not isinstance(vel_ant, bool) else BOLA_VEL_PADRAO
+    novo_bola: dict = {"velocidade": float(vel), "seq": int(anterior.get("seq", 0) or 0) + 1}
+    if "auto_atirar" in dados:
+        auto = dados["auto_atirar"]
+        if not isinstance(auto, bool):
+            raise ValueError(f"`auto_atirar` tem de ser booleano (recebido {auto!r})")
+        novo_bola["auto_atirar"] = auto
+    elif isinstance(anterior.get("auto_atirar"), bool):
+        novo_bola["auto_atirar"] = bool(anterior["auto_atirar"])
+    return {"bola": novo_bola}
 
 
 def tiro_do_controlo(controlo: dict) -> dict:
@@ -1753,6 +1797,38 @@ def validar_tiro(dados, atual: dict) -> dict:
     disparos = anterior["disparos"] + (1 if gatilho else 0)
     seq = anterior["seq"] + 1
     return {"tiro": {"gatilho": gatilho, "disparos": disparos, "seq": seq}}
+
+
+CARGA_EXTRA_MAX_G = 5000.0
+
+
+def carga_do_controlo(controlo: dict) -> dict:
+    """Bloco `carga` em vigor (`{carga_extra_g, seq}`)."""
+    bloco = controlo.get("carga")
+    if not isinstance(bloco, dict):
+        return {"carga_extra_g": 0.0, "seq": 0}
+    g = _numero_finito(bloco, "carga_extra_g")
+    seq = bloco.get("seq", 0)
+    return {
+        "carga_extra_g": float(g) if g is not None and 0.0 <= g <= CARGA_EXTRA_MAX_G else 0.0,
+        "seq": int(seq) if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else 0,
+    }
+
+
+def validar_carga(dados, atual: dict) -> dict:
+    """`POST /api/carga` → `{"carga": {"carga_extra_g", "seq"}}` (`seq` do servidor, +1 por pedido)."""
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON {carga_extra_g}")  # noqa: TRY004
+    desconhecidas = set(dados) - {"carga_extra_g"}
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita só ['carga_extra_g']")
+    g = _numero_finito(dados, "carga_extra_g")
+    if g is None:
+        raise ValueError("indique `carga_extra_g` (g)")
+    if not 0.0 <= g <= CARGA_EXTRA_MAX_G:
+        raise ValueError(f"`carga_extra_g` tem de estar em [0, {CARGA_EXTRA_MAX_G:g}] g (recebido {g!r})")
+    anterior = carga_do_controlo(atual)
+    return {"carga": {"carga_extra_g": float(g), "seq": anterior["seq"] + 1}}
 
 
 def validar_controlador(dados, atual: dict) -> dict:
@@ -2240,7 +2316,7 @@ def resumo_hardware(hardware: dict | None) -> dict | None:
     return {"build": hardware.get("build"), "modo_acao": hardware.get("modo_acao"),
             "motor": nome(p.get("motor")), "helice": nome(p.get("helice")), "celula": nome(p.get("celula")),
             "frame": nome(p.get("frame")), "esc": nome(p.get("esc")),
-            "arma": d.get("arma"),
+            "arma": d.get("arma"), "limites_carga": d.get("limites_carga"),
             "bateria": d.get("bateria"), "massa_total_g": d.get("massa_total_g"), "t_w": d.get("t_w_cheia"),
             "omega_max_rpm": d.get("omega_max_cheia_rpm"), "p_pairagem_w": ph.get("p_total"),
             "g_por_w": ph.get("g_por_w"), "autonomia_min": d.get("autonomia_min"),
@@ -2522,6 +2598,7 @@ def controlo_de_arranque(atual: dict) -> dict:
     voo = atual.get("voo") if isinstance(atual.get("voo"), dict) else {}
     bola = atual.get("bola") if isinstance(atual.get("bola"), dict) else {}
     tiro = tiro_do_controlo(atual)
+    carga = carga_do_controlo(atual)
     return {
         "vento_simples": {**base, "ligado": False, "seq": int(simples.get("seq", 0) or 0) + 1},
         "voo": {"ativo": True, "teclas": dict.fromkeys(("w", "a", "s", "d", "q", "e"), False),
@@ -2530,6 +2607,7 @@ def controlo_de_arranque(atual: dict) -> dict:
         "bola": {"velocidade": bola_do_controlo(atual)["velocidade"],
                  "seq": int(bola.get("seq", 0) or 0) + 1},
         "tiro": {"gatilho": False, "disparos": tiro["disparos"], "seq": tiro["seq"] + 1},
+        "carga": {"carga_extra_g": 0.0, "seq": carga["seq"] + 1},
     }
 
 

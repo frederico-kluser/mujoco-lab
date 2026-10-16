@@ -381,7 +381,7 @@ class Arma:
     @property
     def area_frontal(self) -> float:
         """Área frontal efetiva (m², perpendicular a +x)."""
-        c, l, a = self.dims
+        _c, l, a = self.dims
         aero = self.dados.get("aerodinamica") or {}
         fator = float(aero.get("fator_area_frontal", 0.75))
         return fator * l * a
@@ -389,7 +389,7 @@ class Arma:
     @property
     def area_lateral(self) -> float:
         """Área lateral efetiva (m², perpendicular a +y: silhueta ferrolho + punho)."""
-        c, l, a = self.dims
+        c, _l, a = self.dims
         aero = self.dados.get("aerodinamica") or {}
         fator = float(aero.get("fator_area_lateral", 0.65))
         return fator * c * a
@@ -511,6 +511,16 @@ class Hardware:
     @property
     def massa_total(self) -> float:
         return float(sum(self.massas.values()))
+
+    @property
+    def massa_estrutura_sem_carga(self) -> float:
+        """Massa do drone base (kg) sem carga útil/arma (`arma` excluída)."""
+        return float(sum(v for k, v in self.massas.items() if k != "arma"))
+
+    @property
+    def massa_carga_total(self) -> float:
+        """Massa total de carga útil acoplada no build (kg): arma + carga extra."""
+        return float(self.massas.get("arma", 0.0))
 
     @property
     def peso(self) -> float:
@@ -635,6 +645,292 @@ class Hardware:
                 "g_por_w": m * 1000.0 / (p_mot + p_ele), "g_por_w_motores": m * 1000.0 / p_mot,
                 "satura": d > self.duty_max}
 
+    def areas_equivalentes_corpo(self) -> tuple[float, float]:
+        """Áreas equivalentes de arrasto de corpo rombo (C_d·A_x, C_d·A_y) em m² (frame + bateria + pilha + arma)."""
+        lado = (0.5 * float(self.frame.dados["placa_mm"]) / 1000.0 if self.frame.dados.get("placa_mm")
+                else max(0.045, 0.16 * self.frame.wheelbase))
+        # Braços (4 tubos a 45°) + placa central + pack de bateria + pilha de eletrónica
+        a_bracos = 4.0 * (0.5 * self.frame.wheelbase) * 0.012 * 0.7071
+        dims_bat = [float(x) / 1000.0 for x in self.bateria.dados.get("dims_mm", (142, 70, 44))]
+        c_b, l_b, a_b = sorted(dims_bat, reverse=True)
+        cda_x = 1.10 * (a_bracos + l_b * a_b + (2.0 * lado) * 0.035)
+        cda_y = 1.10 * (a_bracos + c_b * a_b + (2.0 * lado) * 0.035)
+        if self.arma is not None:
+            aero_a = self.arma.dados.get("aerodinamica") or {}
+            cda_x += float(aero_a.get("cd_frontal", 1.15)) * self.arma.area_frontal
+            cda_y += float(aero_a.get("cd_lateral", 1.20)) * self.arma.area_lateral
+        return (cda_x, cda_y)
+
+    def ponto_maximo(self, soc: float = 1.0, temperatura_c: float | None = None, soh: float = 1.0) -> dict:
+        """Ponto de operação a 100 % de acelerador (`duty_max`) resolvendo a queda de tensão REAL na bateria:
+        V_bus = OCV(SoC) − I_total(V_bus, duty_max) · R_ef(SoC, T, SoH).
+
+        Devolve tensões, correntes, potências, empuxo bruto e EFETIVO (descontando `perda_download` e incluindo
+        o ganho de efeito de solo no arranque) e a verificação dos limites elétricos/térmicos de cada peça.
+        """
+        b = self.bateria
+        soc_c = float(np.clip(soc, 0.0, 1.0))
+        ocv = float(b.ocv(soc_c))
+        t_c = self.temperatura_ambiente if temperatura_c is None else float(temperatura_c)
+        f_t = math.exp(22_000.0 / 8.314 * (1.0 / (t_c + 273.15) - 1.0 / 298.15))
+        f_soc = 1.0 + max(0.0, 0.2 - soc_c) / 0.2
+        f_soh = 1.0 + 0.5 * (1.0 - float(soh)) / 0.2
+        r_tot = b.r0 * f_t * f_soc * f_soh + self.r_ligacoes
+        d_max = self.duty_max
+        p_ele = self.potencia_eletronica("voo")
+        v = ocv
+        for _ in range(30):
+            w = self.omega_max(v)
+            i_fase = max(0.0, float(self.corrente_motor(d_max, v, w)))
+            i_bus = d_max * i_fase / self.esc.eficiencia
+            i_tot = 4.0 * i_bus + p_ele / max(v, 1e-3)
+            v_novo = max(self.v_brownout, ocv - i_tot * r_tot)
+            if abs(v_novo - v) < 1e-7:
+                v = v_novo
+                break
+            v = v_novo
+        w_max = self.omega_max(v)
+        i_fase = max(0.0, float(self.corrente_motor(d_max, v, w_max)))
+        i_bus = d_max * i_fase / self.esc.eficiencia
+        i_tot = 4.0 * i_bus + p_ele / max(v, 1e-3)
+        p_mot_unit = v * i_bus
+        p_mot = 4.0 * p_mot_unit
+        p_tot = p_mot + p_ele
+        t_bruto = 4.0 * self.kf * (w_max ** 2)
+        f_dl = 1.0 - self.frame.perda_download
+        t_efetivo_oge = f_dl * t_bruto
+        # Ganho de efeito de solo EXATO com as pernas apoiadas no chão (Sanchez-Cuevas 2017, igual a `aero.ganho_solo`)
+        dims_bat = [float(x) / 1000.0 for x in self.bateria.dados.get("dims_mm", (142, 70, 44))]
+        a_b = min(dims_bat)
+        z_baixo = -0.0015 - 0.004 - a_b - 0.004
+        h_pernas = max(self.frame.altura_pernas, -z_baixo + 0.03)
+        h_motor = float(self.motor.dados.get("altura_mm", 20.0)) / 1000.0
+        z_chao = h_pernas + 0.006 + 0.0015 + h_motor + 0.014
+        r_h = self.helice.raio
+        r2 = r_h * r_h
+        b_op = self.frame.wheelbase
+        d_viz = b_op / math.sqrt(2.0)
+        s_ige = (
+            (r_h / (4.0 * z_chao)) ** 2
+            + r2 * z_chao / math.sqrt((d_viz ** 2 + 4.0 * z_chao * z_chao) ** 3)
+            + 0.5 * r2 * z_chao / math.sqrt((2.0 * d_viz ** 2 + 4.0 * z_chao * z_chao) ** 3)
+            + 2.0 * r2 * z_chao * 2.0 / math.sqrt((b_op ** 2 + 4.0 * z_chao * z_chao) ** 3)
+        )
+        g_ige = min(1.0 / max(1.0 - s_ige, 1e-9), 1.6)
+        t_efetivo_ige = t_efetivo_oge * g_ige
+        return {
+            "soc": soc_c,
+            "v_ocv": ocv,
+            "v_bus_carga": v,
+            "queda_tensao_v": ocv - v,
+            "r_total_mohm": r_tot * 1000.0,
+            "omega_max": w_max,
+            "rpm_max": w_max / RPM_PARA_RAD,
+            "i_fase_motor": i_fase,
+            "i_bus_motor": i_bus,
+            "i_total": i_tot,
+            "p_motor_unit_w": p_mot_unit,
+            "p_motores_w": p_mot,
+            "p_total_w": p_tot,
+            "empuxo_bruto_n": t_bruto,
+            "empuxo_efetivo_oge_n": t_efetivo_oge,
+            "empuxo_efetivo_ige_n": t_efetivo_ige,
+            "ganho_solo_descolagem": g_ige,
+            "limites_pecas": {
+                "motor_i_max_a": self.motor.i_max,
+                "motor_i_ok": i_fase <= self.motor.i_max,
+                "motor_p_max_w": self.motor.p_max,
+                "motor_p_ok": p_mot_unit <= self.motor.p_max,
+                "esc_i_max_a": self.esc.i_max,
+                "esc_i_ok": i_bus <= self.esc.i_max,
+                "bateria_i_max_a": b.i_max,
+                "bateria_i_ok": i_tot <= b.i_max,
+            },
+        }
+
+    def impacto_vento(self, vento_m_s: float, azimute_graus: float = 90.0, massa: float | None = None,
+                      soc: float = 1.0, tilt_max_graus: float = 30.0) -> dict:
+        """Cálculo físico fechado do impacto do vento `vento_m_s` (m/s) acoplado ao peso `massa` (kg) e `soc`:
+
+          1. Força horizontal de arrasto = arrasto H-force dos 4 rotores + arrasto parasita de corpo rombo
+             (frame + bateria + eletrónica + arma no topo);
+          2. Inclinação de equilíbrio θ_eq = arctan(F_vento / (m·g)) necessária para segurar posição;
+          3. Inflow axial v_axial = W·sin(θ_eq) através do disco inclinado (BEMT: reduz κ_T e altera κ_Q);
+          4. Empuxo total necessário T_nec = √((m·g)² + F_vento²) / (1 − perda_download) e rotação ω_vento;
+          5. Tensão real do barramento por ponto fixo V_bus = OCV(SoC) − I_total(V_bus)·R₀, corrente, potência
+             e verificação de saturação de empuxo (duty > duty_max) e de inclinação (θ_eq > tilt_max).
+        """
+        m = self.massa_total if massa is None else max(float(massa), 1e-3)
+        w_vel = max(0.0, float(vento_m_s))
+        az = math.radians(float(azimute_graus))
+        wx = abs(w_vel * math.cos(az))
+        wy = abs(w_vel * math.sin(az))
+        b = self.bateria
+        soc_c = float(np.clip(soc, 0.0, 1.0))
+        ocv = float(b.ocv(soc_c))
+        f_soc = 1.0 + max(0.0, 0.2 - soc_c) / 0.2
+        r_tot = b.r0 * f_soc + self.r_ligacoes
+        f_dl = 1.0 - self.frame.perda_download
+        p_ele = self.potencia_eletronica("voo")
+
+        # Coeficientes de arrasto linear (rotor + arma) e quadrático (corpo rombo)
+        dx_a, dy_a = self.arrasto_arma_xy()
+        d_x, d_y = 0.30 + dx_a, 0.30 + dy_a
+        cda_x, cda_y = self.areas_equivalentes_corpo()
+        f_wx = d_x * m * wx + 0.5 * RHO_AR * cda_x * w_vel * wx
+        f_wy = d_y * m * wy + 0.5 * RHO_AR * cda_y * w_vel * wy
+        f_vento = math.hypot(f_wx, f_wy)
+        peso_n = m * GRAVIDADE
+        theta_eq = math.atan2(f_vento, peso_n)
+        theta_graus = math.degrees(theta_eq)
+        satura_incl = theta_graus > float(tilt_max_graus)
+
+        # Inflow axial BEMT no disco inclinado (v_axial = W·sin(θ_eq) > 0: ar entra por cima do disco)
+        v_axial = w_vel * math.sin(theta_eq)
+        raio = self.helice.raio
+        ct0 = self.kf / (RHO_AR * math.pi * (raio ** 4))
+        cq0 = self.kq / (RHO_AR * math.pi * (raio ** 5))
+        lam0 = math.sqrt(ct0 / 2.0)
+        sigma_a = 0.45
+        theta_pa = 3.0 * (2.0 * ct0 / sigma_a + lam0 / 2.0)
+        cq_perf = max(cq0 - lam0 * ct0, 0.0)
+        t_rotor_nec = math.hypot(peso_n, f_vento) / (4.0 * f_dl)
+        w_est = math.sqrt(max(t_rotor_nec / self.kf, 1e-6))
+        for _ in range(6):
+            lam_c = v_axial / max(w_est * raio, 1e-6)
+            a_b = sigma_a * theta_pa / 6.0
+            b_b = sigma_a / 4.0
+            bb = b_b - 2.0 * lam_c
+            lam = (-bb + math.sqrt(bb * bb + 8.0 * a_b)) / 4.0
+            ct = a_b - b_b * lam
+            kt_inflow = min(max(ct / ct0, 0.25), 1.3)
+            cq = cq_perf + lam * max(ct, 0.0)
+            kq_inflow = min(max(cq / cq0, 0.1), 1.5)
+            w_est = math.sqrt(max(t_rotor_nec / (kt_inflow * self.kf), 1e-6))
+
+        # Equilíbrio elétrico com a bateria sob carga
+        v = ocv
+        satura_empuxo = False
+        for _ in range(30):
+            d_nec = self.duty_para_omega(w_est, v, kappa_q=kq_inflow)
+            satura_empuxo = d_nec > self.duty_max
+            d_ef = min(d_nec, self.duty_max)
+            w_real = w_est if not satura_empuxo else float(self.omega_regime(d_ef, v, kappa_q=kq_inflow))
+            i_fase = max(0.0, float(self.corrente_motor(d_ef, v, w_real)))
+            i_bus = d_ef * i_fase / self.esc.eficiencia
+            i_tot = 4.0 * i_bus + p_ele / max(v, 1e-3)
+            v_novo = max(self.v_brownout, ocv - i_tot * r_tot)
+            if abs(v_novo - v) < 1e-7:
+                v = v_novo
+                break
+            v = v_novo
+
+        d_nec = self.duty_para_omega(w_est, v, kappa_q=kq_inflow)
+        satura_empuxo = d_nec > self.duty_max
+        d_ef = min(d_nec, self.duty_max)
+        w_real = w_est if not satura_empuxo else float(self.omega_regime(d_ef, v, kappa_q=kq_inflow))
+        i_fase = max(0.0, float(self.corrente_motor(d_ef, v, w_real)))
+        i_bus = d_ef * i_fase / self.esc.eficiencia
+        i_tot = 4.0 * i_bus + p_ele / max(v, 1e-3)
+        p_mot = 4.0 * v * i_bus
+        p_tot = p_mot + p_ele
+        t_disp_total = 4.0 * f_dl * kt_inflow * self.kf * (w_real ** 2)
+        t_vert_disp = t_disp_total * math.cos(min(theta_eq, math.radians(tilt_max_graus)))
+        v_pouso = v_pouso_celula(b.celula) * b.s
+        sustenta = (not satura_empuxo) and (not satura_incl) and (v >= v_pouso) and (t_vert_disp >= peso_n * 0.999)
+        return {
+            "vento_m_s": w_vel,
+            "azimute_graus": float(azimute_graus),
+            "massa_g": m * 1000.0,
+            "forca_vento_n": f_vento,
+            "acel_vento_m_s2": f_vento / m,
+            "inclinacao_eq_graus": theta_graus,
+            "kappa_t_inflow": kt_inflow,
+            "kappa_q_inflow": kq_inflow,
+            "empuxo_necessario_n": 4.0 * t_rotor_nec * f_dl,
+            "empuxo_disponivel_n": t_disp_total,
+            "omega": w_real,
+            "rpm": w_real / RPM_PARA_RAD,
+            "duty_necessario": d_nec,
+            "duty": d_ef,
+            "acelerador": self.duty_para_acelerador(d_ef),
+            "v_bus": v,
+            "i_fase": i_fase,
+            "i_bus_motor": i_bus,
+            "i_total": i_tot,
+            "p_motores": p_mot,
+            "p_eletronica": p_ele,
+            "p_total": p_tot,
+            "satura_empuxo": bool(satura_empuxo),
+            "satura_inclinacao": bool(satura_incl),
+            "satura": bool(satura_empuxo or satura_incl or v < v_pouso),
+            "sustenta_voo": bool(sustenta),
+        }
+
+    def vento_maximo_sustentavel(self, massa: float | None = None, soc: float = 1.0,
+                                 azimute_graus: float = 90.0, tilt_max_graus: float = 30.0) -> float:
+        """Velocidade máxima de vento constante (m/s) que o drone sustenta sem saturar motores nem inclinação."""
+        if not self.impacto_vento(0.0, azimute_graus, massa=massa, soc=soc, tilt_max_graus=tilt_max_graus)["sustenta_voo"]:
+            return 0.0
+        lo, hi = 0.0, 25.0
+        for _ in range(28):
+            mid = 0.5 * (lo + hi)
+            if self.impacto_vento(mid, azimute_graus, massa=massa, soc=soc, tilt_max_graus=tilt_max_graus)["sustenta_voo"]:
+                lo = mid
+            else:
+                hi = mid
+        return round(lo, 3)
+
+    def limites_carga(self, massa_total: float | None = None, soc: float = 1.0, vento_m_s: float = 0.0) -> dict:
+        """Calcula o envelope de carga útil, impacto na bateria e viabilidade de descolagem/voo do build."""
+        m = self.massa_total if massa_total is None else max(float(massa_total), 1e-3)
+        m_base = self.massa_estrutura_sem_carga
+        carga_atual = max(0.0, m - m_base)
+        pm = self.ponto_maximo(soc=soc)
+        t_max_oge = pm["empuxo_efetivo_oge_n"]
+        t_max_ige = pm["empuxo_efetivo_ige_n"]
+        m_max_oge = t_max_oge / GRAVIDADE
+        m_max_ige = t_max_ige / GRAVIDADE
+        m_max_seguro = t_max_oge / (1.35 * GRAVIDADE)
+        peso_n = m * GRAVIDADE
+        tw_oge = t_max_oge / max(peso_n, 1e-6)
+        tw_ige = t_max_ige / max(peso_n, 1e-6)
+        iv = self.impacto_vento(vento_m_s, massa=m, soc=soc)
+        w_max = self.vento_maximo_sustentavel(massa=m, soc=soc)
+        pode_alcar = bool(tw_ige > 1.005 and pm["v_bus_carga"] > self.v_brownout)
+        pode_oge = bool(tw_oge > 1.01 and iv["sustenta_voo"])
+        pode_seguro = bool(tw_oge >= 1.35 and iv["sustenta_voo"])
+        if not pode_alcar:
+            estado = "impossivel_alcar_voo"
+        elif tw_oge <= 1.01:
+            estado = "preso_efeito_solo"
+        elif not iv["sustenta_voo"]:
+            estado = "insustentavel_no_vento"
+        elif tw_oge < 1.35:
+            estado = "marginal_sem_reserva"
+        else:
+            estado = "voo_seguro"
+        return {
+            "massa_sem_carga_g": round(m_base * 1000.0, 1),
+            "massa_total_g": round(m * 1000.0, 1),
+            "carga_atual_g": round(carga_atual * 1000.0, 1),
+            "massa_max_descolagem_oge_g": round(m_max_oge * 1000.0, 1),
+            "carga_max_descolagem_oge_g": round(max(0.0, m_max_oge - m_base) * 1000.0, 1),
+            "massa_max_descolagem_ige_g": round(m_max_ige * 1000.0, 1),
+            "carga_max_descolagem_ige_g": round(max(0.0, m_max_ige - m_base) * 1000.0, 1),
+            "massa_max_voo_seguro_g": round(m_max_seguro * 1000.0, 1),
+            "carga_max_voo_seguro_g": round(max(0.0, m_max_seguro - m_base) * 1000.0, 1),
+            "t_w_efetivo_oge": round(tw_oge, 3),
+            "t_w_efetivo_ige": round(tw_ige, 3),
+            "pode_alcar_voo": pode_alcar,
+            "pode_pairar_oge": pode_oge,
+            "pode_voar_seguro": pode_seguro,
+            "estado_voo": estado,
+            "vento_max_m_s": w_max,
+            "operacao_atual": iv,
+            "ponto_maximo": pm,
+        }
+
     def resumo(self) -> dict:
         """Números-chave do build (orçamento, T/W, pairagem, ω_max e autonomia estimada)."""
         b = self.bateria
@@ -644,6 +940,8 @@ class Hardware:
         aut = autonomia_estimada(self)
         return {
             "build": self.nome, "massa_total_g": self.massa_total * 1000.0,
+            "massa_sem_carga_g": self.massa_estrutura_sem_carga * 1000.0,
+            "carga_total_g": self.massa_carga_total * 1000.0,
             "massas_g": {k: v * 1000.0 for k, v in self.massas.items()},
             "kf": self.kf, "kq": self.kq, "kq_kf_m": self.kq / self.kf, "origem_kf_kq": self.origem_kf_kq,
             "j_rotor": self.j_rotor, "r_motor_ohm": self.r_motor,
@@ -651,6 +949,7 @@ class Hardware:
                         "wh": b.energia_wh, "massa_g": b.massa * 1000.0, "wh_kg": b.densidade_wh_kg,
                         "r0_mohm": b.r0 * 1000.0},
             "arma": self.resumo_arma(),
+            "limites_carga": self.limites_carga(),
             "t_w_cheia": t_max / self.peso,
             "omega_max_cheia_rpm": self.omega_max(b.v_cheia) / RPM_PARA_RAD,
             "pairagem_v_nominal": ph,
@@ -734,14 +1033,15 @@ def inercia_rotor(motor: Motor, helice: Helice) -> float:
     return j_helice + j_sino
 
 
-def autonomia_estimada(hw: Hardware, soc0: float = 1.0, dt: float = 2.0, perfil: str = "voo") -> dict:
-    """Autonomia de PAIRAGEM (min) integrando a bateria (OCV(SoC) − I·R₀) com o regime de pairagem.
+def autonomia_estimada(hw: Hardware, soc0: float = 1.0, dt: float = 2.0, perfil: str = "voo",
+                       massa: float | None = None, vento_m_s: float = 0.0) -> dict:
+    """Autonomia de PAIRAGEM (min) integrando a bateria (OCV(SoC) − I·R₀) com o regime de pairagem
+    (em ar parado ou sob vento constante `vento_m_s` m/s, para a massa total `massa` kg).
 
-    Bancada sem MuJoCo (ar parado, fora do efeito de solo, SoH = 1, 25 °C): a cada `dt` resolve-se a
+    Bancada sem MuJoCo (fora do efeito de solo, SoH = 1, 25 °C): a cada `dt` resolve-se a
     tensão do barramento por ponto fixo (V = OCV − I(V)·R) e desconta-se a carga por contagem de Coulomb.
     Para quando a tensão POR CÉLULA sob carga cai abaixo da tensão de pouso da química (LiPo 3,5 V,
-    Li-ion 3,0 V) ou o SoC chega a 0. Usada no resumo/`hardware.py`; a autonomia MEDIDA na planta MuJoCo
-    é a do `run.py` (§ autonomia) e tem de concordar com esta.
+    Li-ion 3,0 V), o SoC chega a 0 ou o empuxo/inclinação saturam (`p["satura"]`).
     """
     b = hw.bateria
     cap_as = b.capacidade_ah * 3600.0
@@ -749,15 +1049,24 @@ def autonomia_estimada(hw: Hardware, soc0: float = 1.0, dt: float = 2.0, perfil:
     v_pouso = v_pouso_celula(b.celula) * b.s
     soc, t, e_wh, v = float(soc0), 0.0, 0.0, float(b.ocv(soc0))
     serie = []
+    motivo = "soc_zero"
     while soc > 0.0 and t < 6.0 * 3600.0:
-        ocv = float(b.ocv(soc))
-        for _ in range(30):        # ponto fixo V = OCV − I(V)·R
-            p = hw.ponto_pairagem(v)
-            v_novo = ocv - p["i_total"] * r
-            if abs(v_novo - v) < 1e-7:
-                break
-            v = v_novo
-        if v < v_pouso or p["satura"]:
+        if vento_m_s > 0.0:
+            p = hw.impacto_vento(vento_m_s, massa=massa, soc=soc)
+            v = p["v_bus"]
+        else:
+            ocv = float(b.ocv(soc))
+            for _ in range(30):        # ponto fixo V = OCV − I(V)·R
+                p = hw.ponto_pairagem(v, massa=massa)
+                v_novo = ocv - p["i_total"] * r
+                if abs(v_novo - v) < 1e-7:
+                    break
+                v = v_novo
+        if v < v_pouso:
+            motivo = "tensao_pouso"
+            break
+        if p["satura"]:
+            motivo = "saturacao_carga_ou_vento"
             break
         i = p["i_total"]
         if len(serie) == 0 or t - serie[-1][0] >= 60.0:
@@ -766,7 +1075,7 @@ def autonomia_estimada(hw: Hardware, soc0: float = 1.0, dt: float = 2.0, perfil:
         e_wh += p["p_total"] * dt / 3600.0
         t += dt
     return {"minutos": t / 60.0, "soc_final": max(soc, 0.0), "v_final": v, "energia_wh": e_wh,
-            "v_pouso": v_pouso, "serie": serie}
+            "v_pouso": v_pouso, "motivo_fim": motivo, "pode_voar": t > 0.0, "serie": serie}
 
 
 # =========================================================================================== resolução

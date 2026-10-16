@@ -122,11 +122,11 @@ class Aerodinamica:
         """
         self._vrs_ruido = [0.0, 0.0, 0.0, 0.0]
 
-    def definir_arrasto(self, d_x: float, d_y: float) -> None:
+    def definir_arrasto(self, d_x: float, d_y: float, massa: float | None = None) -> None:
         """Arrasto de rotor (s⁻¹) ao longo de x e y do CORPO, em pairagem (c_d por rotor)."""
-        m = self.hw.massa_total
+        m = self.hw.massa_total if massa is None else float(massa)
         self.d_xy = (float(d_x), float(d_y))
-        self.cd = np.array([d_x, d_y]) * m / (4.0 * self.omega_h)   # N/((rad/s)·(m/s)) por rotor
+        self.cd = np.array([d_x, d_y]) * m / (4.0 * max(self.omega_h, 1e-6))   # N/((rad/s)·(m/s)) por rotor
 
     @property
     def cd(self) -> np.ndarray:

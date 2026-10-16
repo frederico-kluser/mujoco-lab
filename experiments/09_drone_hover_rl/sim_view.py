@@ -300,7 +300,7 @@ CIRCULO_VEL, CIRCULO_RAIO = 0.5, 1.5
 # «SEGUIR A BOLA» (contrato r13, 2026-10-12): com `voo.segui_alvo` a bola (o ponto mocap) passa a mover-se
 # ALEATORIAMENTE à velocidade do bloco `"bola"` do controlo e o IBVS do núcleo mantém-na centrada na câmara
 # FPV (guinada + translação). A faixa é a do `env_real.definir_trajetoria_ponto`; o padrão é o do protocolo.
-BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.1, 0.8, 0.5
+BOLA_VEL_MIN, BOLA_VEL_MAX, BOLA_VEL_PADRAO = 0.0, 0.8, 0.5
 # HUD AO VIVO (r13): a cada passo de decisão (50 Hz) o runner manda um datagrama UDP com o essencial do voo
 # para a porta que o `sim_site.py` abriu (variável de ambiente abaixo) — é o que alimenta os instrumentos do
 # site sem passar pelo disco nem esperar pelos ~10 Hz da telemetria. Sem a variável nada é enviado.
@@ -465,13 +465,14 @@ class VentoSimples:
 
 @dataclass
 class Bola:
-    """Bloco `"bola"` do controlo (contrato r13): `{velocidade, seq}` — a velocidade da bola aleatória.
+    """Bloco `"bola"` do controlo (contrato r13): `{velocidade, auto_atirar, seq}` — velocidade da bola e Auto-Shoot.
 
-    O interruptor do modo é o `voo.segui_alvo` (o «olhar» do r12); este bloco só diz A QUE VELOCIDADE a
-    bola deambula enquanto o modo está ligado (m/s, cortada a [BOLA_VEL_MIN, BOLA_VEL_MAX]).
+    O interruptor do modo é o `voo.segui_alvo` (o «olhar» do r12); `velocidade` diz a que velocidade a bola se move
+    (0,0 = bola parada; 0,1–0,8 m/s = aleatória) e `auto_atirar` ativa o disparo automático quando no alvo.
     """
 
     velocidade: float = BOLA_VEL_PADRAO
+    auto_atirar: bool = False
     seq: int | None = None
 
 
@@ -486,6 +487,17 @@ class Tiro:
     def assinatura(self) -> str:
         return json.dumps({"gatilho": self.gatilho, "disparos": self.disparos, "seq": self.seq},
                           sort_keys=True)
+
+
+@dataclass
+class Carga:
+    """Bloco `"carga"` do controlo: `{carga_extra_g, seq}` — carga útil extra acoplada ao drone (g)."""
+
+    carga_extra_g: float = 0.0
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        return json.dumps({"carga_extra_g": self.carga_extra_g, "seq": self.seq}, sort_keys=True)
 
 
 @dataclass
@@ -506,6 +518,7 @@ class Registo:
     vento_simples: VentoSimples | None = None     # None = campo ausente: manda o vento do contrato antigo
     bola: Bola | None = None                      # None = campo ausente: velocidade padrão da bola (r13)
     tiro: Tiro | None = None                      # None = campo ausente: não dispara nem mexe no gatilho
+    carga: Carga | None = None                    # None = campo ausente: mantém a carga útil atual
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -762,19 +775,22 @@ def _ler_vento_simples(bruto) -> VentoSimples | None:
 
 
 def _ler_bola(bruto) -> Bola | None:
-    """`"bola"` do controlo → `Bola` validada (`None` se o campo não vier) — contrato r13."""
+    """`"bola"` do controlo → `Bola` validada (`None` se o campo não vier) — contrato r13 + `auto_atirar`."""
     if bruto is None:
         return None
     if not isinstance(bruto, dict):
-        raise ValueError("`bola` tem de ser um objeto JSON {velocidade}")  # noqa: TRY004
+        raise ValueError("`bola` tem de ser um objeto JSON {velocidade, auto_atirar?}")  # noqa: TRY004
     vel = _numero(bruto, "velocidade", BOLA_VEL_PADRAO)
     if not BOLA_VEL_MIN <= vel <= BOLA_VEL_MAX:
         raise ValueError(f"`bola.velocidade` tem de estar em [{BOLA_VEL_MIN}, {BOLA_VEL_MAX}] m/s "
                          f"(recebido {vel!r})")
+    auto = bruto.get("auto_atirar", False)
+    if not isinstance(auto, bool):
+        raise ValueError(f"`bola.auto_atirar` tem de ser booleano (recebido {auto!r})")
     seq = bruto.get("seq")
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
         raise ValueError(f"`bola.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
-    return Bola(float(vel), seq)
+    return Bola(float(vel), bool(auto), seq)
 
 
 def _ler_tiro(bruto) -> Tiro | None:
@@ -791,6 +807,21 @@ def _ler_tiro(bruto) -> Tiro | None:
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
         raise ValueError(f"`tiro.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
     return Tiro(False if gatilho is None else bool(gatilho), int(disparos), seq)
+
+
+def _ler_carga(bruto) -> Carga | None:
+    """`"carga"` do controlo → `Carga` validada (`None` se o campo não vier)."""
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`carga` tem de ser um objeto JSON {carga_extra_g, seq}")  # noqa: TRY004
+    g = _numero(bruto, "carga_extra_g", 0.0)
+    if not 0.0 <= g <= 5000.0:
+        raise ValueError(f"`carga.carga_extra_g` tem de estar em [0, 5000] g (recebido {g!r})")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`carga.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return Carga(float(g), seq)
 
 
 def ler_registo(dados) -> Registo:
@@ -821,7 +852,7 @@ def ler_registo(dados) -> Registo:
                    _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
                    _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")),
                    _ler_vento_simples(dados.get("vento_simples")), _ler_bola(dados.get("bola")),
-                   _ler_tiro(dados.get("tiro")))
+                   _ler_tiro(dados.get("tiro")), _ler_carga(dados.get("carga")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -1014,10 +1045,13 @@ class Controlo:
         self._assinatura_vento_simples: str | None = None
         self.gerador_vento = vento_natural.VentoNatural(semente=0)   # o vento dos 3 botões, passo a passo
         self.bola_vel = BOLA_VEL_PADRAO                  # m/s — velocidade da bola aleatória (bloco `bola`)
+        self.bola_auto_atirar = False                    # disparo automático quando o tiro for literalmente acertar a bola
         self.tiro: Tiro | None = None                    # último bloco `tiro` APLICADO (SPACE)
         self._assinatura_tiro: str | None = None
         self.tiro_disparos: int | None = None            # linha de base do contador de disparos
         self.n_tiros = 0                                 # disparos aplicados ao env nesta sessão
+        self.carga: Carga | None = None                  # último bloco `carga` APLICADO
+        self._assinatura_carga: str | None = None
         self._le_contador_inicial()
 
     def _le_contador_inicial(self) -> None:
@@ -1184,8 +1218,10 @@ class Controlo:
         self._aplica_voo(env, registo.voo)               # controle de voo: estado das teclas (contrato r11)
         self._aplica_vento_simples(registo.vento_simples)   # os 3 botões do vento (r13)
         self._aplica_tiro(env, registo.tiro)             # tiro da Glock 25 (tecla SPACE)
+        self._aplica_carga(env, registo.carga)           # carga útil extra acoplada ao drone (g)
         if registo.bola is not None:
             self.bola_vel = float(registo.bola.velocidade)
+            self.bola_auto_atirar = bool(registo.bola.auto_atirar)
         self.n_ventos += 1                               # o controlo está APLICADO (contador de auditoria)
         # o ficheiro muda a CADA tecla/arrasto de câmara: só se anuncia o vento quando ELE mudou
         resumo_vento = (registo.vel, registo.azimute, registo.elevacao, registo.ativo)
@@ -1393,6 +1429,21 @@ class Controlo:
                       f"{res['direcao_soco']} (azimute {res['azimute_soco_graus']:.1f} deg) · "
                       f"Δv={res['delta_v_m_s']:.3f} m/s · Δω_pitch={res['delta_omega_pitch_rad_s']:+.3f} rad/s "
                       f"(seq {bloco.seq})", flush=True)
+
+    def _aplica_carga(self, env: HoverEnv, bloco: Carga | None) -> None:
+        """Bloco `carga` → altera a carga útil extra do drone no env (`definir_carga`)."""
+        if bloco is None:
+            return
+        assinatura = bloco.assinatura()
+        if assinatura == self._assinatura_carga:
+            return
+        self._assinatura_carga = assinatura
+        self.carga = bloco
+        if hasattr(env, "definir_carga"):
+            res = env.definir_carga(bloco.carga_extra_g / 1000.0)
+            print(f"[sim] CARGA EXTRA -> +{bloco.carga_extra_g:.0f} g · massa total {res['massa_total_g']:.0f} g · "
+                  f"T/W_OGE {res['t_w_efetivo_oge']:.2f} · estado={res['estado_voo']} · "
+                  f"alça voo={'SIM' if res['pode_alcar_voo'] else 'NÃO'} (seq {bloco.seq})", flush=True)
 
     def passo_vento_simples(self, env: HoverEnv) -> bool:
         """Escreve em `opt.wind` o vento dos 3 botões DESTE passo de decisão; `True` se é ele que manda.
@@ -2214,7 +2265,10 @@ class ControladorDeVoo:
         self._recusado: str | None = None           # último pedido recusado (não se repete a cada passo)
         self._voo: Voo | None = None                # bloco `voo` em vigor (para o eco `"controlador"`)
         self.bola_vel = BOLA_VEL_PADRAO             # m/s — velocidade da bola aleatória (o `correr` atualiza-a)
+        self.bola_auto_atirar = False               # disparo automático no modo seguir a bola (AUTO SHOOT)
         self._bola: tuple[bool, float] | None = None   # (a seguir?, velocidade) já aplicados à trajetória
+        from mira_balistica import MiraBalisticaIA
+        self.mira_ia = MiraBalisticaIA()
 
     # ------------------------------------------------------------------ estado
     def requisitar(self, modo: str) -> bool:
@@ -2254,6 +2308,7 @@ class ControladorDeVoo:
     def pos_reset(self) -> None:
         """Depois de um `env.reset` com o núcleo instalado (calibração + armar a cascata)."""
         self._bola = None                           # a lei da bola volta a ser aplicada no passo seguinte
+        self.mira_ia.reiniciar()
         if self.modo == "classico" and self.nucleo is not None:
             self.nucleo.pos_reset()
 
@@ -2309,29 +2364,39 @@ class ControladorDeVoo:
                 self.motivo = str(erro)
                 self._aviso_olhar()
         cmd = comando_classico(voo, alvo=alvo)
-        self._alternar_bola(cmd.get("modo") == "olhar")
+        seguir = cmd.get("modo") == "olhar"
+        self._alternar_bola(seguir)
+        if (
+            seguir
+            and getattr(self.env, "hw", None) is not None
+            and getattr(self.env.hw, "arma", None) is not None
+            and float(self.env.data.qpos[2]) > 0.70
+        ):
+            cmd_mira = self.mira_ia.passo(self.env, dt=getattr(self.env, "dt_decisao", 0.02))
+            self.nucleo.comando(cmd_mira)
+            cam = getattr(self.nucleo.fc, "camera", None)
+            if cam is not None and cam.registo and cam.registo[-1][1]:
+                self.nucleo.nucleo.saida.seguidor.estado = 0
+            if self.bola_auto_atirar and self.mira_ia.deve_atirar(self.env):
+                res_auto = self.env.disparar(1)
+                if res_auto is not None:
+                    print(f"[sim] AUTO SHOOT -> tiro #{res_auto['tiros_acumulados']} NO ALVO "
+                          f"(acertos={self.env.planta.n_acertos_bola})", flush=True)
+            return cmd
         self.nucleo.comando(cmd)
         return cmd
 
     def _alternar_bola(self, seguir: bool) -> None:
-        """«SEGUIR A BOLA» (r13): com o modo ligado a bola move-se ALEATORIAMENTE; desligado, fica parada.
-
-        É o cenário que o dono pediu em 2026-10-12 («a bola movimenta-se aleatoriamente e ele precisa de
-        mudar a rotação/posição para a bola estar sempre centralizada na câmara de FPV»): enquanto
-        `segui_alvo` estiver aplicado, o ponto mocap deambula (`definir_trajetoria_ponto("aleatorio")`) à
-        velocidade `bola_vel` do bloco `"bola"` e o IBVS do núcleo segue-o; ao sair do modo a bola fica
-        PARADA onde estiver (a chamada só muda a lei de movimento — nada de teleportes). Mudar a velocidade
-        a meio re-aplica a lei com a velocidade nova, a partir da posição atual. Sem alvo no modelo não há
-        o que mexer.
-        """
+        """«SEGUIR A BOLA» (r13): com o modo ligado a bola move-se ALEATORIAMENTE (ou fica parada se `bola_vel == 0`);
+        desligado, fica parada."""
         pedido = (bool(seguir), round(float(self.bola_vel), 3) if seguir else 0.0)
         if pedido == self._bola:
             return
         self._bola = pedido
         if not getattr(self.env, "com_alvo", False):
             return
-        self.env.definir_trajetoria_ponto("aleatorio" if seguir else "parado",
-                                          vel=float(self.bola_vel), raio=CIRCULO_RAIO)
+        modo_traj = "aleatorio" if (seguir and self.bola_vel > 0.0) else "parado"
+        self.env.definir_trajetoria_ponto(modo_traj, vel=float(self.bola_vel), raio=CIRCULO_RAIO)
 
     def _aviso_olhar(self) -> None:
         if getattr(self, "_olhar_avisado", False):
@@ -2445,6 +2510,7 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
         "voo": info.get("voo"),                     # aditivo: controle de voo (contrato r11; null = fora do modo)
         "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro")),
+        "carga": (env.carga_estado() if hasattr(env, "carga_estado") else info.get("carga")),
         # aditivo r12: quem pilota + o estado do yaw/olhar (null com runner antigo — o site aceita)
         "controlador": (piloto.amostra(_rumo_de(env), multi_ia) if piloto is not None else None),
     }
@@ -2531,7 +2597,8 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
            # o vento que o drone SENTE (observador de perturbação da cascata clássica); `None` com a política
            "vento_bordo": None,
            "est": None, "real": None, "bateria": None, "voo": None, "bola": None, "controlador": None,
-           "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro"))}
+           "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro")),
+           "carga": (env.carga_estado() if hasattr(env, "carga_estado") else info.get("carga"))}
     if real:
         d = env._derivados()
         e = env.estimador
@@ -2580,7 +2647,11 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
                            "raio_tan": (None if olhar.get("raio_px") is None else
                                         round(float(olhar["raio_px"]) / f_px, 5)),
                            "camara": [larg, alt], "fovy": round(fovy, 3), "dist": dist,
-                           "vel": round(float(piloto.bola_vel), 3), "alvo_mundo": alvo}
+                           "vel": round(float(piloto.bola_vel), 3),
+                           "auto_atirar": bool(piloto.bola_auto_atirar),
+                           "alvo_mundo": alvo}
+        if isinstance(hud.get("tiro"), dict):
+            hud["tiro"]["auto_atirar"] = bool(piloto.bola_auto_atirar)
     return hud
 
 
@@ -2943,6 +3014,7 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
         controlo.passo_rajada(env)                       # rajada one-shot: base+envelope DESTE passo
         controlo.passo_vento_simples(env)                # r13: o vento dos 3 botões DESTE passo (se mandar)
         piloto.bola_vel = controlo.bola_vel              # r13: velocidade da bola aleatória (bloco `bola`)
+        piloto.bola_auto_atirar = controlo.bola_auto_atirar
         try:
             est.acao = piloto.passo(est, controlo.voo)   # RL: a política · clássico: zeros (o C++ manda)
             est.h1, est.h2 = sonda.escondidas()

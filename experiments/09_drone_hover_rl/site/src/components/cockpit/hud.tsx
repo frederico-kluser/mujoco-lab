@@ -303,6 +303,9 @@ export function Hud({
   const rTiroContagem = useRef<HTMLSpanElement>(null)
   const rTiroSoco = useRef<HTMLSpanElement>(null)
   const rTiroRecuo = useRef<HTMLSpanElement>(null)
+  const rMiraImpacto = useRef<HTMLDivElement>(null)
+  const rMiraEstado = useRef<HTMLSpanElement>(null)
+  const rTiroResultado = useRef<HTMLSpanElement>(null)
 
   useDesenhoHud((quadro: QuadroHud) => {
     const { hud, texto } = quadro
@@ -390,6 +393,21 @@ export function Hud({
     }
     mostrar(rReticulo, alvo !== null)
 
+    // Marcador de ONDE O TIRO VAI PEGAR (mira balística da Glock 25 no visor FPS)
+    const miraImagem = naImagem?.tiro?.mira ?? hud?.tiro?.mira ?? null
+    const pontoImp =
+      g.emFpv && miraImagem !== null && miraImagem.pontoImpactoTan !== null
+        ? projetarNaVista(miraImagem.pontoImpactoTan, g.focal, g.vista)
+        : null
+    if (pontoImp !== null && miraImagem !== null) {
+      const ix = limitar(pontoImp.x, 30, g.vista[0] - 30)
+      const iy = limitar(pontoImp.y, 30, g.vista[1] - 30)
+      transformar(rMiraImpacto, `translate3d(${ix.toFixed(1)}px,${iy.toFixed(1)}px,0)`)
+      mostrar(rMiraImpacto, true)
+    } else {
+      mostrar(rMiraImpacto, false)
+    }
+
     // ---- ≤ 10 Hz: os números ---------------------------------------------------------------
     if (!texto) return
     escrever(rRumo, fmtRumo(ins.rumo))
@@ -431,7 +449,7 @@ export function Hud({
     const tHud = hud?.tiro ?? null
     escrever(
       rTiroContagem,
-      tHud === null ? "0" : `${tHud.tiros}`
+      tHud === null ? "0" : `${tHud.tiros} (${tHud.acertosBola}✓)`
     )
     escrever(
       rTiroSoco,
@@ -439,6 +457,34 @@ export function Hud({
         ? "1,92 N·s"
         : `${fmtHud(tHud.impulsoNs, 2)} N·s · −${fmtHud(tHud.deltaVTeoricoMS, 2)} m/s`
     )
+    const mira = tHud?.mira ?? null
+    if (rMiraEstado.current !== null) {
+      const erroCm =
+        mira?.erroBolaM != null ? ` (${fmtHud(mira.erroBolaM * 100, 1)} cm)` : ""
+      const txtMira =
+        mira === null
+          ? "—"
+          : mira.noAlvo
+            ? `NO ALVO${erroCm}`
+            : `FORA DO ALVO${erroCm}`
+      if (rMiraEstado.current.textContent !== txtMira) {
+        rMiraEstado.current.textContent = txtMira
+        rMiraEstado.current.dataset.noAlvo = mira?.noAlvo ? "sim" : "nao"
+      }
+    }
+    if (rTiroResultado.current !== null) {
+      const resUlt = tHud?.ultimoResultado ?? null
+      const txtRes =
+        tHud === null || tHud.tiros === 0
+          ? "pronto [SPACE]"
+          : resUlt === "acertou_bola"
+            ? `ACERTOU A BOLA! (${tHud.acertosBola}/${tHud.tiros})`
+            : resUlt === "em_voo"
+              ? `EM VOO… (${tHud.acertosBola}/${tHud.tiros})`
+              : `ERROU A BOLA (${tHud.acertosBola}/${tHud.tiros})`
+      if (rTiroResultado.current.textContent !== txtRes)
+        rTiroResultado.current.textContent = txtRes
+    }
   })
 
   // A pílula vem do resumo (lento): o texto e o tom por estado, sem tocar na amostra de 50 Hz.
@@ -745,6 +791,46 @@ export function Hud({
               className="absolute -top-3.5 left-0 block size-3.5 border-b-[3px] border-l-[3px] border-hud-magenta shadow-[-1px_1px_0_#000] will-change-transform"
             />
           </div>
+          {/* PONTO DE IMPACTO DO TIRO (mira balística da Glock 25 no visor FPS) + mensagem NO ALVO / FORA DO ALVO */}
+          <div
+            ref={rMiraImpacto}
+            data-testid="hud-mira-impacto"
+            className="absolute top-0 left-0 size-0 will-change-transform"
+            style={{ opacity: 0 }}
+          >
+            <svg
+              width="36"
+              height="36"
+              viewBox="-18 -18 36 36"
+              aria-hidden="true"
+              className="-translate-x-1/2 -translate-y-1/2 overflow-visible [filter:drop-shadow(0_0_2px_#000)]"
+            >
+              <circle
+                cx="0"
+                cy="0"
+                r="10"
+                fill="none"
+                stroke="#22c55e"
+                strokeWidth="2"
+                strokeDasharray="4 2"
+              />
+              <path
+                d="M-15 0H-5M5 0H15M0 -15V-5M0 5V15"
+                stroke="#22c55e"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <circle cx="0" cy="0" r="2.5" fill="#22c55e" />
+            </svg>
+            <span
+              ref={rMiraEstado}
+              data-testid="hud-estado-mira"
+              data-no-alvo="nao"
+              className="absolute top-3 left-1/2 -translate-x-1/2 rounded bg-black/80 px-1.5 py-0.5 font-mono text-[0.65rem] font-bold tracking-wider whitespace-nowrap text-emerald-400 shadow"
+            >
+              FORA DO ALVO
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -860,6 +946,15 @@ export function Hud({
                 style={{ opacity: 0 }}
               >
                 SOCO
+              </span>
+            </div>
+            <div className="osd flex items-center justify-between gap-1 text-[0.6rem] leading-none">
+              <span
+                ref={rTiroResultado}
+                data-testid="hud-tiro-resultado"
+                className="font-mono font-bold text-emerald-400"
+              >
+                pronto [SPACE]
               </span>
             </div>
           </div>
