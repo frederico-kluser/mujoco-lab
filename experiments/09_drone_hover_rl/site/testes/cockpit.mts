@@ -418,6 +418,37 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
       bolaZero !== null && bolaZero.velocidade === 0.0 && bolaZero.min === 0.0 && bolaZero.autoAtirar === true,
       "lerBolaConfig: aceita velocidade 0,0 m/s (bola parada) e `auto_atirar: true`"
     )
+    const hudGraf = m.lerHud({
+      ...AMOSTRA,
+      graficos: {
+        sombras: false,
+        reflexos: false,
+        nevoeiro: true,
+        mostrar_helices: true,
+        mostrar_efeitos: true,
+        mostrar_fios_detalhes: false,
+        escala_resolucao: 0.5,
+        qualidade_jpeg: 65,
+        fps_atual: 59.8,
+        fps_simulacao: 59.8,
+        fps_fpv: 49.9,
+        fps_fisica: 50.0,
+        ms_render_sim: 1.8,
+        ms_render_fpv: 1.4,
+      },
+    })
+    ok(
+      hudGraf?.graficos !== null &&
+        hudGraf?.graficos.sombras === false &&
+        hudGraf.graficos.reflexos === false &&
+        hudGraf.graficos.nevoeiro === true &&
+        hudGraf.graficos.mostrarFiosDetalhes === false &&
+        aprox(hudGraf.graficos.escalaResolucao, 0.5) &&
+        hudGraf.graficos.qualidadeJpeg === 65 &&
+        aprox(hudGraf.graficos.fpsAtual ?? 0, 59.8) &&
+        aprox(hudGraf.graficos.fpsSimulacao ?? 0, 59.8),
+      "lerHud: bloco `graficos` (otimização gráfica do MuJoCo e FPS atual) lido"
+    )
   }
   ok(a("w", { ctrl: true }) === "null" && a("r", { meta: true }) === "null" && a("f", { alt: true }) === "null",
     "teclas: com Ctrl/Meta/Alt nunca se rouba o atalho do browser")

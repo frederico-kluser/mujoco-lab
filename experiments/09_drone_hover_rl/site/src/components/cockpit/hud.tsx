@@ -306,6 +306,7 @@ export function Hud({
   const rMiraImpacto = useRef<HTMLDivElement>(null)
   const rMiraEstado = useRef<HTMLSpanElement>(null)
   const rTiroResultado = useRef<HTMLSpanElement>(null)
+  const rFpsBadge = useRef<HTMLSpanElement>(null)
 
   useDesenhoHud((quadro: QuadroHud) => {
     const { hud, texto } = quadro
@@ -485,6 +486,12 @@ export function Hud({
       if (rTiroResultado.current.textContent !== txtRes)
         rTiroResultado.current.textContent = txtRes
     }
+    if (rFpsBadge.current !== null) {
+      const fpsVal = hud?.graficos?.fpsAtual ?? null
+      const txtFps = fpsVal != null ? `${fmtHud(fpsVal, 0)} FPS` : "50 FPS"
+      if (rFpsBadge.current.textContent !== txtFps)
+        rFpsBadge.current.textContent = txtFps
+    }
   })
 
   // A pílula vem do resumo (lento): o texto e o tom por estado, sem tocar na amostra de 50 Hz.
@@ -527,6 +534,14 @@ export function Hud({
               </span>
             </>
           ) : null}
+          <span aria-hidden="true" className="h-4 w-px bg-white/25" />
+          <span
+            ref={rFpsBadge}
+            data-testid="hud-fps-atual"
+            className="font-mono text-[0.75rem] text-emerald-400"
+          >
+            50 FPS
+          </span>
         </div>
         {aSeguir ? (
           <div

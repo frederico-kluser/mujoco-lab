@@ -189,6 +189,34 @@ class Planta:
         r_inercia = q_inercia.reshape(3, 3)
         i_corpo = r_inercia @ np.diag(model.body_inertia[c]) @ r_inercia.T
         self.inercia_corpo = np.diag(i_corpo).copy()
+        # Hélices 3D rotativas (rotores 1..4): sentido correto (CW = -1 nos rotores 1,2; CCW = +1 nos rotores 3,4)
+        # e velocidade angular visual proporcional à fração % de ω_max de cada motor.
+        self.sentido_rotacao_helices = [int(g) for g in hw.GIRO]
+        self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
+        self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
+        self._helices_pas: list[tuple[np.ndarray, list[tuple[int, float, float, float, float]]]] = []
+        r_hel = hw.helice.raio
+        theta_pa = hw.helice.angulo_passo_75_rad
+        n_pas = max(int(hw.helice.pas), 2)
+        for i in range(4):
+            centro_r = model.site_pos[int(self.sites[i])].copy()
+            s_giro = float(self.sentido_rotacao_helices[i])
+            pecas_pa: list[tuple[int, float, float, float, float]] = []
+            gid_cubo = self._geom_id(f"helice{i + 1}_cubo")
+            if gid_cubo is not None:
+                model.geom_sameframe[gid_cubo] = 0
+            for b_idx in range(n_pas):
+                psi_b = 2.0 * math.pi * b_idx / n_pas
+                for sufixo, r_frac, dz_pa, k_pitch in (
+                    ("raiz", 0.29, 0.0005, 1.00),
+                    ("ponta", 0.73, 0.0005, 0.75),
+                    ("faixa", 0.93, 0.0006, 0.65),
+                ):
+                    gid_pa = self._geom_id(f"helice{i + 1}_pa{b_idx + 1}_{sufixo}")
+                    if gid_pa is not None:
+                        model.geom_sameframe[gid_pa] = 0
+                        pecas_pa.append((gid_pa, r_frac * r_hel, dz_pa, psi_b, k_pitch * s_giro * theta_pa))
+            self._helices_pas.append((centro_r, pecas_pa))
 
     def _geom_id(self, nome: str) -> int | None:
         try:
@@ -251,6 +279,9 @@ class Planta:
         self.data.xfrc_applied[self.corpo] = 0.0
         self._tiros_ativos.clear()
         self._limpar_visuais_tiro()
+        self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
+        self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
+        self._aplicar_geoms_helices()
         self.n_tiros = 0
         self.n_acertos_bola = 0
         self.n_erros_bola = 0
@@ -388,6 +419,46 @@ class Planta:
             m.geom_pos[gid] = [0.0, 0.0, -10.0]
         if self._gid_ferrolho is not None and self._pos_ferrolho0 is not None:
             m.geom_pos[self._gid_ferrolho] = self._pos_ferrolho0
+
+    def _aplicar_geoms_helices(self) -> None:
+        """Atualiza `geom_pos` e `geom_quat` das pás 3D das 4 hélices segundo `self.angulos_helices`."""
+        m = self.model
+        gpos, gquat = m.geom_pos, m.geom_quat
+        for i, (centro_r, pecas_pa) in enumerate(self._helices_pas):
+            if not pecas_pa:
+                continue
+            ang_i = self.angulos_helices[i]
+            cx_r, cy_r, cz_r = float(centro_r[0]), float(centro_r[1]), float(centro_r[2])
+            for gid_pa, r_dist, dz_pa, psi_b, pitch_rad in pecas_pa:
+                psi = ang_i + psi_b
+                c_p, s_p = math.cos(psi), math.sin(psi)
+                gpos[gid_pa, 0] = cx_r + r_dist * c_p
+                gpos[gid_pa, 1] = cy_r + r_dist * s_p
+                gpos[gid_pa, 2] = cz_r + dz_pa
+                cz_h, sz_h = math.cos(0.5 * psi), math.sin(0.5 * psi)
+                cx_h, sx_h = math.cos(0.5 * pitch_rad), math.sin(0.5 * pitch_rad)
+                gquat[gid_pa, 0] = cz_h * cx_h
+                gquat[gid_pa, 1] = cz_h * sx_h
+                gquat[gid_pa, 2] = sz_h * sx_h
+                gquat[gid_pa, 3] = sz_h * cx_h
+
+    def _passo_helices_visuais(self, omega_rotores) -> None:
+        """Avança o ângulo de cada hélice no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4)
+        com velocidade proporcional à % de rotação máxima (`ω_i / ω_max(V_bus)`)."""
+        w_max = max(self.hw.omega_max(self.v_bus), 1.0)
+        dt = self.dt
+        omega_vis_max = 36.0  # rad/s a 100 % de ω_max (abaixo do Nyquist de 50 fps para nunca inverter sentido)
+        mexeu = False
+        for i in range(4):
+            w_i = float(omega_rotores[i])
+            pct = min(max(w_i / w_max, 0.0), 1.0)
+            self.pct_rotacao_helices[i] = pct
+            if pct > 1e-6:
+                s = self.sentido_rotacao_helices[i]
+                self.angulos_helices[i] = (self.angulos_helices[i] + s * omega_vis_max * pct * dt) % (2.0 * math.pi)
+                mexeu = True
+        if mexeu and (self.n_passos < 20 or (self.n_passos & 1) == 0):
+            self._aplicar_geoms_helices()
 
     def _aplicar_fogo_e_ferrolho(self) -> None:
         """Atualiza o efeito de fogo do cano (muzzle flash) e o recuo blowback do ferrolho da Glock 25."""
@@ -847,6 +918,7 @@ class Planta:
 
         _mj_step2(m, d)
         self._passo_visuais_tiro()
+        self._passo_helices_visuais(omega)
 
         # bateria: corrente REAL deste passo (motores + eletrónica)
         p_e = 0.0 if self.brownout else self.p_eletronica
@@ -942,6 +1014,7 @@ class Planta:
 
         mujoco.mj_step2(m, d)
         self._passo_visuais_tiro()
+        self._passo_helices_visuais(omega)
 
         # bateria: corrente REAL deste passo (motores + eletrónica)
         p_e = 0.0 if self.brownout else self.p_eletronica

@@ -488,7 +488,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "multi_ia": (ultima.get("multi_ia") if isinstance(ultima.get("multi_ia"), dict) else None),
             "controlador": (controlador if isinstance(controlador, dict) else None),
             "tiro": (tiro if isinstance(tiro, dict) else None),
-            "carga": (carga if isinstance(carga, dict) else None)}
+            "carga": (carga if isinstance(carga, dict) else None),
+            "graficos": (ultima.get("graficos") if isinstance(ultima.get("graficos"), dict) else None)}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -1054,6 +1055,8 @@ class Handler(BaseHTTPRequestHandler):
                      "eco": resumo.get("tiro")},  # tiro Glock 25 (SPACE): pedido × eco do runner
             "carga": {"pedido": carga_do_controlo(controlo),
                       "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
+            "graficos": {"pedido": graficos_do_controlo(controlo),
+                         "eco": resumo.get("graficos")},  # otimização gráfica do MuJoCo e FPS ao vivo
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1087,6 +1090,8 @@ class Handler(BaseHTTPRequestHandler):
                      "eco": resumo.get("tiro")},  # tiro Glock 25 (SPACE): pedido × eco do runner
             "carga": {"pedido": carga_do_controlo(controlo),
                       "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
+            "graficos": {"pedido": graficos_do_controlo(controlo),
+                         "eco": resumo.get("graficos")},  # otimização gráfica do MuJoCo e FPS ao vivo
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1172,6 +1177,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_tiro(dados)
             elif rota == "/api/carga":
                 self._post_carga(dados)
+            elif rota == "/api/graficos":
+                self._post_graficos(dados)
             else:
                 self._erro(404, f"rota desconhecida: {rota}")
         except _PedidoInvalido as erro:
@@ -1567,6 +1574,23 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[site] carga extra: {bloco['carga_extra_g']:.0f} g (seq {bloco['seq']})", flush=True)
         self._json(200, {"ok": True, "carga": bloco})
 
+    def _post_graficos(self, dados) -> None:
+        """OTIMIZAÇÃO GRÁFICA DO MUJOCO (`POST /api/graficos`): 200/400."""
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_graficos(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["graficos"]
+        print(f"[site] graficos MuJoCo: sombras={bloco['sombras']} · reflexos={bloco['reflexos']} · "
+              f"fios={bloco['mostrar_fios_detalhes']} · helices={bloco['mostrar_helices']} · "
+              f"escala={bloco['escala_resolucao']:.2f} · jpeg={bloco['qualidade_jpeg']} (seq {bloco['seq']})",
+              flush=True)
+        self._json(200, {"ok": True, "graficos": bloco})
+
     def _post_voo(self, dados) -> None:
         """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
 
@@ -1829,6 +1853,79 @@ def validar_carga(dados, atual: dict) -> dict:
         raise ValueError(f"`carga_extra_g` tem de estar em [0, {CARGA_EXTRA_MAX_G:g}] g (recebido {g!r})")
     anterior = carga_do_controlo(atual)
     return {"carga": {"carga_extra_g": float(g), "seq": anterior["seq"] + 1}}
+
+
+GRAFICOS_PADRAO = {
+    "sombras": True,
+    "reflexos": True,
+    "nevoeiro": False,
+    "mostrar_helices": True,
+    "mostrar_efeitos": True,
+    "mostrar_fios_detalhes": True,
+    "escala_resolucao": 1.0,
+    "qualidade_jpeg": 80,
+}
+CAMPOS_BOOL_GRAFICOS = (
+    "sombras",
+    "reflexos",
+    "nevoeiro",
+    "mostrar_helices",
+    "mostrar_efeitos",
+    "mostrar_fios_detalhes",
+)
+CAMPOS_GRAFICOS = (*CAMPOS_BOOL_GRAFICOS, "escala_resolucao", "qualidade_jpeg")
+
+
+def graficos_do_controlo(controlo: dict) -> dict:
+    """Bloco `graficos` em vigor (ou `GRAFICOS_PADRAO` se ausente)."""
+    bloco = controlo.get("graficos")
+    out = dict(GRAFICOS_PADRAO)
+    seq = 0
+    if isinstance(bloco, dict):
+        for k in CAMPOS_BOOL_GRAFICOS:
+            if isinstance(bloco.get(k), bool):
+                out[k] = bool(bloco[k])
+        esc = _numero_finito(bloco, "escala_resolucao")
+        if esc is not None and 0.25 <= esc <= 1.0:
+            out["escala_resolucao"] = round(float(esc), 2)
+        q = _numero_finito(bloco, "qualidade_jpeg")
+        if q is not None and 30 <= q <= 95:
+            out["qualidade_jpeg"] = int(round(q))
+        s = bloco.get("seq", 0)
+        if isinstance(s, int) and not isinstance(s, bool) and s >= 0:
+            seq = s
+    out["seq"] = seq
+    return out
+
+
+def validar_graficos(dados, atual: dict) -> dict:
+    """`POST /api/graficos` → `{"graficos": {...}}` (`seq` +1 por pedido)."""
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON com opções gráficas")  # noqa: TRY004
+    desconhecidas = set(dados) - set(CAMPOS_GRAFICOS)
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita {sorted(CAMPOS_GRAFICOS)}")
+    if not any(k in dados for k in CAMPOS_GRAFICOS):
+        raise ValueError(f"indique pelo menos um de {sorted(CAMPOS_GRAFICOS)}")
+    base = graficos_do_controlo(atual)
+    seq = int(base.get("seq", 0)) + 1
+    for k in CAMPOS_BOOL_GRAFICOS:
+        if k in dados:
+            if not isinstance(dados[k], bool):
+                raise ValueError(f"`{k}` tem de ser booleano (recebido {dados[k]!r})")
+            base[k] = dados[k]
+    if "escala_resolucao" in dados:
+        esc = _numero_finito(dados, "escala_resolucao")
+        if esc is None or not 0.25 <= esc <= 1.0:
+            raise ValueError(f"`escala_resolucao` tem de estar em [0.25, 1.0] (recebido {dados['escala_resolucao']!r})")
+        base["escala_resolucao"] = round(float(esc), 2)
+    if "qualidade_jpeg" in dados:
+        q = _numero_finito(dados, "qualidade_jpeg")
+        if q is None or not 30 <= q <= 95:
+            raise ValueError(f"`qualidade_jpeg` tem de estar em [30, 95] (recebido {dados['qualidade_jpeg']!r})")
+        base["qualidade_jpeg"] = int(round(q))
+    base["seq"] = seq
+    return {"graficos": base}
 
 
 def validar_controlador(dados, atual: dict) -> dict:

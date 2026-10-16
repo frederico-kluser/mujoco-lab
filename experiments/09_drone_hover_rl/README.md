@@ -139,6 +139,36 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
     conjunto com `SEGUIR A BOLA`, dispara automaticamente **apenas quando o tiro for literalmente acertar a bola na chegada**
     ($d_{\min}(t + \tau_{\text{voo}}) \le 0,72 \, R_{\text{col}}$ e taxas angulares estabilizadas), garantindo **100 % de
     taxa de acerto (`0 erros`)** tanto com bola parada ($0,0\text{ m/s}$) como em movimento ($0,3\text{–}0,8\text{ m/s}$).
+- **Modelagem 3D de Alta Estabilidade, Motor MN4004 Real, Raspberry Pi 5 Fiel, Hélices 3D Rotativas e Otimização Gráfica MuJoCo (`POST /api/graficos`)**
+  (`lab/drone_rpi/modelo.py`, `lab/drone_rpi/componentes.py`, `lab/drone_rpi/planta.py`, `lab/camera_rpi.py`, `painel-otimizacao-mujoco.tsx`, `valida_real.py` `A6`, `B9`, `B10`):
+  - **Estrutura de alta estabilidade e cablagem trifásica**: dupla placa central de carbono em sanduíche (`placa` +
+    `placa_superior` com 4 espaçadores CNC de alumínio vermelho), 4 treliças diagonais anti-torção (`trelica_estab_1..4`)
+    entre braços adjacentes para eliminar flexão e ressonância modal, suportes CNC de motor (`suporte_motor_1..4`), berço
+    de bateria de baixo CG com cintas (`cinta_bateria_1..2`) e cabos de potência XT90 (`conector_xt90`, `cabo_bateria_pos/neg`),
+    mais **3 fios trifásicos de silicone por braço** (`fio_motor1..4_a/b/c`: vermelho, preto, azul) presos por abraçadeiras
+    (`abracadeira_braco1..4_1..2`) desde o ESC central até cada motor.
+  - **Motor baseado no T-Motor Antigravity MN4004 KV300 real**: base CNC ventilada (`motor_base_cnc`), estator interno com
+    **bobinas de cobre visíveis** (`motor_estator_cobre`), anel magnético e sino anodizado preto com **raios superiores
+    vazados** (`motor_sino_anel`, `motor_raio_1..3`) e eixo oco em aço inox (`motor_eixo`).
+  - **Raspberry Pi 5 fiel ($85 \times 56\text{ mm}$)**: PCB verde (`el_rpi5`), SoC Broadcom BCM2712 com *heatspreader*
+    metálico (`rpi5_soc_bcm2712`), **Active Cooler** com dissipador de alumínio aletado (`rpi5_dissipador`) e ventoinha
+    radial (`rpi5_ventoinha`), chip I/O RP1 (`rpi5_rp1`), 2× torres USB 3.0 com interior azul (`rpi5_usb3_torre`,
+    `rpi5_usb3_azul`), torre USB 2.0 (`rpi5_usb2_torre`), porta Gigabit Ethernet RJ45 (`rpi5_rj45`), barramento GPIO de
+    40 pinos (`rpi5_gpio_40p`), USB-C de energia (`rpi5_usbc`) e 2× portas micro-HDMI (`rpi5_micro_hdmi_1..2`).
+  - **Hélices 3D com impacto físico do design e rotação por % de $\omega_{\max}$**:
+    - `Helice` (`componentes.py`): `corda_media`, `afunilamento` ($\lambda_{\text{taper}} \to \kappa_J$ na inércia
+      $J_{\text{rotor}}$), `solidez` ($\sigma = N_b \bar{c} / (\pi R)$), `angulo_passo_75_rad` ($\theta_{75}$), `perfil`
+      (`scimitar_cf`, `mr_naca`, `tri_pa_fpv`), `ct_cp_bemt()` e `com_design(...)` — alterar diâmetro, passo, número de
+      pás, corda ou afunilamento altera fisicamente $k_f, k_q, J_{\text{rotor}}$ e $\tau_{\text{motor}}$ (`B9`).
+    - **Rotação 3D (`B10`)**: cada hélice (`helice1..4_cubo` + pás `pa1..2_raiz/ponta/faixa` em carbono com pontas
+      identificadoras) gira no **sentido físico correto** (`CW` nos rotores 1 e 2, `CCW` nos rotores 3 e 4) com velocidade
+      angular proporcional à fração `%` de $\omega_{\max}(V_{\text{bus}})$ em que aquele motor está a operar.
+  - **Painel HTML de Otimização Gráfica do MuJoCo e FPS ao Vivo (`PainelOtimizacaoMuJoCo` + `POST /api/graficos`)**:
+    mostra o **FPS atual** (`fps_atual`, `fps_simulacao`, `fps_fpv`, `fps_fisica` e `ms_render`) no topo do HUD e nas
+    janelas **Gráficos (tecla 6)** e **Sistema (tecla 7)**, com presets rápidos (`⚡ MÁXIMO FPS`, `⚖ EQUILIBRADO`,
+    `✦ ULTRA 1080P`), interruptores em tempo real para desligar **Sombras (`mjRND_SHADOW`)**, **Reflexos
+    (`mjRND_REFLECTION`)**, **Fios e Detalhes RPi 5 (`group 3`)**, **Hélices 3D (`group 1`)**, **Efeitos (`group 2`)** e
+    **Nevoeiro (`mjRND_FOG`)**, além de sliders de **escala de resolução OpenGL (`25–100 %`)** e **qualidade JPEG (`30–95 %`)**.
 - **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
   - No ponto de $100\%$ de acelerador sob queda de tensão real da bateria ($V_{\text{carga}} = 23,79\text{ V}$ a $28,9\text{ A}$,
     queda de $1,41\text{ V}$ face ao OCV $25,20\text{ V}$) e descontando os $5\%$ de *download* na estrutura:

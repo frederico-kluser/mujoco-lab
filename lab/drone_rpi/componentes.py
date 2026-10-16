@@ -149,6 +149,106 @@ class Helice:
     def area(self) -> float:
         return math.pi * self.raio ** 2
 
+    @property
+    def perfil(self) -> str:
+        """Família aerodinâmica/geométrica da pá: `scimitar_cf` (T-Motor P/MF carbono), `mr_naca` (APC MR) ou `tri_pa_fpv`."""
+        if self.dados.get("perfil"):
+            return str(self.dados["perfil"])
+        if self.pas >= 3:
+            return "tri_pa_fpv"
+        if "apc" in self.id.lower():
+            return "mr_naca"
+        return "scimitar_cf"
+
+    @property
+    def corda_media(self) -> float:
+        """Corda média da pá c̄ (m): `corda_media_mm` do catálogo ou lei geométrica por perfil (≈ 0,078·D nas P-series CF)."""
+        if self.dados.get("corda_media_mm"):
+            return float(self.dados["corda_media_mm"]) / 1000.0
+        fator = {"scimitar_cf": 0.078, "mr_naca": 0.084, "tri_pa_fpv": 0.115}.get(self.perfil, 0.080)
+        return fator * self.diametro
+
+    @property
+    def afunilamento(self) -> float:
+        """Razão de afunilamento ponta/raiz λ_taper = c_ponta / c_raiz (0,42 nominal nas pás scimitar de carbono)."""
+        return float(self.dados.get("afunilamento", 0.42))
+
+    @property
+    def solidez(self) -> float:
+        """Solidez do disco do rotor σ = N_pás · c̄ / (π · R)."""
+        return float(self.pas) * self.corda_media / (math.pi * max(self.raio, 1e-6))
+
+    @property
+    def angulo_passo_75_rad(self) -> float:
+        """Ângulo geométrico de passo a 75 % do raio: θ_75 = arctan(P / (0,75 · π · D))."""
+        return math.atan2(self.passo, 0.75 * math.pi * max(self.diametro, 1e-6))
+
+    @property
+    def fator_inercia(self) -> float:
+        """Fator adimensional de inércia rotacional κ_J = J_hélice / (m·R²) em função do afunilamento λ_taper.
+        No afunilamento nominal λ_taper = 0,42 vale exatamente 0,20 (preservando a identidade bit a bit)."""
+        lam = self.afunilamento
+        nom = 1.0 + 2.0 * 0.42 + 3.0 * (0.42 ** 2)
+        return 0.20 * (1.0 + 2.0 * lam + 3.0 * (lam ** 2)) / nom
+
+    def ct_cp_bemt(self) -> tuple[float, float]:
+        """Calcula (C_T, C_P) estáticos pela Teoria do Elemento de Pá + Momento (BEMT) a partir do tamanho e
+        design da hélice (diâmetro D, passo P, N_pás, corda/solidez σ, afunilamento e perfil aerodinâmico)."""
+        perf = {
+            "scimitar_cf": (5.85, 0.014, 1.12),   # (a₀ rad⁻¹, C_d0 perfil fino CF, κ_ind)
+            "mr_naca": (5.50, 0.018, 1.16),       # perfil NACA/APC mais espesso
+            "tri_pa_fpv": (5.20, 0.024, 1.22),    # pá curta de baixo Reynolds
+        }.get(self.perfil, (5.70, 0.016, 1.14))
+        a0, cd0, k_ind = perf
+        sigma = self.solidez
+        # Correção de perdas de ponta de Prandtl (fator B ≈ 1 − √(2·C_T)/N_pás ≈ 0,92–0,95)
+        b_prandtl = 1.0 - 0.11 / max(float(self.pas), 1.0)
+        sa = sigma * a0 * b_prandtl
+        theta75 = self.angulo_passo_75_rad
+        lam0 = (sa / 16.0) * (math.sqrt(max(1.0 + (64.0 / (3.0 * max(sa, 1e-6))) * theta75, 0.0)) - 1.0)
+        ct_bemt = max(2.0 * (lam0 ** 2), 1e-5)
+        # Convenção UIUC: C_T_uiuc = π³ · ct_bemt / 4, C_P_uiuc = π⁴ · cp_bemt / 4
+        cp_bemt = k_ind * lam0 * ct_bemt + 0.125 * sigma * cd0 * (1.0 + 0.15 * self.afunilamento)
+        ct_uiuc = (math.pi ** 3 / 4.0) * ct_bemt
+        cp_uiuc = (math.pi ** 4 / 4.0) * cp_bemt
+        return ct_uiuc, cp_uiuc
+
+    def com_design(self, *, diametro_pol: float | None = None, passo_pol: float | None = None,
+                   pas: int | None = None, corda_media_mm: float | None = None,
+                   afunilamento: float | None = None, perfil: str | None = None) -> Helice:
+        """Cria uma variante da hélice com novo tamanho/design (diâmetro, passo, nº de pás, corda, afunilamento
+        ou perfil), recalculando a massa por escala física e ajustando `ct`/`cp` pelo rácio BEMT do novo design."""
+        d_novo = self.diametro if diametro_pol is None else float(diametro_pol) * POL
+        p_novo = self.passo if passo_pol is None else float(passo_pol) * POL
+        pas_novo = self.pas if pas is None else int(pas)
+        dados_novos = dict(self.dados)
+        dados_novos["id_base"] = self.dados.get("id_base", self.id)
+        dados_novos.setdefault("perfil", self.perfil)
+        if corda_media_mm is not None:
+            dados_novos["corda_media_mm"] = float(corda_media_mm)
+        if afunilamento is not None:
+            dados_novos["afunilamento"] = float(afunilamento)
+        if perfil is not None:
+            dados_novos["perfil"] = str(perfil)
+        dados_novos["design_customizado"] = True
+        ct0, cp0 = self.ct_cp_bemt()
+        # Massa escala com (N_pás / N_pás0) · (D / D0)^2,3 · (c̄ / c̄0)
+        r_d = d_novo / max(self.diametro, 1e-6)
+        r_pas = pas_novo / max(self.pas, 1)
+        temp = Helice(id=f"{self.id}_custom", fabricante=self.fabricante, modelo=f"{self.modelo} (design)",
+                      diametro=d_novo, passo=p_novo, massa=self.massa, ct=self.ct, cp=self.cp,
+                      pas=pas_novo, dados=dados_novos)
+        r_c = temp.corda_media / max(self.corda_media, 1e-6)
+        m_nova = self.massa * r_pas * (r_d ** 2.0) * r_c
+        ct1, cp1 = temp.ct_cp_bemt()
+        dados_novos["escala_ct_design"] = ct1 / max(ct0, 1e-6)
+        dados_novos["escala_cp_design"] = cp1 / max(cp0, 1e-6)
+        return Helice(id=temp.id, fabricante=self.fabricante, modelo=temp.modelo,
+                      diametro=d_novo, passo=p_novo, massa=m_nova,
+                      ct=ct1 if self.ct is None else self.ct * (ct1 / max(ct0, 1e-6)),
+                      cp=cp1 if self.cp is None else self.cp * (cp1 / max(cp0, 1e-6)),
+                      pas=pas_novo, dados=dados_novos)
+
 
 @dataclass(frozen=True)
 class Celula:
@@ -960,7 +1060,8 @@ class Hardware:
 # =========================================================================================== derivações
 def _kf_kq(motor: Motor, helice: Helice) -> tuple[float, float, str]:
     """kf, kq e a origem: TABELA do fabricante (este motor + esta hélice) > C_T/C_P da hélice."""
-    linhas = [r for r in motor.tabela if r.get("helice") == helice.id and r.get("rpm")]
+    ids_hel = {helice.id, helice.dados.get("id_base")} - {None}
+    linhas = [r for r in motor.tabela if r.get("helice") in ids_hel and r.get("rpm")]
     if len(linhas) >= 1:
         w = np.array([r["rpm"] for r in linhas], dtype=float) * RPM_PARA_RAD
         t = np.array([r["empuxo_g"] for r in linhas], dtype=float) * 1e-3 * GRAVIDADE
@@ -980,14 +1081,20 @@ def _kf_kq(motor: Motor, helice: Helice) -> tuple[float, float, str]:
         independente = all(r.get("independente") for r in linhas)
         if not independente:
             kq *= CORRECAO_KQ_TABELA
+        if helice.dados.get("design_customizado"):
+            kf *= float(helice.dados.get("escala_ct_design", 1.0)) * (helice.diametro / (float(helice.dados.get("diametro_pol", 15.0)) * POL)) ** 4
+            kq *= float(helice.dados.get("escala_cp_design", 1.0)) * (helice.diametro / (float(helice.dados.get("diametro_pol", 15.0)) * POL)) ** 5
         corr = "medição independente" if independente else f"+{100 * (CORRECAO_KQ_TABELA - 1):.1f} % de realismo"
         return kf, kq, f"tabela do fabricante ({len(linhas)} pontos; kq por {fonte}; {corr})"
-    if helice.ct is None or helice.cp is None:
-        raise ValueError(f"sem tabela de ensaio para {motor.id}+{helice.id} e a hélice não traz C_T/C_P")
+    ct_use, cp_use = (helice.ct, helice.cp) if (helice.ct is not None and helice.cp is not None) else helice.ct_cp_bemt()
     d = helice.diametro
-    kf = helice.ct * RHO_AR * d ** 4 / (4.0 * math.pi ** 2)
-    kq = helice.cp * RHO_AR * d ** 5 / (8.0 * math.pi ** 3)
-    return kf, kq, "C_T/C_P estáticos da hélice (convenção UIUC)"
+    kf = ct_use * RHO_AR * d ** 4 / (4.0 * math.pi ** 2)
+    kq = cp_use * RHO_AR * d ** 5 / (8.0 * math.pi ** 3)
+    origem = "C_T/C_P estáticos da hélice (convenção UIUC)" if (helice.ct is not None and helice.cp is not None) else "BEMT geométrico do design da hélice"
+    return kf, kq, origem
+
+
+kf_kq = _kf_kq
 
 
 def _curva_esc(hw) -> tuple[np.ndarray, np.ndarray]:
@@ -1022,14 +1129,14 @@ def _curva_esc(hw) -> tuple[np.ndarray, np.ndarray]:
 
 
 def inercia_rotor(motor: Motor, helice: Helice) -> float:
-    """J do conjunto que gira (kg·m²): hélice ≈ 0,2·m·R² + sino ≈ (0,35·m_motor)·r_sino².
+    """J do conjunto que gira (kg·m²): hélice = κ_J(afunilamento)·m·R² + sino ≈ (0,35·m_motor)·r_sino².
 
-    `r_sino` = raio externo do motor (catálogo `diametro_mm`/2; na falta, 14 mm). ESTIMATIVA documentada
-    — a domain randomization cobre ±25 % e o SysID do hardware real fixa o valor.
+    `r_sino` = raio externo do motor (catálogo `diametro_mm`/2; na falta, 14 mm); `κ_J` vem da distribuição
+    radial de corda da pá (`helice.fator_inercia`, igual a 0,20 no afunilamento nominal 0,42).
     """
     r_sino = float(motor.dados.get("diametro_mm", 28.0)) / 2000.0
     j_sino = 0.35 * motor.massa * r_sino ** 2
-    j_helice = 0.2 * helice.massa * helice.raio ** 2
+    j_helice = helice.fator_inercia * helice.massa * helice.raio ** 2
     return j_helice + j_sino
 
 

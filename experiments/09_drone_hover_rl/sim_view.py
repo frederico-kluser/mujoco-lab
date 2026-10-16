@@ -501,6 +501,37 @@ class Carga:
 
 
 @dataclass
+class Graficos:
+    """Bloco `"graficos"` do controlo: opções de otimização gráfica do MuJoCo em tempo real."""
+
+    sombras: bool = True
+    reflexos: bool = True
+    nevoeiro: bool = False
+    mostrar_helices: bool = True
+    mostrar_efeitos: bool = True
+    mostrar_fios_detalhes: bool = True
+    escala_resolucao: float = 1.0
+    qualidade_jpeg: int = 80
+    seq: int | None = None
+
+    def como_dict(self) -> dict:
+        return {
+            "sombras": self.sombras,
+            "reflexos": self.reflexos,
+            "nevoeiro": self.nevoeiro,
+            "mostrar_helices": self.mostrar_helices,
+            "mostrar_efeitos": self.mostrar_efeitos,
+            "mostrar_fios_detalhes": self.mostrar_fios_detalhes,
+            "escala_resolucao": self.escala_resolucao,
+            "qualidade_jpeg": self.qualidade_jpeg,
+            "seq": self.seq,
+        }
+
+    def assinatura(self) -> str:
+        return json.dumps(self.como_dict(), sort_keys=True)
+
+
+@dataclass
 class Registo:
     """Conteúdo validado do ficheiro de controlo (vento base + comandos de episódio + vento dinâmico)."""
 
@@ -519,6 +550,7 @@ class Registo:
     bola: Bola | None = None                      # None = campo ausente: velocidade padrão da bola (r13)
     tiro: Tiro | None = None                      # None = campo ausente: não dispara nem mexe no gatilho
     carga: Carga | None = None                    # None = campo ausente: mantém a carga útil atual
+    graficos: Graficos | None = None              # None = campo ausente: mantém opções gráficas atuais
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -824,6 +856,35 @@ def _ler_carga(bruto) -> Carga | None:
     return Carga(float(g), seq)
 
 
+def _ler_graficos(bruto) -> Graficos | None:
+    """`"graficos"` do controlo → `Graficos` validado (`None` se o campo não vier)."""
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`graficos` tem de ser um objeto JSON")  # noqa: TRY004
+    g = Graficos()
+    for k in ("sombras", "reflexos", "nevoeiro", "mostrar_helices", "mostrar_efeitos", "mostrar_fios_detalhes"):
+        if k in bruto:
+            if not isinstance(bruto[k], bool):
+                raise ValueError(f"`graficos.{k}` tem de ser booleano (recebido {bruto[k]!r})")  # noqa: TRY004
+            setattr(g, k, bool(bruto[k]))
+    if "escala_resolucao" in bruto:
+        esc = _numero(bruto, "escala_resolucao", 1.0)
+        if not 0.25 <= esc <= 1.0:
+            raise ValueError(f"`graficos.escala_resolucao` tem de estar em [0.25, 1.0] (recebido {esc!r})")
+        g.escala_resolucao = round(float(esc), 2)
+    if "qualidade_jpeg" in bruto:
+        q = _numero(bruto, "qualidade_jpeg", 80.0)
+        if not 30.0 <= q <= 95.0:
+            raise ValueError(f"`graficos.qualidade_jpeg` tem de estar em [30, 95] (recebido {q!r})")
+        g.qualidade_jpeg = int(round(q))
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`graficos.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    g.seq = seq
+    return g
+
+
 def ler_registo(dados) -> Registo:
     """Ficheiro de controlo → `Registo` validado (mesmas regras do net_probe/dashboard).
 
@@ -852,7 +913,8 @@ def ler_registo(dados) -> Registo:
                    _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
                    _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")),
                    _ler_vento_simples(dados.get("vento_simples")), _ler_bola(dados.get("bola")),
-                   _ler_tiro(dados.get("tiro")), _ler_carga(dados.get("carga")))
+                   _ler_tiro(dados.get("tiro")), _ler_carga(dados.get("carga")),
+                   _ler_graficos(dados.get("graficos")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -1052,6 +1114,11 @@ class Controlo:
         self.n_tiros = 0                                 # disparos aplicados ao env nesta sessão
         self.carga: Carga | None = None                  # último bloco `carga` APLICADO
         self._assinatura_carga: str | None = None
+        self.graficos: Graficos = Graficos()             # opções gráficas do MuJoCo em vigor
+        self._assinatura_graficos: str | None = None
+        self.modulo_fpv = None                           # `ModuloCamera` da vista FPV (ligado em `correr`)
+        self.modulo_sim = None                           # `ModuloCamera` da vista 3.ª pessoa (ligado em `correr`)
+        self._fps_fisica = {"t": None, "n": 0, "valor": 50.0}
         self._le_contador_inicial()
 
     def _le_contador_inicial(self) -> None:
@@ -1219,6 +1286,7 @@ class Controlo:
         self._aplica_vento_simples(registo.vento_simples)   # os 3 botões do vento (r13)
         self._aplica_tiro(env, registo.tiro)             # tiro da Glock 25 (tecla SPACE)
         self._aplica_carga(env, registo.carga)           # carga útil extra acoplada ao drone (g)
+        self._aplica_graficos(registo.graficos)          # otimização gráfica do MuJoCo (sombras/reflexos/fios/escala)
         if registo.bola is not None:
             self.bola_vel = float(registo.bola.velocidade)
             self.bola_auto_atirar = bool(registo.bola.auto_atirar)
@@ -1444,6 +1512,52 @@ class Controlo:
             print(f"[sim] CARGA EXTRA -> +{bloco.carga_extra_g:.0f} g · massa total {res['massa_total_g']:.0f} g · "
                   f"T/W_OGE {res['t_w_efetivo_oge']:.2f} · estado={res['estado_voo']} · "
                   f"alça voo={'SIM' if res['pode_alcar_voo'] else 'NÃO'} (seq {bloco.seq})", flush=True)
+
+    def _aplica_graficos(self, bloco: Graficos | None) -> None:
+        """Bloco `graficos` → aplica as opções de otimização gráfica do MuJoCo aos renderizadores ativos."""
+        if bloco is None:
+            return
+        assinatura = bloco.assinatura()
+        if assinatura == self._assinatura_graficos:
+            return
+        self._assinatura_graficos = assinatura
+        self.graficos = bloco
+        op = bloco.como_dict()
+        for mod in (self.modulo_fpv, self.modulo_sim):
+            if mod is not None and hasattr(mod, "configurar_graficos"):
+                mod.configurar_graficos(**op)
+        print(f"[sim] GRAFICOS MUJOCO -> sombras={bloco.sombras} · reflexos={bloco.reflexos} · "
+              f"fios={bloco.mostrar_fios_detalhes} · helices={bloco.mostrar_helices} · "
+              f"escala={bloco.escala_resolucao:.2f} · jpeg={bloco.qualidade_jpeg} (seq {bloco.seq})", flush=True)
+
+    def estado_graficos(self) -> dict:
+        """Estado atual das opções gráficas do MuJoCo + FPS ao vivo (simulação, FPV e física)."""
+        agora = time.perf_counter()
+        f = self._fps_fisica
+        if f["t"] is None:
+            f["t"], f["n"] = agora, 1
+        else:
+            f["n"] += 1
+            if agora - f["t"] >= 0.8:
+                med = (f["n"] - 1) / max(agora - f["t"], 1e-6)
+                f["valor"] = round(0.4 * f["valor"] + 0.6 * med, 1)
+                f["t"], f["n"] = agora, 1
+        est_sim = self.modulo_sim.estado() if self.modulo_sim is not None else None
+        est_fpv = self.modulo_fpv.estado() if self.modulo_fpv is not None else None
+        fps_sim = float((est_sim or {}).get("fps_medido") or 0.0)
+        fps_fpv = float((est_fpv or {}).get("fps_medido") or 0.0)
+        host_sim = (est_sim or {}).get("host_ms") or {}
+        host_fpv = (est_fpv or {}).get("host_ms") or {}
+        fps_atual = max(fps_sim, fps_fpv, float(f["valor"]))
+        return {
+            **self.graficos.como_dict(),
+            "fps_atual": round(fps_atual, 1),
+            "fps_simulacao": round(fps_sim, 1),
+            "fps_fpv": round(fps_fpv, 1),
+            "fps_fisica": round(float(f["valor"]), 1),
+            "ms_render_sim": round(float(host_sim.get("render") or 0.0), 2),
+            "ms_render_fpv": round(float(host_fpv.get("render") or 0.0), 2),
+        }
 
     def passo_vento_simples(self, env: HoverEnv) -> bool:
         """Escreve em `opt.wind` o vento dos 3 botões DESTE passo de decisão; `True` se é ele que manda.
@@ -2598,7 +2712,8 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
            "vento_bordo": None,
            "est": None, "real": None, "bateria": None, "voo": None, "bola": None, "controlador": None,
            "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro")),
-           "carga": (env.carga_estado() if hasattr(env, "carga_estado") else info.get("carga"))}
+           "carga": (env.carga_estado() if hasattr(env, "carga_estado") else info.get("carga")),
+           "graficos": controlo.estado_graficos()}
     if real:
         d = env._derivados()
         e = env.estimador
@@ -2882,6 +2997,13 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
     # Sem módulo (modelo sem a câmara `fpv`, `--sem-fpv`) fica tudo a `None` e a telemetria publica
     # `"fpv": null` — nunca se inventa uma câmara.
     modulo, modulo_sim, parar_fpv, threads_fpv = montar_fpv(env, args, controlo)
+    controlo.modulo_fpv = modulo
+    controlo.modulo_sim = modulo_sim
+    if controlo.graficos is not None:
+        op_ini = controlo.graficos.como_dict()
+        for mod in (modulo, modulo_sim):
+            if mod is not None and hasattr(mod, "configurar_graficos"):
+                mod.configurar_graficos(**op_ini)
     # HUD AO VIVO (r13): canal rápido dos instrumentos do site (UDP local, 50 Hz) — ver `EmissorHud`
     hud = EmissorHud()
     z_chao = {"z": float((est.info or {}).get("z", 0.0))}   # altura de repouso (o reset assenta no chão)

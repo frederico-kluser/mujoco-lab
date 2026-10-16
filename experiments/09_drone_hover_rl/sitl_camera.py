@@ -160,7 +160,9 @@ class CameraSITL:
         self.mujoco.mj_forward(self.model, self._local)          # xpos/cam_xpos do estado ATUAL (o mocap entra aqui)
         if not hasattr(self, "_scene_opt"):
             self._scene_opt = self.mujoco.MjvOption()
-            self._scene_opt.geomgroup[2] = 0                     # grupo 2 (hélices, fogo do cano, rastro de tiro) oculto ao detetor
+            self._scene_opt.geomgroup[1] = 0                     # grupos 1, 2 e 3 (hélices 3D, discos/fogo/rastro, fios) ocultos ao detetor
+            self._scene_opt.geomgroup[2] = 0
+            self._scene_opt.geomgroup[3] = 0
         self._renderer.update_scene(self._local, camera=self.camera, scene_option=self._scene_opt)
         rgb = self._renderer.render()
         t1 = time.perf_counter()

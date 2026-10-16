@@ -267,6 +267,19 @@ def secao_servidor() -> bool:
                         ("chave desconhecida", {"carga_extra_g": 100, "extra": 1})):
         c.recusa(f"carga: {nome} → 400", s.validar_carga, corpo, {})
 
+    # --- otimização gráfica do MuJoCo (POST /api/graficos)
+    gr1 = s.validar_graficos({"sombras": False, "reflexos": False, "escala_resolucao": 0.5, "qualidade_jpeg": 65}, {})
+    c.ok("graficos: opções de otimização MuJoCo aceites com `seq` (+1)",
+         gr1["graficos"]["sombras"] is False and gr1["graficos"]["reflexos"] is False
+         and gr1["graficos"]["escala_resolucao"] == 0.5 and gr1["graficos"]["qualidade_jpeg"] == 65
+         and gr1["graficos"]["seq"] == 1, str(gr1["graficos"]))
+    for nome, corpo in (("vazio", {}),
+                        ("chave desconhecida", {"sombras": False, "aa": 4}),
+                        ("sombras não booleano", {"sombras": 1}),
+                        ("escala fora de [0.25, 1.0]", {"escala_resolucao": 1.5}),
+                        ("jpeg fora de [30, 95]", {"qualidade_jpeg": 10})):
+        c.recusa(f"graficos: {nome} → 400", s.validar_graficos, corpo, {})
+
     # --- arranque limpo: estado fixo, preferências preservadas
     velho = {"vento_simples": {"ligado": True, "intensidade": 4.0, "aleatorio": True, "direcao": 120.0, "seq": 7},
              "voo": {"ativo": False, "teclas": {"w": True}, "segui_alvo": True, "yaw_taxa": 0.5, "seq": 3},
@@ -381,6 +394,12 @@ def secao_runner(pasta: Path) -> bool:
          rcg.carga is not None and rcg.carga.carga_extra_g == 850.0 and rcg.carga.seq == 2)
     c.recusa("ler_registo: `carga.carga_extra_g` fora da faixa é recusada",
              m.ler_registo, {"carga": {"carga_extra_g": -5.0}})
+    rgr = m.ler_registo({"graficos": {"sombras": False, "mostrar_fios_detalhes": False, "escala_resolucao": 0.5, "seq": 3}})
+    c.ok("ler_registo: bloco `graficos` validado",
+         rgr.graficos is not None and rgr.graficos.sombras is False
+         and rgr.graficos.mostrar_fios_detalhes is False and rgr.graficos.escala_resolucao == 0.5)
+    c.recusa("ler_registo: `graficos.escala_resolucao` fora da faixa é recusada",
+             m.ler_registo, {"graficos": {"escala_resolucao": 0.1}})
 
     # --- o Controlo aplica o registo: o vento antigo é neutralizado e o do gerador chega ao env
     pasta.mkdir(parents=True, exist_ok=True)
@@ -565,6 +584,16 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
         c.ok("o FoV da câmara de bordo vem em TODAS as amostras, antes de o modo bola ligar",
              isinstance(fovy, float) and 20.0 < fovy < 160.0 and sse.ultima().get("bola") is None,
              f"fovy {fovy}° · bola {sse.ultima().get('bola')}")
+        # --- otimização gráfica do MuJoCo + FPS ao vivo no HUD
+        cod_gr, resp_gr = _http(f"{url}/api/graficos", {"sombras": False, "reflexos": False, "mostrar_fios_detalhes": False})
+        time.sleep(0.25)
+        gr_hud = sse.ultima().get("graficos") or {}
+        c.ok("POST /api/graficos desliga sombras/reflexos/fios em tempo real e o HUD publica o FPS atual (> 0 fps)",
+             cod_gr == 200 and resp_gr.get("ok") is True and gr_hud.get("sombras") is False
+             and gr_hud.get("reflexos") is False and gr_hud.get("mostrar_fios_detalhes") is False
+             and float(gr_hud.get("fps_atual") or 0.0) > 10.0,
+             f"fps_atual={gr_hud.get('fps_atual')} · sombras={gr_hud.get('sombras')}")
+        _http(f"{url}/api/graficos", {"sombras": True, "reflexos": True, "mostrar_fios_detalhes": True})
 
         # --- W: para a frente do NARIZ
         x0 = sse.ultima()["real"]["x"]

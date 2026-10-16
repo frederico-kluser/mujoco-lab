@@ -477,6 +477,36 @@ export async function enviarCarga(
   }
 }
 
+export interface OpcoesGraficosPayload {
+  sombras?: boolean
+  reflexos?: boolean
+  nevoeiro?: boolean
+  mostrar_helices?: boolean
+  mostrar_efeitos?: boolean
+  mostrar_fios_detalhes?: boolean
+  escala_resolucao?: number
+  qualidade_jpeg?: number
+}
+
+/** `POST /api/graficos` → atualiza as opções de otimização gráfica do MuJoCo em tempo real. */
+export async function enviarGraficos(
+  opcoes: OpcoesGraficosPayload
+): Promise<Record<string, unknown> | null> {
+  const bruto = await pedirJson("/api/graficos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opcoes),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  return typeof o.graficos === "object" && o.graficos !== null
+    ? (o.graficos as Record<string, unknown>)
+    : null
+}
+
 /**
  * `GET /api/hud.json` — a última amostra do HUD com a idade que o servidor lhe dá. É o FALLBACK do
  * SSE (`GET /api/hud`): quando o `EventSource` cai, o HUD continua a mexer por sondagem.

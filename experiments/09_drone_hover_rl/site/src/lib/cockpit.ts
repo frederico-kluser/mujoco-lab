@@ -224,6 +224,24 @@ export interface HudCarga {
   ventoMaxMS: number | null
 }
 
+/** Estado das opções de otimização gráfica do MuJoCo e FPS medido em tempo real. */
+export interface HudGraficos {
+  sombras: boolean
+  reflexos: boolean
+  nevoeiro: boolean
+  mostrarHelices: boolean
+  mostrarEfeitos: boolean
+  mostrarFiosDetalhes: boolean
+  escalaResolucao: number
+  qualidadeJpeg: number
+  fpsAtual: number | null
+  fpsSimulacao: number | null
+  fpsFpv: number | null
+  fpsFisica: number | null
+  msRenderSim: number | null
+  msRenderFpv: number | null
+}
+
 export interface AmostraHud {
   t: number
   passo: number
@@ -255,6 +273,8 @@ export interface AmostraHud {
   tiro: HudTiro | null
   /** Envelope de carga útil e viabilidade de alçar voo; `null` sem planta real. */
   carga: HudCarga | null
+  /** Otimização gráfica do MuJoCo e FPS em tempo real; `null` num runner antigo. */
+  graficos: HudGraficos | null
 }
 
 export interface HudVentoBordo {
@@ -471,6 +491,27 @@ function lerCargaHud(bruto: unknown): HudCarga | null {
   }
 }
 
+function lerGraficosHud(bruto: unknown): HudGraficos | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  return {
+    sombras: o.sombras !== false,
+    reflexos: o.reflexos !== false,
+    nevoeiro: o.nevoeiro === true,
+    mostrarHelices: o.mostrar_helices !== false,
+    mostrarEfeitos: o.mostrar_efeitos !== false,
+    mostrarFiosDetalhes: o.mostrar_fios_detalhes !== false,
+    escalaResolucao: finito(o.escala_resolucao) ?? 1.0,
+    qualidadeJpeg: finito(o.qualidade_jpeg) ?? 80,
+    fpsAtual: finito(o.fps_atual),
+    fpsSimulacao: finito(o.fps_simulacao),
+    fpsFpv: finito(o.fps_fpv),
+    fpsFisica: finito(o.fps_fisica),
+    msRenderSim: finito(o.ms_render_sim),
+    msRenderFpv: finito(o.ms_render_fpv),
+  }
+}
+
 /**
  * Uma amostra do HUD (o `data:` de um evento do SSE, já em objeto) → `AmostraHud`, ou `null` quando
  * não é uma amostra (sem `t` nem `passo`). Nunca lança e nunca inventa: o que não vier fica `null`.
@@ -506,6 +547,7 @@ export function lerHud(bruto: unknown): AmostraHud | null {
     ventoBordo: lerVentoBordo(o.vento_bordo),
     tiro: lerTiroHud(o.tiro),
     carga: lerCargaHud(o.carga),
+    graficos: lerGraficosHud(o.graficos),
   }
 }
 

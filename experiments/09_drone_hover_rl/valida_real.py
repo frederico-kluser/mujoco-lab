@@ -166,6 +166,23 @@ def checa_catalogo(v: Validador) -> None:
                     max(erros) < 0.12, f"{len(linhas)} pontos, erro máx {100 * max(erros):.1f} % ({hw.origem_kf_kq})")
             if hw.motor.tabela:
                 _checa_tabela_motor(v, nome, hw, linhas)
+    # A6: verificação da modelagem 3D detalhada do build ativo (frame de estabilidade, fios trifásicos, motor MN4004, RPi 5 e hélices 3D)
+    hw_at = dr.hardware()
+    m_at, _ = dr.carregar(hw_at)
+    geoms_drone_3d = (
+        "placa", "placa_superior", "espacador_placa_1", "espacador_placa_4",
+        "trelica_estab_1", "trelica_estab_4", "suporte_motor_1", "suporte_motor_4",
+        "fio_motor1_a", "fio_motor1_b", "fio_motor1_c", "fio_motor4_a", "fio_motor4_b", "fio_motor4_c",
+        "abracadeira_braco1_1", "abracadeira_braco4_2",
+        "motor1_estator_cobre", "motor1_sino_anel", "motor1_base_cnc", "motor1_raio_1", "motor1_eixo",
+        "helice1_cubo", "helice1_pa1_raiz", "helice1_pa1_ponta", "helice1_pa1_faixa", "helice1_pa2_ponta",
+        "el_rpi5", "rpi5_soc_bcm2712", "rpi5_dissipador", "rpi5_ventoinha", "rpi5_rp1",
+        "rpi5_rj45", "rpi5_usb3_torre", "rpi5_usb3_azul", "rpi5_usb2_torre", "rpi5_gpio_40p", "rpi5_usbc", "rpi5_micro_hdmi_1",
+        "cinta_bateria_1", "conector_xt90", "cabo_bateria_pos", "cabo_bateria_neg",
+    )
+    v.check("A6 modelagem 3D detalhada: treliças de estabilidade, fios trifásicos A/B/C até aos motores, motor MN4004 com bobinas e sino ventilado, Raspberry Pi 5 fiel e hélices 3D",
+            all(m_at.geom(g).id >= 0 for g in geoms_drone_3d),
+            f"{len(geoms_drone_3d)}/{len(geoms_drone_3d)} geoms estruturais, fios, motor, RPi 5 e hélices presentes")
 
 
 def _checa_tabela_motor(v: Validador, nome: str, hw, linhas: list) -> None:
@@ -243,6 +260,42 @@ def checa_motor(v: Validador, hw) -> None:
             float(np.abs(q - u).max()) <= 0.5 * passo + 1e-12 and q[0] == 0.0
             and len(np.unique(np.round(q[1:] / passo))) <= 2000,
             f"erro máx {float(np.abs(q - u).max()):.2e} (½ nível = {0.5 * passo:.2e})")
+
+    # B9: impacto físico do tamanho e design da hélice (diâmetro, passo, nº de pás, corda/solidez, afunilamento e perfil)
+    h_base = hw.helice
+    h_maior_d = h_base.com_design(diametro_pol=16.5)
+    h_maior_passo = h_base.com_design(passo_pol=6.2)
+    h_tripa = h_base.com_design(pas=3)
+    h_ponta_larga = h_base.com_design(afunilamento=0.65)
+    kf0, kq0, _ = dr.componentes.kf_kq(hw.motor, h_base)
+    kf_d, kq_d, _ = dr.componentes.kf_kq(hw.motor, h_maior_d)
+    kf_p, kq_p, _ = dr.componentes.kf_kq(hw.motor, h_maior_passo)
+    kf_3, kq_3, _ = dr.componentes.kf_kq(hw.motor, h_tripa)
+    j0 = dr.componentes.inercia_rotor(hw.motor, h_base)
+    j_d = dr.componentes.inercia_rotor(hw.motor, h_maior_d)
+    j_taper = dr.componentes.inercia_rotor(hw.motor, h_ponta_larga)
+    v.check("B9 design e tamanho da hélice impactam a física: maior D, passo ou nº de pás aumentam kf/kq e inércia J_rotor (e afunilamento altera κ_J)",
+            kf_d > kf0 and kq_d > kq0 and kf_p > kf0 and kq_p > kq0 and kf_3 > kf0 and j_d > j0 and j_taper > j0,
+            f"kf: 15x5={kf0:.2e} → 16.5x5={kf_d:.2e}, 15x6.2={kf_p:.2e}, 3-pás={kf_3:.2e} · J_rotor: {j0:.2e} → D16.5={j_d:.2e}, taper0.65={j_taper:.2e}")
+
+    # B10: rotação 3D das hélices no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4) proporcional a % de ω_max
+    m_rot, d_rot, pl_rot = _planta(hw, flags=dra.FlagsAero.base(), seed=0)
+    pl_rot.reiniciar(1.0, armado=True)
+    for _ in range(100):
+        pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pct = pl_rot.pct_rotacao_helices
+    gid_ponta1 = m_rot.geom("helice1_pa1_ponta").id
+    pos_pa_antes = m_rot.geom_pos[gid_ponta1].copy()
+    ang_antes = list(pl_rot.angulos_helices)
+    pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pos_pa_depois = m_rot.geom_pos[gid_ponta1].copy()
+    dang = [((pl_rot.angulos_helices[i] - ang_antes[i] + math.pi) % (2.0 * math.pi)) - math.pi for i in range(4)]
+    v.check("B10 hélices 3D rodam no sentido físico correto (CW: Δθ₁,₂ < 0; CCW: Δθ₃,₄ > 0) com velocidade proporcional à % de ω_max de cada motor",
+            dang[0] < 0.0 and dang[1] < 0.0 and dang[2] > 0.0 and dang[3] > 0.0
+            and abs(dang[0]) > 1.5 * abs(dang[1]) and abs(dang[2]) > 1.5 * abs(dang[3])
+            and float(np.linalg.norm(pos_pa_depois - pos_pa_antes)) > 1e-3,
+            f"%ω_max={[round(100*x, 1) for x in pct]} % · Δθ={[round(x, 4) for x in dang]} rad")
     # B6 ω_max(V) e T_max
     b = hw.bateria
     i_ref = ph["i_total"]
