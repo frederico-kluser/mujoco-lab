@@ -26,13 +26,14 @@ import {
   type EstadoBola,
   type EstadoJanelas,
   type EstadoPiloto,
+  type EstadoTiro,
   type EstadoVento,
   type IdJanela,
   type Ponto,
   type ResumoHud,
   type Tamanho,
 } from "@/lib/cockpit"
-import { bola, piloto, vento } from "@/lib/cockpit-controlos"
+import { bola, piloto, tiro, vento } from "@/lib/cockpit-controlos"
 import { hud, type Desenhador } from "@/lib/hud-store"
 
 // --------------------------------------------------------------------------------- HUD
@@ -66,6 +67,10 @@ export function useVento(): EstadoVento {
 
 export function useBola(): EstadoBola {
   return useSyncExternalStore(bola.subscrever, bola.obter)
+}
+
+export function useTiro(): EstadoTiro {
+  return useSyncExternalStore(tiro.subscrever, tiro.obter)
 }
 
 // --------------------------------------------------------------------------------- browser

@@ -135,6 +135,22 @@ def checa_catalogo(v: Validador) -> None:
             v.check(f"A3d[{nome}] a câmara entra no modelo com a massa da peça (e só ela)",
                     abs(so_camera - hw.camera.massa) < 1e-9,
                     f"{1000 * so_camera:.3f} g vs {1000 * hw.camera.massa:.3f} g (diferença de modelos)")
+        if hw.arma is not None:
+            from dataclasses import replace as _sem_peca_arma
+            sid_boca = model.site("boca_cano").id
+            pos_boca = data.site_xpos[sid_boca] - data.xpos[corpo]
+            gid_fer = model.geom("arma_ferrolho").id
+            gid_qua = model.geom("arma_quadro").id
+            v.check(f"A3e[{nome}] arma ({hw.arma.id}) montada no TOPO do drone (z_cano > 0 acima do CM, "
+                    f"boca_cano à frente em +x, centrada em y=0)",
+                    float(pos_boca[2]) > 0.08 and float(pos_boca[0]) > 0.08 and abs(float(pos_boca[1])) < 1e-9
+                    and float(model.geom_pos[gid_fer, 2]) > float(model.geom_pos[gid_qua, 2]) > 0.0,
+                    f"boca_cano = ({pos_boca[0]:+.4f}, {pos_boca[1]:+.4f}, {pos_boca[2]:+.4f}) m rel. ao CM")
+            sem_arma = dr.modelo.carregar(_sem_peca_arma(hw, arma=None))[0]
+            so_arma = m_mod - float(sem_arma.body_mass.sum())
+            v.check(f"A3f[{nome}] a arma entra no modelo com a massa exata da peça ({1000 * hw.arma.massa:.0f} g)",
+                    abs(so_arma - hw.arma.massa) < 1e-9,
+                    f"{1000 * so_arma:.3f} g vs {1000 * hw.arma.massa:.3f} g (diferença de modelos)")
         h = hw.helice
         if hw.origem_kf_kq.startswith("C_T"):
             kf = h.ct * RHO_AR * h.diametro ** 4 / (4 * math.pi ** 2)
@@ -758,6 +774,105 @@ def checa_autonomia(v: Validador, hw) -> None:
             f"{hw.ponto_pairagem(hw.bateria.v_nominal)['p_total']:.1f} W em pairagem")
 
 
+# ============================================================================================ I. arma e tiro
+def checa_arma_tiro(v: Validador, hw) -> None:
+    """I1–I5: balística da Glock 25 (.380 Auto), impulso linear/angular do tiro no topo do drone e recuperação."""
+    if hw.arma is None:
+        return
+    print("\n— I. arma fixa no topo (Glock 25 .380 Auto: balística, soco, direção, torque e recuperação) —")
+    a = hw.arma
+    e0_teoria = 0.5 * a.massa_projetil * (a.velocidade_boca ** 2)
+    j_teoria = a.massa_projetil * a.velocidade_boca + a.massa_polvora * a.velocidade_gases
+    f_teoria = j_teoria / a.duracao_impulso
+    v.check("I1 balística .380 ACP (95 gr @ 296 m/s): E₀ = ½·m_p·v₀² ≈ 270 J e J_tiro = m_p·v₀ + m_c·v_g",
+            abs(a.energia_boca_j - e0_teoria) < 1e-12 and 268.0 <= a.energia_boca_j <= 272.0
+            and abs(a.impulso_tiro - j_teoria) < 1e-12 and abs(a.forca_media_tiro - f_teoria) < 1e-12,
+            f"E₀ = {a.energia_boca_j:.2f} J · J_tiro = {a.impulso_tiro:.4f} N·s "
+            f"(projétil {a.impulso_projetil:.4f} + gases {a.impulso_gases:.4f}) · "
+            f"F_soco = {a.forca_media_tiro:.2f} N durante {1000 * a.duracao_impulso:.0f} ms")
+
+    # I2 e I4: condições isoladas (gravidade = 0, densidade = 0, rotores parados) → Δv e Δω exatos pela fórmula fechada
+    model, data, pl = _planta(hw, flags=dra.FlagsAero.base(), seed=0)
+    model.opt.gravity[:] = 0.0
+    model.opt.density = 0.0
+    model.opt.viscosity = 0.0
+    data.qpos[2] = 5.0
+    data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    data.qvel[:] = 0.0
+    mujoco.mj_forward(model, data)
+    pl.reiniciar(1.0, armado=False)
+    res = pl.disparar(1)
+    n_passos = round(a.duracao_impulso / pl.dt)
+    for _ in range(n_passos):
+        pl.passo([0.0] * 4)
+    dv_med = np.array(data.qvel[0:3], dtype=float)
+    dw_med = np.array(data.qvel[3:6], dtype=float)
+    dv_esp = -a.impulso_tiro / hw.massa_total
+    z_cano = pl.braco_z_arma
+    iyy = float(pl.inercia_corpo[1])
+    dw_y_esp = -z_cano * a.impulso_tiro / iyy
+    # Como o cano sobe com a cabragem durante os 20 ms (θ̄ ≈ ½·Δω_y·Δt_soco ≈ −0,01 rad), −x̂_corpo ganha uma
+    # pequena componente −z de ~−0,0022 m/s e ‖Δv‖ conserva J_tiro/m_total a 1e-5.
+    v.check("I2 impulso linear do tiro (isolado): Δp = −J_tiro·x̂_corpo ⇒ Δv_x = −J_tiro/m_total (±0,2 %)",
+            _rel(dv_med[0], dv_esp) < 2e-3 and _rel(float(np.linalg.norm(dv_med)), abs(dv_esp)) < 1e-4
+            and abs(dv_med[1]) < 1e-6 and abs(dv_med[2]) < 5e-3
+            and isinstance(res, dict) and res["tiros_acumulados"] == 1,
+            f"Δv = ({dv_med[0]:+.5f}, {dv_med[1]:+.5f}, {dv_med[2]:+.5f}) m/s vs teoria {dv_esp:+.5f} m/s")
+    v.check("I4 impulso angular (arma no TOPO, z_cano > 0 acima do CM): ΔL_y = −z_cano·J_tiro ⇒ Δω_y = −z_cano·J/I_yy < 0 (nariz sobe)",
+            _rel(dw_med[1], dw_y_esp) < 5e-3 and dw_med[1] < -0.5 and abs(dw_med[0]) < 1e-6 and abs(dw_med[2]) < 1e-6,
+            f"Δω_y = {dw_med[1]:+.5f} rad/s vs teoria {dw_y_esp:+.5f} rad/s (z_cano = {1000 * z_cano:.1f} mm, I_yy = {iyy:.4f} kg·m²)")
+
+    # I3: direção do soco roda com o rumo (yaw = +90° → nariz aponta para +y, soco empurra para −y)
+    model2, data2, pl2 = _planta(hw, flags=dra.FlagsAero.base(), seed=0)
+    model2.opt.gravity[:] = 0.0
+    model2.opt.density = 0.0
+    model2.opt.viscosity = 0.0
+    data2.qpos[2] = 5.0
+    ang = math.pi / 2.0
+    data2.qpos[3:7] = [math.cos(ang / 2.0), 0.0, 0.0, math.sin(ang / 2.0)]
+    data2.qvel[:] = 0.0
+    mujoco.mj_forward(model2, data2)
+    pl2.reiniciar(1.0, armado=False)
+    res2 = pl2.disparar(1)
+    for _ in range(n_passos):
+        pl2.passo([0.0] * 4)
+    dv2 = np.array(data2.qvel[0:3], dtype=float)
+    v.check("I3 direção do soco acompanha o rumo: com yaw = 90° (+y), o soco empurra para −y (azimute 270°)",
+            _rel(dv2[1], dv_esp) < 2e-3 and abs(dv2[0]) < 1e-3 and abs(res2["azimute_soco_graus"] - 270.0) < 1e-2,
+            f"Δv = ({dv2[0]:+.4f}, {dv2[1]:+.4f}, {dv2[2]:+.4f}) m/s · azimute do soco = {res2['azimute_soco_graus']:.1f}°")
+
+    # I5: disparo em pairagem com o controlador (DroneRealEnv + FC): o drone sente o soco, recua e recupera sem cair
+    import sim_view as sv
+    env = DroneRealEnv(modo_acao="ctbr", comando=True, episodio_s=15.0)
+    nuc = sv.NucleoClassico.criar(env)
+    nuc.instalar()
+    env.reset(seed=0)
+    nuc.pos_reset()
+    for _ in range(200):
+        nuc.comando({"modo": "velocidade", "vx": 0.0, "vy": 0.0, "vz": 0.0, "yaw_taxa": 0.0})
+        env.step(np.zeros(4, dtype=np.float32))
+    x_antes = float(env.data.qpos[0])
+    vx_antes = float(env.data.qvel[0])
+    wy_antes = float(env.data.qvel[4])
+    env.disparar(1)
+    nuc.comando({"modo": "velocidade", "vx": 0.0, "vy": 0.0, "vz": 0.0, "yaw_taxa": 0.0})
+    env.step(np.zeros(4, dtype=np.float32))
+    dvx_voo = float(env.data.qvel[0]) - vx_antes
+    dwy_voo = float(env.data.qvel[4]) - wy_antes
+    terminou = False
+    for _ in range(200):
+        nuc.comando({"modo": "velocidade", "vx": 0.0, "vy": 0.0, "vz": 0.0, "yaw_taxa": 0.0})
+        _, _, term, _, info = env.step(np.zeros(4, dtype=np.float32))
+        terminou = terminou or bool(term)
+    x_depois = float(env.data.qpos[0])
+    z_depois = float(info["z"])
+    nuc.remover()
+    v.check("I5 disparo em pairagem (SPACE): produz o soco (−0,64 m/s e cabragem −1,08 rad/s) e a cascata recupera a posição sem cair",
+            not terminou and abs(dvx_voo - dv_esp) < 0.03 and dwy_voo < -0.8
+            and abs(x_depois - x_antes) < 0.12 and abs(z_depois - 1.0) < 0.08,
+            f"soco imediato: Δv_x={dvx_voo:+.3f} m/s, Δω_y={dwy_voo:+.3f} rad/s → após 4 s: Δx={x_depois - x_antes:+.3f} m, z={z_depois:.3f} m")
+
+
 def checa_planta_real(v) -> None:
     """Todas as checagens da planta real (chamada pelo `run.py`)."""
     t0 = time.perf_counter()
@@ -775,6 +890,7 @@ def checa_planta_real(v) -> None:
     checa_contrato(v)
     checa_fc(v, hw)
     checa_autonomia(v, hw)
+    checa_arma_tiro(v, hw)
     print(f"(planta real validada em {time.perf_counter() - t0:.1f} s)")
 
 

@@ -2630,6 +2630,97 @@
       "modelo": "Portenta Vision Shield Rev 1 (Himax HM01B0, 320×320 monocromático)"
     }
   },
+  "armas": {
+    "glock_g25": {
+      "fabricante": "Glock GmbH (Áustria)",
+      "modelo": "G25 (Glock 25)",
+      "calibre": ".380 Auto (9x17mm / .380 ACP / 9mm Short)",
+      "sistema_funcionamento": "Safe Action® (ação simples)",
+      "principio_funcionamento": "Blowback simples (ferrolho não travado)",
+      "comprimento_mm": 187.0,
+      "comprimento_cano_mm": 102.0,
+      "altura_mm": 128.0,
+      "largura_mm": 32.0,
+      "largura_ferrolho_mm": 25.5,
+      "distancia_miras_polimero_mm": 153.0,
+      "distancia_miras_aco_mm": 152.0,
+      "massa_sem_carregador_g": 575.0,
+      "massa_carregador_vazio_g": 645.0,
+      "massa_carregador_cheio_g": 785.0,
+      "massa_g": 785.0,
+      "capacidade_padrao": 15,
+      "capacidade_opcional": 17,
+      "peso_gatilho_n": 28.0,
+      "distancia_gatilho_mm": 71.2,
+      "raias": 6,
+      "sentido_raias": "destrógiro (right-hand)",
+      "passo_raiamento_mm": 250.0,
+      "material_quadro": "Polímero",
+      "material_ferrolho": "Aço",
+      "material_cano": "Aço",
+      "acabamento": "Tenifer / NDLC (resistente à corrosão)",
+      "segurancas": "3 seguranças automáticas: do gatilho, do percussor e de queda (Safe Action®)",
+      "dims_mm": [
+        187.0,
+        32.0,
+        128.0
+      ],
+      "balistica": {
+        "municao_referencia": ".380 ACP 95 gr FMJ/TMJ (cano 4,02″ / 102 mm)",
+        "massa_projetil_gr": 95.0,
+        "massa_projetil_g": 6.156,
+        "velocidade_boca_m_s": 296.0,
+        "velocidade_boca_fps": 971.0,
+        "faixa_velocidade_m_s": [
+          285.0,
+          305.0
+        ],
+        "energia_boca_j": 270.0,
+        "faixa_energia_boca_j": [
+          250.0,
+          280.0
+        ],
+        "massa_polvora_gr": 3.1,
+        "massa_polvora_g": 0.2,
+        "velocidade_gases_m_s": 470.0,
+        "fator_recuo_ft_lb": 2.55,
+        "alcance_efetivo_m": 50.0,
+        "alcance_maximo_m": 1500.0,
+        "exemplos": [
+          {
+            "municao": "Speer Lawman 95gr TMJ",
+            "massa_gr": 95.0,
+            "velocidade_fps": 945.0,
+            "velocidade_m_s": 288.0
+          },
+          {
+            "municao": "Hornady 90gr XTP",
+            "massa_gr": 90.0,
+            "velocidade_fps": 975.0,
+            "velocidade_m_s": 297.0
+          }
+        ]
+      },
+      "aerodinamica": {
+        "cd_frontal": 1.15,
+        "cd_lateral": 1.2,
+        "fator_area_frontal": 0.75,
+        "fator_area_lateral": 0.65,
+        "v_ref_linearizacao_m_s": 3.0
+      },
+      "duracao_impulso_s": 0.02,
+      "confianca": "fabricante (Glock GmbH: dimensões 187×32×128 mm, cano 102 mm, ferrolho 25,5 mm, massas 575/645/785 g, capacidade 15/17, gatilho 28 N, passo 250 mm) + medido (balística .380 ACP 95 gr @ 296 m/s, 270 J, Speer Lawman / Hornady XTP) + estimado (carga propelente 0,20 g @ 470 m/s e coeficientes de arrasto aerodinâmico do corpo da arma)",
+      "estimado": {
+        "massa_polvora_g": "carga típica .380 ACP de 3,1 gr (0,20 g) com velocidade efetiva de jato dos gases v_g = 470 m/s (~1,59× v₀, fórmula balística de Hatcher/SAAMI para pistola semiautomática) ⇒ impulso dos gases J_gases = 0,094 N·s somado a J_projétil = m_p·v₀ = 1,8222 N·s → J_tiro = 1,9162 N·s",
+        "aerodinamica": "arrasto parasita de corpo rombo (C_d,x = 1,15 frontal; C_d,y = 1,20 lateral) com preenchimento da silhueta da pistola (0,75 frontal, 0,65 lateral) linearizado a v_ref = 3 m/s"
+      },
+      "nota": "Montada FIXA no topo do drone, alinhada com o nariz (+x): o projétil sai em +x_corpo e o recuo ('soco') empurra o drone em -x_corpo no eixo do cano (acima do CM ⇒ gera também impulso angular de cabragem / nariz para cima, ΔL_y = -z_cano·J_tiro).",
+      "fontes": [
+        "https://eu.glock.com/en/products/pistols/g25",
+        "https://saami.org/technical-information/ansi-saami-standards/"
+      ]
+    }
+  },
   "correcao_tabelas": {
     "kq": 1.075,
     "fonte": "Tyto Robotics ym47/#3496 vs tabelas T-Motor: 6–9 % menos eficiência (pesquisa profunda verificada 3-0, 2026-10-10)"

@@ -25,6 +25,8 @@ IDÊNTICOS bit a bit é `experiments/09_drone_hover_rl/bench_treino.py identidad
 """
 from __future__ import annotations
 
+import math
+
 import mujoco
 import numpy as np
 
@@ -32,7 +34,7 @@ from . import escalar
 from .aero import Aerodinamica, FlagsAero
 from .bateria import EstadoDesgaste, ModeloBateria
 from .componentes import Hardware
-from .modelo import REACOES, ROTORES, SITES_ROTOR
+from .modelo import REACOES, ROTORES, SITE_BOCA_CANO, SITES_ROTOR
 from .propulsao import Propulsao
 from .sensores import IMU, Barometro, FluxoOptico, MonitorBateria, Telemetro, _sortear
 
@@ -115,6 +117,26 @@ class Planta:
         self._v_ctrl, self._v_xfrc, self._v_sd = data.ctrl, data.xfrc_applied[c], data.sensordata
         self._i_t = [int(i) for i in self.slot_t]
         self._i_q = [int(i) for i in self.slot_q]
+        # arma fixa no topo (Glock 25 .380 Auto): site `boca_cano` e estado de disparo/recuo
+        try:
+            self.site_boca: int | None = int(model.site(SITE_BOCA_CANO).id)
+        except KeyError:
+            self.site_boca = None
+        self._v_boca = data.site_xpos[self.site_boca] if self.site_boca is not None else None
+        self._tiros_ativos: list[list[float]] = []    # [[forca_n, passos_restantes], ...]
+        self.n_tiros = 0
+        self.gatilho_tiro = False
+        self.forca_tiro_atual = 0.0
+        self.ultimo_tiro: dict | None = None
+        # altura do eixo do cano acima do CM (m) e inércia de pitch I_yy (kg·m²) no corpo
+        self.braco_z_arma = (
+            float(model.site_pos[self.site_boca, 2]) if self.site_boca is not None else 0.0
+        )
+        q_inercia = np.zeros(9)
+        mujoco.mju_quat2Mat(q_inercia, model.body_iquat[c])
+        r_inercia = q_inercia.reshape(3, 3)
+        i_corpo = r_inercia @ np.diag(model.body_inertia[c]) @ r_inercia.T
+        self.inercia_corpo = np.diag(i_corpo).copy()
 
     # ------------------------------------------------------------------ vistas ndarray (a API de sempre)
     @property
@@ -169,6 +191,11 @@ class Planta:
         self.data.ctrl[self.slot_t] = self.prop.empuxos()
         self.data.ctrl[self.slot_q] = 0.0
         self.data.xfrc_applied[self.corpo] = 0.0
+        self._tiros_ativos.clear()
+        self.n_tiros = 0
+        self.gatilho_tiro = False
+        self.forca_tiro_atual = 0.0
+        self.ultimo_tiro = None
         t0 = float(self.data.time)
         self.imu.reiniciar(self.rng, t0)
         for s in (self.tof, self.fluxo, self.baro):
@@ -190,6 +217,73 @@ class Planta:
     def armar(self, armado: bool = True) -> None:
         if not self.brownout:
             self.prop.armar(armado)
+
+    # ------------------------------------------------------------------ arma e recuo do tiro ("o soco")
+    def disparar(self, n: int = 1) -> dict | None:
+        """Dispara `n` tiro(s) da arma montada no topo do drone (`hw.arma`), entregando o impulso J_tiro
+        no site `boca_cano` em `-x̂_corpo` ao longo de N = round(duracao / dt) passos de física.
+
+        Física 100 % real (via `xfrc_applied` antes de `mj_step2`):
+          · impulso linear: Δp = −n · J_tiro · x̂_corpo  ⇒  Δv = −n · J_tiro / m_total · x̂_corpo;
+          · impulso angular no CM: ΔL = (p_boca − r_CM) × Δp  ⇒  no corpo, ΔL_y = −z_cano · n · J_tiro < 0
+            (nariz sobe / cabra ao disparar porque a arma está fixa EM CIMA do drone, acima do CM).
+        Devolve o registo do disparo (ou `None` se `n <= 0` ou o build não tiver arma).
+        """
+        n = int(n)
+        arma = self.hw.arma
+        if n <= 0 or arma is None:
+            return None
+        mujoco.mj_kinematics(self.model, self.data)
+        mujoco.mj_comPos(self.model, self.data)
+        n_passos = max(1, round(arma.duracao_impulso / self.dt))
+        j_total = float(n) * arma.impulso_tiro
+        f_passo = j_total / (n_passos * self.dt)
+        self._tiros_ativos.append([f_passo, n_passos])
+        self.n_tiros += n
+        rmat = self._v_xmat.reshape(3, 3)
+        ex = rmat[:, 0].copy()                   # +x̂_corpo no mundo (direção do projétil)
+        soco_dir = (-ex).copy()                  # −x̂_corpo no mundo (direção do soco no drone)
+        j_vec = soco_dir * j_total
+        com = self._v_xipos.copy()
+        p_boca = self._v_boca.copy() if self._v_boca is not None else (com + rmat @ np.array([0.0965, 0.0, self.braco_z_arma]))
+        braco_mundo = p_boca - com
+        l_vec = np.cross(braco_mundo, j_vec)
+        massa_atual = float(self.model.body_mass.sum())
+        azim_soco = float(math.degrees(math.atan2(soco_dir[1], soco_dir[0])) % 360.0)
+        self.ultimo_tiro = {
+            "t": round(float(self.data.time), 4),
+            "n": n,
+            "tiros_acumulados": self.n_tiros,
+            "impulso_ns": round(j_total, 5),
+            "forca_n": round(f_passo, 3),
+            "duracao_s": round(n_passos * self.dt, 4),
+            "passos_fisica": n_passos,
+            "direcao_tiro": [round(float(v), 5) for v in ex],
+            "direcao_soco": [round(float(v), 5) for v in soco_dir],
+            "azimute_soco_graus": round(azim_soco, 2),
+            "impulso_vec": [round(float(v), 5) for v in j_vec],
+            "torque_impulso_vec": [round(float(v), 5) for v in l_vec],
+            "delta_v_m_s": round(j_total / max(massa_atual, 1e-6), 5),
+            "braco_z_m": round(self.braco_z_arma, 5),
+            "delta_omega_pitch_rad_s": round(-self.braco_z_arma * j_total / max(float(self.inercia_corpo[1]), 1e-6), 5),
+        }
+        return self.ultimo_tiro
+
+    def _forca_tiro_passo(self) -> float:
+        """Força escalar de recuo (N) a aplicar NESTE passo de física (avança os contadores ativos)."""
+        if not self._tiros_ativos:
+            self.forca_tiro_atual = 0.0
+            return 0.0
+        f_tot = 0.0
+        restantes: list[list[float]] = []
+        for item in self._tiros_ativos:
+            f_tot += item[0]
+            item[1] -= 1
+            if item[1] > 0:
+                restantes.append(item)
+        self._tiros_ativos = restantes
+        self.forca_tiro_atual = f_tot
+        return f_tot
 
     # ------------------------------------------------------------------ bateria ↔ ESC
     def _resolver_tensao(self, corrente_bus=None) -> float:
@@ -316,6 +410,24 @@ class Planta:
         xfrc[3] = tx
         xfrc[4] = ty
         xfrc[5] = tz
+        if self._tiros_ativos:
+            f_tiro = self._forca_tiro_passo()
+            frx, fry, frz = -f_tiro * r00, -f_tiro * r10, -f_tiro * r20
+            if self._v_boca is not None:
+                px_b, py_b, pz_b = self._v_boca.tolist()
+                bx_a, by_a, bz_a = px_b - cx, py_b - cy, pz_b - cz
+            else:
+                bx_a = 0.0965 * r00 + self.braco_z_arma * r02
+                by_a = 0.0965 * r10 + self.braco_z_arma * r12
+                bz_a = 0.0965 * r20 + self.braco_z_arma * r22
+            xfrc[0] += frx
+            xfrc[1] += fry
+            xfrc[2] += frz
+            xfrc[3] += by_a * frz - bz_a * fry
+            xfrc[4] += bz_a * frx - bx_a * frz
+            xfrc[5] += bx_a * fry - by_a * frx
+        else:
+            self.forca_tiro_atual = 0.0
 
         _mj_step2(m, d)
 
@@ -398,6 +510,18 @@ class Planta:
         tau += self.aero.binario_giroscopico(w_mundo, self.prop.momento_angular(), ez)
         d.xfrc_applied[self.corpo, :3] = f_arrasto.sum(axis=0)
         d.xfrc_applied[self.corpo, 3:] = tau
+        if self._tiros_ativos:
+            f_tiro = self._forca_tiro_passo()
+            f_recuo = -f_tiro * ex
+            if self._v_boca is not None:
+                braco_arma = self._v_boca - com
+            else:
+                braco_arma = 0.0965 * ex + self.braco_z_arma * ez
+            tau_recuo = np.cross(braco_arma, f_recuo)
+            d.xfrc_applied[self.corpo, :3] += f_recuo
+            d.xfrc_applied[self.corpo, 3:] += tau_recuo
+        else:
+            self.forca_tiro_atual = 0.0
 
         mujoco.mj_step2(m, d)
 
@@ -436,13 +560,54 @@ class Planta:
         """Teto de rotação com a tensão ATUAL do barramento (rad/s) — decai com a descarga."""
         return self.hw.omega_max(self.v_bus)
 
+    def telemetria_arma(self) -> dict | None:
+        """Estado e balística da arma montada no topo do drone (`None` sem arma no build)."""
+        arma = self.hw.arma
+        if arma is None:
+            return None
+        rmat = self._v_xmat.reshape(3, 3)
+        ex = rmat[:, 0]
+        soco = -ex
+        azim_soco = float(math.degrees(math.atan2(soco[1], soco[0])) % 360.0)
+        massa_atual = float(self.model.body_mass.sum())
+        j_tiro = arma.impulso_tiro
+        iyy = max(float(self.inercia_corpo[1]), 1e-6)
+        cap = max(arma.capacidade, 1)
+        municao = cap if self.n_tiros == 0 else (cap - (self.n_tiros % cap))
+        return {
+            "id": arma.id,
+            "modelo": f"{arma.fabricante} {arma.modelo}".strip(),
+            "calibre": arma.calibre,
+            "massa_g": round(arma.massa * 1000.0, 1),
+            "capacidade": cap,
+            "municao": int(municao),
+            "tiros": int(self.n_tiros),
+            "gatilho": bool(self.gatilho_tiro),
+            "em_recuo": bool(self._tiros_ativos),
+            "impulso_ns": round(j_tiro, 5),
+            "forca_pico_n": round(arma.forca_media_tiro, 2),
+            "forca_atual_n": round(float(self.forca_tiro_atual), 2),
+            "duracao_ms": round(arma.duracao_impulso * 1000.0, 1),
+            "energia_boca_j": round(arma.energia_boca_j, 2),
+            "velocidade_boca_m_s": round(arma.velocidade_boca, 1),
+            "delta_v_teorico_m_s": round(j_tiro / max(massa_atual, 1e-6), 5),
+            "braco_z_m": round(self.braco_z_arma, 5),
+            "impulso_angular_nms": round(self.braco_z_arma * j_tiro, 5),
+            "delta_omega_pitch_rad_s": round(-self.braco_z_arma * j_tiro / iyy, 5),
+            "direcao_tiro": [round(float(v), 5) for v in ex],
+            "direcao_soco": [round(float(v), 5) for v in soco],
+            "azimute_soco_graus": round(azim_soco, 2),
+            "ultimo_tiro": self.ultimo_tiro,
+        }
+
     def telemetria(self) -> dict:
         b = self.bat.telemetria()
         pw = self.potencias()
         return {"bateria": b, "potencia": pw, "motores": self.prop.telemetria(),
                 "v_bus": self.v_bus, "i_total": self.i_total, "brownout": self.brownout,
                 "omega_max": self.omega_max_atual(), "t_max_rotor": self.hw.kf * self.omega_max_atual() ** 2,
-                "kappa_t": self.kappa_t.copy(), "altura_rotores": self.altura_rotores.copy()}
+                "kappa_t": self.kappa_t.copy(), "altura_rotores": self.altura_rotores.copy(),
+                "arma": self.telemetria_arma()}
 
 
 def potencia_pairagem_bancada(hw: Hardware, v_bus: float) -> float:

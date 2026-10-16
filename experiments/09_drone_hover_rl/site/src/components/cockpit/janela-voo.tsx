@@ -20,8 +20,9 @@ import {
   rumoParaFixar,
   velocidadeNoNariz,
   type EstadoPiloto,
+  type EstadoTiro,
 } from "@/lib/cockpit"
-import { piloto as controlo } from "@/lib/cockpit-controlos"
+import { piloto as controlo, tiro as controloTiro } from "@/lib/cockpit-controlos"
 import { hud } from "@/lib/hud-store"
 import type { TeclaVoo } from "@/lib/voo"
 
@@ -37,6 +38,7 @@ const MOVIMENTO: readonly { tecla: TeclaVoo; rotulo: string; titulo: string }[] 
 
 export interface JanelaVooProps {
   piloto: EstadoPiloto
+  tiro?: EstadoTiro
   /** A bola está a pilotar (as teclas de movimento ficam em espera). */
   aSeguirBola: boolean
   /** O runner aceita comandos de voo? (`false` = política sem modo de comando: as teclas não mandam) */
@@ -53,15 +55,34 @@ function comSinal(v: number): string {
 
 export function JanelaVoo({
   piloto,
+  tiro,
   aSeguirBola,
   aceitaComandos,
   onSemRumo,
 }: JanelaVooProps) {
   const rRumo = useRef<HTMLSpanElement>(null)
+  const rTiros = useRef<HTMLSpanElement>(null)
+  const rSoco = useRef<HTMLSpanElement>(null)
+  const rDirecaoSoco = useRef<HTMLSpanElement>(null)
   useDesenhoHud(({ hud: amostra, texto }) => {
-    if (!texto || rRumo.current === null) return
-    const valor = fmtRumo(instrumentos(amostra).rumo)
-    if (rRumo.current.textContent !== valor) rRumo.current.textContent = valor
+    if (!texto) return
+    if (rRumo.current !== null) {
+      const valor = fmtRumo(instrumentos(amostra).rumo)
+      if (rRumo.current.textContent !== valor) rRumo.current.textContent = valor
+    }
+    const t = amostra?.tiro ?? null
+    if (rTiros.current !== null) {
+      const txt = t === null ? "0 tiros" : `${t.tiros} tiros (${t.municao ?? 15}/${t.capacidade ?? 15})`
+      if (rTiros.current.textContent !== txt) rTiros.current.textContent = txt
+    }
+    if (rSoco.current !== null && t !== null) {
+      const txt = `J=${fmtHud(t.impulsoNs, 2)} N·s · F=${fmtHud(t.forcaPicoN, 1)} N · Δv=−${fmtHud(t.deltaVTeoricoMS, 2)} m/s · Δω=${fmtHud(t.deltaOmegaPitchRadS, 2)} rad/s`
+      if (rSoco.current.textContent !== txt) rSoco.current.textContent = txt
+    }
+    if (rDirecaoSoco.current !== null && t !== null && t.azimuteSocoGraus !== null) {
+      const txt = `−x̂ nariz (${fmtRumo(t.azimuteSocoGraus)}° mundo)`
+      if (rDirecaoSoco.current.textContent !== txt) rDirecaoSoco.current.textContent = txt
+    }
   })
 
   const [frente, esquerda, cima] = velocidadeNoNariz(piloto)
@@ -191,6 +212,37 @@ export function JanelaVoo({
             onLargar={() => controlo.largar("c")}
           />
         </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5 border-t border-white/10 pt-2.5" data-testid="voo-arma">
+        <div className="flex items-center justify-between gap-2">
+          <Legenda>arma no topo · Glock 25 (.380)</Legenda>
+          <span
+            ref={rTiros}
+            data-testid="voo-tiro-contagem"
+            className="font-mono text-[0.72rem] font-bold text-hud"
+          >
+            0 tiros (15/15)
+          </span>
+        </div>
+        <Tecla
+          letra="ESPAÇO · TIRO"
+          rotulo="disparar (+x̂ nariz · soco −x̂)"
+          titulo="ESPAÇO · Disparar Glock 25 .380 Auto fixa no topo do drone"
+          premida={Boolean(tiro?.gatilho)}
+          testid="voo-tecla-espaco"
+          onPremir={() => controloTiro.premir()}
+          onLargar={() => controloTiro.largar()}
+        />
+        <p className="font-mono text-[0.68rem] leading-snug text-hud" data-testid="voo-tiro-soco">
+          <span ref={rSoco}>J=1,92 N·s · F=95,8 N · Δv=−0,65 m/s · Δω=−1,09 rad/s</span>
+        </p>
+        <p className="flex justify-between font-mono text-[0.65rem] text-muted-foreground">
+          <span>direção do soco:</span>
+          <strong ref={rDirecaoSoco} data-testid="voo-tiro-direcao" className="text-hud">
+            −x̂ nariz (180° mundo)
+          </strong>
+        </p>
       </div>
     </div>
   )

@@ -70,6 +70,7 @@ vento; o «retorno» (recompensa de treino) e o «erro de rumo» saíram do ecr�
 | `W` `S` / `A` `D` | frente · trás / esquerda · direita, **relativos ao nariz** (1,0 m/s) |
 | `Q` `E` | subir · descer (0,7 m/s) |
 | `Z` `C` | rodar para a esquerda · direita (±0,5 rad/s); `X` fixa o rumo atual |
+| `Espaço` (`SPACE`) | **TIRO**: dispara a **Glock 25 (.380 Auto)** fixa no topo do drone (soco $J = 1,92\text{ N}\cdot\text{s}$ para trás em $-\hat{x}_{\text{corpo}}$, $\Delta v = -0,65\text{ m/s}$ e cabragem $\Delta\omega_y = -1,03\text{ rad/s}$) |
 | `B` | **SEGUIR A BOLA** liga/desliga |
 | `V` | vento liga/desliga |
 | `F` | troca a vista (1.ª ↔ 3.ª pessoa) |
@@ -122,7 +123,8 @@ autoridade; `POST /api/parar` desliga os dois.
 | `GET /api/hud.json` | `{"hud": {...}\|null, "idade_s", "velho"}` — a última amostra (para testes e para o fallback do site) |
 | `POST /api/vento-simples` | ver 0.5 → `{"ok": true, "vento_simples": {ligado, intensidade, aleatorio, direcao, seq}}` · 400 com o motivo |
 | `POST /api/bola` | `{"velocidade": 0.1–0.8}` (m/s) → `{"ok": true, "bola": {velocidade, seq}}` |
-| `GET /api/sim`, `/api/state` | ganham `vento_simples` (ou `null`) e `bola: {velocidade, min, max}` |
+| `POST /api/tiro` | `{"gatilho": bool}` (ou `{}`) → `{"ok": true, "tiro": {gatilho, disparos, seq}}` (premido dispara 1 tiro semiautomático da Glock 25 no topo; largar solta o gatilho) |
+| `GET /api/sim`, `/api/state` | ganham `vento_simples` (ou `null`), `bola: {velocidade, min, max}` e `tiro: {pedido, eco}` |
 
 Amostra do HUD (o runner manda-a por UDP local ao servidor; nada toca no disco):
 

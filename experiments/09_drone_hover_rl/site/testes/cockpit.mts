@@ -326,6 +326,23 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
     "teclas: 1–8 abrem as janelas (9 e 0 não são do cockpit)")
   ok(a("Escape") === '{"tipo":"fechar"}' && a("?") === '{"tipo":"ajuda"}' && a("Enter") === "null" && a("g") === "null",
     "teclas: Esc fecha, ? abre a ajuda; o resto não é interceptado")
+  ok(a(" ") === '{"tipo":"tiro"}' && a("Spacebar") === '{"tipo":"tiro"}' && a(" ", { ctrl: true }) === "null",
+    "teclas: ESPAÇO dispara a Glock 25 (tipo: tiro), exceto com Ctrl/Meta/Alt")
+  {
+    const enviadosTiro: boolean[] = []
+    const ct = new m.ControloTiro({ enviar: async (g) => { enviadosTiro.push(g) } })
+    ct.premir()
+    ct.premir() // auto-repeat ignorado
+    ok(ct.obter().gatilho === true && ct.obter().disparos === 1 && enviadosTiro.join(",") === "true",
+      "tiro: premir SPACE acende o gatilho e dispara 1× (auto-repeat não repete)")
+    ct.largar()
+    ct.largar()
+    ok(ct.obter().gatilho === false && ct.obter().disparos === 1 && enviadosTiro.join(",") === "true,false",
+      "tiro: largar SPACE solta o gatilho sem disparar outro tiro")
+    const hudTiro = m.lerHud({ ...AMOSTRA, tiro: { id: "glock_g25", tiros: 3, gatilho: true, em_recuo: true, impulso_ns: 1.9162, delta_v_teorico_m_s: 0.6457, direcao_soco: [-1, 0, 0], azimute_soco_graus: 180 } })
+    ok(hudTiro?.tiro?.id === "glock_g25" && hudTiro.tiro.tiros === 3 && hudTiro.tiro.gatilho && hudTiro.tiro.emRecuo && aprox(hudTiro.tiro.impulsoNs ?? 0, 1.9162),
+      "lerHud: bloco `tiro` (Glock 25) lido com impulso, recuo e direção do soco")
+  }
   ok(a("w", { ctrl: true }) === "null" && a("r", { meta: true }) === "null" && a("f", { alt: true }) === "null",
     "teclas: com Ctrl/Meta/Alt nunca se rouba o atalho do browser")
   ok(m.eCampoDeTexto({ tagName: "INPUT", type: "text" }) && m.eCampoDeTexto({ tagName: "INPUT", type: null }) &&
@@ -683,6 +700,11 @@ const MUTACOES: { nome: string; de: string; para: string }[] = [
     nome: "as janelas deixam de encaixar no viewport",
     de: "    x: Math.round(limitar(ponto.x, margem, maxX)),",
     para: "    x: Math.round(ponto.x),",
+  },
+  {
+    nome: "a tecla ESPAÇO deixa de disparar o tiro",
+    de: '  if (key === " " || key === "Spacebar") return { tipo: "tiro" }',
+    para: '  if (key === "Spacebar") return { tipo: "tiro" }',
   },
 ]
 

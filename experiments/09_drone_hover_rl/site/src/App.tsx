@@ -51,6 +51,7 @@ import {
   usePaginaVisivel,
   usePiloto,
   useResumoHud,
+  useTiro,
   useVento,
   useViewport,
   useVista,
@@ -75,6 +76,7 @@ import {
   definirPlantaDaCamera,
   ligarAvisos,
   piloto as controloPiloto,
+  tiro as controloTiro,
   vento as controloVento,
 } from "@/lib/cockpit-controlos"
 import { hud } from "@/lib/hud-store"
@@ -90,6 +92,7 @@ export function App() {
   const visivel = usePaginaVisivel()
   const resumoHud = useResumoHud()
   const piloto = usePiloto()
+  const tiro = useTiro()
   const vento = useVento()
   const bola = useBola()
   const { toasts, conteudo, notificar, fechar } = useAvisos()
@@ -223,6 +226,9 @@ export function App() {
         case "fixar_rumo":
           if (!controloPiloto.fixarRumo(rumoParaFixar(hud.ultima()))) semRumo()
           break
+        case "tiro":
+          controloTiro.premir()
+          break
         case "bola":
           controloPiloto.alternarBola()
           break
@@ -255,12 +261,14 @@ export function App() {
       if (acao === null) return
       if (acao.tipo === "voo" || acao.tipo === "rodar")
         controloPiloto.largar(acao.tecla)
+      else if (acao.tipo === "tiro") controloTiro.largar()
       else if (acao.tipo === "reiniciar") gestoReiniciar.current?.cancelar()
     }
 
     // Perder o foco (outra janela, outro separador) solta tudo: o `keyup` já não chega cá.
     const soltar = () => {
       controloPiloto.soltarTudo()
+      controloTiro.largar()
       gestoReiniciar.current?.cancelar()
     }
     const aoEsconder = () => {
@@ -286,6 +294,7 @@ export function App() {
         return (
           <JanelaVoo
             piloto={piloto}
+            tiro={tiro}
             aSeguirBola={resumoHud.modo === "bola"}
             aceitaComandos={resumoHud.aceitaComandos}
             onSemRumo={semRumo}
@@ -416,6 +425,7 @@ export function App() {
         vista={vista.vista}
         comImagem={comImagem}
         piloto={piloto}
+        tiro={tiro}
         viewport={viewport}
         imagemBordo={imagemBordo}
         atrasoImagemMs={atrasoDaImagem(

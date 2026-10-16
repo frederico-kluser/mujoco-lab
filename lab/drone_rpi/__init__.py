@@ -29,6 +29,7 @@ from .bateria import EstadoDesgaste, ModeloBateria, perda_por_ciclo
 from .componentes import (
     GRAVIDADE,
     RHO_AR,
+    Arma,
     Hardware,
     autonomia_estimada,
     carregar_builds,
@@ -36,7 +37,7 @@ from .componentes import (
     nome_build_ativo,
     resolver,
 )
-from .modelo import REACOES, ROTORES, SITES_ROTOR, construir_spec, exportar_xml
+from .modelo import REACOES, ROTORES, SITE_BOCA_CANO, SITES_ROTOR, construir_spec, exportar_xml
 from .planta import Planta
 from .propulsao import Propulsao, quantiza_dshot
 
@@ -69,7 +70,21 @@ def definir_vento(model: mujoco.MjModel, vx: float, vy: float, vz: float = 0.0) 
     model.opt.wind[:] = (vx, vy, vz)
 
 
+def disparar(planta: Planta, n: int = 1) -> dict | None:
+    """Dispara `n` tiro(s) da arma no topo do drone (impulso J_tiro em −x̂_corpo no site `boca_cano`)."""
+    return planta.disparar(n)
+
+
+def definir_gatilho_tiro(planta: Planta, gatilho: bool) -> None:
+    """Estado do gatilho/tecla SPACE (True = premido, False = solto)."""
+    planta.gatilho_tiro = bool(gatilho)
+
+
 # --------------------------------------------------------------------------------------- ler_*
+def ler_arma(planta: Planta) -> dict | None:
+    return planta.telemetria_arma()
+
+
 def ler_bateria(planta: Planta) -> dict:
     return planta.bat.telemetria()
 
@@ -114,10 +129,11 @@ def modo_rampa(planta: Planta, tau: float, duracao: float = 5.0) -> None:
 MODOS = {"desligado": modo_desligado, "gaz_fixo": modo_gaz_fixo, "rampa": modo_rampa}
 
 __all__ = [
-    "GRAVIDADE", "MODOS", "REACOES", "RHO_AR", "ROTORES", "SITES_ROTOR", "Aerodinamica", "EstadoDesgaste",
-    "FlagsAero", "Hardware", "ModeloBateria", "Planta", "Propulsao", "aero", "autonomia_estimada", "bateria",
-    "carregar", "carregar_builds", "carregar_catalogo", "componentes", "construir_spec", "definir_aceleradores",
-    "definir_armado", "definir_vento", "exportar_xml", "ganho_solo", "hardware", "ler_bateria", "ler_estado",
+    "GRAVIDADE", "MODOS", "REACOES", "RHO_AR", "ROTORES", "SITE_BOCA_CANO", "SITES_ROTOR", "Aerodinamica",
+    "Arma", "EstadoDesgaste", "FlagsAero", "Hardware", "ModeloBateria", "Planta", "Propulsao", "aero",
+    "autonomia_estimada", "bateria", "carregar", "carregar_builds", "carregar_catalogo", "componentes",
+    "construir_spec", "definir_aceleradores", "definir_armado", "definir_gatilho_tiro", "definir_vento",
+    "disparar", "exportar_xml", "ganho_solo", "hardware", "ler_arma", "ler_bateria", "ler_estado",
     "ler_imu", "ler_motores", "modelo", "nome_build_ativo", "perda_por_ciclo", "propulsao", "quantiza_dshot",
     "resolver", "sensores",
 ]

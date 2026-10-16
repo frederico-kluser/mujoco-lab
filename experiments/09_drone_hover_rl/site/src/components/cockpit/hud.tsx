@@ -48,11 +48,13 @@ import {
   ventoNoNariz,
   yawNoMundo,
   type EstadoPiloto,
+  type EstadoTiro,
   type Par,
   type ResumoHud,
   type Tamanho,
   type TomEstado,
 } from "@/lib/cockpit"
+import { tiro as controloTiro } from "@/lib/cockpit-controlos"
 import { hud as hudAoVivo, type QuadroHud } from "@/lib/hud-store"
 
 // --------------------------------------------------------------------------------- escrita por refs
@@ -201,6 +203,7 @@ export interface HudProps {
   /** A vista tem imagem? Sem ela não se desenha o que assenta na imagem (horizonte, mira, retículo). */
   comImagem: boolean
   piloto: EstadoPiloto
+  tiro?: EstadoTiro
   viewport: Tamanho
   /** Resolução do stream da câmara de bordo (px) — a escala do `object-fit: cover`. */
   imagemBordo: Par | null
@@ -227,6 +230,7 @@ export function Hud({
   vista,
   comImagem,
   piloto,
+  tiro,
   viewport,
   imagemBordo,
   atrasoImagemMs,
@@ -296,6 +300,9 @@ export function Hud({
   const rCanto3 = useRef<HTMLSpanElement>(null)
   const rLinha = useRef<HTMLDivElement>(null)
   const rBolaTexto = useRef<HTMLSpanElement>(null)
+  const rTiroContagem = useRef<HTMLSpanElement>(null)
+  const rTiroSoco = useRef<HTMLSpanElement>(null)
+  const rTiroRecuo = useRef<HTMLSpanElement>(null)
 
   useDesenhoHud((quadro: QuadroHud) => {
     const { hud, texto } = quadro
@@ -332,6 +339,7 @@ export function Hud({
     }
     mostrar(rVentoSeta, vento.angulo !== null)
     mostrar(rRajada, hud?.rajada === true)
+    mostrar(rTiroRecuo, hud?.tiro?.emRecuo === true)
 
     // Os símbolos que assentam na IMAGEM usam a amostra do instante em que o quadro foi captado.
     const naImagem = g.emFpv ? hudAoVivo.deHa(g.atrasoImagemMs) : null
@@ -419,6 +427,17 @@ export function Hud({
         : `erro ${fmtHud(erro.graus, 1)}°${erro.px === null ? "" : ` · ${fmtHud(erro.px, 0)} px`}${
             bola?.dist == null ? "" : ` · a ${fmtHud(bola.dist, 1)} m`
           }`
+    )
+    const tHud = hud?.tiro ?? null
+    escrever(
+      rTiroContagem,
+      tHud === null ? "0" : `${tHud.tiros}`
+    )
+    escrever(
+      rTiroSoco,
+      tHud === null || tHud.impulsoNs === null
+        ? "1,92 N·s"
+        : `${fmtHud(tHud.impulsoNs, 2)} N·s · −${fmtHud(tHud.deltaVTeoricoMS, 2)} m/s`
     )
   })
 
@@ -804,6 +823,45 @@ export function Hud({
             <Tecla tamanho="hud" letra="Z" premida={piloto.z} apagada={teclasEmEspera} testid="tecla-z" />
             <Tecla tamanho="hud" letra="X" premida={piloto.yaw_alvo !== null} apagada={teclasEmEspera} testid="tecla-x" />
             <Tecla tamanho="hud" letra="C" premida={piloto.c} apagada={teclasEmEspera} testid="tecla-c" />
+          </div>
+          <div className="pointer-events-auto flex w-full flex-col gap-1 pt-0.5" data-testid="hud-tiro">
+            <button
+              type="button"
+              data-testid="tecla-espaco"
+              data-estado={tiro?.gatilho ? "ativa" : "inativa"}
+              aria-pressed={Boolean(tiro?.gatilho)}
+              title="ESPAÇO · Disparar Glock 25 .380 fixa no topo do drone (soco para trás)"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture?.(e.pointerId)
+                controloTiro.premir()
+              }}
+              onPointerUp={() => controloTiro.largar()}
+              onPointerCancel={() => controloTiro.largar()}
+              onLostPointerCapture={() => controloTiro.largar()}
+              className={`flex h-8 w-full items-center justify-between rounded-lg border px-2 font-etiqueta text-[0.68rem] font-bold tracking-wider select-none ${
+                tiro?.gatilho
+                  ? "translate-y-px border-hud-vermelho bg-hud-vermelho text-black shadow-[0_0_14px_rgb(255_82_82/0.65)]"
+                  : "border-hud-ambar/65 bg-black/55 text-hud hover:bg-white/12"
+              }`}
+            >
+              <span>ESPAÇO · TIRO</span>
+              <span className="font-mono text-[0.65rem]">
+                #<span ref={rTiroContagem} data-testid="hud-tiro-contagem">0</span>
+              </span>
+            </button>
+            <div className="osd flex items-center justify-between gap-1 text-[0.6rem] leading-none">
+              <span ref={rTiroSoco} data-testid="hud-tiro-soco">
+                1,92 N·s · −0,65 m/s
+              </span>
+              <span
+                ref={rTiroRecuo}
+                data-testid="hud-tiro-recuo"
+                className="font-bold text-hud-vermelho"
+                style={{ opacity: 0 }}
+              >
+                SOCO
+              </span>
+            </div>
           </div>
         </div>
       </div>

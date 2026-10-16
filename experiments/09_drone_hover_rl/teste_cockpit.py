@@ -239,6 +239,21 @@ def secao_servidor() -> bool:
                                    "max": s.BOLA_VEL_MAX}
          and s.bola_do_controlo({"bola": {"velocidade": "depressa"}})["velocidade"] == s.BOLA_VEL_PADRAO)
 
+    # --- tiro (SPACE, Glock 25 no topo do drone)
+    t1 = s.validar_tiro({"gatilho": True}, {})
+    c.ok("tiro: premir SPACE (`gatilho: true`) incrementa `disparos` (+1) e `seq` (+1)",
+         t1["tiro"] == {"gatilho": True, "disparos": 1, "seq": 1}, str(t1["tiro"]))
+    t2 = s.validar_tiro({"gatilho": False}, t1)
+    c.ok("tiro: largar SPACE (`gatilho: false`) solta o gatilho sem disparar outro tiro (`seq` +1)",
+         t2["tiro"] == {"gatilho": False, "disparos": 1, "seq": 2}, str(t2["tiro"]))
+    t3 = s.validar_tiro({}, t2)
+    c.ok("tiro: corpo vazio `{}` equivale a um disparo (`gatilho: true`, `disparos` +1)",
+         t3["tiro"] == {"gatilho": True, "disparos": 2, "seq": 3}, str(t3["tiro"]))
+    for nome, corpo in (("chave desconhecida", {"gatilho": True, "arma": "x"}),
+                        ("`gatilho` que não é booleano", {"gatilho": 1}),
+                        ("corpo que não é objeto", [1])):
+        c.recusa(f"tiro: {nome} → 400", s.validar_tiro, corpo, {})
+
     # --- arranque limpo: estado fixo, preferências preservadas
     velho = {"vento_simples": {"ligado": True, "intensidade": 4.0, "aleatorio": True, "direcao": 120.0, "seq": 7},
              "voo": {"ativo": False, "teclas": {"w": True}, "segui_alvo": True, "yaw_taxa": 0.5, "seq": 3},
@@ -313,6 +328,15 @@ class _EnvFalso:
     def definir_vento_dinamico(self, config):
         self.dinamicos.append(config)
 
+    def definir_gatilho_tiro(self, gatilho: bool):
+        self.gatilho = bool(gatilho)
+
+    def disparar(self, n: int = 1):
+        self.disparos = getattr(self, "disparos", 0) + int(n)
+        return {"tiros_acumulados": self.disparos, "impulso_ns": 1.9162 * n, "forca_n": 95.81 * n,
+                "duracao_s": 0.02, "direcao_soco": [-1.0, 0.0, 0.0], "azimute_soco_graus": 180.0,
+                "delta_v_m_s": 0.6457 * n, "delta_omega_pitch_rad_s": -1.025 * n}
+
 
 def secao_runner(pasta: Path) -> bool:
     import sim_site
@@ -334,6 +358,11 @@ def secao_runner(pasta: Path) -> bool:
              m.ler_registo, {"vento_simples": {"ligado": True, "intensidade": 99}})
     c.recusa("ler_registo: velocidade da bola fora da faixa é recusada",
              m.ler_registo, {"bola": {"velocidade": 5.0}})
+    rt = m.ler_registo({"tiro": {"gatilho": True, "disparos": 3, "seq": 5}})
+    c.ok("ler_registo: bloco `tiro` validado",
+         rt.tiro is not None and rt.tiro.gatilho is True and rt.tiro.disparos == 3 and rt.tiro.seq == 5)
+    c.recusa("ler_registo: `tiro.disparos` negativo é recusado",
+             m.ler_registo, {"tiro": {"gatilho": True, "disparos": -1}})
 
     # --- o Controlo aplica o registo: o vento antigo é neutralizado e o do gerador chega ao env
     pasta.mkdir(parents=True, exist_ok=True)
@@ -531,6 +560,27 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
              (eco.get("teclas") or {}).get("w") is True and avanco > 0.8, f"Δx = {avanco:+.2f} m em 3 s")
         time.sleep(2.5)
 
+        # --- TIRO (SPACE, Glock 25 fixa no topo do drone)
+        vx_antes_tiro = float(sse.ultima()["real"]["vx"])
+        pitch_antes_tiro = float(sse.ultima()["real"]["pitch"])
+        cod_tiro, resp_tiro = _http(f"{url}/api/tiro", {"gatilho": True})
+        c.ok("POST /api/tiro (SPACE) → 200 com o disparo registado",
+             cod_tiro == 200 and (resp_tiro.get("tiro") or {}).get("disparos") == 1)
+        t_tiro0 = time.perf_counter()
+        time.sleep(0.25)
+        _http(f"{url}/api/tiro", {"gatilho": False})
+        amostras_tiro = sse.desde(t_tiro0)
+        min_vx_tiro = min((float(a["real"]["vx"]) for a in amostras_tiro if a.get("real")), default=vx_antes_tiro)
+        min_pitch_tiro = min((float(a["real"]["pitch"]) for a in amostras_tiro if a.get("real")), default=pitch_antes_tiro)
+        tiro_hud = sse.ultima().get("tiro") or {}
+        c.ok("SPACE dispara a Glock 25: o HUD regista o tiro (J ≈ 1,92 N·s) e o drone sofre o soco para trás (Δvx < −0,3 m/s) e cabra o nariz",
+             tiro_hud.get("tiros") == 1 and abs(float(tiro_hud.get("impulso_ns") or 0.0) - 1.9162) < 0.01
+             and min_vx_tiro - vx_antes_tiro < -0.30 and min_pitch_tiro < pitch_antes_tiro - 0.02,
+             f"tiros={tiro_hud.get('tiros')} · J={tiro_hud.get('impulso_ns')} N·s · Δvx={min_vx_tiro - vx_antes_tiro:+.2f} m/s · Δpitch={min_pitch_tiro - pitch_antes_tiro:+.3f} rad")
+        time.sleep(2.5)
+        c.ok("após o soco do tiro a cascata recupera a pairagem (continua A VOAR)",
+             sse.ultima()["fase"] == "a_voar", f"z {sse.ultima()['real']['z']:.2f} m")
+
         # --- vento: liga em rampa, a física leva a intensidade pedida, desliga a zero
         codigo, resposta = _http(f"{url}/api/vento-simples", {"ligado": True, "intensidade": 3.0,
                                                                "aleatorio": False, "direcao": 90.0})
@@ -681,6 +731,12 @@ MUTACOES = (
      "depois": '    if hardware and str(hardware.get("modo_acao", "ctbr")) == "ctbr":\n        return "rl"\n',
      "checagem": (_PREAMBULO + "import sim_site as s\n"
                   "assert s.resolver_controlador('auto', {'modo_acao': 'ctbr'}) == 'classico'\n")},
+    {"nome": "tiro (SPACE) sem incrementar o contador de disparos",
+     "ficheiro": "sim_site.py",
+     "antes": '    disparos = anterior["disparos"] + (1 if gatilho else 0)\n',
+     "depois": '    disparos = anterior["disparos"]\n',
+     "checagem": (_PREAMBULO + "import sim_site as s\n"
+                  "assert s.validar_tiro({'gatilho': True}, {})['tiro']['disparos'] == 1\n")},
 )
 
 

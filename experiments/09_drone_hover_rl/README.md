@@ -98,6 +98,26 @@ preferências ficam). Achado e corrigido na revisão: se o bloco dos 3 botões s
 soprar, o nível da rampa ficava congelado e reaparecia como «vento fantasma» (1,93 m/s medidos) quando o bloco
 voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `teste_cockpit.py`.
 
+**Arma fixa no topo: Glock 25 (.380 Auto / 9×17mm) e botão de tiro `SPACE`** (`POST /api/tiro`, `valida_real.py` §I):
+- **Peça real no catálogo** (`models/drone_rpi/componentes.json` → `armas.glock_g25`): comprimento 187 mm, cano
+  102 mm, altura 128 mm, largura 32 mm (ferrolho 25,5 mm), 575 g sem carregador / 645 g vazia / **785 g com
+  carregador cheio (15 tiros)**, gatilho Safe Action® 28 N, blowback simples.
+- **Recalibração de peso, inércia e aerodinâmica**: massa total do `endurance_15pol_p50b` passa de 2182,6 g para
+  **2967,6 g**; o CM sobe +25,3 mm (eixo do cano `boca_cano` fica a $z_{\text{cano}} = +134,2\text{ mm}$ acima do
+  novo CM); inércias principais sobem para $I_{xx} = 0,2461$, $I_{yy} = 0,2508$, $I_{zz} = 0,4698\text{ kg}\cdot\text{m}^2$;
+  pairagem a 21,6 V passa para **3658 rpm, duty 67,2 %, 314,2 W (9,44 g/W), T/W 1,93, autonomia 40,7 min**;
+  arrasto anisotrópico recalibrado com a silhueta frontal/lateral da pistola ($d_x = 0,3020\text{ s}^{-1}$,
+  $d_y = 0,3105\text{ s}^{-1}$) mais a caixa de inércia de fluido do MuJoCo.
+- **Balística e cálculo do soco no drone**: projétil de 95 gr ($m_p = 6,156\text{ g}$) a $v_0 = 296\text{ m/s}$
+  ($E_0 = \frac{1}{2}m_p v_0^2 = 269,68\text{ J} \approx 270\text{ J}$) mais gases propelentes ($m_c = 0,20\text{ g}$
+  a $v_g = 470\text{ m/s}$) $\Rightarrow$ impulso total por disparo:
+  $$J_{\text{tiro}} = m_p v_0 + m_c v_g = 1,8222 + 0,0940 = 1,9162\text{ N}\cdot\text{s}$$
+  entregue fisicamente (`xfrc_applied` no site `boca_cano` antes de `mj_step2`) durante $\Delta t_{\text{soco}} = 20\text{ ms}$
+  (10 passos de 2 ms, força média $F_{\text{soco}} = 95,81\text{ N}$) na direção oposta ao nariz ($-\hat{x}_{\text{corpo}}$):
+  - **Soco linear**: $\Delta \vec{v} = -\frac{J_{\text{tiro}}}{m_{\text{total}}} \hat{x}_{\text{corpo}} \implies \Delta v_x = -0,6457\text{ m/s}$ (para trás).
+  - **Soco angular (cabragem)**: como a arma está fixa **em cima** do drone ($z_{\text{cano}} = +0,1342\text{ m}$ acima do CM),
+    gera momento de cabragem $\Delta L_y = -z_{\text{cano}} \cdot J_{\text{tiro}} = -0,2572\text{ N}\cdot\text{m}\cdot\text{s} \implies \Delta\omega_y = -1,0254\text{ rad/s}$ (nariz sobe ao disparar; a cascata absorve o recuo e recupera a pairagem).
+
 **Aguentar o vento — clássico ou IA?** (`avaliar_vento.py`, `teste_vento_classico.py`). A cascata clássica
 da fase 1 (sem vento) perdia para a política RL assim que o vento apertava: a 5 m/s constantes derivava 3,7 m.
 Ganhou quatro peças, todas clássicas e todas no núcleo C++ que vai para o Arduino: um **observador de

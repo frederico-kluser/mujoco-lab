@@ -39,7 +39,7 @@ from lab.drone_rpi import componentes as comp
 
 COALA = _RAIZ / ".agents" / "mujoco-lab-coala-agent-skill" / "scripts" / "coala.py"
 XML_ATIVO = comp.PASTA_MODELO / "drone_rpi.xml"
-GRUPOS = ("motores", "helices", "celulas", "frames", "esc", "eletronica", "sensores", "cameras")
+GRUPOS = ("motores", "helices", "celulas", "frames", "esc", "eletronica", "sensores", "cameras", "armas")
 
 
 def _nome(peca: dict) -> str:
@@ -66,6 +66,10 @@ def cmd_listar(_args) -> int:
                 fov = p.get("fov_graus", {})
                 extra = (f"{p.get('sensor', '?')} · {p.get('mp', '?')} MP · FoV {fov.get('diag', '?')}° diag · "
                          f"{p['massa_g']} g · vídeo {', '.join(p.get('modos_video', []))}")
+            elif g == "armas":
+                bal = p.get("balistica", {})
+                extra = (f"{p.get('calibre', '?')} · {p.get('massa_g', 0):g} g cheia ({p.get('capacidade_padrao', '?')} tiros) · "
+                         f"v₀ {bal.get('velocidade_boca_m_s', '?'):g} m/s · E₀ {bal.get('energia_boca_j', '?'):g} J")
             elif g == "sensores":
                 extra = f"{p.get('tipo', '?')} · {p.get('massa_g', 0)} g"
             print(f"  {pid:28s} {_nome(p):40s} {extra}")
@@ -106,6 +110,13 @@ def cmd_mostrar(args) -> int:
         print(f"  camera  {_nome(hw.camera.dados)} · {hw.camera.dados.get('mp', '?')} MP{mono} · montada à frente · "
               f"FoV {fov['horizontal']:.0f}°×{fov['vertical']:.0f}° no modo {modo} · "
               f"{1000 * hw.camera.massa:.0f} g · vídeo {', '.join(hw.camera.dados.get('modos_video', []))}")
+    if hw.arma is not None:
+        a = hw.arma
+        dv = a.impulso_tiro / hw.massa_total
+        print(f"  arma    {_nome(a.dados)} ({a.calibre}) · fixa no topo (+x) · {1000 * a.massa:.0f} g cheia "
+              f"({a.capacidade} tiros; {1000 * a.massa_vazia:.0f} g vazia) · v₀ {a.velocidade_boca:.0f} m/s · "
+              f"E₀ {a.energia_boca_j:.1f} J · soco J={a.impulso_tiro:.3f} N·s "
+              f"(F={a.forca_media_tiro:.1f} N em {1000 * a.duracao_impulso:.0f} ms, Δv={dv:.3f} m/s em -x)")
     print("  massa   " + " + ".join(f"{k} {v:.0f}" for k, v in r["massas_g"].items()) +
           f" = {r['massa_total_g']:.0f} g")
     ph = r["pairagem_v_nominal"]
@@ -160,8 +171,8 @@ def cmd_usar(args) -> int:
 def cmd_montar(args) -> int:
     builds = comp.carregar_builds()
     base = copy.deepcopy(builds["builds"][args.base or builds["ativo"]])
-    for chave in ("motor", "helice", "frame", "esc"):
-        valor = getattr(args, chave)
+    for chave in ("motor", "helice", "frame", "esc", "arma"):
+        valor = getattr(args, chave, None)
         if valor:
             base[chave] = valor
     if args.celula:
@@ -303,7 +314,7 @@ def main(argv=None) -> int:
     mo = sub.add_parser("montar")
     mo.add_argument("--nome", required=True)
     mo.add_argument("--base", default=None, help="build de partida (por omissão o ativo)")
-    for chave in ("motor", "helice", "frame", "esc", "celula", "descricao"):
+    for chave in ("motor", "helice", "frame", "esc", "celula", "arma", "descricao"):
         mo.add_argument(f"--{chave}", default=None)
     mo.add_argument("--s", type=int, default=None, help="células em série")
     mo.add_argument("--p", type=int, default=None, help="células em paralelo")

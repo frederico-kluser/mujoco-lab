@@ -85,7 +85,7 @@ def ganho_solo(z, raio: float, d_vizinhos: float, b_opostos: float, kb: float = 
 class Aerodinamica:
     """Fatores κ_T/κ_Q por rotor e forças/binários extra (arrasto de rotor, giroscópico)."""
 
-    def __init__(self, hw: Hardware, flags: FlagsAero | None = None, d_xy=(D_ARRASTO, D_ARRASTO)):
+    def __init__(self, hw: Hardware, flags: FlagsAero | None = None, d_xy: tuple[float, float] | None = None):
         self.hw = hw
         self.flags = flags if flags is not None else FlagsAero()
         h = hw.helice
@@ -102,10 +102,14 @@ class Aerodinamica:
         self.kb = KB_CORPO
         self.k_vrs = K_VRS
         self.escala_solo = 1.0               # DR: força do efeito de solo
-        # arrasto de rotor: c_d tal que, em pairagem nominal, Σ F/m = −d·v
+        # arrasto de rotor + perfil da arma no topo: c_d tal que, em pairagem nominal, Σ F/m = −d·v
         p = hw.ponto_pairagem(hw.bateria.v_nominal)
         self.omega_h = p["omega"]
-        self.definir_arrasto(*d_xy)
+        if d_xy is None:
+            dx_a, dy_a = hw.arrasto_arma_xy() if hasattr(hw, "arrasto_arma_xy") else (0.0, 0.0)
+            d_xy = (D_ARRASTO + dx_a, D_ARRASTO + dy_a)
+        self.d_xy_nominal = (float(d_xy[0]), float(d_xy[1]))
+        self.definir_arrasto(*self.d_xy_nominal)
         self._vrs_ruido = [0.0, 0.0, 0.0, 0.0]       # estado AR(1) da flutuação do VRS, por rotor (lista de floats)
 
     def reiniciar(self) -> None:

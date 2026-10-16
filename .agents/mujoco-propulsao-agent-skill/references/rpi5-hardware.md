@@ -34,6 +34,8 @@ uv run python experiments/09_drone_hover_rl/hardware.py usar <build>    # torna 
 uv run python experiments/09_drone_hover_rl/hardware.py xml             # MJCF gerado (inspecionar)
 uv run python experiments/09_drone_hover_rl/hardware.py coala           # catálogo → memória CoALA
 ```
+ATENÇÃO (verificado 2026-10-15): `montar` só regenera o MJCF quando levado com `--usar`; sem ele grava
+apenas `builds.json` + sincroniza CoALA. `usar` regenera sempre.
 Depois de trocar peças: `run.py` (validação física) e um treino novo — **uma política só vale para as
 peças com que treinou** (o `train.py` grava `hardware.json` ao lado de cada política).
 

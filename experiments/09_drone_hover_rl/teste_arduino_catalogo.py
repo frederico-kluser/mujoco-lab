@@ -531,28 +531,29 @@ def checa_build(c: Checagens) -> None:
                                     + cat["cameras"]["raspberry_camera_module_3_wide"]["massa_g"]) / 1000.0
                 + (ele["arduino_portenta_h7"]["massa_g"] + cat["cameras"]["portenta_vision_shield_hm0360"]["massa_g"]) / 1000.0)
     m_a, m_p = hw_a.massas, hw_p.massas
-    c.ok("[§3] massa: p50b − (RPi 5 52 g + FC 8 g + Pi Camera 4 g) + (Portenta 10 g + shield 8 g) = 2136,6 g; o orçamento "
-         "do build novo não tem rpi5 nem fc_h7 e tem Portenta + câmara",
-         abs(hw_a.massa_total - esperada) < 1e-9 and abs(hw_a.massa_total * 1000.0 - 2136.6) < 1e-6
+    c.ok("[§3] massa: p50b − (RPi 5 52 g + FC 8 g + Pi Camera 4 g) + (Portenta 10 g + shield 8 g) = 2921,6 g; o orçamento "
+         "do build novo não tem rpi5 nem fc_h7 e tem Portenta + câmara + Glock 25",
+         abs(hw_a.massa_total - esperada) < 1e-9 and abs(hw_a.massa_total * 1000.0 - 2921.6) < 1e-6
          and "rpi5" not in m_a and "fc_h7" not in m_a and "arduino_portenta_h7" in m_a and "camera" in m_a
+         and "arma" in m_a
          and abs(m_p["frame"] - m_a["frame"]) < TOL_S and abs(m_p["bateria"] - m_a["bateria"]) < TOL_S,
          f"{hw_p.massa_total * 1000:.1f} g → {hw_a.massa_total * 1000:.1f} g ({1000 * (hw_a.massa_total - hw_p.massa_total):+.1f} g)")
     p_sens = sum(float(s.get("potencia_w", 0.0)) for s in hw_a.sensores.values())
     ph_a, ph_p = hw_a.ponto_pairagem(hw_a.bateria.v_nominal), hw_p.ponto_pairagem(hw_p.bateria.v_nominal)
     aut_a, aut_p = comp.autonomia_estimada(hw_a)["minutos"], comp.autonomia_estimada(hw_p)["minutos"]
     c.ok("[§3] potência: a eletrónica do build novo = (Portenta 1,0 W + sensores) ÷ 0,88 ≈ 1,3 W (a do p50b é 6,5 W) e a "
-         "pairagem desce de ~198 W para ~187 W; T/W sobe",
+         "pairagem desce de ~314 W para ~302 W; T/W sobe",
          abs(hw_a.potencia_eletronica("voo") - (1.0 + p_sens) / 0.88) < 1e-9
          and 1.0 < hw_a.potencia_eletronica("voo") < 1.6 and 6.0 < hw_p.potencia_eletronica("voo") < 7.0
-         and 5.0 < ph_p["p_total"] - ph_a["p_total"] < 20.0 and abs(ph_p["p_total"] - 198.1) < 0.5
+         and 5.0 < ph_p["p_total"] - ph_a["p_total"] < 20.0 and abs(ph_p["p_total"] - 314.2) < 0.5
          and ph_a["g_por_w"] > ph_p["g_por_w"],
          f"eletrónica {hw_p.potencia_eletronica('voo'):.2f} → {hw_a.potencia_eletronica('voo'):.2f} W · pairagem "
          f"{ph_p['p_total']:.1f} → {ph_a['p_total']:.1f} W · {ph_p['g_por_w']:.2f} → {ph_a['g_por_w']:.2f} g/W")
     r_a, r_p = hw_a.resumo(), hw_p.resumo()
-    c.ok("[§3] autonomia pelo modelo: p50b 65,8 min (como antes) → Arduino ~70 min (+4 min); T/W com a bateria cheia ≥ 2,6; "
-         "sem saturação; meta de 60 min cumprida",
-         abs(aut_p - 65.8) < 0.3 and 2.0 < aut_a - aut_p < 8.0 and aut_a > hw_a.dados["meta_autonomia_min"]
-         and r_a["t_w_cheia"] >= 2.6 and not ph_a["satura"] and r_a["autonomia_min"] == aut_a,
+    c.ok("[§3] autonomia pelo modelo (com Glock 25 no topo): p50b 40,7 min → Arduino ~42,5 min (+1,8 min); T/W com a bateria cheia ≥ 1,9; "
+         "sem saturação; meta de 40 min cumprida",
+         abs(aut_p - 40.7) < 0.5 and 1.0 < aut_a - aut_p < 5.0 and aut_a > hw_a.dados["meta_autonomia_min"]
+         and r_a["t_w_cheia"] >= 1.9 and not ph_a["satura"] and r_a["autonomia_min"] == aut_a,
          f"{aut_p:.1f} → {aut_a:.1f} min ({aut_a - aut_p:+.1f}) · T/W {r_p['t_w_cheia']:.2f} → {r_a['t_w_cheia']:.2f}")
 
     # ---- a planta constrói (MuJoCo + ar + bateria) e paira: massa do modelo = orçamento, pairagem = catálogo
@@ -618,7 +619,7 @@ def checa_usar_em_copia(c: Checagens) -> None:
     c.ok("[§3] `usar` na CÓPIA: exit 0, o ativo da cópia passa a ser o build novo, o MJCF sai com a câmara `fpv`, a "
          "planta constrói e dá 1 passo; o builds.json REAL fica byte a byte igual e o ativo real continua o p50b",
          codigo == 0 and ativo_copia == BUILD_NOVO and hw.nome == BUILD_NOVO and ok_xml
-         and abs(hw.massa_total * 1000.0 - 2136.6) < 1e-6 and _sha(BUILDS) == antes
+         and abs(hw.massa_total * 1000.0 - 2921.6) < 1e-6 and _sha(BUILDS) == antes
          and comp.nome_build_ativo() == BUILD_ATIVO and _builds()["ativo"] == BUILD_ATIVO,
          f"ativo da cópia = {ativo_copia} · real = {comp.nome_build_ativo()} · sha igual {_sha(BUILDS) == antes}")
 
@@ -630,12 +631,12 @@ def checa_cli(c: Checagens) -> None:
                         check=False)
     r2 = subprocess.run([sys.executable, str(cli), "listar"], capture_output=True, text=True, timeout=180, check=False)
     c.ok("[§3] `hardware.py mostrar <build novo>`: arquitetura arduino, câmara MONO no modo por omissão QVGA30 (FoV "
-         "70°×55°), 2137 g, 70,0 min; `listar` mostra as 5 peças novas",
+         "70°×55°), 2922 g, 42,5 min; `listar` mostra as peças novas",
          r1.returncode == 0 and "arquitetura arduino" in r1.stdout and "monocromática" in r1.stdout
-         and "QVGA30" in r1.stdout and "2137 g" in r1.stdout and "70.0 min" in r1.stdout
+         and "QVGA30" in r1.stdout and "2922 g" in r1.stdout and "42.5 min" in r1.stdout
          and r2.returncode == 0 and all(k in r2.stdout for k in (
              "arduino_portenta_h7", "arduino_nicla_vision", "arduino_giga_r1", "portenta_vision_shield_hm0360",
-             "portenta_vision_shield_hm01b0", BUILD_NOVO)),
+             "portenta_vision_shield_hm01b0", "glock_g25", BUILD_NOVO)),
          f"mostrar exit {r1.returncode} · listar exit {r2.returncode}")
 
 

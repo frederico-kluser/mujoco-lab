@@ -157,6 +157,32 @@ export interface HudBola {
   alvoMundo: [number, number, number] | null
 }
 
+/** Estado e balística da arma fixa no topo do drone (Glock 25 .380 Auto; botão SPACE). */
+export interface HudTiro {
+  id: string | null
+  modelo: string | null
+  calibre: string | null
+  massaG: number | null
+  capacidade: number | null
+  municao: number | null
+  tiros: number
+  gatilho: boolean
+  emRecuo: boolean
+  impulsoNs: number | null
+  forcaPicoN: number | null
+  forcaAtualN: number | null
+  duracaoMs: number | null
+  energiaBocaJ: number | null
+  velocidadeBocaMS: number | null
+  deltaVTeoricoMS: number | null
+  bracoZM: number | null
+  impulsoAngularNms: number | null
+  deltaOmegaPitchRadS: number | null
+  direcaoTiro: [number, number, number] | null
+  direcaoSoco: [number, number, number] | null
+  azimuteSocoGraus: number | null
+}
+
 export interface AmostraHud {
   t: number
   passo: number
@@ -184,6 +210,8 @@ export interface AmostraHud {
    * uma estimativa, o drone não tem anemómetro); `null` com a política RL, no cf2 ou num runner antigo.
    */
   ventoBordo: HudVentoBordo | null
+  /** Estado e balística da arma fixa no topo do drone (Glock 25, tecla SPACE); `null` sem arma. */
+  tiro: HudTiro | null
 }
 
 export interface HudVentoBordo {
@@ -319,6 +347,36 @@ function lerBolaHud(bruto: unknown): HudBola | null {
   }
 }
 
+function lerTiroHud(bruto: unknown): HudTiro | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  const tiros = finito(o.tiros)
+  return {
+    id: typeof o.id === "string" ? o.id : null,
+    modelo: typeof o.modelo === "string" ? o.modelo : null,
+    calibre: typeof o.calibre === "string" ? o.calibre : null,
+    massaG: finito(o.massa_g),
+    capacidade: finito(o.capacidade),
+    municao: finito(o.municao),
+    tiros: tiros === null ? 0 : Math.max(0, Math.trunc(tiros)),
+    gatilho: o.gatilho === true,
+    emRecuo: o.em_recuo === true,
+    impulsoNs: finito(o.impulso_ns),
+    forcaPicoN: finito(o.forca_pico_n),
+    forcaAtualN: finito(o.forca_atual_n),
+    duracaoMs: finito(o.duracao_ms),
+    energiaBocaJ: finito(o.energia_boca_j),
+    velocidadeBocaMS: finito(o.velocidade_boca_m_s),
+    deltaVTeoricoMS: finito(o.delta_v_teorico_m_s),
+    bracoZM: finito(o.braco_z_m),
+    impulsoAngularNms: finito(o.impulso_angular_nms),
+    deltaOmegaPitchRadS: finito(o.delta_omega_pitch_rad_s),
+    direcaoTiro: lerTrio(o.direcao_tiro),
+    direcaoSoco: lerTrio(o.direcao_soco),
+    azimuteSocoGraus: finito(o.azimute_soco_graus),
+  }
+}
+
 /**
  * Uma amostra do HUD (o `data:` de um evento do SSE, já em objeto) → `AmostraHud`, ou `null` quando
  * não é uma amostra (sem `t` nem `passo`). Nunca lança e nunca inventa: o que não vier fica `null`.
@@ -352,6 +410,7 @@ export function lerHud(bruto: unknown): AmostraHud | null {
     bola: lerBolaHud(o.bola),
     fovy: finito(o.fovy),
     ventoBordo: lerVentoBordo(o.vento_bordo),
+    tiro: lerTiroHud(o.tiro),
   }
 }
 
@@ -955,6 +1014,7 @@ export type AcaoTecla =
   | { tipo: "voo"; tecla: TeclaVoo }
   | { tipo: "rodar"; tecla: TeclaRodar }
   | { tipo: "fixar_rumo" }
+  | { tipo: "tiro" }
   | { tipo: "bola" }
   | { tipo: "vento" }
   | { tipo: "vista" }
@@ -974,6 +1034,7 @@ export function acaoDaTecla(
   if (modificadores.ctrl || modificadores.meta || modificadores.alt) return null
   if (key === "Escape") return { tipo: "fechar" }
   if (key === "?") return { tipo: "ajuda" }
+  if (key === " " || key === "Spacebar") return { tipo: "tiro" }
   const k = key.length === 1 ? key.toLowerCase() : key
   if ((TECLAS_VOO as readonly string[]).includes(k))
     return { tipo: "voo", tecla: k as TeclaVoo }
@@ -1968,6 +2029,58 @@ export class ControloBola extends Observavel<EstadoBola> {
   }
 }
 
+/** Estado local do botão de tiro (SPACE, Glock 25 fixa no topo do drone). */
+export interface EstadoTiro {
+  gatilho: boolean
+  disparos: number
+}
+
+export const TIRO_INICIAL: EstadoTiro = {
+  gatilho: false,
+  disparos: 0,
+}
+
+/**
+ * Controlo do TIRO (`POST /api/tiro`, tecla SPACE):
+ *  · `premir()` (keydown de SPACE sem auto-repeat, ou clique no botão) acende o gatilho e dispara 1 tiro;
+ *  · `largar()` (keyup de SPACE ou blur) solta o gatilho;
+ *  · cada transição real sai imediatamente para o servidor.
+ */
+export class ControloTiro extends Observavel<EstadoTiro> {
+  private readonly enviarFn: (gatilho: boolean) => Promise<unknown>
+  private readonly aoFalhar?: (erro: unknown) => void
+
+  constructor(
+    opcoes: ControloOpcoes & {
+      enviar: (gatilho: boolean) => Promise<unknown>
+    }
+  ) {
+    super(TIRO_INICIAL)
+    this.enviarFn = opcoes.enviar
+    this.aoFalhar = opcoes.aoFalhar
+  }
+
+  premir(): void {
+    if (this.valor.gatilho) return
+    const novo: EstadoTiro = {
+      gatilho: true,
+      disparos: this.valor.disparos + 1,
+    }
+    this.publicar(novo)
+    void this.enviarFn(true).catch((erro: unknown) => this.aoFalhar?.(erro))
+  }
+
+  largar(): void {
+    if (!this.valor.gatilho) return
+    const novo: EstadoTiro = {
+      ...this.valor,
+      gatilho: false,
+    }
+    this.publicar(novo)
+    void this.enviarFn(false).catch((erro: unknown) => this.aoFalhar?.(erro))
+  }
+}
+
 // --------------------------------------------------------------------------------- ajuda (as teclas)
 
 /** As teclas do cockpit, como a janela Ajuda as lista (`INTERFACE.md` §0.3). */
@@ -1977,6 +2090,7 @@ export const ATALHOS: readonly { teclas: string[]; faz: string }[] = [
   { teclas: ["Q", "E"], faz: "subir · descer (0,7 m/s)" },
   { teclas: ["Z", "C"], faz: "rodar para a esquerda · direita (manter)" },
   { teclas: ["X"], faz: "fixar o rumo atual" },
+  { teclas: ["Espaço"], faz: "TIRO: dispara a Glock 25 .380 fixa no topo (soco para trás)" },
   { teclas: ["B"], faz: "seguir a bola: liga · desliga" },
   { teclas: ["V"], faz: "vento: liga · desliga" },
   { teclas: ["F"], faz: "trocar a vista: 1.ª ↔ 3.ª pessoa" },

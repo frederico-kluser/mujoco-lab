@@ -12,6 +12,7 @@
 import {
   enviarBola,
   enviarCamera,
+  enviarTiro,
   enviarVentoSimples,
   enviarVoo,
   lerCameraEmVigor,
@@ -20,6 +21,7 @@ import { MaquinaCamera, limitesDistancia } from "./camera-gestos.ts"
 import {
   ControloBola,
   ControloPiloto,
+  ControloTiro,
   ControloVento,
   Emissor,
 } from "./cockpit.ts"
@@ -59,6 +61,11 @@ export const vento = new ControloVento({
 export const bola = new ControloBola({
   enviar: enviarBola,
   aoFalhar: (erro) => avisarErro("POST /api/bola", erro),
+})
+
+export const tiro = new ControloTiro({
+  enviar: enviarTiro,
+  aoFalhar: (erro) => avisarErro("POST /api/tiro", erro),
 })
 
 // --------------------------------------------------------------------------------- câmara (3.ª pessoa)

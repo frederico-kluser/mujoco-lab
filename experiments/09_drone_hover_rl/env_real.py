@@ -356,7 +356,7 @@ class DroneRealEnv(HoverEnv):
             m.body_ipos[:] = self._ipos_nom
             pl.prop.aplicar_escalas()
             pl.bat.escala_r = 1.0
-            pl.aero.definir_arrasto(dr.aero.D_ARRASTO, dr.aero.D_ARRASTO)
+            pl.aero.definir_arrasto(*getattr(pl.aero, "d_xy_nominal", (dr.aero.D_ARRASTO, dr.aero.D_ARRASTO)))
             pl.aero.escala_solo = 1.0
             pl.aero.k_vrs = dr.aero.K_VRS
             for s in self._sensores():
@@ -708,6 +708,18 @@ class DroneRealEnv(HoverEnv):
         self.v_ref = self._v_ref_externo.copy()
         self.comando = True
 
+    def disparar(self, n: int = 1) -> dict | None:
+        """Dispara `n` tiro(s) da arma fixa no topo do drone (`planta.disparar`)."""
+        return self.planta.disparar(n)
+
+    def definir_gatilho_tiro(self, gatilho: bool) -> None:
+        """Estado da tecla SPACE / botão de tiro (`True` = premido, `False` = solto)."""
+        self.planta.gatilho_tiro = bool(gatilho)
+
+    def tiro_estado(self) -> dict | None:
+        """Estado atual e balística da arma montada no drone (`None` sem arma no build)."""
+        return self.planta.telemetria_arma()
+
     def observacao(self, d: dict | None = None) -> np.ndarray:
         """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).
 
@@ -750,6 +762,8 @@ class DroneRealEnv(HoverEnv):
                 "soh": b.desgaste.soh, "brownout": self.planta.brownout}
         if self.comando:
             info["voo"] = self.comando_estado(d)
+        if self.hw.arma is not None:
+            info["tiro"] = self.tiro_estado()
         return info
 
     def close(self) -> None:

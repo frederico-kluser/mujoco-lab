@@ -33,11 +33,13 @@ TIMESTEP = 0.002
 ROTORES = ("rotor1", "rotor2", "rotor3", "rotor4")
 REACOES = ("reacao1", "reacao2", "reacao3", "reacao4")
 SITES_ROTOR = ("r1", "r2", "r3", "r4")
+SITE_BOCA_CANO = "boca_cano"
 
 _COR = {"frame": [0.13, 0.13, 0.15, 1], "motor": [0.72, 0.72, 0.76, 1], "esc": [0.18, 0.22, 0.55, 1],
         "bateria": [0.50, 0.12, 0.10, 1], "rpi": [0.06, 0.45, 0.22, 1], "fc": [0.10, 0.10, 0.10, 1],
         "sensor": [0.85, 0.65, 0.10, 1], "perna": [0.25, 0.25, 0.28, 1],
         "helice_cw": [0.10, 0.55, 0.85, 0.35], "helice_ccw": [0.90, 0.40, 0.10, 0.35]}
+_COR_ARMA = {"glock_od": [0.44, 0.41, 0.30, 1], "glock_aco": [0.18, 0.19, 0.21, 1]}
 
 
 def _caixa_pack(hw: Hardware) -> tuple[float, float, float]:
@@ -69,6 +71,9 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
     for nome, rgba in _COR.items():
         spec.add_material(name=nome, rgba=rgba)
+    if hw.arma is not None:
+        for nome, rgba in _COR_ARMA.items():
+            spec.add_material(name=nome, rgba=rgba)
 
     wb = spec.worldbody
     wb.add_geom(name="chao", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[50, 50, 0.1], material="chao",
@@ -176,6 +181,40 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
         modulo_cam = cam_rpi.modulo_da_peca(hw.camera.id)
         cam_rpi.add_camera_fpv(corpo, p(x_cam + 0.5 * d_x + 0.001, 0, z_cam),
                                cam_rpi.fovy_graus(modulo_cam, cam_rpi.modo_omissao(modulo_cam)), nome="fpv")
+
+    # ---- ARMA FIXA NO TOPO DO DRONE (ex.: Glock 25 .380 Auto, peça REAL do catálogo `armas`)
+    # Montada por cima da pilha de eletrónica, alinhada com o nariz (+x) e centrada em xy (o CM horizontal
+    # fica sobre o centro do quadrado dos rotores; o CM vertical sobe e a linha do cano fica acima do CM,
+    # gerando impulso linear em -x_corpo e impulso angular de cabragem ΔL_y = -z_cano·J_tiro a cada disparo).
+    if hw.arma is not None:
+        c_a, l_a, a_a = hw.arma.dims                # (187, 32, 128) mm em m
+        l_fer = hw.arma.largura_ferrolho            # 25,5 mm em m
+        c_cano = hw.arma.comprimento_cano           # 102 mm em m
+        z_base_arma = z + 0.002                     # assente no topo da pilha de eletrónica
+        m_quadro = 0.45 * hw.arma.massa             # quadro de polímero + carregador cheio (45 % da massa)
+        m_ferrolho = hw.arma.massa - m_quadro       # ferrolho + cano de aço no topo (55 %; soma exata = hw.arma.massa)
+        z_quadro = z_base_arma + 0.375 * a_a
+        z_cano = z_base_arma + 0.875 * a_a          # eixo do cano / ferrolho (no topo da pistola)
+        corpo.add_geom(name="arma_quadro", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.5 * c_a, 0.5 * l_a, 0.375 * a_a], pos=p(0, 0, z_quadro),
+                       mass=m_quadro, material="glock_od", **sem_contacto)
+        corpo.add_geom(name="arma_ferrolho", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.5 * c_a, 0.5 * l_fer, 0.125 * a_a], pos=p(0, 0, z_cano),
+                       mass=m_ferrolho, material="glock_aco", **sem_contacto)
+        # cano de aço (102 mm) e miras (153 mm entre miras, ficha oficial) — visuais (massa já nos 2 blocos acima)
+        q_eixo_x = [math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0]
+        x_boca = 0.5 * c_a + 0.003
+        corpo.add_geom(name="arma_cano", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                       size=[0.0065, 0.5 * c_cano, 0], pos=p(x_boca - 0.5 * c_cano, 0, z_cano),
+                       quat=q_eixo_x, mass=0.0, material="glock_aco", **sem_contacto)
+        z_mira = z_base_arma + a_a + 0.0025
+        corpo.add_geom(name="arma_mira_frente", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.003, 0.002, 0.0025], pos=p(0.5 * 0.153, 0, z_mira),
+                       mass=0.0, material="glock_aco", **sem_contacto)
+        corpo.add_geom(name="arma_mira_tras", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.004, 0.006, 0.0025], pos=p(-0.5 * 0.153, 0, z_mira),
+                       mass=0.0, material="glock_aco", **sem_contacto)
+        corpo.add_site(name=SITE_BOCA_CANO, pos=p(x_boca, 0, z_cano), quat=q_eixo_x, size=[0.005, 0, 0])
 
     # ---- trem de pouso (colisão): 4 pernas sob os braços, mais baixas do que o pack
     h_pernas = max(hw.frame.altura_pernas, -z_baixo + 0.03)

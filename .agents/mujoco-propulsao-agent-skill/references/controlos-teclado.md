@@ -44,6 +44,9 @@ Princípios do contrato (não os quebres):
    `seq` do servidor e erro claro (ver `POST /api/voo` em `sim_site.py:1134` como molde).
 4. **Runner** (`sim_view.py`): aplica o bloco 1× por mudança de assinatura (não a cada passo!) via
    `env.definir_*` — e o reinício/loop não pode reverter um pedido legítimo (defeito medido em 2026-10-09).
+   EXCEÇÕES idempotentes (verificado 2026-10-15): o eco do modo clássico (`_eco_voo`, r12) re-aplica
+   `definir_comando_teclas/definir_v_ref` a cada passo de decisão, e `reaplicar()` re-aplica os blocos
+   após `env.reset` — o «1×» vale para o GATILHO dos blocos-tecla, não como invariant de todo o runner.
 5. **Site** (`site/src/lib/<bloco>.ts` + componente): funções PURAS de teclado (testáveis em node, sem
    DOM — molde `voo.ts`), keycap que acende com o ESTADO real, `fetch` do POST no keydown/keyup.
 6. **Contrato** (`INTERFACE.md` §0): documenta tecla, semântica, faixas, eco. É literal — deploy e

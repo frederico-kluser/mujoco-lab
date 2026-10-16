@@ -213,9 +213,11 @@ def gerar_acoes(semente: int, n: int) -> np.ndarray:
 def criar_env(arv: Arvore, cen: dict):
     """O `DroneRealEnv` do cenário, construído com as classes DESTA árvore."""
     kw = dict(cen.get("kw", {}))
-    build = cen.get("build", BUILD_TREINO)
+    nome_build = cen.get("build", BUILD_TREINO)
+    cfg_build = {**arv.dr.carregar_builds()["builds"][nome_build], "nome": nome_build}
+    cfg_build.pop("arma", None)               # `REF_ORIGINAL` (b153c3d) é anterior à Glock 25 no catálogo
+    build = arv.dr.hardware(cfg_build)
     if "v_brownout" in cen:
-        build = arv.dr.hardware(build)
         build.v_brownout = float(cen["v_brownout"])
     if "flags" in cen:
         kw["flags_aero"] = arv.dr.FlagsAero(**cen["flags"])

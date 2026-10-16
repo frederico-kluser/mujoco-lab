@@ -2,7 +2,7 @@
   "ativo": "endurance_15pol_p50b",
   "builds": {
     "endurance_15pol_p50b": {
-      "descricao": "META 1 h: 15″ (T-Motor MN4004 KV300 + P15x5) em frame DIY de tubo de carbono 1950 mm (wheelbase ×3, estabilidade), 6S2P Molicel P50B (Li-ion 21700)",
+      "descricao": "15″ (T-Motor MN4004 KV300 + P15x5) em frame DIY de tubo de carbono 1950 mm (wheelbase ×3, estabilidade), 6S2P Molicel P50B (Li-ion 21700) + Glock 25 .380 Auto (785 g, 15 tiros) fixa no topo",
       "frame": "diy_tubo_carbono_1950",
       "motor": "tmotor_mn4004_kv300",
       "helice": "tmotor_p15x5",
@@ -36,11 +36,12 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60,
-      "camera": "raspberry_camera_module_3_wide"
+      "meta_autonomia_min": 40,
+      "camera": "raspberry_camera_module_3_wide",
+      "arma": "glock_g25"
     },
     "endurance_15pol_arduino": {
-      "descricao": "Igual ao endurance_15pol_p50b (frame DIY 1950 mm, MN4004 KV300 + P15×5, 6S2P Molicel P50B, AIR 40A, BMI088/VL53L1X/PMW3901/INA226) com o COMPUTADOR DE BORDO trocado: Arduino Portenta H7 + Portenta Vision Shield Rev 2 (HM0360, câmara monocromática 640×480) em vez de RPi 5 + FC H7 + Pi Camera Module 3 Wide — laço de voo de 500 Hz no núcleo M4 e visão no M7 (recomendação da pesquisa de 2026-10-12: inferência, a validar em placa). O Portenta não tem IMU: mantém o BMI088 externo",
+      "descricao": "Igual ao endurance_15pol_p50b (frame DIY 1950 mm, MN4004 KV300 + P15×5, 6S2P Molicel P50B, AIR 40A, BMI088/VL53L1X/PMW3901/INA226 + Glock 25 .380 Auto no topo) com o COMPUTADOR DE BORDO trocado: Arduino Portenta H7 + Portenta Vision Shield Rev 2 (HM0360, câmara monocromática 640×480) em vez de RPi 5 + FC H7 + Pi Camera Module 3 Wide — laço de voo de 500 Hz no núcleo M4 e visão no M7 (recomendação da pesquisa de 2026-10-12: inferência, a validar em placa). O Portenta não tem IMU: mantém o BMI088 externo",
       "frame": "diy_tubo_carbono_1950",
       "motor": "tmotor_mn4004_kv300",
       "helice": "tmotor_p15x5",
@@ -73,8 +74,9 @@
       "v_brownout": 9.0,
       "temperatura_ambiente_c": 25,
       "massa_extra_g": 15,
-      "meta_autonomia_min": 60,
-      "camera": "portenta_vision_shield_hm0360"
+      "meta_autonomia_min": 40,
+      "camera": "portenta_vision_shield_hm0360",
+      "arma": "glock_g25"
     },
     "endurance_15pol_semisolido": {
       "descricao": "Igual ao endurance_15pol_p50b com o pack semi-sólido Tattu 6S 12 Ah (800 g, 266 Wh, dados só do fabricante)",

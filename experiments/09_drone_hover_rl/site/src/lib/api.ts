@@ -405,6 +405,32 @@ export async function enviarBola(velocidade: number): Promise<number | null> {
   return numero(bola.velocidade)
 }
 
+/** `POST /api/tiro {"gatilho": bool}` → dispara 1 tiro da Glock 25 no topo do drone (tecla SPACE). */
+export async function enviarTiro(
+  gatilho = true
+): Promise<{ gatilho: boolean; disparos: number; seq: number } | null> {
+  const bruto = await pedirJson("/api/tiro", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gatilho: Boolean(gatilho) }),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  const t =
+    typeof o.tiro === "object" && o.tiro !== null
+      ? (o.tiro as Record<string, unknown>)
+      : null
+  if (t === null) return null
+  return {
+    gatilho: t.gatilho === true,
+    disparos: numero(t.disparos) ?? 0,
+    seq: numero(t.seq) ?? 0,
+  }
+}
+
 /**
  * `GET /api/hud.json` — a última amostra do HUD com a idade que o servidor lhe dá. É o FALLBACK do
  * SSE (`GET /api/hud`): quando o `EventSource` cai, o HUD continua a mexer por sondagem.

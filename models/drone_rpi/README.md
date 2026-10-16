@@ -46,7 +46,15 @@ política, porque uma política só vale para as peças com que treinou.
 > **2026-10-11 — WHEELBASE ×3 no build ativo (650 → 1950 mm, frame `diy_tubo_carbono_1950`)**, pedido do
 > dono para ganhar estabilidade. Só o `endurance_15pol_p50b` migra (os outros builds mantêm os frames de
 > 650/750 mm como alternativas do catálogo). Tubos **25×23 mm** (16 mm seria flexível demais a ~850 mm de
-> braço), frame+pernas **800 g** (faixa da pesquisa 750–850 g, fórmula no catálogo). O que a mudança faz
+> braço), frame+pernas **800 g** (faixa da pesquisa 750–850 g, fórmula no catálogo).
+>
+> **Arma fixa no topo — Glock 25 (.380 Auto, `componentes.json` → `armas.glock_g25`)**: montada fixa no topo da
+> pilha central, apontada para $+x$ (boca do cano em `site="boca_cano"`), com **785 g** (carregador cheio de 15
+> tiros; 645 g vazia; 575 g sem carregador), projétil 95 gr (6,156 g) a 296 m/s ($E_0 = 269,7\text{ J} \approx 270\text{ J}$),
+> impulso de recuo $J_{\text{tiro}} = 1,9162\text{ N}\cdot\text{s}$ ($F = 95,81\text{ N}$ em 20 ms, $\Delta v = -0,6457\text{ m/s}$
+> em $-\hat{x}_{\text{corpo}}$ e cabragem $\Delta\omega_y = -1,025\text{ rad/s}$). Com a Glock 25 no topo, o
+> `endurance_15pol_p50b` passa a **2968 g, 314,2 W em pairagem (9,44 g/W), T/W 1,93 e 40,7 min de autonomia**
+> (e o `endurance_15pol_arduino` passa a **2922 g, 302,1 W, T/W 1,96 e 42,5 min**). O que a mudança faz
 > (medições do modelo + `pesquisas/relatorio-bracos-3x-estabilidade.md`):
 >
 > | grandeza | 650 mm | 1950 mm | fator |

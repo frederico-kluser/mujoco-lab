@@ -243,7 +243,7 @@ PERIODO_AMOSTRA = 0.1            # s — cadência da telemetria a correr (~10 H
 PERIODO_OCIO = 0.02              # s — ritmo do ciclo quando não há física (pausa): 1 passo de decisão
 VEL_MAX, AZIM_MAX, ELEV_MAX = 5.0, 360.0, 90.0      # faixas do contrato do controlo
 PRECISAO = 6                     # casas decimais na telemetria (linhas pequenas e legíveis)
-TECLA_ESPACO, TECLA_Q, TECLA_ESC = 32, 81, 256      # códigos GLFW entregues pelo viewer
+TECLA_ESPACO, TECLA_P, TECLA_Q, TECLA_ESC = 32, 80, 81, 256      # códigos GLFW entregues pelo viewer
 # vento DINÂMICO ao vivo (ver o cabeçalho do módulo): 4 modos são do `env.py`, `rajada_agora` é um one-shot
 # dirigido aplicado AQUI (o env não tem rajadas dirigidas) e `nenhum` é inerte.
 MODOS_DINAMICOS = ("nenhum", "rajadas", "aleatoria", "frente", "dryden", "rajada_agora")
@@ -313,22 +313,26 @@ HUD_Z_CHAO_MARGEM = 0.06          # m acima da altura de repouso (medida no rese
 # 1/3/5 m/s → 0,29/1,09/2,16 m/s² observados; a verdade 0,32/1,12/2,09): |a| ≈ A1·W + A2·W². É uma
 # estimativa de bordo (o drone não tem anemómetro) — o site mostra-a ao lado do vento real do simulador.
 VENTO_BORDO_A1, VENTO_BORDO_A2 = 0.30, 0.0245
+VENTO_BORDO_ARMA_A1, VENTO_BORDO_ARMA_A2 = 0.25, 0.06
 VENTO_BORDO_PISO = 0.10        # m/s² — o que o observador marca em ar parado (abaixo disto: «não sente vento»)
 
 
-def vento_sentido(pert, yaw0: float) -> dict:
+def vento_sentido(pert, yaw0: float, com_arma: bool = False) -> dict:
     """`Saida.pert` (m/s², referencial de ARRANQUE) → o vento que o drone SENTE, no MUNDO.
 
     Devolve `{"acc": [ax, ay], "vel": W, "direcao": graus}`: a aceleração de perturbação rodada por `yaw0`,
     a velocidade de vento equivalente (inversa do ajuste `A1·W + A2·W²`; 0 abaixo do piso) e para onde o ar
-    empurra (0° = +x, 90° = +y — a convenção do vento do cockpit).
+    empurra (0° = +x, 90° = +y — a convenção do vento do cockpit). Com a arma no topo (`com_arma=True`) a
+    caixa de inércia equivalente do MuJoCo e a massa aumentam (medido a 1/3/5 m/s: 0,27/1,30/2,76 m/s²).
     """
     p0, p1 = float(pert[0]), float(pert[1])
     c, s_ = math.cos(yaw0), math.sin(yaw0)
     ax, ay = c * p0 - s_ * p1, s_ * p0 + c * p1
     a = math.hypot(ax, ay)
+    a1 = VENTO_BORDO_ARMA_A1 if com_arma else VENTO_BORDO_A1
+    a2 = VENTO_BORDO_ARMA_A2 if com_arma else VENTO_BORDO_A2
     vel = 0.0 if a <= VENTO_BORDO_PISO else (
-        (-VENTO_BORDO_A1 + math.sqrt(VENTO_BORDO_A1 ** 2 + 4.0 * VENTO_BORDO_A2 * a)) / (2.0 * VENTO_BORDO_A2))
+        (-a1 + math.sqrt(a1 ** 2 + 4.0 * a2 * a)) / (2.0 * a2))
     return {"acc": [round(ax, 4), round(ay, 4)], "vel": round(vel, 3),
             "direcao": round(math.degrees(math.atan2(ay, ax)) % 360.0, 1)}
 
@@ -472,6 +476,19 @@ class Bola:
 
 
 @dataclass
+class Tiro:
+    """Bloco `"tiro"` do controlo: `{gatilho, disparos, seq}` — o botão de tiro (SPACE, Glock 25 no topo)."""
+
+    gatilho: bool = False
+    disparos: int = 0
+    seq: int | None = None
+
+    def assinatura(self) -> str:
+        return json.dumps({"gatilho": self.gatilho, "disparos": self.disparos, "seq": self.seq},
+                          sort_keys=True)
+
+
+@dataclass
 class Registo:
     """Conteúdo validado do ficheiro de controlo (vento base + comandos de episódio + vento dinâmico)."""
 
@@ -488,6 +505,7 @@ class Registo:
     controlador: SelControlador | None = None     # None = campo ausente: não mexe no seletor (r12)
     vento_simples: VentoSimples | None = None     # None = campo ausente: manda o vento do contrato antigo
     bola: Bola | None = None                      # None = campo ausente: velocidade padrão da bola (r13)
+    tiro: Tiro | None = None                      # None = campo ausente: não dispara nem mexe no gatilho
 
 
 def _numero(dados: dict, campo: str, predefinido: float) -> float:
@@ -759,6 +777,22 @@ def _ler_bola(bruto) -> Bola | None:
     return Bola(float(vel), seq)
 
 
+def _ler_tiro(bruto) -> Tiro | None:
+    """`"tiro"` do controlo → `Tiro` validado (`None` se o campo não vier)."""
+    if bruto is None:
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("`tiro` tem de ser um objeto JSON {gatilho, disparos, seq}")  # noqa: TRY004
+    gatilho = _booleano(bruto, "gatilho")
+    disparos = bruto.get("disparos", 0)
+    if isinstance(disparos, bool) or not isinstance(disparos, int) or disparos < 0:
+        raise ValueError(f"`tiro.disparos` tem de ser um inteiro ≥ 0 (recebido {disparos!r})")
+    seq = bruto.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        raise ValueError(f"`tiro.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
+    return Tiro(False if gatilho is None else bool(gatilho), int(disparos), seq)
+
+
 def ler_registo(dados) -> Registo:
     """Ficheiro de controlo → `Registo` validado (mesmas regras do net_probe/dashboard).
 
@@ -786,7 +820,8 @@ def ler_registo(dados) -> Registo:
                    _booleano(dados, "loop"), _ler_dinamico(dados.get("dinamico")),
                    _ler_camera(dados.get("camera")), _ler_fpv(dados.get("fpv")),
                    _ler_voo(dados.get("voo")), _ler_controlador(dados.get("controlador")),
-                   _ler_vento_simples(dados.get("vento_simples")), _ler_bola(dados.get("bola")))
+                   _ler_vento_simples(dados.get("vento_simples")), _ler_bola(dados.get("bola")),
+                   _ler_tiro(dados.get("tiro")))
 
 
 def ler_controlo_bruto(caminho: Path) -> dict:
@@ -979,6 +1014,10 @@ class Controlo:
         self._assinatura_vento_simples: str | None = None
         self.gerador_vento = vento_natural.VentoNatural(semente=0)   # o vento dos 3 botões, passo a passo
         self.bola_vel = BOLA_VEL_PADRAO                  # m/s — velocidade da bola aleatória (bloco `bola`)
+        self.tiro: Tiro | None = None                    # último bloco `tiro` APLICADO (SPACE)
+        self._assinatura_tiro: str | None = None
+        self.tiro_disparos: int | None = None            # linha de base do contador de disparos
+        self.n_tiros = 0                                 # disparos aplicados ao env nesta sessão
         self._le_contador_inicial()
 
     def _le_contador_inicial(self) -> None:
@@ -989,6 +1028,8 @@ class Controlo:
         except (OSError, ValueError):
             return                                  # sem ficheiro (ou inválido): a linha de base fica None
         self.reiniciar, self.loop = registo.reiniciar, registo.loop
+        if registo.tiro is not None:
+            self.tiro_disparos = registo.tiro.disparos
         bloco = dados.get("bateria") if isinstance(dados, dict) else None
         if isinstance(bloco, dict) and isinstance(bloco.get("seq"), int):
             self.bateria_seq = int(bloco["seq"])    # comando velho do ficheiro: linha de base, não se repete
@@ -1142,6 +1183,7 @@ class Controlo:
         self._aplica_fpv(registo)                        # módulo de câmara FPV: 1x por mudança de assinatura
         self._aplica_voo(env, registo.voo)               # controle de voo: estado das teclas (contrato r11)
         self._aplica_vento_simples(registo.vento_simples)   # os 3 botões do vento (r13)
+        self._aplica_tiro(env, registo.tiro)             # tiro da Glock 25 (tecla SPACE)
         if registo.bola is not None:
             self.bola_vel = float(registo.bola.velocidade)
         self.n_ventos += 1                               # o controlo está APLICADO (contador de auditoria)
@@ -1323,6 +1365,34 @@ class Controlo:
         print(f"[sim] vento (3 botões) -> {'LIGADO' if bloco.ligado else 'desligado'} · "
               f"{bloco.intensidade:.1f} m/s @ {bloco.direcao:.0f} deg · aleatoriedade "
               f"{'LIGADA' if bloco.aleatorio else 'desligada'} (seq {bloco.seq})", flush=True)
+
+    def _aplica_tiro(self, env: HoverEnv, bloco: Tiro | None) -> None:
+        """Bloco `tiro` (SPACE, Glock 25 no topo) → estado do gatilho + disparos novos no env."""
+        if bloco is None:
+            return
+        assinatura = bloco.assinatura()
+        if assinatura == self._assinatura_tiro:
+            return
+        self._assinatura_tiro = assinatura
+        self.tiro = bloco
+        if hasattr(env, "definir_gatilho_tiro"):
+            env.definir_gatilho_tiro(bloco.gatilho)
+        novos = 0
+        if self.tiro_disparos is None:
+            if bloco.disparos > 0:
+                novos = bloco.disparos
+        elif bloco.disparos > self.tiro_disparos:
+            novos = bloco.disparos - self.tiro_disparos
+        self.tiro_disparos = bloco.disparos
+        if novos > 0 and hasattr(env, "disparar"):
+            res = env.disparar(novos)
+            self.n_tiros += novos
+            if isinstance(res, dict):
+                print(f"[sim] TIRO (SPACE) -> #{res['tiros_acumulados']} · soco J={res['impulso_ns']:.3f} N·s "
+                      f"(F={res['forca_n']:.1f} N por {1000 * res['duracao_s']:.0f} ms) em "
+                      f"{res['direcao_soco']} (azimute {res['azimute_soco_graus']:.1f} deg) · "
+                      f"Δv={res['delta_v_m_s']:.3f} m/s · Δω_pitch={res['delta_omega_pitch_rad_s']:+.3f} rad/s "
+                      f"(seq {bloco.seq})", flush=True)
 
     def passo_vento_simples(self, env: HoverEnv) -> bool:
         """Escreve em `opt.wind` o vento dos 3 botões DESTE passo de decisão; `True` se é ele que manda.
@@ -1794,14 +1864,17 @@ def _vento_polar(env: HoverEnv) -> tuple[float, float]:
 
 # ---------------------------------------------------------------------------------------------- teclado
 class Teclas:
-    """Estado do `key_callback` do viewer: ESPAÇO pausa/retoma, Q/Esc fecha (nada mais — sem HUD)."""
+    """Estado do `key_callback` do viewer: ESPAÇO dispara (Glock 25), P pausa/retoma, Q/Esc fecha."""
 
     def __init__(self) -> None:
         self.pausa = False
         self.fechar = False
+        self.tiros_pendentes = 0
 
     def ao_teclar(self, tecla: int) -> None:
         if tecla == TECLA_ESPACO:
+            self.tiros_pendentes += 1
+        elif tecla == TECLA_P:
             self.pausa = not self.pausa
         elif tecla in (TECLA_Q, TECLA_ESC):
             self.fechar = True
@@ -2371,6 +2444,7 @@ def amostra(env: HoverEnv, est: Estado, cam=None, gestor: GestorBateria | None =
         "planta": "real" if real else "cf2",        # aditivo: o site escolhe os blocos/rótulos certos
         "fim": est.motivo_fim if est.fim_episodio else None,   # aditivo: "tempo" | "queda" | null (a correr)
         "voo": info.get("voo"),                     # aditivo: controle de voo (contrato r11; null = fora do modo)
+        "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro")),
         # aditivo r12: quem pilota + o estado do yaw/olhar (null com runner antigo — o site aceita)
         "controlador": (piloto.amostra(_rumo_de(env), multi_ia) if piloto is not None else None),
     }
@@ -2456,7 +2530,8 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
            "fovy": _fovy_fpv(env),
            # o vento que o drone SENTE (observador de perturbação da cascata clássica); `None` com a política
            "vento_bordo": None,
-           "est": None, "real": None, "bateria": None, "voo": None, "bola": None, "controlador": None}
+           "est": None, "real": None, "bateria": None, "voo": None, "bola": None, "controlador": None,
+           "tiro": (env.tiro_estado() if hasattr(env, "tiro_estado") else info.get("tiro"))}
     if real:
         d = env._derivados()
         e = env.estimador
@@ -2485,7 +2560,8 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
         if eco["modo"] == "classico" and piloto.nucleo is not None and real:
             pert = getattr(piloto.nucleo.nucleo.saida, "pert", None)
             if pert is not None:
-                hud["vento_bordo"] = vento_sentido(pert, float(env.yaw0))
+                hud["vento_bordo"] = vento_sentido(pert, float(env.yaw0),
+                                                   com_arma=getattr(env.hw, "arma", None) is not None)
         olhar = eco.get("olhar")
         if isinstance(olhar, dict) and piloto.nucleo is not None:
             larg, alt = piloto.nucleo.LARGURA, piloto.nucleo.ALTURA
@@ -2787,6 +2863,10 @@ def correr(env: HoverEnv, politica, controlo: Controlo, telemetria: Telemetria, 
             if teclas.fechar:
                 break
             est.pausado = bool(teclas.pausa)
+            if teclas.tiros_pendentes > 0 and hasattr(env, "disparar"):
+                n_disp = teclas.tiros_pendentes
+                teclas.tiros_pendentes = 0
+                env.disparar(n_disp)
         if viewer is not None and not viewer.is_running():
             break
 

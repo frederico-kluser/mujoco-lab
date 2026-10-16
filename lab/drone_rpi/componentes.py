@@ -302,6 +302,99 @@ class Camera:
         return dict(self.dados.get("fov_graus", {}))
 
 
+@dataclass(frozen=True)
+class Arma:
+    """Arma montada FIXA no topo do drone (`models/drone_rpi/componentes.json` → `armas`).
+
+    Física e balística fechadas a partir dos dados da ficha técnica:
+      · dimensões `(comprimento, largura, altura)` em m (187 × 32 × 128 mm na Glock 25);
+      · massas em kg: `massa` (com carregador cheio, 785 g), `massa_vazia` (645 g), `massa_sem_carregador` (575 g);
+      · energia na boca do cano: `E₀ = ½ · m_p · v₀²` (269,68 J ≈ 270 J para 95 gr @ 296 m/s);
+      · impulso do tiro ("o soco"): `J_tiro = m_p · v₀ + m_polvora · v_gases` (N·s), entregue em `-x̂_corpo`
+        ao longo de `duracao_impulso` s (`F_media = J_tiro / duracao_impulso`, N) no eixo do cano (site `boca_cano`).
+    """
+
+    id: str
+    fabricante: str
+    modelo: str
+    calibre: str
+    massa: float                    # kg — com carregador cheio (padrão em voo)
+    massa_vazia: float              # kg — com carregador vazio
+    massa_sem_carregador: float     # kg — sem carregador
+    capacidade: int                 # tiros no carregador padrão (15 na G25)
+    comprimento_cano: float         # m (0,102 m na G25)
+    largura_ferrolho: float         # m (0,0255 m na G25)
+    peso_gatilho_n: float           # N (28 N na G25)
+    massa_projetil: float           # kg (6,156e-3 kg = 95 gr)
+    velocidade_boca: float          # m/s (296 m/s = 971 fps)
+    massa_polvora: float            # kg (0,20e-3 kg ≈ 3,1 gr)
+    velocidade_gases: float         # m/s (470 m/s)
+    duracao_impulso: float = 0.020  # s — janela física do pulso de recuo (10 passos de 2 ms = 20 ms)
+    dados: dict = field(default_factory=dict, compare=False)
+
+    @property
+    def dims(self) -> tuple[float, float, float]:
+        """(comprimento x, largura y, altura z) em m."""
+        if "dims_mm" in self.dados:
+            return tuple(float(v) / 1000.0 for v in self.dados["dims_mm"])
+        return (
+            float(self.dados.get("comprimento_mm", 187.0)) / 1000.0,
+            float(self.dados.get("largura_mm", 32.0)) / 1000.0,
+            float(self.dados.get("altura_mm", 128.0)) / 1000.0,
+        )
+
+    @property
+    def massa_municao_unitaria(self) -> float:
+        """Massa de um cartucho completo (kg) = (massa_cheia − massa_vazia) / capacidade."""
+        return (self.massa - self.massa_vazia) / max(self.capacidade, 1)
+
+    @property
+    def energia_boca_j(self) -> float:
+        """Energia cinética na boca do cano E₀ = ½·m_p·v₀² (J)."""
+        return 0.5 * self.massa_projetil * (self.velocidade_boca ** 2)
+
+    @property
+    def impulso_projetil(self) -> float:
+        """Quantidade de movimento linear do projétil p_p = m_p·v₀ (N·s)."""
+        return self.massa_projetil * self.velocidade_boca
+
+    @property
+    def impulso_gases(self) -> float:
+        """Impulso adicional do jato de gases propelentes na boca do cano J_g = m_c·v_g (N·s)."""
+        return self.massa_polvora * self.velocidade_gases
+
+    @property
+    def impulso_tiro(self) -> float:
+        """Impulso total de recuo por disparo ("o soco") J_tiro = m_p·v₀ + m_c·v_g (N·s)."""
+        return self.impulso_projetil + self.impulso_gases
+
+    @property
+    def forca_media_tiro(self) -> float:
+        """Força média durante a janela `duracao_impulso`: F = J_tiro / Δt_soco (N)."""
+        return self.impulso_tiro / max(self.duracao_impulso, 1e-6)
+
+    @property
+    def energia_recuo_livre_arma_j(self) -> float:
+        """Energia de recuo livre da pistola isolada E_rec = J_tiro² / (2·m_arma) (J)."""
+        return (self.impulso_tiro ** 2) / (2.0 * max(self.massa, 1e-6))
+
+    @property
+    def area_frontal(self) -> float:
+        """Área frontal efetiva (m², perpendicular a +x)."""
+        c, l, a = self.dims
+        aero = self.dados.get("aerodinamica") or {}
+        fator = float(aero.get("fator_area_frontal", 0.75))
+        return fator * l * a
+
+    @property
+    def area_lateral(self) -> float:
+        """Área lateral efetiva (m², perpendicular a +y: silhueta ferrolho + punho)."""
+        c, l, a = self.dims
+        aero = self.dados.get("aerodinamica") or {}
+        fator = float(aero.get("fator_area_lateral", 0.65))
+        return fator * c * a
+
+
 # =========================================================================================== build resolvido
 @dataclass
 class Hardware:
@@ -324,6 +417,7 @@ class Hardware:
     v_brownout: float         # V — abaixo disto o BEC/ESC desligam (queda)
     temperatura_ambiente: float  # °C
     camera: Camera | None = None  # módulo de câmara CSI (opcional; entra no orçamento de massa)
+    arma: Arma | None = None      # arma montada fixa no topo do drone (opcional; entra no orçamento, inércia e aero)
     massa_extra: float = 0.0  # kg — parafusos, abraçadeiras, fita (lastro do orçamento)
     dados: dict = field(default_factory=dict)
     # derivados (preenchidos em __post_init__)
@@ -361,7 +455,58 @@ class Hardware:
             m[f"sensor_{papel}"] = float(s.get("massa_g", 0.0)) / 1000.0
         if self.camera is not None:
             m["camera"] = self.camera.massa
+        if self.arma is not None:
+            m["arma"] = self.arma.massa
         return m
+
+    def arrasto_arma_xy(self, v_ref: float | None = None) -> tuple[float, float]:
+        """Acréscimo de coeficiente linear de arrasto (Δd_x, Δd_y) em s⁻¹ devido ao perfil da arma no topo.
+
+        Fórmula fechada: ΔF_{d,i} = ½·ρ·C_{d,i}·A_i·v_ref·v_i ⇒ Δd_i = ½·ρ·C_{d,i}·A_i·v_ref / m_total.
+        Sem arma devolve `(0.0, 0.0)`.
+        """
+        if self.arma is None:
+            return (0.0, 0.0)
+        aero = self.arma.dados.get("aerodinamica") or {}
+        cd_x = float(aero.get("cd_frontal", 1.15))
+        cd_y = float(aero.get("cd_lateral", 1.20))
+        v = float(aero.get("v_ref_linearizacao_m_s", 3.0) if v_ref is None else v_ref)
+        m = max(self.massa_total, 1e-6)
+        dx = 0.5 * RHO_AR * cd_x * self.arma.area_frontal * v / m
+        dy = 0.5 * RHO_AR * cd_y * self.arma.area_lateral * v / m
+        return (dx, dy)
+
+    def resumo_arma(self) -> dict | None:
+        """Dados físicos, balísticos e de recuo da arma montada no drone (ou `None` sem arma)."""
+        if self.arma is None:
+            return None
+        a = self.arma
+        dx, dy = self.arrasto_arma_xy()
+        return {
+            "id": a.id,
+            "fabricante": a.fabricante,
+            "modelo": a.modelo,
+            "calibre": a.calibre,
+            "massa_g": a.massa * 1000.0,
+            "massa_vazia_g": a.massa_vazia * 1000.0,
+            "massa_sem_carregador_g": a.massa_sem_carregador * 1000.0,
+            "capacidade": a.capacidade,
+            "comprimento_cano_mm": a.comprimento_cano * 1000.0,
+            "dims_mm": [round(v * 1000.0, 1) for v in a.dims],
+            "peso_gatilho_n": a.peso_gatilho_n,
+            "massa_projetil_g": a.massa_projetil * 1000.0,
+            "velocidade_boca_m_s": a.velocidade_boca,
+            "energia_boca_j": a.energia_boca_j,
+            "impulso_projetil_ns": a.impulso_projetil,
+            "impulso_gases_ns": a.impulso_gases,
+            "impulso_tiro_ns": a.impulso_tiro,
+            "duracao_impulso_s": a.duracao_impulso,
+            "forca_media_tiro_n": a.forca_media_tiro,
+            "delta_v_drone_m_s": a.impulso_tiro / max(self.massa_total, 1e-6),
+            "direcao_tiro_corpo": [1.0, 0.0, 0.0],
+            "direcao_soco_corpo": [-1.0, 0.0, 0.0],
+            "delta_d_xy_s1": [dx, dy],
+        }
 
     @property
     def massa_total(self) -> float:
@@ -505,6 +650,7 @@ class Hardware:
             "bateria": {"id": b.id, "quimica": b.quimica, "s": b.s, "p": b.p, "ah": b.capacidade_ah,
                         "wh": b.energia_wh, "massa_g": b.massa * 1000.0, "wh_kg": b.densidade_wh_kg,
                         "r0_mohm": b.r0 * 1000.0},
+            "arma": self.resumo_arma(),
             "t_w_cheia": t_max / self.peso,
             "omega_max_cheia_rpm": self.omega_max(b.v_cheia) / RPM_PARA_RAD,
             "pairagem_v_nominal": ph,
@@ -711,10 +857,33 @@ def resolver(build: str | dict | None = None, catalogo: dict | None = None,
         c = _peca(cat, "cameras", cfg["camera"])
         camera = Camera(id=c["id"], nome=c.get("modelo", c["id"]),
                         massa=float(c["massa_g"]) / 1000.0, dados=c)
+    arma = None
+    if cfg.get("arma"):
+        a = _peca(cat, "armas", cfg["arma"])
+        bal = a.get("balistica") or {}
+        arma = Arma(
+            id=a["id"],
+            fabricante=a.get("fabricante", ""),
+            modelo=a.get("modelo", a["id"]),
+            calibre=a.get("calibre", ""),
+            massa=float(a.get("massa_g", a.get("massa_carregador_cheio_g", 785.0))) / 1000.0,
+            massa_vazia=float(a.get("massa_carregador_vazio_g", 645.0)) / 1000.0,
+            massa_sem_carregador=float(a.get("massa_sem_carregador_g", 575.0)) / 1000.0,
+            capacidade=int(a.get("capacidade_padrao", 15)),
+            comprimento_cano=float(a.get("comprimento_cano_mm", 102.0)) / 1000.0,
+            largura_ferrolho=float(a.get("largura_ferrolho_mm", 25.5)) / 1000.0,
+            peso_gatilho_n=float(a.get("peso_gatilho_n", 28.0)),
+            massa_projetil=float(bal.get("massa_projetil_g", 6.156)) / 1000.0,
+            velocidade_boca=float(bal.get("velocidade_boca_m_s", 296.0)),
+            massa_polvora=float(bal.get("massa_polvora_g", 0.20)) / 1000.0,
+            velocidade_gases=float(bal.get("velocidade_gases_m_s", 470.0)),
+            duracao_impulso=float(a.get("duracao_impulso_s", 0.020)),
+            dados=a,
+        )
     return Hardware(
         nome=nome, descricao=cfg.get("descricao", ""), frame=frame,
         motor=_motor(_peca(cat, "motores", cfg["motor"])), helice=_helice(_peca(cat, "helices", cfg["helice"])),
-        bateria=bateria, esc=esc, consumidores=consumidores, sensores=sensores, camera=camera,
+        bateria=bateria, esc=esc, consumidores=consumidores, sensores=sensores, camera=camera, arma=arma,
         arquitetura=cfg.get("arquitetura", "fc"), bec_eficiencia=float(cfg.get("bec_eficiencia", 0.88)),
         r_ligacoes=float(cfg.get("r_ligacoes_mohm", 3.0)) / 1000.0,
         atraso_comando=float(cfg.get("atraso_comando_ms", 8.0)) / 1000.0,
