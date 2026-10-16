@@ -1086,12 +1086,18 @@ def _kf_kq(motor: Motor, helice: Helice) -> tuple[float, float, str]:
             kq *= float(helice.dados.get("escala_cp_design", 1.0)) * (helice.diametro / (float(helice.dados.get("diametro_pol", 15.0)) * POL)) ** 5
         corr = "medição independente" if independente else f"+{100 * (CORRECAO_KQ_TABELA - 1):.1f} % de realismo"
         return kf, kq, f"tabela do fabricante ({len(linhas)} pontos; kq por {fonte}; {corr})"
-    ct_use, cp_use = (helice.ct, helice.cp) if (helice.ct is not None and helice.cp is not None) else helice.ct_cp_bemt()
-    d = helice.diametro
-    kf = ct_use * RHO_AR * d ** 4 / (4.0 * math.pi ** 2)
-    kq = cp_use * RHO_AR * d ** 5 / (8.0 * math.pi ** 3)
-    origem = "C_T/C_P estáticos da hélice (convenção UIUC)" if (helice.ct is not None and helice.cp is not None) else "BEMT geométrico do design da hélice"
-    return kf, kq, origem
+    if helice.ct is not None and helice.cp is not None:
+        d = helice.diametro
+        kf = helice.ct * RHO_AR * d ** 4 / (4.0 * math.pi ** 2)
+        kq = helice.cp * RHO_AR * d ** 5 / (8.0 * math.pi ** 3)
+        return kf, kq, "C_T/C_P estáticos da hélice (convenção UIUC)"
+    if helice.dados.get("design_customizado") or helice.dados.get("permitir_bemt"):
+        ct_b, cp_b = helice.ct_cp_bemt()
+        d = helice.diametro
+        kf = ct_b * RHO_AR * d ** 4 / (4.0 * math.pi ** 2)
+        kq = cp_b * RHO_AR * d ** 5 / (8.0 * math.pi ** 3)
+        return kf, kq, "BEMT geométrico do design da hélice"
+    raise ValueError(f"sem tabela de ensaio para {motor.id}+{helice.id} e a hélice não traz C_T/C_P")
 
 
 kf_kq = _kf_kq
@@ -1306,3 +1312,313 @@ def resolver(build: str | dict | None = None, catalogo: dict | None = None,
         v_brownout=float(cfg.get("v_brownout", 6.0)),
         temperatura_ambiente=float(cfg.get("temperatura_ambiente_c", 25.0)),
         massa_extra=float(cfg.get("massa_extra_g", 0.0)) / 1000.0, dados=cfg)
+
+
+# Catálogo visual e físico para troca ao vivo de Motores e Baterias no Cockpit (`POST /api/pecas`):
+# Cada motor e bateria tem cor 3D distinta, dimensões físicas reais e parâmetros elétricos de datasheet.
+CATALOGO_MOTORES_PAINEL: dict[str, dict] = {
+    "tmotor_mn4004_kv300": {
+        "id": "tmotor_mn4004_kv300",
+        "rotulo": "T-Motor MN4004 KV300 (Endurance · Preto/Cobre)",
+        "cor_nome": "Preto Anodizado",
+        "cor_hex": "#242730",
+        "cor_rgba": [0.14, 0.15, 0.19, 1.0],
+        "escala_raio": 1.00,
+        "escala_altura": 1.00,
+    },
+    "tmotor_mn4004_kv400": {
+        "id": "tmotor_mn4004_kv400",
+        "rotulo": "T-Motor MN4004 KV400 (Alta Rotação · Prata Titânio)",
+        "cor_nome": "Prata Titânio",
+        "cor_hex": "#b8c2d4",
+        "cor_rgba": [0.72, 0.76, 0.83, 1.0],
+        "escala_raio": 1.00,
+        "escala_altura": 1.00,
+    },
+    "tmotor_mn4006_kv380": {
+        "id": "tmotor_mn4006_kv380",
+        "rotulo": "T-Motor MN4006 KV380 (Alto Binário 380W · Vermelho)",
+        "cor_nome": "Vermelho Competição",
+        "cor_hex": "#d9262e",
+        "cor_rgba": [0.85, 0.15, 0.18, 1.0],
+        "escala_raio": 1.05,
+        "escala_altura": 1.15,
+    },
+    "tmotor_mn5006_kv450": {
+        "id": "tmotor_mn5006_kv450",
+        "rotulo": "T-Motor MN5006 KV450 (Pesado 650W · Azul Cobalto)",
+        "cor_nome": "Azul Cobalto",
+        "cor_hex": "#2470eb",
+        "cor_rgba": [0.14, 0.44, 0.92, 1.0],
+        "escala_raio": 1.28,
+        "escala_altura": 1.25,
+    },
+    "tmotor_mn3508_kv380": {
+        "id": "tmotor_mn3508_kv380",
+        "rotulo": "T-Motor Navigator MN3508 KV380 (Robusto · Dourado)",
+        "cor_nome": "Dourado Bronze",
+        "cor_hex": "#e0a324",
+        "cor_rgba": [0.88, 0.64, 0.14, 1.0],
+        "escala_raio": 0.96,
+        "escala_altura": 1.38,
+    },
+    "tmotor_mn2806_kv400": {
+        "id": "tmotor_mn2806_kv400",
+        "rotulo": "T-Motor MN2806 KV400 (Compacto Leve 260W · Verde)",
+        "cor_nome": "Verde Esmeralda",
+        "cor_hex": "#1eb86b",
+        "cor_rgba": [0.12, 0.72, 0.42, 1.0],
+        "escala_raio": 0.80,
+        "escala_altura": 0.92,
+    },
+}
+
+CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
+    "molicel_p50b_6s2p": {
+        "id": "molicel_p50b_6s2p",
+        "rotulo": "6S2P Molicel P50B Li-ion (216 Wh · Vazão 120 A · Padrão)",
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 2,
+        "vazao_max_a": 120.0,
+        "massa_extra_g": 45.0,
+        "dims_mm": [142.0, 70.0, 44.0],
+        "cor_nome": "Vermelho Rubi",
+        "cor_hex": "#8c1f1a",
+        "cor_rgba": [0.55, 0.12, 0.10, 1.0],
+    },
+    "molicel_p50b_6s3p": {
+        "id": "molicel_p50b_6s3p",
+        "rotulo": "6S3P Molicel P50B Mega-Pack (324 Wh · Vazão 180 A · +Pesada)",
+        "celula": "molicel_p50b",
+        "s": 6,
+        "p": 3,
+        "vazao_max_a": 180.0,
+        "massa_extra_g": 65.0,
+        "dims_mm": [146.0, 105.0, 46.0],
+        "cor_nome": "Azul Royal",
+        "cor_hex": "#1f52c7",
+        "cor_rgba": [0.12, 0.32, 0.78, 1.0],
+    },
+    "lipo_6s1p_4500_alta_vazao": {
+        "id": "lipo_6s1p_4500_alta_vazao",
+        "rotulo": "6S1P LiPo Gens Ace 45C (111 Wh · Vazão 225 A · Máx Potência)",
+        "celula": "gensace_5ah_45c",
+        "s": 6,
+        "p": 1,
+        "vazao_max_a": 225.0,
+        "massa_extra_g": 35.0,
+        "dims_mm": [152.0, 50.0, 52.0],
+        "cor_nome": "Amarelo Ouro",
+        "cor_hex": "#ebb814",
+        "cor_rgba": [0.92, 0.72, 0.08, 1.0],
+    },
+    "amprius_si_6s2p": {
+        "id": "amprius_si_6s2p",
+        "rotulo": "6S2P Amprius Silício-Ânodo (222 Wh · Vazão 80 A · Ultra-Leve)",
+        "celula": "amprius_sa102",
+        "s": 6,
+        "p": 2,
+        "vazao_max_a": 80.0,
+        "massa_extra_g": 35.0,
+        "dims_mm": [132.0, 60.0, 36.0],
+        "cor_nome": "Roxo Tecnológico",
+        "cor_hex": "#9433d1",
+        "cor_rgba": [0.58, 0.20, 0.82, 1.0],
+    },
+    "molicel_p45b_6s1p": {
+        "id": "molicel_p45b_6s1p",
+        "rotulo": "6S1P Molicel P45B Compacta (97 Wh · Vazão 45 A · Baixa Vazão)",
+        "celula": "molicel_p45b",
+        "s": 6,
+        "p": 1,
+        "vazao_max_a": 45.0,
+        "massa_extra_g": 30.0,
+        "dims_mm": [128.0, 44.0, 24.0],
+        "cor_nome": "Verde Esmeralda",
+        "cor_hex": "#1fad59",
+        "cor_rgba": [0.12, 0.68, 0.35, 1.0],
+    },
+    "lipo_4s1p_4500_baixa_tensao": {
+        "id": "lipo_4s1p_4500_baixa_tensao",
+        "rotulo": "3S1P LiPo 11,1 V Subdimensionada (17 Wh · Tensão Insuficiente)",
+        "celula": "lipo_1500_4s_cell",
+        "s": 3,
+        "p": 1,
+        "massa_extra_g": 18.0,
+        "dims_mm": [106.0, 36.0, 28.0],
+        "cor_nome": "Laranja Âmbar",
+        "cor_hex": "#eb6b1a",
+        "cor_rgba": [0.92, 0.42, 0.10, 1.0],
+    },
+}
+
+# Presets calibrados e homologados (Motor + Bateria + Ganhos de Controlo afinados em conjunto).
+# Impede combinações livres incompatíveis na interface e garante estabilidade em pairagem, manobras e tiro.
+PRESETS_PROPULSAO_PAINEL: dict[str, dict] = {
+    "endurance_p50b": {
+        "id": "endurance_p50b",
+        "nome": "Endurance Padrão · MN4004 KV300 + 6S2P P50B",
+        "subtitulo": "Equilíbrio ideal · 216 Wh · Vazão 120 A · 2968 g · ~41 min",
+        "motor_id": "tmotor_mn4004_kv300",
+        "bateria_id": "molicel_p50b_6s2p",
+        "escala_kp_rp": 1.00,
+        "escala_kp_yaw": 0.25,
+    },
+    "tatico_silicio": {
+        "id": "tatico_silicio",
+        "nome": "Tático Ultra-Leve · MN4004 KV300 + 6S2P Amprius Si",
+        "subtitulo": "Mais leve (−336 g) e eficiente · 222 Wh · Vazão 80 A · 2632 g · ~50 min",
+        "motor_id": "tmotor_mn4004_kv300",
+        "bateria_id": "amprius_si_6s2p",
+        "escala_kp_rp": 0.96,
+        "escala_kp_yaw": 0.24,
+    },
+    "interceptor_lipo": {
+        "id": "interceptor_lipo",
+        "nome": "Interceptor Alta Vazão · MN4006 KV380 + 6S1P LiPo 45C",
+        "subtitulo": "Resposta explosiva · 111 Wh · Vazão 225 A (4995 W) · 2862 g",
+        "motor_id": "tmotor_mn4006_kv380",
+        "bateria_id": "lipo_6s1p_4500_alta_vazao",
+        "escala_kp_rp": 0.92,
+        "escala_kp_yaw": 0.22,
+    },
+    "heavy_6s3p": {
+        "id": "heavy_6s3p",
+        "nome": "Heavy Long-Range · MN4006 KV380 + 6S3P P50B Mega",
+        "subtitulo": "Máxima energia e inércia · 324 Wh · Vazão 180 A · 3463 g · ~48 min",
+        "motor_id": "tmotor_mn4006_kv380",
+        "bateria_id": "molicel_p50b_6s3p",
+        "escala_kp_rp": 1.04,
+        "escala_kp_yaw": 0.25,
+    },
+    "forca_bruta_5006": {
+        "id": "forca_bruta_5006",
+        "nome": "Força Bruta 650W · MN5006 KV450 + 6S2P P50B",
+        "subtitulo": "Motores 56×22 mm (650W) · 216 Wh · Vazão 120 A · 3260 g · T/W máximo",
+        "motor_id": "tmotor_mn5006_kv450",
+        "bateria_id": "molicel_p50b_6s2p",
+        "escala_kp_rp": 0.88,
+        "escala_kp_yaw": 0.20,
+    },
+    "agile_scout": {
+        "id": "agile_scout",
+        "nome": "Agile Scout Compacto · MN3508 KV380 + 6S1P P45B",
+        "subtitulo": "Pack leve 1P · 97 Wh · Vazão 45 A · 2747 g · Ágil",
+        "motor_id": "tmotor_mn3508_kv380",
+        "bateria_id": "molicel_p45b_6s1p",
+        "escala_kp_rp": 0.94,
+        "escala_kp_yaw": 0.23,
+    },
+}
+
+
+def preset_id_de_pecas(motor_id: str, bateria_id: str) -> str:
+    """Identifica o `preset_id` correspondente ao par `(motor_id, bateria_id)`, ou `'personalizado'`."""
+    for pid, spec in PRESETS_PROPULSAO_PAINEL.items():
+        if spec["motor_id"] == motor_id and spec["bateria_id"] == bateria_id:
+            return pid
+    return "personalizado"
+
+
+def criar_hardware_com_pecas(hw_base: Hardware, motor_id: str | None = None,
+                             bateria_id: str | None = None,
+                             preset_id: str | None = None) -> Hardware:
+    """Devolve um novo `Hardware` aplicando um preset calibrado (`preset_id`) ou trocando `motor_id`/`bateria_id`,
+    recalculando todos os parâmetros elétricos, massas, limites de carga e autonomia."""
+    if preset_id is not None:
+        if preset_id not in PRESETS_PROPULSAO_PAINEL:
+            raise ValueError(f"preset desconhecido {preset_id!r} — aceites: {sorted(PRESETS_PROPULSAO_PAINEL)}")
+        pspec = PRESETS_PROPULSAO_PAINEL[preset_id]
+        motor_id = pspec["motor_id"]
+        bateria_id = pspec["bateria_id"]
+    cat = carregar_catalogo()
+    cfg = copy.deepcopy(hw_base.dados)
+    if motor_id is not None:
+        if motor_id not in CATALOGO_MOTORES_PAINEL:
+            raise ValueError(f"motor desconhecido {motor_id!r} — aceites: {sorted(CATALOGO_MOTORES_PAINEL)}")
+        cfg["motor"] = motor_id
+    if bateria_id is not None:
+        if bateria_id not in CATALOGO_BATERIAS_PAINEL:
+            raise ValueError(f"bateria desconhecida {bateria_id!r} — aceites: {sorted(CATALOGO_BATERIAS_PAINEL)}")
+        b_spec = CATALOGO_BATERIAS_PAINEL[bateria_id]
+        cfg["bateria"] = {
+            "id": b_spec["id"],
+            "celula": b_spec["celula"],
+            "s": b_spec["s"],
+            "p": b_spec["p"],
+            "massa_extra_g": b_spec["massa_extra_g"],
+            "dims_mm": list(b_spec["dims_mm"]),
+        }
+    # Para motores que não trazem linha direta com a P15x5 na tabela, preserva o C_T/C_P real da hélice P15x5
+    m_dict = _peca(cat, "motores", cfg["motor"])
+    h_dict = _peca(cat, "helices", cfg["helice"])
+    tem_linha = any(r.get("helice") == h_dict["id"] and r.get("rpm") for r in m_dict.get("tabela", ()))
+    if not tem_linha and h_dict.get("ct") is None:
+        d_h = float(h_dict["diametro_pol"]) * POL
+        h_dict["ct"] = float(hw_base.kf * (4.0 * math.pi ** 2) / (RHO_AR * d_h ** 4))
+        h_dict["cp"] = float(hw_base.kq * (8.0 * math.pi ** 3) / (RHO_AR * d_h ** 5))
+    cat_local = copy.deepcopy(cat)
+    cat_local["helices"][cfg["helice"]] = h_dict
+    cfg["nome"] = hw_base.nome
+    return resolver(cfg, catalogo=cat_local)
+
+
+def catalogo_pecas_painel(hw_atual: Hardware | None = None) -> dict:
+    """Devolve o catálogo completo de motores e baterias trocáveis no painel HTML com especificações
+    físicas (KV, massa, dimensões, cor, Wh, Ah, vazão máxima A, potência máxima W e R₀)."""
+    cat = carregar_catalogo()
+    motores_out = []
+    for mid, meta in CATALOGO_MOTORES_PAINEL.items():
+        d = _peca(cat, "motores", mid)
+        motores_out.append({
+            "id": mid,
+            "rotulo": meta["rotulo"],
+            "modelo": f"{d['fabricante']} {d['modelo']}",
+            "kv": float(d["kv_rpm_v"]),
+            "massa_g": float(d["massa_g"]),
+            "r_int_mohm": float(d["r_int_mohm"]),
+            "i_max_a": float(d["i_max_a"]),
+            "p_max_w": float(d["p_max_w"]),
+            "diametro_mm": float(d.get("diametro_mm", 44.35)),
+            "altura_mm": float(d.get("altura_mm", 19.0)),
+            "cor_nome": meta["cor_nome"],
+            "cor_hex": meta["cor_hex"],
+            "cor_rgba": list(meta["cor_rgba"]),
+            "escala_raio": float(meta["escala_raio"]),
+            "escala_altura": float(meta["escala_altura"]),
+        })
+    baterias_out = []
+    for bid, meta in CATALOGO_BATERIAS_PAINEL.items():
+        cel = _celula(_peca(cat, "celulas", meta["celula"]))
+        bat = Bateria(id=bid, celula=cel, s=int(meta["s"]), p=int(meta["p"]),
+                      massa_extra=float(meta["massa_extra_g"]) / 1000.0, dados=meta)
+        baterias_out.append({
+            "id": bid,
+            "rotulo": meta["rotulo"],
+            "quimica": bat.quimica,
+            "s": bat.s,
+            "p": bat.p,
+            "capacidade_ah": round(bat.capacidade_ah, 2),
+            "energia_wh": round(bat.energia_wh, 1),
+            "v_nominal": round(bat.v_nominal, 2),
+            "v_cheia": round(bat.v_cheia, 2),
+            "vazao_max_a": round(bat.i_max, 1),
+            "potencia_max_w": round(bat.v_nominal * bat.i_max, 0),
+            "r0_mohm": round(bat.r0 * 1000.0, 1),
+            "massa_g": round(bat.massa * 1000.0, 1),
+            "dims_mm": list(meta["dims_mm"]),
+            "cor_nome": meta["cor_nome"],
+            "cor_hex": meta["cor_hex"],
+            "cor_rgba": list(meta["cor_rgba"]),
+        })
+    m_ativo = hw_atual.motor.id if hw_atual is not None else "tmotor_mn4004_kv300"
+    b_ativa = hw_atual.bateria.id if hw_atual is not None else "molicel_p50b_6s2p"
+    return {
+        "presets": [dict(v) for v in PRESETS_PROPULSAO_PAINEL.values()],
+        "preset_ativo": preset_id_de_pecas(m_ativo, b_ativa),
+        "motores": motores_out,
+        "baterias": baterias_out,
+        "motor_ativo": m_ativo,
+        "bateria_ativa": b_ativa,
+    }

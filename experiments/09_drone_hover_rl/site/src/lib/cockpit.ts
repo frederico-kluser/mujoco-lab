@@ -242,6 +242,49 @@ export interface HudGraficos {
   msRenderFpv: number | null
 }
 
+/** Estado em tempo real do preset calibrado (motor + bateria), vazão (A), Watts gastos e distância adaptativa (`POST /api/pecas`). */
+export interface HudPecas {
+  presetId: string | null
+  presetNome: string | null
+  motorId: string | null
+  motorModelo: string | null
+  motorKv: number | null
+  motorMassaG: number | null
+  motorRIntMohm: number | null
+  motorPMaxW: number | null
+  motorIMaxA: number | null
+  motorDiametroMm: number | null
+  motorAlturaMm: number | null
+  motorCorNome: string | null
+  motorCorHex: string | null
+  bateriaId: string | null
+  bateriaRotulo: string | null
+  bateriaQuimica: string | null
+  bateriaS: number | null
+  bateriaP: number | null
+  bateriaAh: number | null
+  bateriaWh: number | null
+  bateriaMassaG: number | null
+  bateriaR0Mohm: number | null
+  bateriaCorNome: string | null
+  bateriaCorHex: string | null
+  vazaoAtualA: number | null
+  vazaoMaxA: number | null
+  vazaoPct: number | null
+  wattsTotal: number | null
+  wattsMotores: number | null
+  wattsEletronica: number | null
+  potenciaMaxBateriaW: number | null
+  vBus: number | null
+  socPct: number | null
+  autonomiaEstimadaMin: number | null
+  massaTotalG: number | null
+  tWOge: number | null
+  podeAlcarVoo: boolean
+  estadoVoo: string | null
+  distAlvoDinamicaM: number | null
+}
+
 export interface AmostraHud {
   t: number
   passo: number
@@ -275,6 +318,8 @@ export interface AmostraHud {
   carga: HudCarga | null
   /** Otimização gráfica do MuJoCo e FPS em tempo real; `null` num runner antigo. */
   graficos: HudGraficos | null
+  /** Estado em tempo real do motor, da bateria, da vazão (A) e dos Watts gastos; `null` sem planta real. */
+  pecas: HudPecas | null
 }
 
 export interface HudVentoBordo {
@@ -512,6 +557,52 @@ function lerGraficosHud(bruto: unknown): HudGraficos | null {
   }
 }
 
+function lerPecasHud(bruto: unknown): HudPecas | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  return {
+    presetId: typeof o.preset_id === "string" ? o.preset_id : null,
+    presetNome: typeof o.preset_nome === "string" ? o.preset_nome : null,
+    motorId: typeof o.motor_id === "string" ? o.motor_id : null,
+    motorModelo: typeof o.motor_modelo === "string" ? o.motor_modelo : null,
+    motorKv: finito(o.motor_kv),
+    motorMassaG: finito(o.motor_massa_g),
+    motorRIntMohm: finito(o.motor_r_int_mohm),
+    motorPMaxW: finito(o.motor_p_max_w),
+    motorIMaxA: finito(o.motor_i_max_a),
+    motorDiametroMm: finito(o.motor_diametro_mm),
+    motorAlturaMm: finito(o.motor_altura_mm),
+    motorCorNome: typeof o.motor_cor_nome === "string" ? o.motor_cor_nome : null,
+    motorCorHex: typeof o.motor_cor_hex === "string" ? o.motor_cor_hex : null,
+    bateriaId: typeof o.bateria_id === "string" ? o.bateria_id : null,
+    bateriaRotulo: typeof o.bateria_rotulo === "string" ? o.bateria_rotulo : null,
+    bateriaQuimica: typeof o.bateria_quimica === "string" ? o.bateria_quimica : null,
+    bateriaS: finito(o.bateria_s),
+    bateriaP: finito(o.bateria_p),
+    bateriaAh: finito(o.bateria_ah),
+    bateriaWh: finito(o.bateria_wh),
+    bateriaMassaG: finito(o.bateria_massa_g),
+    bateriaR0Mohm: finito(o.bateria_r0_mohm),
+    bateriaCorNome: typeof o.bateria_cor_nome === "string" ? o.bateria_cor_nome : null,
+    bateriaCorHex: typeof o.bateria_cor_hex === "string" ? o.bateria_cor_hex : null,
+    vazaoAtualA: finito(o.vazao_atual_a),
+    vazaoMaxA: finito(o.vazao_max_a),
+    vazaoPct: finito(o.vazao_pct),
+    wattsTotal: finito(o.watts_total),
+    wattsMotores: finito(o.watts_motores),
+    wattsEletronica: finito(o.watts_eletronica),
+    potenciaMaxBateriaW: finito(o.potencia_max_bateria_w),
+    vBus: finito(o.v_bus),
+    socPct: finito(o.soc_pct),
+    autonomiaEstimadaMin: finito(o.autonomia_estimada_min),
+    massaTotalG: finito(o.massa_total_g),
+    tWOge: finito(o.t_w_oge),
+    podeAlcarVoo: o.pode_alcar_voo !== false,
+    estadoVoo: typeof o.estado_voo === "string" ? o.estado_voo : null,
+    distAlvoDinamicaM: finito(o.dist_alvo_dinamica_m),
+  }
+}
+
 /**
  * Uma amostra do HUD (o `data:` de um evento do SSE, já em objeto) → `AmostraHud`, ou `null` quando
  * não é uma amostra (sem `t` nem `passo`). Nunca lança e nunca inventa: o que não vier fica `null`.
@@ -548,6 +639,7 @@ export function lerHud(bruto: unknown): AmostraHud | null {
     tiro: lerTiroHud(o.tiro),
     carga: lerCargaHud(o.carga),
     graficos: lerGraficosHud(o.graficos),
+    pecas: lerPecasHud(o.pecas),
   }
 }
 

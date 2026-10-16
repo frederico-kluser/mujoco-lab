@@ -128,6 +128,36 @@ O projeto `09_drone_hover_rl` contra o critério do dono (pior das 3 seeds, roll
 | Provas da interface (câmara, PARAR, arranque, site) | `teste_camera.py` **50/50** · `teste_parar_vento.py` **15/15** sem flags (**16/16** com `--http`, **18/18** com `--http --navegador`) · `teste_arranque_loop.py` **68/68** · site `npm run test:camera` **62/62** |
 | Deploy ONNX (Raspberry Pi 5) | `max\|Δ\|` **5,7e-06** vs PyTorch · benchmark p50/p99 no painel |
 
+## Evolução de Estabilidade, Tiros/min (Bola Programada) e Benchmark de Vento Fixo
+
+<div align="center">
+  <img src="evolucao_drone.png" width="920" alt="Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo">
+</div>
+
+O acompanhamento evolutivo do drone (`endurance_15pol_p50b` + Glock 25 `.380 Auto` no topo) é regido pela skill **[`drone-evolucao-benchmark-agent-skill`](.agents/drone-evolucao-benchmark-agent-skill/SKILL.md)** (`scripts/evoluir_e_benchmark.py` e [`benchmark_evolucao.py`](experiments/09_drone_hover_rl/benchmark_evolucao.py)):
+- **Treino em GPU + TensorFlow OpenXLA (`treinar_mira_gpu.py`)**: usa **movimento aleatório da bola** (Ornstein–Uhlenbeck) e perturbações estocásticas em 4096 ambientes paralelos na RTX 4070 (`CudaDevice(id=0)`), treinando seletivamente apenas 3 módulos residuais (`CompensadorEstabilidadeTF`, `VisaoBalisticaTF` e `RedeDistanciaEstavelTF`).
+- **Captura de Dados / Benchmark Determinístico (`benchmark_evolucao.py`)**: usa **sempre o mesmo movimento programado da bola** (`modo="programado"`, trajetória Lissajous 3D analítica repetível a $0,55\text{ m/s}$, $r=1,35\text{ m}$, $15,0\text{ s}$) e **o mesmo cenário de vento fixo** (Fase A: $0\text{ m/s}$ ar calmo $\to$ Fase B: $3,0\text{ m/s} @ 90^\circ \to$ Fase C: $5,0\text{ m/s} @ 45^\circ$).
+
+### Evolução Medida por Geração (`v1` → `v4`)
+
+| Geração | Tremor $\omega_{\text{RMS}}$ (°/s) | Jitter Motores (%) | Recuperação Pós-Tiro (s) | Tiros Certeiros / min (TPM) | Vento Fixo 3 / 5 m/s (cm) | Índice de Estabilidade (0–100) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **v1 · Bloco Fixo (Sem Filtro/Recuo)** | 2,04 | 4,37 % | 1,62 s | **32,0** (100 %) | 5,1 / 9,4 | **50,6** |
+| **v2 · Anti-Tremor + Mira GPU** | 0,77 | 0,68 % | 0,76 s | **32,0** (100 %) | 10,5 / 14,9 | **80,0** |
+| **v3 · Recuo Ativo 500 Hz + TF XLA** | 0,77 | 0,68 % | **0,10 s** | **40,0** (100 %) | 10,8 / 15,1 | **87,7** |
+| **v4 · Standoff Dinâmico + 6 Presets TF** | **0,77** | **0,68 %** | **0,10 s** | **44,0** (100 %) | 10,8 / 15,1 | **87,7** |
+
+### Desempenho dos 6 Presets Calibrados de Propulsão (`POST /api/pecas`, sem combinação livre)
+
+| Preset Calibrado | Motor + Bateria (Cores 3D) | Massa Total | Potência Média | Vazão Máx | Tiros / min (TPM) | Estabilidade |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `endurance_p50b` | MN4004 KV300 (Preto) + 6S2P P50B (Vermelho) | 2968 g | 325,5 W | 120 A | **44,0 / min** | 87,7 / 100 |
+| `tatico_silicio` | MN4004 KV300 (Preto) + 6S2P Amprius Si (Roxo) | 2529 g | 254,7 W | 80 A | **28,0 / min** | 85,9 / 100 |
+| `interceptor_lipo` | MN4006 KV380 (Vermelho) + 6S1P LiPo 45C (Ouro) | 2912 g | 303,8 W | **225 A** | **44,0 / min** | **89,1 / 100** |
+| `heavy_6s3p` | MN4006 KV380 (Vermelho) + 6S3P P50B (Azul Royal) | 3460 g | 376,5 W | 180 A | **44,0 / min** | **89,4 / 100** |
+| `forca_bruta_5006` | MN5006 KV450 (Azul) + 6S2P P50B (Vermelho) | 3180 g | 358,7 W | 120 A | **48,0 / min** | **89,4 / 100** |
+| `agile_scout` | MN3508 KV380 (Dourado) + 6S1P P45B (Verde) | 2723 g | 293,2 W | 45 A | **36,0 / min** | 64,8 / 100 |
+
 ## Como se cria um projeto novo
 
 Resumo do método (**memória primeiro, física sempre, interface CLEAN + site, validação sem janelas**): começar pelo `coala.py recall` → vendorizar o modelo intacto em `models/` e adaptar em runtime em `lab/<robo>.py` → experimento com `run.py` que valida por fórmulas fechadas → RL com `env.py`/`train.py` quando a tarefa é aprender uma política → interface `sim_view.py` + `site/` → deploy no RPi 5 → registar tudo (README + `coala.py add`). O passo a passo completo, com comandos, contratos e lições medidas, está em [**Como criar um projeto neste laboratório (o padrão)**](#como-criar-um-projeto-neste-laboratório-o-padrão) — o [`09_drone_hover_rl`](experiments/09_drone_hover_rl/README.md) é a implementação de referência e o template `lab-padrao` empacota o conjunto.

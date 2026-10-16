@@ -169,6 +169,38 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
     `✦ ULTRA 1080P`), interruptores em tempo real para desligar **Sombras (`mjRND_SHADOW`)**, **Reflexos
     (`mjRND_REFLECTION`)**, **Fios e Detalhes RPi 5 (`group 3`)**, **Hélices 3D (`group 1`)**, **Efeitos (`group 2`)** e
     **Nevoeiro (`mjRND_FOG`)**, além de sliders de **escala de resolução OpenGL (`25–100 %`)** e **qualidade JPEG (`30–95 %`)**.
+  - **Estabilização Anti-Tremor, Recuperação Rápida Pós-Disparo (0,10 s), TensorFlow Seletivo (OpenXLA) e Troca de Motores/Baterias ao Vivo (`POST /api/pecas`)**
+    (`pesquisas/2026-10-16-estabilizacao-avancada-de-quadricopteros-sem-tremor-rejeicao.md`, `mira_balistica.py`, `treinar_mira_gpu.py`, `painel-troca-pecas.tsx`, `valida_real.py` `J5`, `J6`):
+    - **Eliminação do tremor em ar calmo (`_afinar_cfg_anti_tremor` em `sim_view.py`)**: escalonamento do ganho de taxa de
+      guinada ($0,25 \times K_{p,\text{yaw}}, K_{d,\text{yaw}} = 0$), filtragem passa-baixo PT1 no giroscópio a $40\text{ Hz}$
+      e termo D a $22\text{ Hz}$ ($0,45 \times K_{d,rp}$), e constante de tempo do observador de perturbação $\tau_{\text{vel}} = 35\text{ ms}$
+      com $K_{d,\text{vel}} = 0$ → reduz o *jitter* de comando dos motores em **$10\times$** (de $6,63\%$ para **$0,68\%$**) e
+      o tremor angular RMS em ar calmo em **$4\times$** (de $3,11^\circ/\text{s}$ para **$0,58\text{–}0,77^\circ/\text{s}$**).
+    - **Recuperação ultra-rápida pós-disparo (0,10 s) e TensorFlow seletivo (`@tf.function(jit_compile=True)` OpenXLA)**:
+      - Seguindo *Neural-Fly* (*Science Robotics* 2022), *NeuroBEM* (*RSS* 2021) e *KalmanNet* (*IEEE TSP* 2022), a física e a
+        geometria analítica comandam o laço nominal enquanto o **TensorFlow 2.21 XLA** treina apenas dois módulos residuais
+        compactos: `CompensadorEstabilidadeTF` (`mlp_recuo_tf`, `8 → 24 → 24 → 1` que adapta o amortecimento ativo de recuo a
+        $500\text{ Hz}$ às características de cada motor/bateria) e `VisaoBalisticaTF` (`mlp_visao_tf`, `8 → 24 → 24 → 3` para
+        o *lead* não-linear da bola), aliados à absorção suave de recuo longitudinal (`vx_glide`) que evita inclinar o cano
+        para o chão → o tempo para voltar a ficar pronto `NO ALVO` após disparar cai de **$1,92\text{ s}$ para $0,10\text{–}0,12\text{ s}$** ($>15\times$ mais rápido!).
+    - **Painel HTML de Presets Calibrados de Motores e Bateria (`PainelTrocaPecas` + `POST /api/pecas`, `valida_real.py` `J5`, `J7`)**:
+      - Em vez de permitir combinações livres incompatíveis, disponibiliza **6 Presets Calibrados e Homologados** (`PRESETS_PROPULSAO_PAINEL`),
+        cada um com cores e tamanhos 3D próprios no MuJoCo, peso real, potência ($\text{W}$), vazão máxima de corrente ($\text{A}$) e
+        adaptação automática do acelerador de pairagem e ganhos do controlador C++/TensorFlow:
+        1. **`endurance_p50b`** (`MN4004 KV300` Preto + `6S2P Molicel P50B` Vermelho · $216\text{ Wh}$, Vazão $120\text{ A}$, $2968\text{ g}$, $314\text{ W}$);
+        2. **`tatico_silicio`** (`MN4004 KV300` Preto + `6S2P Amprius Si` Roxo · $222\text{ Wh}$, Vazão $80\text{ A}$, $2529\text{ g}$, $263\text{ W}$);
+        3. **`interceptor_lipo`** (`MN4006 KV380` Vermelho + `6S1P LiPo Gens Ace 45C` Amarelo Ouro · $111\text{ Wh}$, Vazão $225\text{ A}$, $2912\text{ g}$, $323\text{ W}$);
+        4. **`heavy_6s3p`** (`MN4006 KV380` Vermelho + `6S3P Molicel P50B Mega` Azul Royal · $324\text{ Wh}$, Vazão $180\text{ A}$, $3460\text{ g}$, $397\text{ W}$);
+        5. **`forca_bruta_5006`** (`MN5006 KV450` Azul Cobalto $56\times 22\text{ mm}$ + `6S2P P50B` Vermelho · $216\text{ Wh}$, Vazão $120\text{ A}$, $3180\text{ g}$, $388\text{ W}$);
+        6. **`agile_scout`** (`MN3508 KV380` Dourado + `6S1P Molicel P45B` Verde Esmeralda · $97\text{ Wh}$, Vazão $45\text{ A}$, $2723\text{ g}$, $316\text{ W}$).
+      - **Distância Adaptativa ao Alvo (`dist_alvo_dinamica_m` + `RedeDistanciaEstavelTF`)**: quando a bola aumenta de velocidade,
+        o drone **toma distância sozinho** ($2,15\text{ m} \to 3,35\text{–}3,60\text{ m}$) e atenua a perseguição lateral, acompanhando
+        a bola por rotação suave no eixo com inclinação reduzida, **0 quedas** em todos os 6 presets e **$10\times$ mais tempo `NO ALVO` a $0,8\text{ m/s}$** ($4,2\% \to 40,2\%$).
+    - **Acompanhamento de Evolução e Benchmark Determinístico (`benchmark_evolucao.py` + `evolucao_drone.png` na raiz)**:
+      - Treino na GPU usa movimento aleatório da bola; captura de dados usa **movimento programado (`modo="programado"`)** e **vento fixo ($0 \to 3 \to 5\text{ m/s}$)**.
+      - Evolução `v1 → v4`: tremor $\omega_{\text{RMS}}$ de **$2,04^\circ/\text{s} \to 0,77^\circ/\text{s}$**, *jitter* de **$4,37\% \to 0,68\%$**, recuperação pós-tiro de **$1,62\text{ s} \to 0,10\text{ s}$**, cadência certeira de **$32,0 \to 44,0\text{–}48,0\text{ tiros/min}$** ($100\%$ acerto) e estabilidade de **$50,6 \to 87,7\text{–}89,4/100$**:
+
+![Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo](../../evolucao_drone.png)
 - **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
   - No ponto de $100\%$ de acelerador sob queda de tensão real da bateria ($V_{\text{carga}} = 23,79\text{ V}$ a $28,9\text{ A}$,
     queda de $1,41\text{ V}$ face ao OCV $25,20\text{ V}$) e descontando os $5\%$ de *download* na estrutura:

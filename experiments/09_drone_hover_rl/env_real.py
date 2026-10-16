@@ -535,7 +535,7 @@ class DroneRealEnv(HoverEnv):
         """
         if not self.com_alvo:
             raise RuntimeError("esta instância não foi construída com `com_alvo=True`")
-        if modo not in ("parado", "aleatorio", "circulo", "oito"):
+        if modo not in ("parado", "aleatorio", "circulo", "oito", "programado"):
             raise ValueError(f"trajetória desconhecida: {modo!r}")
         self.ponto_modo = modo
         self.ponto_vel = float(np.clip(vel, 0.0, PONTO_VEL_MAX))
@@ -620,12 +620,33 @@ class DroneRealEnv(HoverEnv):
             w = v / max(self.ponto_raio, 0.1)
             pos = self.ponto_centro + self.ponto_raio * np.array(
                 [math.cos(w * self.ponto_t), math.sin(w * self.ponto_t), 0.0])
+            self.ponto_alvo_vel = self.ponto_raio * w * np.array(
+                [-math.sin(w * self.ponto_t), math.cos(w * self.ponto_t), 0.0])
         elif modo == "oito":
             v = self.ponto_vel or 0.5
             w = v / max(self.ponto_raio, 0.1)
             a = self.ponto_raio
             pos = self.ponto_centro + np.array(
                 [a * math.sin(w * self.ponto_t), a * math.sin(w * self.ponto_t) * math.cos(w * self.ponto_t), 0.0])
+            self.ponto_alvo_vel = np.array(
+                [a * w * math.cos(w * self.ponto_t), a * w * math.cos(2.0 * w * self.ponto_t), 0.0])
+        elif modo == "programado":
+            # Cenário determinístico 3D repetível para benchmark (Lissajous suave 3D com rampa inicial):
+            # Garante exatamente o mesmo percurso da bola em qualquer geração/preset avaliado.
+            v = self.ponto_vel or 0.5
+            a = max(self.ponto_raio, 0.4)
+            w = v / a
+            t = self.ponto_t
+            rampa = 1.0 - math.exp(-t / 0.45)
+            dx = 0.35 * a * math.sin(1.6 * w * t)
+            dy = 0.85 * a * math.sin(w * t)
+            dz = 0.16 * a * math.sin(1.2 * w * t)
+            vx = 0.35 * a * (1.6 * w) * math.cos(1.6 * w * t) * rampa
+            vy = 0.85 * a * w * math.cos(w * t) * rampa
+            vz = 0.16 * a * (1.2 * w) * math.cos(1.2 * w * t) * rampa
+            pos = self.ponto_centro + rampa * np.array([dx, dy, dz])
+            pos[2] = float(np.clip(pos[2], 0.82, 1.85))
+            self.ponto_alvo_vel = np.array([vx, vy, vz])
         self.ponto_alvo = np.asarray(pos, dtype=float)
         from lab import camera_rpi as _cam
         _cam.posicionar_ponto(self.model, self.data, self.ponto_alvo)
@@ -737,10 +758,30 @@ class DroneRealEnv(HoverEnv):
         return res
 
     def carga_estado(self) -> dict:
-        """Estado atual de carga útil, limite de descolagem/voo e impacto do vento e da bateria."""
+        """Estado atual de carga útil, limite de descolagem/voo e impacto do vento e da bateria (com cache a 50 Hz)."""
         vento_xy = float(np.linalg.norm(self.vento_atual[:2]))
         massa_atual = float(self.model.body_mass.sum())
-        return self.hw.limites_carga(massa_total=massa_atual, soc=self.planta.bat.soc, vento_m_s=vento_xy)
+        return self.planta.limites_carga_rapido(massa_atual, self.planta.bat.soc, vento_xy)
+
+    def trocar_pecas(self, motor_id: str | None = None, bateria_id: str | None = None,
+                     preset_id: str | None = None) -> dict:
+        """Troca o preset calibrado (`preset_id`) ou os motores/bateria em tempo real (`planta.trocar_pecas`),
+        atualizando `self.hw`, `self.massa`, `self.u_pairagem` e `self.omega_ref`."""
+        res = self.planta.trocar_pecas(motor_id=motor_id, bateria_id=bateria_id, preset_id=preset_id)
+        self.hw = self.planta.hw
+        self.massa = float(self.model.body_mass.sum())
+        self.mg = self.massa * self.gravidade
+        self._massa_nom = self.model.body_mass.copy()
+        self._inercia_nom = self.model.body_inertia.copy()
+        ph = self.hw.ponto_pairagem(self.hw.bateria.v_nominal, massa=self.massa)
+        self.u_pairagem = min(1.0, float(ph["acelerador"]))
+        self._omega_pairagem = float(ph["omega"])
+        self.omega_ref = self.hw.omega_max(self.hw.bateria.v_cheia)
+        return res
+
+    def pecas_estado(self) -> dict:
+        """Estado atual do motor, da bateria, da vazão (A) e dos Watts gastos em tempo real."""
+        return self.planta.telemetria_pecas()
 
     def observacao(self, d: dict | None = None) -> np.ndarray:
         """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).

@@ -11,6 +11,7 @@
 import { useRef, type ReactNode } from "react"
 import { BatteryCharging, ChevronDown, ChevronUp } from "lucide-react"
 
+import { PainelTrocaPecas } from "@/components/cockpit/painel-troca-pecas"
 import { FOCO, Legenda, Leitura } from "@/components/cockpit/pecas"
 import { useDesenhoHud } from "@/hooks/use-cockpit"
 import { fmtAutonomia, fmtHud, limitar } from "@/lib/cockpit"
@@ -178,6 +179,9 @@ export function JanelaEnergia({
           <ChevronDown className="size-4" aria-hidden="true" />
         )}
       </button>
+
+      <PainelTrocaPecas />
+
       {detalheAberto ? (
         <div className="flex flex-col gap-3" data-testid="energia-detalhe-paineis">
           {detalhe}

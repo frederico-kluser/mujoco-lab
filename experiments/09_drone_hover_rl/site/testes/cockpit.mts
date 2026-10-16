@@ -449,6 +449,44 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
         aprox(hudGraf.graficos.fpsSimulacao ?? 0, 59.8),
       "lerHud: bloco `graficos` (otimização gráfica do MuJoCo e FPS atual) lido"
     )
+    const hudPecas = m.lerHud({
+      ...AMOSTRA,
+      pecas: {
+        preset_id: "forca_bruta_5006",
+        preset_nome: "Força Bruta 650W · MN5006 KV450 + 6S2P P50B",
+        motor_id: "tmotor_mn5006_kv450",
+        motor_modelo: "T-Motor Antigravity MN5006 KV450",
+        motor_kv: 450,
+        motor_massa_g: 126,
+        motor_cor_nome: "Azul Cobalto",
+        motor_cor_hex: "#2470eb",
+        bateria_id: "lipo_6s1p_4500_alta_vazao",
+        bateria_wh: 99.9,
+        bateria_cor_nome: "Amarelo Ouro",
+        bateria_cor_hex: "#ebb814",
+        vazao_atual_a: 18.4,
+        vazao_max_a: 225.0,
+        vazao_pct: 8.2,
+        watts_total: 412.5,
+        watts_motores: 406.0,
+        pode_alcar_voo: true,
+        estado_voo: "voo_seguro",
+        dist_alvo_dinamica_m: 3.18,
+      },
+    })
+    ok(
+      hudPecas?.pecas !== null &&
+        hudPecas?.pecas.presetId === "forca_bruta_5006" &&
+        hudPecas?.pecas.motorId === "tmotor_mn5006_kv450" &&
+        hudPecas.pecas.motorKv === 450 &&
+        hudPecas.pecas.motorCorHex === "#2470eb" &&
+        hudPecas.pecas.bateriaId === "lipo_6s1p_4500_alta_vazao" &&
+        aprox(hudPecas.pecas.vazaoMaxA ?? 0, 225.0) &&
+        aprox(hudPecas.pecas.wattsTotal ?? 0, 412.5) &&
+        aprox(hudPecas.pecas.distAlvoDinamicaM ?? 0, 3.18) &&
+        hudPecas.pecas.podeAlcarVoo === true,
+      "lerHud: bloco `pecas` (preset calibrado, cores 3D, vazão A, Watts gastos e distância dinâmica) lido"
+    )
   }
   ok(a("w", { ctrl: true }) === "null" && a("r", { meta: true }) === "null" && a("f", { alt: true }) === "null",
     "teclas: com Ctrl/Meta/Alt nunca se rouba o atalho do browser")

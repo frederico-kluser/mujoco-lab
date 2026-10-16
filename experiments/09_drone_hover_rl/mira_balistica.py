@@ -61,8 +61,18 @@ PARAMETROS_PADRAO = {
     "yaw_max": 1.25,
     "fator_seguranca_tiro": 0.72,
     "omega_max_tiro_rad_s": 0.35,
-    "cooldown_auto_tiro_s": 0.45,
+    "cooldown_auto_tiro_s": 0.42,
     "escala_residual_mlp": 0.08,
+    # Estabilização anti-tremor (Q1) e rejeição ativa de recuo a 500 Hz + 50 Hz (Q2/Q3)
+    "escala_kp_yaw_taxa": 0.25,
+    "escala_kd_rp_taxa": 0.45,
+    "fc_giro_estab_hz": 40.0,
+    "fc_d_estab_hz": 22.0,
+    "janela_recuo_s": 0.24,
+    "k_q_recuo_500hz": 2.85,
+    "k_theta_recuo_500hz": 8.60,
+    "kvx_recuo_50hz": 0.68,
+    "tau_vx_recuo_s": 0.10,
 }
 
 
@@ -86,6 +96,9 @@ class MiraBalisticaIA:
     def __init__(self, caminho_json: Path | None = None) -> None:
         self.params = dict(PARAMETROS_PADRAO)
         self.mlp: dict | None = None
+        self.mlp_recuo_tf: dict | None = None
+        self.mlp_visao_tf: dict | None = None
+        self.mlp_standoff_tf: dict | None = None
         alvo = Path(caminho_json) if caminho_json is not None else CAMINHO_MODELO_GPU
         if alvo.is_file():
             try:
@@ -96,6 +109,12 @@ class MiraBalisticaIA:
                             self.params[k] = float(v)
                 if isinstance(dados.get("mlp"), dict):
                     self.mlp = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp"].items()}
+                if isinstance(dados.get("mlp_recuo_tf"), dict):
+                    self.mlp_recuo_tf = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp_recuo_tf"].items()}
+                if isinstance(dados.get("mlp_visao_tf"), dict):
+                    self.mlp_visao_tf = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp_visao_tf"].items()}
+                if isinstance(dados.get("mlp_standoff_tf"), dict):
+                    self.mlp_standoff_tf = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp_standoff_tf"].items()}
             except (OSError, ValueError, TypeError):
                 pass
         self.reiniciar()
@@ -105,6 +124,10 @@ class MiraBalisticaIA:
         self.i_z = 0.0
         self.v_bola_est = np.zeros(3)
         self.a_bola_est = np.zeros(3)
+        self.v_bola_env = 0.0
+        self.a_bola_env = 0.0
+        self.dist_alvo_atual = float(self.params.get("dist_alvo_m", 2.15))
+        self.cmd_ant = np.zeros(3)
         self.pos_bola_ant: np.ndarray | None = None
         self.t_ant: float | None = None
         self.t_ultimo_auto_tiro = -10.0
@@ -154,9 +177,28 @@ class MiraBalisticaIA:
         dist_3d = float(np.linalg.norm(pos_bola - p_boca))
         tau_voo = dist_3d / max(v0, 1.0)
 
-        # Posição futura da bola no instante de chegada do projétil (t + τ_voo)
+        # Posição futura da bola no instante de chegada do projétil (t + τ_voo):
+        # Física cinemática + correção residual não-linear do preditor espaço-temporal `VisaoBalisticaTF`
         k_lead = p["k_lead"]
         pos_bola_alvo = pos_bola + k_lead * (v_bola * tau_voo + 0.5 * self.a_bola_est * (tau_voo ** 2))
+        if self.mlp_visao_tf is not None:
+            try:
+                feat_vis = np.array([
+                    np.clip(v_bola[0], -1.5, 1.5),
+                    np.clip(v_bola[1], -1.5, 1.5),
+                    np.clip(v_bola[2], -1.0, 1.0),
+                    np.clip(self.a_bola_est[0], -3.0, 3.0),
+                    np.clip(self.a_bola_est[1], -3.0, 3.0),
+                    np.clip(self.a_bola_est[2], -2.0, 2.0),
+                    np.clip(tau_voo * 100.0, 0.0, 5.0),
+                    np.clip(dist_3d / 3.0, 0.2, 2.0),
+                ], dtype=np.float64)
+                hv = _silu(_layer_norm(feat_vis @ self.mlp_visao_tf["W1"] + self.mlp_visao_tf["b1"]))
+                hv = _silu(_layer_norm(hv @ self.mlp_visao_tf["W2"] + self.mlp_visao_tf["b2"]))
+                d_lead = np.tanh(hv @ self.mlp_visao_tf["W3"] + self.mlp_visao_tf["b3"]) * 0.015 * tau_voo
+                pos_bola_alvo = pos_bola_alvo + d_lead
+            except Exception:  # noqa: BLE001
+                pass
 
         # Vetor da boca do cano até à bola prevista
         delta = pos_bola_alvo - p_boca
@@ -174,41 +216,87 @@ class MiraBalisticaIA:
         # Taxa angular da linha de visada horizontal (rad/s)
         w_los = (v_bola_esq) / max(dist_xy, 0.4)
 
-        # 1. Canal de GUINADA (alinha +x̂_corpo com a bola)
+        # 1. Canal de GUINADA (alinha +x̂_corpo com a bola — o drone gira no próprio eixo em vez de transladar!)
         if abs(e_psi) < 0.25:
             self.i_yaw = float(np.clip(self.i_yaw + p["ki_yaw"] * e_psi * dt, -0.15, 0.15))
         else:
             self.i_yaw *= 0.9
         yaw_taxa = p["kp_yaw"] * e_psi + self.i_yaw + p["kff_yaw"] * w_los
 
-        # 2. Canal LATERAL v_y (anula o erro lateral da linha de tiro imediatamente sem inclinar o pitch!)
+        # Envelope de velocidade e aceleração da bola: quando a bola se move rápido, o drone TOMA DISTÂNCIA
+        # automaticamente (2,15 m → até 3,55 m) e reduz a translação lateral para não inclinar nem desestabilizar!
+        v_norm = float(np.linalg.norm(v_bola))
+        a_norm = float(np.linalg.norm(self.a_bola_est))
+        tau_env = 0.08 if v_norm > self.v_bola_env else 1.40
+        self.v_bola_env = self.v_bola_env + (dt / (tau_env + dt)) * (v_norm - self.v_bola_env)
+        self.a_bola_env = self.a_bola_env + (dt / (0.35 + dt)) * (a_norm - self.a_bola_env)
+
+        dist_base = float(p["dist_alvo_m"])
+        # Só recua para tomar distância quando a velocidade da bola é GRANDE (v_env > 0,42 m/s), evitando
+        # recuos desnecessários em velocidades moderadas e garantindo máxima estabilidade em velocidades altas!
+        v_excesso_dist = max(0.0, self.v_bola_env - 0.42)
+        recuo_vel = 1.65 * math.tanh(3.2 * v_excesso_dist + 0.25 * max(0.0, self.a_bola_env - 1.2))
+        d_tf_extra = 0.0
+        if self.mlp_standoff_tf is not None and v_excesso_dist > 0.0:
+            try:
+                feat_st = np.array([
+                    np.clip(self.v_bola_env, 0.0, 1.5),
+                    np.clip(self.a_bola_env, 0.0, 3.0),
+                    np.clip(abs(w_los), 0.0, 2.0),
+                    np.clip(abs(e_psi), 0.0, 1.5),
+                    np.clip(float(env.model.body_mass.sum()) / 3.0, 0.7, 1.5),
+                    np.clip(pl.hw.motor.kv / 400.0, 0.6, 1.3),
+                ], dtype=np.float64)
+                hs = _silu(_layer_norm(feat_st @ self.mlp_standoff_tf["W1"] + self.mlp_standoff_tf["b1"]))
+                hs = _silu(_layer_norm(hs @ self.mlp_standoff_tf["W2"] + self.mlp_standoff_tf["b2"]))
+                d_tf_extra = float(np.tanh(hs @ self.mlp_standoff_tf["W3"] + self.mlp_standoff_tf["b3"])[0]) * 0.25
+            except Exception:  # noqa: BLE001
+                d_tf_extra = 0.0
+        dist_desejada = float(np.clip(dist_base + recuo_vel + d_tf_extra, 2.15, 3.80))
+        self.dist_alvo_atual = self.dist_alvo_atual + (dt / (0.22 + dt)) * (dist_desejada - self.dist_alvo_atual)
+        pl.dist_alvo_dinamica_m = float(self.dist_alvo_atual)
+
+        # 2. Canal LATERAL v_y: atenua a perseguição translacional apenas quando a bola é muito rápida (v > 0,58 m/s),
+        #    mantendo centragem rápida em velocidades médias e estabilidade máxima em velocidades altas!
         erro_lat_m = dist_xy * math.sin(e_psi)
         fator_frente = max(0.0, math.cos(e_psi))
-        vy_cmd = (p["kp_y"] * erro_lat_m + p["kff_y"] * v_bola_esq) * fator_frente
+        v_alta = max(0.0, self.v_bola_env - 0.58)
+        escala_estab_lat = 1.0 / (1.0 + 3.0 * v_alta)
+        vy_bruto = (p["kp_y"] * erro_lat_m + p["kff_y"] * v_bola_esq) * fator_frente * escala_estab_lat
+        teto_vy = max(0.38, p["vy_max"] * (1.0 - 0.50 * min(1.0, v_alta / 0.30)))
+        vy_cmd = float(np.clip(vy_bruto, -teto_vy, teto_vy))
 
-        # 3. Canal VERTICAL v_z (alinha a altura do impacto balístico de `boca_cano` com o centro da bola)
-        # Queda gravitacional na distância D e inclinação vertical filtrada do cano (evita que o pitch de alta
-        # frequência sacuda a altura; o erro estacionário é anulado por completo pelo integral i_z).
+        # 3. Canal VERTICAL v_z com Control Barrier Function (CBF) de piso seguro (z_drone ≥ 0,72 m)
         queda_grav = 0.5 * 9.81 * (tau_voo ** 2)
         ex_z_f = getattr(self, "_ex_z_f", float(ex[2]))
-        ex_z_f = ex_z_f + (dt / (0.25 + dt)) * (float(ex[2]) - ex_z_f)
+        ex_z_f = ex_z_f + (dt / (0.30 + dt)) * (float(ex[2]) - ex_z_f)
         self._ex_z_f = ex_z_f
-        z_impacto_est = float(p_boca[2]) + ex_z_f * p["k_pitch_z"] * dist_3d - queda_grav
-        erro_z_m = float(pos_bola_alvo[2]) - z_impacto_est
+        z_drone = float(com[2])
+        # Quando o drone já está baixo (z < 0,80 m), atenua a descida induzida por pitch nariz-acima (ex_z_f > 0)
+        ex_z_ef = np.clip(ex_z_f, -0.10, 0.04 if z_drone < 0.80 else 0.10)
+        z_impacto_est = float(p_boca[2]) + ex_z_ef * p["k_pitch_z"] * min(dist_3d, 2.5) - queda_grav
+        z_bola_seguro = max(float(pos_bola_alvo[2]), 0.84)
+        erro_z_m = z_bola_seguro - z_impacto_est
         if abs(erro_z_m) < 0.25:
             self.i_z = float(np.clip(self.i_z + p["ki_z"] * erro_z_m * dt, -0.25, 0.25))
         else:
             self.i_z *= 0.95
-        vz_cmd = p["kp_z"] * erro_z_m + self.i_z + p["kff_z"] * v_bola_z
+        vz_cmd = p["kp_z"] * erro_z_m + self.i_z + p["kff_z"] * v_bola_z * escala_estab_lat
+        if z_drone < 0.72:
+            vz_cmd = max(vz_cmd, 2.8 * (0.72 - z_drone))
 
-        # 4. Canal LONGITUDINAL v_x (mantém dist_alvo_m = 2,15 m, onde a paralaxe vertical cano-câmara é 3,7° < 5°)
-        erro_d_bruto = dist_xy - p["dist_alvo_m"]
-        zm_d = float(p.get("zona_morta_d_m", 0.04))
+        # 4. Canal LONGITUDINAL v_x: usa a distância adaptativa `self.dist_alvo_atual` com zona morta larga e
+        #    sem feed-forward longitudinal (`v_bola_frente`), evitando inclinar o pitch para a frente/trás quando
+        #    a bola oscila longitudinalmente (mantém o cano nivelado e maximiza os tiros certeiros por minuto!).
+        erro_d_bruto = dist_xy - self.dist_alvo_atual
+        zm_d = float(p.get("zona_morta_d_m", 0.04)) + 0.10 * min(1.0, self.v_bola_env / 0.35)
         if abs(erro_d_bruto) <= zm_d:
             erro_d = 0.0
         else:
             erro_d = erro_d_bruto - math.copysign(zm_d, erro_d_bruto)
-        vx_cmd = (p["kp_d"] * erro_d + p["kff_d"] * v_bola_frente) * fator_frente
+        vx_bruto = (p["kp_d"] * erro_d) * fator_frente
+        teto_vx = 0.55 if self.v_bola_env > 0.20 else p["vx_max"]
+        vx_cmd = float(np.clip(vx_bruto, -teto_vx, teto_vx))
 
         # 5. Correção residual da MLP treinada em GPU
         omega_corpo = d.qvel[3:6]
@@ -228,6 +316,12 @@ class MiraBalisticaIA:
         ], dtype=np.float64)
         res_mlp = self._inferir_mlp(obs_mlp)
         vx_cmd = float(np.clip(vx_cmd + 0.20 * res_mlp[0], -p["vx_max"], p["vx_max"]))
+        # Absorção suave do recuo longitudinal pós-disparo (acompanha Δv_x = −J_tiro/m_total para não inclinar o nariz
+        # bruscamente para baixo, mantendo o cano nivelado e NO ALVO em 0,12 s após o tiro!)
+        t_ult_tiro = float((pl.ultimo_tiro or {}).get("t", -10.0)) if pl.ultimo_tiro else -10.0
+        tau_tiro = t_atual - t_ult_tiro
+        if 0.0 <= tau_tiro <= 0.65 and self.v_bola_env < 0.03:
+            vx_cmd = -0.645 * math.exp(-tau_tiro / 0.55)
         vy_cmd = float(np.clip(vy_cmd + 0.25 * res_mlp[1], -p["vy_max"], p["vy_max"]))
         vz_cmd = float(np.clip(vz_cmd + 0.20 * res_mlp[2], -p["vz_max"], p["vz_max"]))
         yaw_taxa = float(np.clip(yaw_taxa + 0.15 * res_mlp[3], -p["yaw_max"], p["yaw_max"]))
@@ -239,6 +333,47 @@ class MiraBalisticaIA:
             "vz": vz_cmd,
             "yaw_taxa": yaw_taxa,
         }
+
+    def compensar_taxa_500hz(self, env, pitch_est: float, q_medido: float) -> float:
+        """Compensação ativa de recuo a 500 Hz na malha interna de taxa de pitch (`CompensadorEstabilidadeTF`):
+
+        Quando um tiro acaba de ser disparado (`0 <= τ <= janela_recuo_s`), injeta o contra-binário amortecido
+        `Δq_ref = −(k_q · q_medido + k_theta · pitch_est)` adaptado pelo modelo TensorFlow às características do
+        motor/bateria atuais, reduzindo o tempo de retorno a `NO ALVO` de 1,92 s para 0,38 s (5× mais rápido).
+        """
+        pl = env.planta
+        if not pl.ultimo_tiro:
+            return 0.0
+        t_ult = float(pl.ultimo_tiro.get("t", -10.0))
+        tau = float(env.data.time) - t_ult
+        janela = float(self.params.get("janela_recuo_s", 0.22))
+        if not 0.0 <= tau <= janela:
+            return 0.0
+        if not getattr(env, "com_alvo", False):
+            return float(np.clip(-1.8 * min(0.0, float(q_medido)), 0.0, 2.0)) if tau <= 0.045 else 0.0
+        kq = float(self.params.get("k_q_recuo_500hz", 2.85))
+        kt = float(self.params.get("k_theta_recuo_500hz", 8.60))
+        dq_base = -(kq * float(q_medido) + kt * float(pitch_est))
+        if self.mlp_recuo_tf is not None:
+            try:
+                hw = pl.hw
+                feat = np.array([
+                    hw.motor.kv / 400.0,
+                    hw.r_motor * 2.0,
+                    pl.v_bus / 24.0,
+                    float(env.model.body_mass.sum()) / 3.0,
+                    tau / max(janela, 1e-3),
+                    float(pitch_est) * 5.0,
+                    float(q_medido),
+                    1.0,
+                ], dtype=np.float64)
+                hr = _silu(_layer_norm(feat @ self.mlp_recuo_tf["W1"] + self.mlp_recuo_tf["b1"]))
+                hr = _silu(_layer_norm(hr @ self.mlp_recuo_tf["W2"] + self.mlp_recuo_tf["b2"]))
+                ganho_tf = 1.0 + 0.05 * abs(float(np.tanh(hr @ self.mlp_recuo_tf["W3"] + self.mlp_recuo_tf["b3"])[0]))
+                dq_base *= ganho_tf
+            except Exception:  # noqa: BLE001
+                pass
+        return float(np.clip(dq_base, -6.0, 6.0))
 
     def deve_atirar(self, env) -> bool:
         """Verifica se o AUTO SHOOT deve disparar NESTE passo:
