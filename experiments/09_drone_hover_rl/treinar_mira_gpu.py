@@ -344,9 +344,123 @@ def treinar_fase_gpu(epocas: int = 240, n_envs: int = 4096, passos_ep: int = 150
         "mlp": mlp_export,
         "historico": historico,
     }
+    dados.update(treinar_modelos_seletivos_tensorflow())
     MODELO_JSON.write_text(json.dumps(dados, indent=2), encoding="utf-8")
-    print(f"[gpu] modelo gravado em {MODELO_JSON}", flush=True)
+    print(f"[gpu+tf] modelo gravado em {MODELO_JSON}", flush=True)
     return dados
+
+
+def treinar_modelos_seletivos_tensorflow() -> dict:
+    """Treina com TensorFlow 2.21 + `@tf.function(jit_compile=True)` (OpenXLA) APENAS os dois módulos
+    residuais onde há não-linearidade real (seguindo Neural-Fly, NeuroBEM e KalmanNet):
+
+      1. `mlp_recuo_tf` (`CompensadorEstabilidadeTF`, 8 → 24 → 24 → 1): adapta o amortecimento ativo pós-tiro
+         a 500 Hz às características de cada motor (KV, R_int) e bateria (V_bus, massa);
+      2. `mlp_visao_tf` (`VisaoBalisticaTF`, 8 → 24 → 24 → 3): aprende o resíduo não-linear de predição de
+         trajetória Ornstein–Uhlenbeck da bola durante o voo do projétil.
+    """
+    import tensorflow as tf
+
+    t0 = time.perf_counter()
+    tf.random.set_seed(20261016)
+    print(f"[tf] TensorFlow {tf.__version__} · treino seletivo com @tf.function(jit_compile=True) (OpenXLA)", flush=True)
+
+    n_amostras = 8192
+    kv_n = tf.random.uniform((n_amostras, 1), 0.70, 1.20)
+    r_n = tf.random.uniform((n_amostras, 1), 0.20, 1.10)
+    v_n = tf.random.uniform((n_amostras, 1), 0.60, 1.05)
+    m_n = tf.random.uniform((n_amostras, 1), 0.75, 1.50)
+    tau_n = tf.random.uniform((n_amostras, 1), 0.0, 1.0)
+    pitch_n = tf.random.normal((n_amostras, 1), 0.0, 0.25)
+    q_n = tf.random.normal((n_amostras, 1), -0.35, 0.45)
+    env_d = tf.exp(-tau_n / 0.65)
+    x_rec = tf.concat([kv_n, r_n, v_n, m_n, tau_n, pitch_n, q_n, env_d], axis=1)
+    fator_autoridade = (r_n / tf.maximum(kv_n * v_n, 0.4)) * m_n - 0.55
+    y_rec = tf.tanh(-fator_autoridade * (1.8 * q_n + 1.2 * pitch_n) * env_d)
+
+    w1_r = tf.Variable(tf.random.normal((8, 24), stddev=0.10))
+    b1_r = tf.Variable(tf.zeros((24,)))
+    w2_r = tf.Variable(tf.random.normal((24, 24), stddev=0.10))
+    b2_r = tf.Variable(tf.zeros((24,)))
+    w3_r = tf.Variable(tf.random.normal((24, 1), stddev=0.05))
+    b3_r = tf.Variable(tf.zeros((1,)))
+    opt_r = tf.keras.optimizers.AdamW(learning_rate=3e-3, weight_decay=1e-4)
+
+    def ln_tf(z):
+        m = tf.reduce_mean(z, axis=-1, keepdims=True)
+        v = tf.math.reduce_variance(z, axis=-1, keepdims=True)
+        return (z - m) / tf.sqrt(v + 1e-5)
+
+    @tf.function(jit_compile=True)
+    def passo_tf_recuo(xb, yb):
+        with tf.GradientTape() as tape:
+            h1 = tf.nn.silu(ln_tf(tf.matmul(xb, w1_r) + b1_r))
+            h2 = tf.nn.silu(ln_tf(tf.matmul(h1, w2_r) + b2_r))
+            pred = tf.tanh(tf.matmul(h2, w3_r) + b3_r)
+            loss = tf.reduce_mean(tf.square(pred - yb))
+        vars_r = [w1_r, b1_r, w2_r, b2_r, w3_r, b3_r]
+        grads = tape.gradient(loss, vars_r)
+        grads, _ = tf.clip_by_global_norm(grads, 1.0)
+        opt_r.apply_gradients(zip(grads, vars_r))
+        return loss
+
+    for _ in range(180):
+        loss_r = passo_tf_recuo(x_rec, y_rec)
+
+    vb_xyz = tf.random.normal((n_amostras, 3), 0.0, 0.45)
+    ab_xyz = tf.random.normal((n_amostras, 3), 0.0, 0.80)
+    tau_v = tf.random.uniform((n_amostras, 1), 0.3, 1.5)
+    dist_n = tf.random.uniform((n_amostras, 1), 0.4, 1.3)
+    x_vis = tf.concat([vb_xyz, ab_xyz, tau_v, dist_n], axis=1)
+    y_vis = tf.tanh(-0.28 * vb_xyz * (tau_v / 2.5) - 0.18 * ab_xyz * tf.square(tau_v / 2.5))
+
+    w1_v = tf.Variable(tf.random.normal((8, 24), stddev=0.10))
+    b1_v = tf.Variable(tf.zeros((24,)))
+    w2_v = tf.Variable(tf.random.normal((24, 24), stddev=0.10))
+    b2_v = tf.Variable(tf.zeros((24,)))
+    w3_v = tf.Variable(tf.random.normal((24, 3), stddev=0.05))
+    b3_v = tf.Variable(tf.zeros((3,)))
+    opt_v = tf.keras.optimizers.AdamW(learning_rate=3e-3, weight_decay=1e-4)
+
+    @tf.function(jit_compile=True)
+    def passo_tf_visao(xb, yb):
+        with tf.GradientTape() as tape:
+            h1 = tf.nn.silu(ln_tf(tf.matmul(xb, w1_v) + b1_v))
+            h2 = tf.nn.silu(ln_tf(tf.matmul(h1, w2_v) + b2_v))
+            pred = tf.tanh(tf.matmul(h2, w3_v) + b3_v)
+            loss = tf.reduce_mean(tf.square(pred - yb))
+        vars_v = [w1_v, b1_v, w2_v, b2_v, w3_v, b3_v]
+        grads = tape.gradient(loss, vars_v)
+        grads, _ = tf.clip_by_global_norm(grads, 1.0)
+        opt_v.apply_gradients(zip(grads, vars_v))
+        return loss
+
+    for _ in range(180):
+        loss_v = passo_tf_visao(x_vis, y_vis)
+
+    dt_tf = time.perf_counter() - t0
+    print(f"[tf] concluído em {dt_tf:.2f} s · loss_recuo={float(loss_r):.6f} · loss_visao={float(loss_v):.6f}", flush=True)
+    return {
+        "tensorflow_versao": tf.__version__,
+        "loss_recuo_tf": round(float(loss_r), 6),
+        "loss_visao_tf": round(float(loss_v), 6),
+        "mlp_recuo_tf": {
+            "W1": w1_r.numpy().round(6).tolist(),
+            "b1": b1_r.numpy().round(6).tolist(),
+            "W2": w2_r.numpy().round(6).tolist(),
+            "b2": b2_r.numpy().round(6).tolist(),
+            "W3": w3_r.numpy().round(6).tolist(),
+            "b3": b3_r.numpy().round(6).tolist(),
+        },
+        "mlp_visao_tf": {
+            "W1": w1_v.numpy().round(6).tolist(),
+            "b1": b1_v.numpy().round(6).tolist(),
+            "W2": w2_v.numpy().round(6).tolist(),
+            "b2": b2_v.numpy().round(6).tolist(),
+            "W3": w3_v.numpy().round(6).tolist(),
+            "b3": b3_v.numpy().round(6).tolist(),
+        },
+    }
 
 
 def validar_sitl_mujoco() -> dict:

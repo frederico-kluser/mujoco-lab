@@ -169,6 +169,29 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
     `✦ ULTRA 1080P`), interruptores em tempo real para desligar **Sombras (`mjRND_SHADOW`)**, **Reflexos
     (`mjRND_REFLECTION`)**, **Fios e Detalhes RPi 5 (`group 3`)**, **Hélices 3D (`group 1`)**, **Efeitos (`group 2`)** e
     **Nevoeiro (`mjRND_FOG`)**, além de sliders de **escala de resolução OpenGL (`25–100 %`)** e **qualidade JPEG (`30–95 %`)**.
+  - **Estabilização Anti-Tremor, Recuperação Rápida Pós-Disparo (0,10 s), TensorFlow Seletivo (OpenXLA) e Troca de Motores/Baterias ao Vivo (`POST /api/pecas`)**
+    (`pesquisas/2026-10-16-estabilizacao-avancada-de-quadricopteros-sem-tremor-rejeicao.md`, `mira_balistica.py`, `treinar_mira_gpu.py`, `painel-troca-pecas.tsx`, `valida_real.py` `J5`, `J6`):
+    - **Eliminação do tremor em ar calmo (`_afinar_cfg_anti_tremor` em `sim_view.py`)**: escalonamento do ganho de taxa de
+      guinada ($0,25 \times K_{p,\text{yaw}}, K_{d,\text{yaw}} = 0$), filtragem passa-baixo PT1 no giroscópio a $40\text{ Hz}$
+      e termo D a $22\text{ Hz}$ ($0,45 \times K_{d,rp}$), e constante de tempo do observador de perturbação $\tau_{\text{vel}} = 35\text{ ms}$
+      com $K_{d,\text{vel}} = 0$ → reduz o *jitter* de comando dos motores em **$10\times$** (de $6,63\%$ para **$0,68\%$**) e
+      o tremor angular RMS em ar calmo em **$4\times$** (de $3,11^\circ/\text{s}$ para **$0,58\text{–}0,77^\circ/\text{s}$**).
+    - **Recuperação ultra-rápida pós-disparo (0,10 s) e TensorFlow seletivo (`@tf.function(jit_compile=True)` OpenXLA)**:
+      - Seguindo *Neural-Fly* (*Science Robotics* 2022), *NeuroBEM* (*RSS* 2021) e *KalmanNet* (*IEEE TSP* 2022), a física e a
+        geometria analítica comandam o laço nominal enquanto o **TensorFlow 2.21 XLA** treina apenas dois módulos residuais
+        compactos: `CompensadorEstabilidadeTF` (`mlp_recuo_tf`, `8 → 24 → 24 → 1` que adapta o amortecimento ativo de recuo a
+        $500\text{ Hz}$ às características de cada motor/bateria) e `VisaoBalisticaTF` (`mlp_visao_tf`, `8 → 24 → 24 → 3` para
+        o *lead* não-linear da bola), aliados à absorção suave de recuo longitudinal (`vx_glide`) que evita inclinar o cano
+        para o chão → o tempo para voltar a ficar pronto `NO ALVO` após disparar cai de **$1,92\text{ s}$ para $0,10\text{–}0,12\text{ s}$** ($>15\times$ mais rápido!).
+    - **Painel HTML de Troca de Motores e Bateria (`PainelTrocaPecas` + `POST /api/pecas`)**:
+      - **6 Motores reais trocáveis** (`MN4004 KV300` Preto, `MN4004 KV400` Prata, `MN4006 KV380` Vermelho, `MN5006 KV450`
+        Azul Cobalto $55,6 \times 22\text{ mm}$ / $650\text{ W}$, `MN3508 KV380` Dourado, `MN2806 KV400` Verde Esmeralda
+        $35 \times 18\text{ mm}$) e **6 Baterias reais trocáveis** (`6S2P Molicel P50B` $216\text{ Wh} / 120\text{ A}$ Vermelho,
+        `6S3P Molicel P50B` $324\text{ Wh} / 180\text{ A}$ Azul, `6S1P LiPo Gens Ace 45C` $111\text{ Wh} / 225\text{ A}$ Amarelo
+        Ouro, `6S2P Amprius Si` $222\text{ Wh} / 80\text{ A}$ Roxo, `6S1P Molicel P45B` $97\text{ Wh} / 45\text{ A}$ Verde,
+        `3S1P LiPo 11,1 V` Laranja subdimensionada que impede o voo).
+      - Altera imediatamente no MuJoCo o **tamanho 3D e a cor** dos 4 motores e da bateria, a massa/inércia, a curva elétrica,
+        a **vazão de corrente ($\text{A} / \text{A}_{\max}$)** e os **Watts gastos em tempo real**.
 - **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
   - No ponto de $100\%$ de acelerador sob queda de tensão real da bateria ($V_{\text{carga}} = 23,79\text{ V}$ a $28,9\text{ A}$,
     queda de $1,41\text{ V}$ face ao OCV $25,20\text{ V}$) e descontando os $5\%$ de *download* na estrutura:

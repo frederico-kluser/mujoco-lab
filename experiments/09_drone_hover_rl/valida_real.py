@@ -1120,6 +1120,66 @@ def checa_carga_e_vento(v: Validador, hw) -> None:
             f"aut(0/3/5 m/s)={aut_v0:.1f}/{aut_v3:.1f}/{aut_v5:.1f} min · "
             f"W_máx(sem arma / com G25 / +1,2 kg / excesso)={w_max_leve:.1f} / {w_max_arma:.1f} / {w_max_pesado:.1f} / {w_max_impossivel:.1f} m/s")
 
+    # J5: troca ao vivo de motores e bateria (cores/tamanhos 3D distintos, vazão A, Watts gastos e viabilidade de voo)
+    env_p = DroneRealEnv(modo_acao="ctbr", comando=True, episodio_s=6.0)
+    env_p.reset(seed=0)
+    gid_m1 = env_p.model.geom("motor1").id
+    gid_bat = env_p.model.geom("bateria").id
+    r_m1_antes = float(env_p.model.geom_size[gid_m1, 0])
+    cor_m1_antes = env_p.model.geom_rgba[gid_m1].copy()
+    tam_bat_antes = env_p.model.geom_size[gid_bat].copy()
+    p_5006 = env_p.trocar_pecas(motor_id="tmotor_mn5006_kv450", bateria_id="lipo_6s1p_4500_alta_vazao")
+    r_m1_5006 = float(env_p.model.geom_size[gid_m1, 0])
+    cor_m1_5006 = env_p.model.geom_rgba[gid_m1].copy()
+    tam_bat_lipo = env_p.model.geom_size[gid_bat].copy()
+    p_4s_fraco = env_p.trocar_pecas(motor_id="tmotor_mn4004_kv300", bateria_id="lipo_4s1p_4500_baixa_tensao")
+    v.check("J5 troca dinâmica de motores e bateria (`trocar_pecas`): atualiza tamanho/cor 3D no MuJoCo, KV, massa, vazão (A), Watts e deteta bateria 4S insuficiente",
+            r_m1_5006 > r_m1_antes and not np.allclose(cor_m1_5006, cor_m1_antes)
+            and not np.allclose(tam_bat_lipo, tam_bat_antes)
+            and p_5006["motor_kv"] == 450.0 and p_5006["vazao_max_a"] == 225.0 and p_5006["pode_alcar_voo"] is True
+            and p_4s_fraco["bateria_s"] == 3 and p_4s_fraco["pode_alcar_voo"] is False,
+            f"MN5006+LiPo6S: D={2000*r_m1_5006:.1f} mm ({p_5006['motor_cor_nome']}), vazão={p_5006['vazao_max_a']} A, voa={p_5006['pode_alcar_voo']} · "
+            f"MN4004+3S: T/W={p_4s_fraco['t_w_oge']:.2f}, voa={p_4s_fraco['pode_alcar_voo']}")
+
+    # J6: estabilização anti-tremor em ar calmo (ω_RMS < 0,85°/s, jitter < 0,9 %) e recuperação pós-tiro em ≤ 0,48 s
+    import sim_view as sv
+    from mira_balistica import MiraBalisticaIA
+    env_est = DroneRealEnv(modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=12.0)
+    nuc_est = sv.NucleoClassico.criar(env_est)
+    nuc_est.instalar()
+    env_est.reset(seed=6200)
+    nuc_est.pos_reset()
+    mira_est = MiraBalisticaIA()
+    qs_calmo, us_calmo = [], []
+    for k in range(260):
+        nuc_est.comando({"modo": "velocidade", "vx": 0.0, "vy": 0.0, "vz": 0.0, "yaw_taxa": 0.0})
+        env_est.step(np.zeros(4, dtype=np.float32))
+        if k >= 150:
+            qs_calmo.append(env_est.data.qvel[3:6].copy())
+            us_calmo.append(env_est.planta.prop.duty.copy())
+    qs_arr = np.array(qs_calmo)
+    us_arr = np.array(us_calmo)
+    omega_rms_deg = float(np.max(np.degrees(np.sqrt(np.mean(qs_arr ** 2, axis=0)))))
+    jitter_duty_pct = float(np.diff(us_arr, axis=0).std() * 100.0)
+    env_est.definir_trajetoria_ponto("parado")
+    for _ in range(90):
+        nuc_est.comando(mira_est.passo(env_est, dt=env_est.dt_decisao))
+        env_est.step(np.zeros(4, dtype=np.float32))
+    env_est.disparar(1)
+    erros_pos_tiro = []
+    for _ in range(60):
+        nuc_est.comando(mira_est.passo(env_est, dt=env_est.dt_decisao))
+        env_est.step(np.zeros(4, dtype=np.float32))
+        prev_t = env_est.planta.prever_tiro_bola(pos_bola=env_est.ponto_alvo, vel_bola=env_est.ponto_alvo_vel)
+        erros_pos_tiro.append(100.0 * float(prev_t["erro_bola_m"]))
+    passo_rec = next((k for k in range(2, len(erros_pos_tiro) - 8) if all(e <= 5.45 for e in erros_pos_tiro[k:k + 8])), 60)
+    t_rec_s = passo_rec * 0.02
+    nuc_est.remover()
+    v.check("J6 estabilização anti-tremor (ω_RMS < 0,85°/s, jitter de duty < 0,9 %) e recuperação pós-tiro < 0,50 s",
+            omega_rms_deg < 0.85 and jitter_duty_pct < 0.90 and t_rec_s <= 0.50,
+            f"ar calmo: ω_RMS_máx={omega_rms_deg:.2f}°/s (antes 3,11°/s), jitter_duty={jitter_duty_pct:.2f} % (antes 6,63 %) · "
+            f"retorno a NO ALVO pós-tiro={t_rec_s:.2f} s (antes 1,92 s)")
+
 
 def checa_planta_real(v) -> None:
     """Todas as checagens da planta real (chamada pelo `run.py`)."""

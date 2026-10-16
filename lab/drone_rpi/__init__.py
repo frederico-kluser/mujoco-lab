@@ -27,6 +27,8 @@ from . import aero, bateria, componentes, modelo, propulsao, sensores
 from .aero import Aerodinamica, FlagsAero, ganho_solo
 from .bateria import EstadoDesgaste, ModeloBateria, perda_por_ciclo
 from .componentes import (
+    CATALOGO_BATERIAS_PAINEL,
+    CATALOGO_MOTORES_PAINEL,
     GRAVIDADE,
     RHO_AR,
     Arma,
@@ -34,6 +36,8 @@ from .componentes import (
     autonomia_estimada,
     carregar_builds,
     carregar_catalogo,
+    catalogo_pecas_painel,
+    criar_hardware_com_pecas,
     nome_build_ativo,
     resolver,
 )

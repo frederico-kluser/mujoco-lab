@@ -12,6 +12,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 
 import { PainelOtimizacaoMuJoCo } from "@/components/cockpit/painel-otimizacao-mujoco"
+import { PainelTrocaPecas } from "@/components/cockpit/painel-troca-pecas"
 import { Legenda, Marca } from "@/components/cockpit/pecas"
 import { PainelHardware } from "@/components/sim/hardware"
 import { QuemFazOQue } from "@/components/sim/quem-faz-o-que"
@@ -110,6 +111,7 @@ export function JanelaSistema({
 
   return (
     <div className="flex flex-col gap-4" data-testid="painel-sistema">
+      <PainelTrocaPecas />
       <PainelOtimizacaoMuJoCo />
 
       <section className="flex flex-col gap-2">

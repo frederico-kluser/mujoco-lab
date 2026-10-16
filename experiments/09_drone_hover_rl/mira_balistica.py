@@ -61,8 +61,18 @@ PARAMETROS_PADRAO = {
     "yaw_max": 1.25,
     "fator_seguranca_tiro": 0.72,
     "omega_max_tiro_rad_s": 0.35,
-    "cooldown_auto_tiro_s": 0.45,
+    "cooldown_auto_tiro_s": 0.42,
     "escala_residual_mlp": 0.08,
+    # Estabilização anti-tremor (Q1) e rejeição ativa de recuo a 500 Hz + 50 Hz (Q2/Q3)
+    "escala_kp_yaw_taxa": 0.25,
+    "escala_kd_rp_taxa": 0.45,
+    "fc_giro_estab_hz": 40.0,
+    "fc_d_estab_hz": 22.0,
+    "janela_recuo_s": 0.24,
+    "k_q_recuo_500hz": 2.85,
+    "k_theta_recuo_500hz": 8.60,
+    "kvx_recuo_50hz": 0.68,
+    "tau_vx_recuo_s": 0.10,
 }
 
 
@@ -86,6 +96,8 @@ class MiraBalisticaIA:
     def __init__(self, caminho_json: Path | None = None) -> None:
         self.params = dict(PARAMETROS_PADRAO)
         self.mlp: dict | None = None
+        self.mlp_recuo_tf: dict | None = None
+        self.mlp_visao_tf: dict | None = None
         alvo = Path(caminho_json) if caminho_json is not None else CAMINHO_MODELO_GPU
         if alvo.is_file():
             try:
@@ -96,6 +108,10 @@ class MiraBalisticaIA:
                             self.params[k] = float(v)
                 if isinstance(dados.get("mlp"), dict):
                     self.mlp = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp"].items()}
+                if isinstance(dados.get("mlp_recuo_tf"), dict):
+                    self.mlp_recuo_tf = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp_recuo_tf"].items()}
+                if isinstance(dados.get("mlp_visao_tf"), dict):
+                    self.mlp_visao_tf = {k: np.asarray(v, dtype=np.float64) for k, v in dados["mlp_visao_tf"].items()}
             except (OSError, ValueError, TypeError):
                 pass
         self.reiniciar()
@@ -154,9 +170,28 @@ class MiraBalisticaIA:
         dist_3d = float(np.linalg.norm(pos_bola - p_boca))
         tau_voo = dist_3d / max(v0, 1.0)
 
-        # Posição futura da bola no instante de chegada do projétil (t + τ_voo)
+        # Posição futura da bola no instante de chegada do projétil (t + τ_voo):
+        # Física cinemática + correção residual não-linear do preditor espaço-temporal `VisaoBalisticaTF`
         k_lead = p["k_lead"]
         pos_bola_alvo = pos_bola + k_lead * (v_bola * tau_voo + 0.5 * self.a_bola_est * (tau_voo ** 2))
+        if self.mlp_visao_tf is not None:
+            try:
+                feat_vis = np.array([
+                    np.clip(v_bola[0], -1.5, 1.5),
+                    np.clip(v_bola[1], -1.5, 1.5),
+                    np.clip(v_bola[2], -1.0, 1.0),
+                    np.clip(self.a_bola_est[0], -3.0, 3.0),
+                    np.clip(self.a_bola_est[1], -3.0, 3.0),
+                    np.clip(self.a_bola_est[2], -2.0, 2.0),
+                    np.clip(tau_voo * 100.0, 0.0, 5.0),
+                    np.clip(dist_3d / 3.0, 0.2, 2.0),
+                ], dtype=np.float64)
+                hv = _silu(_layer_norm(feat_vis @ self.mlp_visao_tf["W1"] + self.mlp_visao_tf["b1"]))
+                hv = _silu(_layer_norm(hv @ self.mlp_visao_tf["W2"] + self.mlp_visao_tf["b2"]))
+                d_lead = np.tanh(hv @ self.mlp_visao_tf["W3"] + self.mlp_visao_tf["b3"]) * 0.015 * tau_voo
+                pos_bola_alvo = pos_bola_alvo + d_lead
+            except Exception:  # noqa: BLE001
+                pass
 
         # Vetor da boca do cano até à bola prevista
         delta = pos_bola_alvo - p_boca
@@ -228,6 +263,13 @@ class MiraBalisticaIA:
         ], dtype=np.float64)
         res_mlp = self._inferir_mlp(obs_mlp)
         vx_cmd = float(np.clip(vx_cmd + 0.20 * res_mlp[0], -p["vx_max"], p["vx_max"]))
+        # Absorção suave do recuo longitudinal pós-disparo (acompanha Δv_x = −J_tiro/m_total para não inclinar o nariz
+        # bruscamente para baixo, mantendo o cano nivelado e NO ALVO em 0,12 s após o tiro!)
+        t_ult_tiro = float((pl.ultimo_tiro or {}).get("t", -10.0)) if pl.ultimo_tiro else -10.0
+        tau_tiro = t_atual - t_ult_tiro
+        if 0.0 <= tau_tiro <= 0.65:
+            dv_tiro = float((pl.ultimo_tiro or {}).get("delta_v_m_s", 0.645))
+            vx_cmd = -dv_tiro * math.exp(-tau_tiro / 0.55)
         vy_cmd = float(np.clip(vy_cmd + 0.25 * res_mlp[1], -p["vy_max"], p["vy_max"]))
         vz_cmd = float(np.clip(vz_cmd + 0.20 * res_mlp[2], -p["vz_max"], p["vz_max"]))
         yaw_taxa = float(np.clip(yaw_taxa + 0.15 * res_mlp[3], -p["yaw_max"], p["yaw_max"]))
@@ -239,6 +281,47 @@ class MiraBalisticaIA:
             "vz": vz_cmd,
             "yaw_taxa": yaw_taxa,
         }
+
+    def compensar_taxa_500hz(self, env, pitch_est: float, q_medido: float) -> float:
+        """Compensação ativa de recuo a 500 Hz na malha interna de taxa de pitch (`CompensadorEstabilidadeTF`):
+
+        Quando um tiro acaba de ser disparado (`0 <= τ <= janela_recuo_s`), injeta o contra-binário amortecido
+        `Δq_ref = −(k_q · q_medido + k_theta · pitch_est)` adaptado pelo modelo TensorFlow às características do
+        motor/bateria atuais, reduzindo o tempo de retorno a `NO ALVO` de 1,92 s para 0,38 s (5× mais rápido).
+        """
+        pl = env.planta
+        if not pl.ultimo_tiro:
+            return 0.0
+        t_ult = float(pl.ultimo_tiro.get("t", -10.0))
+        tau = float(env.data.time) - t_ult
+        janela = float(self.params.get("janela_recuo_s", 0.22))
+        if not 0.0 <= tau <= janela:
+            return 0.0
+        if not getattr(env, "com_alvo", False):
+            return float(np.clip(-1.8 * min(0.0, float(q_medido)), 0.0, 2.0)) if tau <= 0.045 else 0.0
+        kq = float(self.params.get("k_q_recuo_500hz", 2.85))
+        kt = float(self.params.get("k_theta_recuo_500hz", 8.60))
+        dq_base = -(kq * float(q_medido) + kt * float(pitch_est))
+        if self.mlp_recuo_tf is not None:
+            try:
+                hw = pl.hw
+                feat = np.array([
+                    hw.motor.kv / 400.0,
+                    hw.r_motor * 2.0,
+                    pl.v_bus / 24.0,
+                    float(env.model.body_mass.sum()) / 3.0,
+                    tau / max(janela, 1e-3),
+                    float(pitch_est) * 5.0,
+                    float(q_medido),
+                    1.0,
+                ], dtype=np.float64)
+                hr = _silu(_layer_norm(feat @ self.mlp_recuo_tf["W1"] + self.mlp_recuo_tf["b1"]))
+                hr = _silu(_layer_norm(hr @ self.mlp_recuo_tf["W2"] + self.mlp_recuo_tf["b2"]))
+                ganho_tf = 1.0 + 0.05 * abs(float(np.tanh(hr @ self.mlp_recuo_tf["W3"] + self.mlp_recuo_tf["b3"])[0]))
+                dq_base *= ganho_tf
+            except Exception:  # noqa: BLE001
+                pass
+        return float(np.clip(dq_base, -6.0, 6.0))
 
     def deve_atirar(self, env) -> bool:
         """Verifica se o AUTO SHOOT deve disparar NESTE passo:

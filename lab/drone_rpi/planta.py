@@ -33,7 +33,14 @@ import numpy as np
 from . import escalar
 from .aero import Aerodinamica, FlagsAero
 from .bateria import EstadoDesgaste, ModeloBateria
-from .componentes import Hardware
+from .componentes import (
+    CATALOGO_BATERIAS_PAINEL,
+    CATALOGO_MOTORES_PAINEL,
+    Hardware,
+    autonomia_estimada,
+    catalogo_pecas_painel,
+    criar_hardware_com_pecas,
+)
 from .modelo import (
     ALCANCE_PROJETIL_M,
     DURACAO_CAMINHO_TIRO_S,
@@ -180,6 +187,10 @@ class Planta:
         self._massa_corpo_base = float(model.body_mass[c])
         self._inercia_corpo_base = model.body_inertia[c].copy()
         self.carga_extra_kg = 0.0
+        self._cache_limites_chave: tuple | None = None
+        self._cache_limites_val: dict | None = None
+        self._cache_pecas_chave: tuple | None = None
+        self._cache_pecas_base: dict | None = None
         # altura do eixo do cano acima do CM (m) e inércia de pitch I_yy (kg·m²) no corpo
         self.braco_z_arma = (
             float(model.site_pos[self.site_boca, 2]) if self.site_boca is not None else 0.0
@@ -755,6 +766,159 @@ class Planta:
         self.omega_h = ph["omega"]
         self.aero.definir_arrasto(*self.aero.d_xy, massa=m_nova)
         return self.hw.limites_carga(massa_total=m_nova, soc=self.bat.soc)
+
+    def trocar_pecas(self, motor_id: str | None = None, bateria_id: str | None = None) -> dict:
+        """Troca em tempo real os motores (`motor_id`) e/ou o pack de bateria (`bateria_id`):
+
+          1. Recalcula `Hardware` (`kv`, `r_int`, `i0`, `j_rotor`, `kf`, `kq`, `curva_esc`, `bateria`, `massa_total`);
+          2. Atualiza tamanho 3D (`model.geom_size`) e cor (`model.geom_rgba`) dos 4 motores e da bateria no MuJoCo;
+          3. Atualiza massa e inércia do corpo (`mj_setConst` preservando o estado dinâmico `qpos`/`qvel`),
+             `Propulsao` e `ModeloBateria` (preservando SoC e ω atuais) e devolve `telemetria_pecas()`.
+        """
+        novo_hw = criar_hardware_com_pecas(self.hw, motor_id=motor_id, bateria_id=bateria_id)
+        omega_ant = self.prop.omega.copy()
+        armado_ant = bool(self.prop.armado)
+        soc_ant = float(self.bat.soc)
+        temp_ant = float(self.bat.temp)
+        desg_ant = self.bat.desgaste
+
+        self.hw = novo_hw
+        self.prop = Propulsao(novo_hw)
+        self.prop.reiniciar(omega_ant)
+        self.prop.armar(armado_ant)
+        self.bat = ModeloBateria(novo_hw, desgaste=desg_ant)
+        self.bat.reiniciar(soc0=soc_ant, temperatura_c=temp_ant)
+
+        # Atualiza geometria 3D e cores dos 4 motores e da bateria no MuJoCo
+        m = self.model
+        meta_m = CATALOGO_MOTORES_PAINEL.get(novo_hw.motor.id, {})
+        cor_m = meta_m.get("cor_rgba", [0.14, 0.15, 0.19, 1.0])
+        d_mot = float(novo_hw.motor.dados.get("diametro_mm", 44.35)) / 1000.0
+        h_mot = float(novo_hw.motor.dados.get("altura_mm", 19.0)) / 1000.0
+        for i in range(4):
+            gid_m = self._geom_id(f"motor{i + 1}")
+            if gid_m is not None:
+                m.geom_size[gid_m, 0] = 0.5 * d_mot
+                m.geom_size[gid_m, 1] = 0.5 * h_mot
+                m.geom_rgba[gid_m] = cor_m
+            for sufixo, r_f, h_f in (("sino_anel", 0.51, 0.22), ("base_cnc", 0.48, 0.14)):
+                gid_s = self._geom_id(f"motor{i + 1}_{sufixo}")
+                if gid_s is not None:
+                    m.geom_size[gid_s, 0] = r_f * d_mot
+                    m.geom_size[gid_s, 1] = h_f * h_mot
+                    m.geom_rgba[gid_s] = cor_m
+            for k_r in range(3):
+                gid_r = self._geom_id(f"motor{i + 1}_raio_{k_r + 1}")
+                if gid_r is not None:
+                    m.geom_size[gid_r, 0] = 0.49 * d_mot
+                    m.geom_size[gid_r, 1] = 0.065 * d_mot
+                    m.geom_rgba[gid_r] = cor_m
+
+        meta_b = CATALOGO_BATERIAS_PAINEL.get(novo_hw.bateria.id, {})
+        cor_b = meta_b.get("cor_rgba", [0.55, 0.12, 0.10, 1.0])
+        dims_b = [float(x) / 1000.0 for x in novo_hw.bateria.dados.get("dims_mm", (142.0, 70.0, 44.0))]
+        c_b, l_b, a_b = sorted(dims_b, reverse=True)
+        gid_bat = self._geom_id("bateria")
+        if gid_bat is not None:
+            m.geom_size[gid_bat] = [0.5 * c_b, 0.5 * l_b, 0.5 * a_b]
+            m.geom_rgba[gid_bat] = cor_b
+        for idx_cb in (1, 2):
+            gid_cb = self._geom_id(f"cinta_bateria_{idx_cb}")
+            if gid_cb is not None:
+                m.geom_size[gid_cb] = [0.008, 0.5 * l_b + 0.002, 0.5 * a_b + 0.002]
+
+        # Atualiza massa e inércia do corpo no MuJoCo preservando o estado dinâmico
+        self._massa_corpo_base = float(novo_hw.massa_total)
+        c = self.corpo
+        m_nova = self._massa_corpo_base + self.carga_extra_kg
+        fator_m = m_nova / max(float(m.body_mass[c]), 1e-6)
+        qpos_atual = self.data.qpos.copy()
+        qvel_atual = self.data.qvel.copy()
+        ctrl_atual = self.data.ctrl.copy()
+        t_atual = float(self.data.time)
+        m.body_mass[c] = m_nova
+        m.body_inertia[c] = m.body_inertia[c] * fator_m
+        self._inercia_corpo_base = m.body_inertia[c].copy()
+        mujoco.mj_setConst(m, self.data)
+        self.data.qpos[:] = qpos_atual
+        self.data.qvel[:] = qvel_atual
+        self.data.ctrl[:] = ctrl_atual
+        self.data.time = t_atual
+        mujoco.mj_forward(m, self.data)
+
+        ph = novo_hw.ponto_pairagem(novo_hw.bateria.v_nominal, massa=m_nova)
+        self.aero.hw = novo_hw
+        self.aero.omega_h = ph["omega"]
+        self.omega_h = ph["omega"]
+        self.aero.definir_arrasto(*self.aero.d_xy, massa=m_nova)
+        self.v_bus = self._resolver_tensao()
+        return self.telemetria_pecas()
+
+    def limites_carga_rapido(self, massa_total: float, soc: float, vento_m_s: float = 0.0) -> dict:
+        """Versão com cache de `hw.limites_carga` para chamada a 50 Hz sem recomputar bisseção a cada passo."""
+        chave = (self.hw.motor.id, self.hw.bateria.id, round(massa_total, 4), round(soc, 2), round(vento_m_s, 1))
+        if self._cache_limites_chave != chave or self._cache_limites_val is None:
+            self._cache_limites_chave = chave
+            self._cache_limites_val = self.hw.limites_carga(massa_total=massa_total, soc=soc, vento_m_s=vento_m_s)
+        return self._cache_limites_val
+
+    def telemetria_pecas(self) -> dict:
+        """Estado em tempo real do motor, da bateria, da vazão de corrente (A) e dos Watts gastos (O(1) a 50 Hz)."""
+        b = self.hw.bateria
+        mot = self.hw.motor
+        m_atual = float(self.model.body_mass.sum())
+        chave = (mot.id, b.id, round(m_atual, 4), round(self.bat.soc, 2))
+        if self._cache_pecas_chave != chave or self._cache_pecas_base is None:
+            meta_m = CATALOGO_MOTORES_PAINEL.get(mot.id, {})
+            meta_b = CATALOGO_BATERIAS_PAINEL.get(b.id, {})
+            lc = self.limites_carga_rapido(m_atual, self.bat.soc, 0.0)
+            aut = autonomia_estimada(self.hw, soc0=self.bat.soc, massa=m_atual)
+            vazao_max = float(b.i_max)
+            pot_max = float(b.v_nominal * vazao_max)
+            self._cache_pecas_chave = chave
+            self._cache_pecas_base = {
+                "motor_id": mot.id,
+                "motor_modelo": f"{mot.fabricante} {mot.modelo}",
+                "motor_kv": float(mot.kv),
+                "motor_massa_g": round(mot.massa * 1000.0, 1),
+                "motor_r_int_mohm": round(mot.r_int * 1000.0, 1),
+                "motor_p_max_w": float(mot.p_max),
+                "motor_i_max_a": float(mot.i_max),
+                "motor_diametro_mm": float(mot.dados.get("diametro_mm", 44.35)),
+                "motor_altura_mm": float(mot.dados.get("altura_mm", 19.0)),
+                "motor_cor_nome": meta_m.get("cor_nome", "Preto Anodizado"),
+                "motor_cor_hex": meta_m.get("cor_hex", "#242730"),
+                "bateria_id": b.id,
+                "bateria_rotulo": meta_b.get("rotulo", f"{b.s}S{b.p}P {b.celula.modelo}"),
+                "bateria_quimica": b.quimica,
+                "bateria_s": int(b.s),
+                "bateria_p": int(b.p),
+                "bateria_ah": round(b.capacidade_ah, 2),
+                "bateria_wh": round(b.energia_wh, 1),
+                "bateria_massa_g": round(b.massa * 1000.0, 1),
+                "bateria_r0_mohm": round(b.r0 * 1000.0, 1),
+                "bateria_cor_nome": meta_b.get("cor_nome", "Vermelho Rubi"),
+                "bateria_cor_hex": meta_b.get("cor_hex", "#8c1f1a"),
+                "vazao_max_a": round(vazao_max, 1),
+                "potencia_max_bateria_w": round(pot_max, 0),
+                "autonomia_estimada_min": round(float(aut["minutos"]), 1),
+                "massa_total_g": round(m_atual * 1000.0, 1),
+                "t_w_oge": lc["t_w_efetivo_oge"],
+                "pode_alcar_voo": lc["pode_alcar_voo"],
+                "estado_voo": lc["estado_voo"],
+            }
+        pw = self.potencias()
+        vazao_max = float(self._cache_pecas_base["vazao_max_a"])
+        return {
+            **self._cache_pecas_base,
+            "vazao_atual_a": round(float(self.i_total), 2),
+            "vazao_pct": round(100.0 * float(self.i_total) / max(vazao_max, 1e-3), 1),
+            "watts_total": round(float(pw["total"]), 1),
+            "watts_motores": round(float(pw["motores"]), 1),
+            "watts_eletronica": round(float(pw["eletronica"]), 1),
+            "v_bus": round(float(self.v_bus), 2),
+            "soc_pct": round(100.0 * float(self.bat.soc), 1),
+        }
 
     def _forca_tiro_passo(self) -> float:
         """Força escalar de recuo (N) a aplicar NESTE passo de física (avança os contadores ativos)."""

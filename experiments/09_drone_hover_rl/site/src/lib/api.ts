@@ -507,6 +507,26 @@ export async function enviarGraficos(
     : null
 }
 
+/** `POST /api/pecas {"motor_id"?, "bateria_id"?}` → troca motores e/ou bateria em tempo real. */
+export async function enviarPecas(opcoes: {
+  motor_id?: string
+  bateria_id?: string
+}): Promise<Record<string, unknown> | null> {
+  const bruto = await pedirJson("/api/pecas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opcoes),
+  })
+  const o =
+    typeof bruto === "object" && bruto !== null
+      ? (bruto as Record<string, unknown>)
+      : {}
+  if (o.erro !== undefined) throw new ErroApi(String(o.erro))
+  return typeof o.pecas === "object" && o.pecas !== null
+    ? (o.pecas as Record<string, unknown>)
+    : null
+}
+
 /**
  * `GET /api/hud.json` — a última amostra do HUD com a idade que o servidor lhe dá. É o FALLBACK do
  * SSE (`GET /api/hud`): quando o `EventSource` cai, o HUD continua a mexer por sondagem.

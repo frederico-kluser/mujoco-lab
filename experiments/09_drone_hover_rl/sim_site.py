@@ -489,7 +489,8 @@ def resumo_telemetria(caminho: Path) -> dict:
             "controlador": (controlador if isinstance(controlador, dict) else None),
             "tiro": (tiro if isinstance(tiro, dict) else None),
             "carga": (carga if isinstance(carga, dict) else None),
-            "graficos": (ultima.get("graficos") if isinstance(ultima.get("graficos"), dict) else None)}
+            "graficos": (ultima.get("graficos") if isinstance(ultima.get("graficos"), dict) else None),
+            "pecas": (ultima.get("pecas") if isinstance(ultima.get("pecas"), dict) else None)}
 
 
 def loop_em_vigor(resumo: dict, controlo: dict) -> bool:
@@ -1057,6 +1058,8 @@ class Handler(BaseHTTPRequestHandler):
                       "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
             "graficos": {"pedido": graficos_do_controlo(controlo),
                          "eco": resumo.get("graficos")},  # otimização gráfica do MuJoCo e FPS ao vivo
+            "pecas": {"pedido": pecas_do_controlo(controlo),
+                      "eco": resumo.get("pecas")},  # troca de motores e bateria ao vivo
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1092,6 +1095,8 @@ class Handler(BaseHTTPRequestHandler):
                       "eco": resumo.get("carga")},  # carga útil extra (g) e envelope de voo/bateria/vento
             "graficos": {"pedido": graficos_do_controlo(controlo),
                          "eco": resumo.get("graficos")},  # otimização gráfica do MuJoCo e FPS ao vivo
+            "pecas": {"pedido": pecas_do_controlo(controlo),
+                      "eco": resumo.get("pecas")},  # troca de motores e bateria ao vivo
             "controlador": controlador_em_vigor(resumo, controlo, self.servidor.controlador),  # seletor (r12)
             "camera_padrao": camera_padrao_para(self.servidor.hardware),   # REPOR VISTA = mandar estes
             "camera_atual": resumo["camera_atual"],    # câmara REAL da telemetria (ou null sem dados)
@@ -1179,6 +1184,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._post_carga(dados)
             elif rota == "/api/graficos":
                 self._post_graficos(dados)
+            elif rota == "/api/pecas":
+                self._post_pecas(dados)
             else:
                 self._erro(404, f"rota desconhecida: {rota}")
         except _PedidoInvalido as erro:
@@ -1591,6 +1598,21 @@ class Handler(BaseHTTPRequestHandler):
               flush=True)
         self._json(200, {"ok": True, "graficos": bloco})
 
+    def _post_pecas(self, dados) -> None:
+        """TROCA DE MOTORES E BATERIA AO VIVO (`POST /api/pecas`): 200/400."""
+        with trava_controlo():
+            atual = ler_controlo(self.servidor.controlo, self.servidor.memorizados)
+            try:
+                novo = validar_pecas(dados, atual)
+            except ValueError as erro:
+                self._erro(400, str(erro))
+                return
+            registo = escrever_controlo(self.servidor.controlo, novo, self.servidor.memorizados)
+        bloco = registo["pecas"]
+        print(f"[site] pecas trocadas: motor={bloco['motor_id']} · bateria={bloco['bateria_id']} (seq {bloco['seq']})",
+              flush=True)
+        self._json(200, {"ok": True, "pecas": bloco})
+
     def _post_voo(self, dados) -> None:
         """CONTROLE DE VOO (contrato r11): estado das teclas WASDQE → 200/400.
 
@@ -1926,6 +1948,67 @@ def validar_graficos(dados, atual: dict) -> dict:
         base["qualidade_jpeg"] = int(round(q))
     base["seq"] = seq
     return {"graficos": base}
+
+
+MOTORES_PAINEL_IDS = (
+    "tmotor_mn4004_kv300",
+    "tmotor_mn4004_kv400",
+    "tmotor_mn4006_kv380",
+    "tmotor_mn5006_kv450",
+    "tmotor_mn3508_kv380",
+    "tmotor_mn2806_kv400",
+)
+BATERIAS_PAINEL_IDS = (
+    "molicel_p50b_6s2p",
+    "molicel_p50b_6s3p",
+    "lipo_6s1p_4500_alta_vazao",
+    "amprius_si_6s2p",
+    "molicel_p45b_6s1p",
+    "lipo_4s1p_4500_baixa_tensao",
+)
+
+
+def pecas_do_controlo(controlo: dict) -> dict:
+    """Bloco `pecas` em vigor (`{motor_id, bateria_id, seq}`)."""
+    bloco = controlo.get("pecas")
+    motor_id = "tmotor_mn4004_kv300"
+    bateria_id = "molicel_p50b_6s2p"
+    seq = 0
+    if isinstance(bloco, dict):
+        m = bloco.get("motor_id")
+        if isinstance(m, str) and m in MOTORES_PAINEL_IDS:
+            motor_id = m
+        b = bloco.get("bateria_id")
+        if isinstance(b, str) and b in BATERIAS_PAINEL_IDS:
+            bateria_id = b
+        s = bloco.get("seq", 0)
+        if isinstance(s, int) and not isinstance(s, bool) and s >= 0:
+            seq = s
+    return {"motor_id": motor_id, "bateria_id": bateria_id, "seq": seq}
+
+
+def validar_pecas(dados, atual: dict) -> dict:
+    """`POST /api/pecas` → `{"pecas": {"motor_id", "bateria_id", "seq"}}` (`seq` +1 por pedido)."""
+    if not isinstance(dados, dict):
+        raise ValueError("o corpo tem de ser um objeto JSON {motor_id?, bateria_id?}")  # noqa: TRY004
+    desconhecidas = set(dados) - {"motor_id", "bateria_id"}
+    if desconhecidas:
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['bateria_id', 'motor_id']")
+    if "motor_id" not in dados and "bateria_id" not in dados:
+        raise ValueError("indique `motor_id` e/ou `bateria_id`")
+    base = pecas_do_controlo(atual)
+    if "motor_id" in dados:
+        m = dados["motor_id"]
+        if not isinstance(m, str) or m not in MOTORES_PAINEL_IDS:
+            raise ValueError(f"`motor_id` desconhecido {m!r} — aceites: {list(MOTORES_PAINEL_IDS)}")
+        base["motor_id"] = m
+    if "bateria_id" in dados:
+        b = dados["bateria_id"]
+        if not isinstance(b, str) or b not in BATERIAS_PAINEL_IDS:
+            raise ValueError(f"`bateria_id` desconhecido {b!r} — aceites: {list(BATERIAS_PAINEL_IDS)}")
+        base["bateria_id"] = b
+    base["seq"] = int(base.get("seq", 0)) + 1
+    return {"pecas": base}
 
 
 def validar_controlador(dados, atual: dict) -> dict:

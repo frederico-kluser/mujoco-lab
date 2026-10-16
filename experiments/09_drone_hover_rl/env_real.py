@@ -737,10 +737,29 @@ class DroneRealEnv(HoverEnv):
         return res
 
     def carga_estado(self) -> dict:
-        """Estado atual de carga útil, limite de descolagem/voo e impacto do vento e da bateria."""
+        """Estado atual de carga útil, limite de descolagem/voo e impacto do vento e da bateria (com cache a 50 Hz)."""
         vento_xy = float(np.linalg.norm(self.vento_atual[:2]))
         massa_atual = float(self.model.body_mass.sum())
-        return self.hw.limites_carga(massa_total=massa_atual, soc=self.planta.bat.soc, vento_m_s=vento_xy)
+        return self.planta.limites_carga_rapido(massa_atual, self.planta.bat.soc, vento_xy)
+
+    def trocar_pecas(self, motor_id: str | None = None, bateria_id: str | None = None) -> dict:
+        """Troca os motores e/ou a bateria em tempo real (`planta.trocar_pecas`), atualizando `self.hw`,
+        `self.massa`, `self.u_pairagem` e `self.omega_ref`."""
+        res = self.planta.trocar_pecas(motor_id=motor_id, bateria_id=bateria_id)
+        self.hw = self.planta.hw
+        self.massa = float(self.model.body_mass.sum())
+        self.mg = self.massa * self.gravidade
+        self._massa_nom = self.model.body_mass.copy()
+        self._inercia_nom = self.model.body_inertia.copy()
+        ph = self.hw.ponto_pairagem(self.hw.bateria.v_nominal, massa=self.massa)
+        self.u_pairagem = min(1.0, float(ph["acelerador"]))
+        self._omega_pairagem = float(ph["omega"])
+        self.omega_ref = self.hw.omega_max(self.hw.bateria.v_cheia)
+        return res
+
+    def pecas_estado(self) -> dict:
+        """Estado atual do motor, da bateria, da vazão (A) e dos Watts gastos em tempo real."""
+        return self.planta.telemetria_pecas()
 
     def observacao(self, d: dict | None = None) -> np.ndarray:
         """Obs [ATOR | CRÍTICO] (42) — ou (48) no modo comando (contrato r11).
