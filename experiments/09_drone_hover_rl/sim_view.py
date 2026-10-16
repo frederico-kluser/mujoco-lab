@@ -533,15 +533,18 @@ class Graficos:
 
 @dataclass
 class Pecas:
-    """Bloco `"pecas"` do controlo: `{motor_id, bateria_id, seq}` — troca de motores e bateria ao vivo."""
+    """Bloco `"pecas"` do controlo: `{preset_id, motor_id, bateria_id, seq}` — preset calibrado de motor e bateria."""
 
     motor_id: str = "tmotor_mn4004_kv300"
     bateria_id: str = "molicel_p50b_6s2p"
     seq: int | None = None
+    preset_id: str = "endurance_p50b"
 
     def assinatura(self) -> str:
-        return json.dumps({"motor_id": self.motor_id, "bateria_id": self.bateria_id, "seq": self.seq},
-                          sort_keys=True)
+        return json.dumps(
+            {"preset_id": self.preset_id, "motor_id": self.motor_id, "bateria_id": self.bateria_id, "seq": self.seq},
+            sort_keys=True,
+        )
 
 
 @dataclass
@@ -904,18 +907,32 @@ def _ler_pecas(bruto) -> Pecas | None:
     if bruto is None:
         return None
     if not isinstance(bruto, dict):
-        raise ValueError("`pecas` tem de ser um objeto JSON {motor_id, bateria_id, seq}")  # noqa: TRY004
-    from lab.drone_rpi.componentes import CATALOGO_BATERIAS_PAINEL, CATALOGO_MOTORES_PAINEL
-    m = bruto.get("motor_id", "tmotor_mn4004_kv300")
-    if not isinstance(m, str) or m not in CATALOGO_MOTORES_PAINEL:
-        raise ValueError(f"`pecas.motor_id` desconhecido {m!r}")
-    b = bruto.get("bateria_id", "molicel_p50b_6s2p")
-    if not isinstance(b, str) or b not in CATALOGO_BATERIAS_PAINEL:
-        raise ValueError(f"`pecas.bateria_id` desconhecida {b!r}")
+        raise ValueError("`pecas` tem de ser um objeto JSON {preset_id?, motor_id?, bateria_id?, seq}")  # noqa: TRY004
+    from lab.drone_rpi.componentes import (
+        CATALOGO_BATERIAS_PAINEL,
+        CATALOGO_MOTORES_PAINEL,
+        PRESETS_PROPULSAO_PAINEL,
+        preset_id_de_pecas,
+    )
+    pid = bruto.get("preset_id")
+    if pid is not None:
+        if not isinstance(pid, str) or pid not in PRESETS_PROPULSAO_PAINEL:
+            raise ValueError(f"`pecas.preset_id` desconhecido {pid!r}")
+        pspec = PRESETS_PROPULSAO_PAINEL[pid]
+        m = pspec["motor_id"]
+        b = pspec["bateria_id"]
+    else:
+        m = bruto.get("motor_id", "tmotor_mn4004_kv300")
+        if not isinstance(m, str) or m not in CATALOGO_MOTORES_PAINEL:
+            raise ValueError(f"`pecas.motor_id` desconhecido {m!r}")
+        b = bruto.get("bateria_id", "molicel_p50b_6s2p")
+        if not isinstance(b, str) or b not in CATALOGO_BATERIAS_PAINEL:
+            raise ValueError(f"`pecas.bateria_id` desconhecida {b!r}")
+        pid = preset_id_de_pecas(m, b)
     seq = bruto.get("seq")
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
         raise ValueError(f"`pecas.seq` tem de ser um inteiro ≥ 0 (recebido {seq!r})")
-    return Pecas(m, b, seq)
+    return Pecas(m, b, seq, pid)
 
 
 def ler_registo(dados) -> Registo:
@@ -1580,9 +1597,9 @@ class Controlo:
             res = env.trocar_pecas(motor_id=bloco.motor_id, bateria_id=bloco.bateria_id)
             if self.piloto_ref is not None and getattr(self.piloto_ref, "nucleo", None) is not None:
                 self.piloto_ref.nucleo.reconfigurar_hardware()
-            print(f"[sim] PECAS TROCADAS -> motor={res['motor_id']} ({res['motor_cor_nome']}) · "
-                  f"bateria={res['bateria_id']} ({res['bateria_wh']} Wh, vazão máx {res['vazao_max_a']} A, "
-                  f"{res['bateria_cor_nome']}) · massa={res['massa_total_g']:.0f} g · "
+            print(f"[sim] PRESET APLICADO -> preset={res.get('preset_id')} · motor={res['motor_id']} "
+                  f"({res['motor_cor_nome']}) · bateria={res['bateria_id']} ({res['bateria_wh']} Wh, "
+                  f"vazão máx {res['vazao_max_a']} A, {res['bateria_cor_nome']}) · massa={res['massa_total_g']:.0f} g · "
                   f"potência={res['watts_total']:.1f} W · alça voo={'SIM' if res['pode_alcar_voo'] else 'NÃO'} "
                   f"(seq {bloco.seq})", flush=True)
 
@@ -2294,9 +2311,16 @@ def _afinar_cfg_anti_tremor(cfg) -> None:
 
 
 def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
-    """Injeta a compensação ativa de recuo a 500 Hz (`CompensadorEstabilidadeTF`) na malha interna de taxa."""
+    """Injeta na malha interna a 500 Hz:
+      1. A compensação feed-forward exata de acelerador de pairagem (`Δu_pairagem`) e escala de autoridade
+         para o preset de Motor + Bateria ativo à tensão `v_bus` atual (garantindo que qualquer preset voa
+         com precisão milimétrica sem perder altitude);
+      2. O amortecimento ativo de recuo (`CompensadorEstabilidadeTF`) após cada disparo.
+    """
     from mira_balistica import MiraBalisticaIA
     mira_comp = MiraBalisticaIA()
+    u_base = float(fc_adaptador.nucleo.cfg.u_pairagem)
+    cache_hw = {"chave": None, "du": 0.0}
 
     def passo_500hz(acelerador, taxas_sp, giro_medido):
         import sitl
@@ -2304,6 +2328,18 @@ def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
         fc_adaptador._sensores()
         sitl.definir_comando_dict(n.cmd, fc_adaptador._cmd)
         ref = n.planear(env.dt)
+        # 1) Adaptação exata ao preset de Motor + Bateria ativo (O(1) com cache)
+        pl = env.planta
+        m_tot = float(env.model.body_mass.sum())
+        chave_hw = (pl.hw.motor.id, pl.hw.bateria.id, round(m_tot, 4))
+        if cache_hw["chave"] != chave_hw:
+            ph_at = pl.hw.ponto_pairagem(pl.hw.bateria.v_nominal, massa=m_tot)
+            cache_hw["chave"] = chave_hw
+            cache_hw["du"] = float(ph_at["acelerador"]) - u_base
+        du_hw = cache_hw["du"]
+        if abs(du_hw) > 1e-4:
+            ref.acelerador = float(np.clip(float(ref.acelerador) + du_hw, float(pl.hw.esc.idle), 1.0))
+        # 2) Amortecimento ativo de recuo pós-tiro
         dq_rec = mira_comp.compensar_taxa_500hz(env, float(n.saida.pitch), float(giro_medido[1]))
         if abs(dq_rec) > 1e-6:
             ref.taxas[1] = float(ref.taxas[1]) + dq_rec
@@ -2413,9 +2449,11 @@ class NucleoClassico:
         self.env.estimador = sitl_estimador(self.fc)
 
     def remover(self) -> None:
-        """Repõe o FC/estimador Python (o modo RL volta a comandar como sempre)."""
+        """Repõe o FC/estimador Python (o modo RL volta a comandar como sempre) e liberta a closure C++."""
         self.env.fc = self.fc_py
         self.env.estimador = self.est_py
+        if hasattr(self.fc, "__dict__") and "passo" in self.fc.__dict__:
+            del self.fc.__dict__["passo"]
 
     def pos_reset(self) -> None:
         """Depois de CADA `env.reset` em modo clássico: calibra o giroscópio no chão e arma a cascata.
@@ -2615,7 +2653,7 @@ class ControladorDeVoo:
             seguir
             and getattr(self.env, "hw", None) is not None
             and getattr(self.env.hw, "arma", None) is not None
-            and float(self.env.data.qpos[2]) > 0.70
+            and float(self.env.data.qpos[2]) > 0.18
         ):
             cmd_mira = self.mira_ia.passo(self.env, dt=getattr(self.env, "dt_decisao", 0.02))
             self.nucleo.comando(cmd_mira)

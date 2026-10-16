@@ -280,15 +280,18 @@ def secao_servidor() -> bool:
                         ("jpeg fora de [30, 95]", {"qualidade_jpeg": 10})):
         c.recusa(f"graficos: {nome} → 400", s.validar_graficos, corpo, {})
 
-    # --- troca de motores e bateria (POST /api/pecas)
-    pc1 = s.validar_pecas({"motor_id": "tmotor_mn5006_kv450", "bateria_id": "lipo_6s1p_4500_alta_vazao"}, {})
-    c.ok("pecas: `motor_id` e `bateria_id` aceites com `seq` (+1)",
-         pc1["pecas"] == {"motor_id": "tmotor_mn5006_kv450", "bateria_id": "lipo_6s1p_4500_alta_vazao", "seq": 1},
+    # --- troca de preset calibrado de motores e bateria (POST /api/pecas)
+    pc1 = s.validar_pecas({"preset_id": "interceptor_lipo"}, {})
+    c.ok("pecas: `preset_id` calibrado aceite com `motor_id`, `bateria_id` e `seq` (+1)",
+         pc1["pecas"] == {"preset_id": "interceptor_lipo", "motor_id": "tmotor_mn4006_kv380",
+                          "bateria_id": "lipo_6s1p_4500_alta_vazao", "seq": 1},
          str(pc1["pecas"]))
     for nome, corpo in (("vazio", {}),
+                        ("preset desconhecido", {"preset_id": "preset_falso"}),
+                        ("combinação livre não calibrada", {"motor_id": "tmotor_mn5006_kv450", "bateria_id": "molicel_p45b_6s1p"}),
                         ("motor desconhecido", {"motor_id": "motor_falso"}),
                         ("bateria desconhecida", {"bateria_id": "pilha_aa"}),
-                        ("chave desconhecida", {"motor_id": "tmotor_mn4004_kv300", "helice_id": "x"})):
+                        ("chave desconhecida", {"preset_id": "endurance_p50b", "helice_id": "x"})):
         c.recusa(f"pecas: {nome} → 400", s.validar_pecas, corpo, {})
 
     # --- arranque limpo: estado fixo, preferências preservadas
@@ -605,18 +608,19 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
              and float(gr_hud.get("fps_atual") or 0.0) > 10.0,
              f"fps_atual={gr_hud.get('fps_atual')} · sombras={gr_hud.get('sombras')}")
         _http(f"{url}/api/graficos", {"sombras": True, "reflexos": True, "mostrar_fios_detalhes": True})
-        # --- troca ao vivo de motores e bateria (POST /api/pecas) + leitura de vazão (A) e Watts
-        cod_pc, resp_pc = _http(f"{url}/api/pecas", {"motor_id": "tmotor_mn4006_kv380", "bateria_id": "lipo_6s1p_4500_alta_vazao"})
+        # --- troca ao vivo de preset calibrado de motores e bateria (POST /api/pecas) + leitura de vazão (A) e Watts
+        cod_pc, resp_pc = _http(f"{url}/api/pecas", {"preset_id": "interceptor_lipo"})
         time.sleep(0.30)
         pc_hud = sse.ultima().get("pecas") or {}
-        c.ok("POST /api/pecas troca motor e bateria ao vivo e o HUD publica cor/tamanho 3D, vazão (225 A) e Watts gastos",
-             cod_pc == 200 and resp_pc.get("ok") is True and pc_hud.get("motor_id") == "tmotor_mn4006_kv380"
+        c.ok("POST /api/pecas aplica preset calibrado ao vivo e o HUD publica cor/tamanho 3D, vazão (225 A) e Watts gastos",
+             cod_pc == 200 and resp_pc.get("ok") is True and pc_hud.get("preset_id") == "interceptor_lipo"
+             and pc_hud.get("motor_id") == "tmotor_mn4006_kv380"
              and pc_hud.get("bateria_id") == "lipo_6s1p_4500_alta_vazao"
              and float(pc_hud.get("vazao_max_a") or 0.0) == 225.0
              and float(pc_hud.get("watts_total") or 0.0) > 100.0,
-             f"motor={pc_hud.get('motor_id')} ({pc_hud.get('motor_cor_nome')}) · bat={pc_hud.get('bateria_id')} · "
+             f"preset={pc_hud.get('preset_id')} · motor={pc_hud.get('motor_id')} ({pc_hud.get('motor_cor_nome')}) · "
              f"watts={pc_hud.get('watts_total')} W · vazão={pc_hud.get('vazao_atual_a')}/{pc_hud.get('vazao_max_a')} A")
-        _http(f"{url}/api/pecas", {"motor_id": "tmotor_mn4004_kv300", "bateria_id": "molicel_p50b_6s2p"})
+        _http(f"{url}/api/pecas", {"preset_id": "endurance_p50b"})
         time.sleep(0.25)
 
         # --- W: para a frente do NARIZ

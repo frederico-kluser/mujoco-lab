@@ -1380,6 +1380,7 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "celula": "molicel_p50b",
         "s": 6,
         "p": 2,
+        "vazao_max_a": 120.0,
         "massa_extra_g": 45.0,
         "dims_mm": [142.0, 70.0, 44.0],
         "cor_nome": "Vermelho Rubi",
@@ -1392,6 +1393,7 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "celula": "molicel_p50b",
         "s": 6,
         "p": 3,
+        "vazao_max_a": 180.0,
         "massa_extra_g": 65.0,
         "dims_mm": [146.0, 105.0, 46.0],
         "cor_nome": "Azul Royal",
@@ -1404,6 +1406,7 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "celula": "gensace_5ah_45c",
         "s": 6,
         "p": 1,
+        "vazao_max_a": 225.0,
         "massa_extra_g": 35.0,
         "dims_mm": [152.0, 50.0, 52.0],
         "cor_nome": "Amarelo Ouro",
@@ -1416,6 +1419,7 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "celula": "amprius_sa102",
         "s": 6,
         "p": 2,
+        "vazao_max_a": 80.0,
         "massa_extra_g": 35.0,
         "dims_mm": [132.0, 60.0, 36.0],
         "cor_nome": "Roxo Tecnológico",
@@ -1428,6 +1432,7 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "celula": "molicel_p45b",
         "s": 6,
         "p": 1,
+        "vazao_max_a": 45.0,
         "massa_extra_g": 30.0,
         "dims_mm": [128.0, 44.0, 24.0],
         "cor_nome": "Verde Esmeralda",
@@ -1448,11 +1453,85 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
     },
 }
 
+# Presets calibrados e homologados (Motor + Bateria + Ganhos de Controlo afinados em conjunto).
+# Impede combinações livres incompatíveis na interface e garante estabilidade em pairagem, manobras e tiro.
+PRESETS_PROPULSAO_PAINEL: dict[str, dict] = {
+    "endurance_p50b": {
+        "id": "endurance_p50b",
+        "nome": "Endurance Padrão · MN4004 KV300 + 6S2P P50B",
+        "subtitulo": "Equilíbrio ideal · 216 Wh · Vazão 120 A · 2968 g · ~41 min",
+        "motor_id": "tmotor_mn4004_kv300",
+        "bateria_id": "molicel_p50b_6s2p",
+        "escala_kp_rp": 1.00,
+        "escala_kp_yaw": 0.25,
+    },
+    "tatico_silicio": {
+        "id": "tatico_silicio",
+        "nome": "Tático Ultra-Leve · MN4004 KV300 + 6S2P Amprius Si",
+        "subtitulo": "Mais leve (−336 g) e eficiente · 222 Wh · Vazão 80 A · 2632 g · ~50 min",
+        "motor_id": "tmotor_mn4004_kv300",
+        "bateria_id": "amprius_si_6s2p",
+        "escala_kp_rp": 0.96,
+        "escala_kp_yaw": 0.24,
+    },
+    "interceptor_lipo": {
+        "id": "interceptor_lipo",
+        "nome": "Interceptor Alta Vazão · MN4006 KV380 + 6S1P LiPo 45C",
+        "subtitulo": "Resposta explosiva · 111 Wh · Vazão 225 A (4995 W) · 2862 g",
+        "motor_id": "tmotor_mn4006_kv380",
+        "bateria_id": "lipo_6s1p_4500_alta_vazao",
+        "escala_kp_rp": 0.92,
+        "escala_kp_yaw": 0.22,
+    },
+    "heavy_6s3p": {
+        "id": "heavy_6s3p",
+        "nome": "Heavy Long-Range · MN4006 KV380 + 6S3P P50B Mega",
+        "subtitulo": "Máxima energia e inércia · 324 Wh · Vazão 180 A · 3463 g · ~48 min",
+        "motor_id": "tmotor_mn4006_kv380",
+        "bateria_id": "molicel_p50b_6s3p",
+        "escala_kp_rp": 1.04,
+        "escala_kp_yaw": 0.25,
+    },
+    "forca_bruta_5006": {
+        "id": "forca_bruta_5006",
+        "nome": "Força Bruta 650W · MN5006 KV450 + 6S2P P50B",
+        "subtitulo": "Motores 56×22 mm (650W) · 216 Wh · Vazão 120 A · 3260 g · T/W máximo",
+        "motor_id": "tmotor_mn5006_kv450",
+        "bateria_id": "molicel_p50b_6s2p",
+        "escala_kp_rp": 0.88,
+        "escala_kp_yaw": 0.20,
+    },
+    "agile_scout": {
+        "id": "agile_scout",
+        "nome": "Agile Scout Compacto · MN3508 KV380 + 6S1P P45B",
+        "subtitulo": "Pack leve 1P · 97 Wh · Vazão 45 A · 2747 g · Ágil",
+        "motor_id": "tmotor_mn3508_kv380",
+        "bateria_id": "molicel_p45b_6s1p",
+        "escala_kp_rp": 0.94,
+        "escala_kp_yaw": 0.23,
+    },
+}
+
+
+def preset_id_de_pecas(motor_id: str, bateria_id: str) -> str:
+    """Identifica o `preset_id` correspondente ao par `(motor_id, bateria_id)`, ou `'personalizado'`."""
+    for pid, spec in PRESETS_PROPULSAO_PAINEL.items():
+        if spec["motor_id"] == motor_id and spec["bateria_id"] == bateria_id:
+            return pid
+    return "personalizado"
+
 
 def criar_hardware_com_pecas(hw_base: Hardware, motor_id: str | None = None,
-                             bateria_id: str | None = None) -> Hardware:
-    """Devolve um novo `Hardware` trocando o motor (`motor_id`) e/ou o pack de bateria (`bateria_id`),
+                             bateria_id: str | None = None,
+                             preset_id: str | None = None) -> Hardware:
+    """Devolve um novo `Hardware` aplicando um preset calibrado (`preset_id`) ou trocando `motor_id`/`bateria_id`,
     recalculando todos os parâmetros elétricos, massas, limites de carga e autonomia."""
+    if preset_id is not None:
+        if preset_id not in PRESETS_PROPULSAO_PAINEL:
+            raise ValueError(f"preset desconhecido {preset_id!r} — aceites: {sorted(PRESETS_PROPULSAO_PAINEL)}")
+        pspec = PRESETS_PROPULSAO_PAINEL[preset_id]
+        motor_id = pspec["motor_id"]
+        bateria_id = pspec["bateria_id"]
     cat = carregar_catalogo()
     cfg = copy.deepcopy(hw_base.dados)
     if motor_id is not None:
@@ -1533,9 +1612,13 @@ def catalogo_pecas_painel(hw_atual: Hardware | None = None) -> dict:
             "cor_hex": meta["cor_hex"],
             "cor_rgba": list(meta["cor_rgba"]),
         })
+    m_ativo = hw_atual.motor.id if hw_atual is not None else "tmotor_mn4004_kv300"
+    b_ativa = hw_atual.bateria.id if hw_atual is not None else "molicel_p50b_6s2p"
     return {
+        "presets": [dict(v) for v in PRESETS_PROPULSAO_PAINEL.values()],
+        "preset_ativo": preset_id_de_pecas(m_ativo, b_ativa),
         "motores": motores_out,
         "baterias": baterias_out,
-        "motor_ativo": hw_atual.motor.id if hw_atual is not None else "tmotor_mn4004_kv300",
-        "bateria_ativa": hw_atual.bateria.id if hw_atual is not None else "molicel_p50b_6s2p",
+        "motor_ativo": m_ativo,
+        "bateria_ativa": b_ativa,
     }

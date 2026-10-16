@@ -1180,6 +1180,38 @@ def checa_carga_e_vento(v: Validador, hw) -> None:
             f"ar calmo: ω_RMS_máx={omega_rms_deg:.2f}°/s (antes 3,11°/s), jitter_duty={jitter_duty_pct:.2f} % (antes 6,63 %) · "
             f"retorno a NO ALVO pós-tiro={t_rec_s:.2f} s (antes 1,92 s)")
 
+    # J7: os 6 presets calibrados funcionam perfeitamente sem cair e o drone toma distância sozinho quando a bola acelera
+    from lab.drone_rpi.componentes import PRESETS_PROPULSAO_PAINEL
+    presets_ok = True
+    resumo_presets = []
+    for pid in PRESETS_PROPULSAO_PAINEL:
+        env_pr = DroneRealEnv(modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=10.0)
+        nuc_pr = sv.NucleoClassico.criar(env_pr)
+        nuc_pr.instalar()
+        env_pr.reset(seed=6200)
+        nuc_pr.pos_reset()
+        info_pr = env_pr.trocar_pecas(preset_id=pid)
+        nuc_pr.reconfigurar_hardware()
+        mira_pr = MiraBalisticaIA()
+        env_pr.definir_trajetoria_ponto("aleatorio", vel=0.7)
+        caiu_pr = False
+        for k_p in range(150):
+            nuc_pr.comando(mira_pr.passo(env_pr, dt=env_pr.dt_decisao))
+            if k_p >= 80 and mira_pr.deve_atirar(env_pr):
+                env_pr.disparar(1)
+            _, _, term_pr, _, _ = env_pr.step(np.zeros(4, dtype=np.float32))
+            if term_pr or (k_p >= 80 and float(env_pr.data.qpos[2]) < 0.55):
+                caiu_pr = True
+                break
+        d_din = float(env_pr.planta.dist_alvo_dinamica_m)
+        w_pr = float(env_pr.pecas_estado()["watts_total"])
+        nuc_pr.remover()
+        if caiu_pr or d_din < 2.80 or w_pr < 150.0:
+            presets_ok = False
+        resumo_presets.append(f"{pid}({info_pr['massa_total_g']:.0f}g,{w_pr:.0f}W,D*={d_din:.2f}m)")
+    v.check("J7 6 presets calibrados (Motor+Bateria+IA) voam/seguem bola rápida (0,7 m/s) com 0 quedas (z ≥ 0,55 m) e tomam distância sozinhos (D* > 2,8 m)",
+            presets_ok, " · ".join(resumo_presets))
+
 
 def checa_planta_real(v) -> None:
     """Todas as checagens da planta real (chamada pelo `run.py`)."""

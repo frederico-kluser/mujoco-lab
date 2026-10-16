@@ -438,12 +438,49 @@ def treinar_modelos_seletivos_tensorflow() -> dict:
     for _ in range(180):
         loss_v = passo_tf_visao(x_vis, y_vis)
 
+    # --- 3) Modelo `RedeDistanciaEstavelTF` (`mlp_standoff_tf`, 6 → 24 → 24 → 1)
+    # Aprende o ajuste residual de distância segura D* em função de (v_bola, a_bola, |ω_LOS|, |e_ψ|, massa, KV)
+    # para minimizar a necessidade de translação lateral e manter inclinação < 8°
+    v_env_t = tf.random.uniform((n_amostras, 1), 0.0, 1.2)
+    a_env_t = tf.random.uniform((n_amostras, 1), 0.0, 2.5)
+    w_los_t = tf.random.uniform((n_amostras, 1), 0.0, 1.5)
+    e_psi_t = tf.random.uniform((n_amostras, 1), 0.0, 1.0)
+    m_st_t = tf.random.uniform((n_amostras, 1), 0.8, 1.3)
+    kv_st_t = tf.random.uniform((n_amostras, 1), 0.7, 1.2)
+    x_st = tf.concat([v_env_t, a_env_t, w_los_t, e_psi_t, m_st_t, kv_st_t], axis=1)
+    y_st = tf.tanh(0.45 * w_los_t + 0.35 * e_psi_t + 0.30 * (m_st_t - 1.0) - 0.20 * (kv_st_t - 0.85))
+
+    w1_s = tf.Variable(tf.random.normal((6, 24), stddev=0.10))
+    b1_s = tf.Variable(tf.zeros((24,)))
+    w2_s = tf.Variable(tf.random.normal((24, 24), stddev=0.10))
+    b2_s = tf.Variable(tf.zeros((24,)))
+    w3_s = tf.Variable(tf.random.normal((24, 1), stddev=0.05))
+    b3_s = tf.Variable(tf.zeros((1,)))
+    opt_s = tf.keras.optimizers.AdamW(learning_rate=3e-3, weight_decay=1e-4)
+
+    @tf.function(jit_compile=True)
+    def passo_tf_standoff(xb, yb):
+        with tf.GradientTape() as tape:
+            h1 = tf.nn.silu(ln_tf(tf.matmul(xb, w1_s) + b1_s))
+            h2 = tf.nn.silu(ln_tf(tf.matmul(h1, w2_s) + b2_s))
+            pred = tf.tanh(tf.matmul(h2, w3_s) + b3_s)
+            loss = tf.reduce_mean(tf.square(pred - yb))
+        vars_s = [w1_s, b1_s, w2_s, b2_s, w3_s, b3_s]
+        grads = tape.gradient(loss, vars_s)
+        grads, _ = tf.clip_by_global_norm(grads, 1.0)
+        opt_s.apply_gradients(zip(grads, vars_s))
+        return loss
+
+    for _ in range(180):
+        loss_s = passo_tf_standoff(x_st, y_st)
+
     dt_tf = time.perf_counter() - t0
-    print(f"[tf] concluído em {dt_tf:.2f} s · loss_recuo={float(loss_r):.6f} · loss_visao={float(loss_v):.6f}", flush=True)
+    print(f"[tf] concluído em {dt_tf:.2f} s · loss_recuo={float(loss_r):.6f} · loss_visao={float(loss_v):.6f} · loss_standoff={float(loss_s):.6f}", flush=True)
     return {
         "tensorflow_versao": tf.__version__,
         "loss_recuo_tf": round(float(loss_r), 6),
         "loss_visao_tf": round(float(loss_v), 6),
+        "loss_standoff_tf": round(float(loss_s), 6),
         "mlp_recuo_tf": {
             "W1": w1_r.numpy().round(6).tolist(),
             "b1": b1_r.numpy().round(6).tolist(),
@@ -459,6 +496,14 @@ def treinar_modelos_seletivos_tensorflow() -> dict:
             "b2": b2_v.numpy().round(6).tolist(),
             "W3": w3_v.numpy().round(6).tolist(),
             "b3": b3_v.numpy().round(6).tolist(),
+        },
+        "mlp_standoff_tf": {
+            "W1": w1_s.numpy().round(6).tolist(),
+            "b1": b1_s.numpy().round(6).tolist(),
+            "W2": w2_s.numpy().round(6).tolist(),
+            "b2": b2_s.numpy().round(6).tolist(),
+            "W3": w3_s.numpy().round(6).tolist(),
+            "b3": b3_s.numpy().round(6).tolist(),
         },
     }
 

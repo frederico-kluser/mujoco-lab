@@ -507,8 +507,9 @@ export async function enviarGraficos(
     : null
 }
 
-/** `POST /api/pecas {"motor_id"?, "bateria_id"?}` → troca motores e/ou bateria em tempo real. */
+/** `POST /api/pecas {"preset_id"}` → aplica preset calibrado de motores e bateria em tempo real. */
 export async function enviarPecas(opcoes: {
+  preset_id?: string
   motor_id?: string
   bateria_id?: string
 }): Promise<Record<string, unknown> | null> {

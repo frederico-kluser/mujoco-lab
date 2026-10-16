@@ -183,15 +183,24 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
         $500\text{ Hz}$ às características de cada motor/bateria) e `VisaoBalisticaTF` (`mlp_visao_tf`, `8 → 24 → 24 → 3` para
         o *lead* não-linear da bola), aliados à absorção suave de recuo longitudinal (`vx_glide`) que evita inclinar o cano
         para o chão → o tempo para voltar a ficar pronto `NO ALVO` após disparar cai de **$1,92\text{ s}$ para $0,10\text{–}0,12\text{ s}$** ($>15\times$ mais rápido!).
-    - **Painel HTML de Troca de Motores e Bateria (`PainelTrocaPecas` + `POST /api/pecas`)**:
-      - **6 Motores reais trocáveis** (`MN4004 KV300` Preto, `MN4004 KV400` Prata, `MN4006 KV380` Vermelho, `MN5006 KV450`
-        Azul Cobalto $55,6 \times 22\text{ mm}$ / $650\text{ W}$, `MN3508 KV380` Dourado, `MN2806 KV400` Verde Esmeralda
-        $35 \times 18\text{ mm}$) e **6 Baterias reais trocáveis** (`6S2P Molicel P50B` $216\text{ Wh} / 120\text{ A}$ Vermelho,
-        `6S3P Molicel P50B` $324\text{ Wh} / 180\text{ A}$ Azul, `6S1P LiPo Gens Ace 45C` $111\text{ Wh} / 225\text{ A}$ Amarelo
-        Ouro, `6S2P Amprius Si` $222\text{ Wh} / 80\text{ A}$ Roxo, `6S1P Molicel P45B` $97\text{ Wh} / 45\text{ A}$ Verde,
-        `3S1P LiPo 11,1 V` Laranja subdimensionada que impede o voo).
-      - Altera imediatamente no MuJoCo o **tamanho 3D e a cor** dos 4 motores e da bateria, a massa/inércia, a curva elétrica,
-        a **vazão de corrente ($\text{A} / \text{A}_{\max}$)** e os **Watts gastos em tempo real**.
+    - **Painel HTML de Presets Calibrados de Motores e Bateria (`PainelTrocaPecas` + `POST /api/pecas`, `valida_real.py` `J5`, `J7`)**:
+      - Em vez de permitir combinações livres incompatíveis, disponibiliza **6 Presets Calibrados e Homologados** (`PRESETS_PROPULSAO_PAINEL`),
+        cada um com cores e tamanhos 3D próprios no MuJoCo, peso real, potência ($\text{W}$), vazão máxima de corrente ($\text{A}$) e
+        adaptação automática do acelerador de pairagem e ganhos do controlador C++/TensorFlow:
+        1. **`endurance_p50b`** (`MN4004 KV300` Preto + `6S2P Molicel P50B` Vermelho · $216\text{ Wh}$, Vazão $120\text{ A}$, $2968\text{ g}$, $314\text{ W}$);
+        2. **`tatico_silicio`** (`MN4004 KV300` Preto + `6S2P Amprius Si` Roxo · $222\text{ Wh}$, Vazão $80\text{ A}$, $2529\text{ g}$, $263\text{ W}$);
+        3. **`interceptor_lipo`** (`MN4006 KV380` Vermelho + `6S1P LiPo Gens Ace 45C` Amarelo Ouro · $111\text{ Wh}$, Vazão $225\text{ A}$, $2912\text{ g}$, $323\text{ W}$);
+        4. **`heavy_6s3p`** (`MN4006 KV380` Vermelho + `6S3P Molicel P50B Mega` Azul Royal · $324\text{ Wh}$, Vazão $180\text{ A}$, $3460\text{ g}$, $397\text{ W}$);
+        5. **`forca_bruta_5006`** (`MN5006 KV450` Azul Cobalto $56\times 22\text{ mm}$ + `6S2P P50B` Vermelho · $216\text{ Wh}$, Vazão $120\text{ A}$, $3180\text{ g}$, $388\text{ W}$);
+        6. **`agile_scout`** (`MN3508 KV380` Dourado + `6S1P Molicel P45B` Verde Esmeralda · $97\text{ Wh}$, Vazão $45\text{ A}$, $2723\text{ g}$, $316\text{ W}$).
+      - **Distância Adaptativa ao Alvo (`dist_alvo_dinamica_m` + `RedeDistanciaEstavelTF`)**: quando a bola aumenta de velocidade,
+        o drone **toma distância sozinho** ($2,15\text{ m} \to 3,35\text{–}3,60\text{ m}$) e atenua a perseguição lateral, acompanhando
+        a bola por rotação suave no eixo com inclinação reduzida, **0 quedas** em todos os 6 presets e **$10\times$ mais tempo `NO ALVO` a $0,8\text{ m/s}$** ($4,2\% \to 40,2\%$).
+    - **Acompanhamento de Evolução e Benchmark Determinístico (`benchmark_evolucao.py` + `evolucao_drone.png` na raiz)**:
+      - Treino na GPU usa movimento aleatório da bola; captura de dados usa **movimento programado (`modo="programado"`)** e **vento fixo ($0 \to 3 \to 5\text{ m/s}$)**.
+      - Evolução `v1 → v4`: tremor $\omega_{\text{RMS}}$ de **$2,04^\circ/\text{s} \to 0,77^\circ/\text{s}$**, *jitter* de **$4,37\% \to 0,68\%$**, recuperação pós-tiro de **$1,62\text{ s} \to 0,10\text{ s}$**, cadência certeira de **$32,0 \to 44,0\text{–}48,0\text{ tiros/min}$** ($100\%$ acerto) e estabilidade de **$50,6 \to 87,7\text{–}89,4/100$**:
+
+![Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo](../../evolucao_drone.png)
 - **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
   - No ponto de $100\%$ de acelerador sob queda de tensão real da bateria ($V_{\text{carga}} = 23,79\text{ V}$ a $28,9\text{ A}$,
     queda de $1,41\text{ V}$ face ao OCV $25,20\text{ V}$) e descontando os $5\%$ de *download* na estrutura:

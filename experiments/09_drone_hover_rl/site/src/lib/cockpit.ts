@@ -242,8 +242,10 @@ export interface HudGraficos {
   msRenderFpv: number | null
 }
 
-/** Estado em tempo real do motor, da bateria, da vazão (A) e dos Watts gastos (`POST /api/pecas`). */
+/** Estado em tempo real do preset calibrado (motor + bateria), vazão (A), Watts gastos e distância adaptativa (`POST /api/pecas`). */
 export interface HudPecas {
+  presetId: string | null
+  presetNome: string | null
   motorId: string | null
   motorModelo: string | null
   motorKv: number | null
@@ -280,6 +282,7 @@ export interface HudPecas {
   tWOge: number | null
   podeAlcarVoo: boolean
   estadoVoo: string | null
+  distAlvoDinamicaM: number | null
 }
 
 export interface AmostraHud {
@@ -558,6 +561,8 @@ function lerPecasHud(bruto: unknown): HudPecas | null {
   const o = objetoSimples(bruto)
   if (o === null) return null
   return {
+    presetId: typeof o.preset_id === "string" ? o.preset_id : null,
+    presetNome: typeof o.preset_nome === "string" ? o.preset_nome : null,
     motorId: typeof o.motor_id === "string" ? o.motor_id : null,
     motorModelo: typeof o.motor_modelo === "string" ? o.motor_modelo : null,
     motorKv: finito(o.motor_kv),
@@ -594,6 +599,7 @@ function lerPecasHud(bruto: unknown): HudPecas | null {
     tWOge: finito(o.t_w_oge),
     podeAlcarVoo: o.pode_alcar_voo !== false,
     estadoVoo: typeof o.estado_voo === "string" ? o.estado_voo : null,
+    distAlvoDinamicaM: finito(o.dist_alvo_dinamica_m),
   }
 }
 

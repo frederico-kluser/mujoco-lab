@@ -452,6 +452,8 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
     const hudPecas = m.lerHud({
       ...AMOSTRA,
       pecas: {
+        preset_id: "forca_bruta_5006",
+        preset_nome: "Força Bruta 650W · MN5006 KV450 + 6S2P P50B",
         motor_id: "tmotor_mn5006_kv450",
         motor_modelo: "T-Motor Antigravity MN5006 KV450",
         motor_kv: 450,
@@ -469,18 +471,21 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
         watts_motores: 406.0,
         pode_alcar_voo: true,
         estado_voo: "voo_seguro",
+        dist_alvo_dinamica_m: 3.18,
       },
     })
     ok(
       hudPecas?.pecas !== null &&
+        hudPecas?.pecas.presetId === "forca_bruta_5006" &&
         hudPecas?.pecas.motorId === "tmotor_mn5006_kv450" &&
         hudPecas.pecas.motorKv === 450 &&
         hudPecas.pecas.motorCorHex === "#2470eb" &&
         hudPecas.pecas.bateriaId === "lipo_6s1p_4500_alta_vazao" &&
         aprox(hudPecas.pecas.vazaoMaxA ?? 0, 225.0) &&
         aprox(hudPecas.pecas.wattsTotal ?? 0, 412.5) &&
+        aprox(hudPecas.pecas.distAlvoDinamicaM ?? 0, 3.18) &&
         hudPecas.pecas.podeAlcarVoo === true,
-      "lerHud: bloco `pecas` (troca de motor/bateria, cores 3D, vazão A e Watts gastos) lido"
+      "lerHud: bloco `pecas` (preset calibrado, cores 3D, vazão A, Watts gastos e distância dinâmica) lido"
     )
   }
   ok(a("w", { ctrl: true }) === "null" && a("r", { meta: true }) === "null" && a("f", { alt: true }) === "null",

@@ -1966,46 +1966,79 @@ BATERIAS_PAINEL_IDS = (
     "molicel_p45b_6s1p",
     "lipo_4s1p_4500_baixa_tensao",
 )
+PRESETS_PAINEL_MAPA = {
+    "endurance_p50b": ("tmotor_mn4004_kv300", "molicel_p50b_6s2p"),
+    "tatico_silicio": ("tmotor_mn4004_kv300", "amprius_si_6s2p"),
+    "interceptor_lipo": ("tmotor_mn4006_kv380", "lipo_6s1p_4500_alta_vazao"),
+    "heavy_6s3p": ("tmotor_mn4006_kv380", "molicel_p50b_6s3p"),
+    "forca_bruta_5006": ("tmotor_mn5006_kv450", "molicel_p50b_6s2p"),
+    "agile_scout": ("tmotor_mn3508_kv380", "molicel_p45b_6s1p"),
+}
+PARES_HOMOLOGADOS_PARA_PRESET = {par: pid for pid, par in PRESETS_PAINEL_MAPA.items()}
 
 
 def pecas_do_controlo(controlo: dict) -> dict:
-    """Bloco `pecas` em vigor (`{motor_id, bateria_id, seq}`)."""
+    """Bloco `pecas` em vigor (`{preset_id, motor_id, bateria_id, seq}`)."""
     bloco = controlo.get("pecas")
-    motor_id = "tmotor_mn4004_kv300"
-    bateria_id = "molicel_p50b_6s2p"
+    preset_id = "endurance_p50b"
+    motor_id, bateria_id = PRESETS_PAINEL_MAPA[preset_id]
     seq = 0
     if isinstance(bloco, dict):
-        m = bloco.get("motor_id")
-        if isinstance(m, str) and m in MOTORES_PAINEL_IDS:
-            motor_id = m
-        b = bloco.get("bateria_id")
-        if isinstance(b, str) and b in BATERIAS_PAINEL_IDS:
-            bateria_id = b
+        pid = bloco.get("preset_id")
+        if isinstance(pid, str) and pid in PRESETS_PAINEL_MAPA:
+            preset_id = pid
+            motor_id, bateria_id = PRESETS_PAINEL_MAPA[pid]
+        else:
+            m = bloco.get("motor_id")
+            b = bloco.get("bateria_id")
+            if (m, b) in PARES_HOMOLOGADOS_PARA_PRESET:
+                preset_id = PARES_HOMOLOGADOS_PARA_PRESET[(m, b)]
+                motor_id, bateria_id = m, b
         s = bloco.get("seq", 0)
         if isinstance(s, int) and not isinstance(s, bool) and s >= 0:
             seq = s
-    return {"motor_id": motor_id, "bateria_id": bateria_id, "seq": seq}
+    return {"preset_id": preset_id, "motor_id": motor_id, "bateria_id": bateria_id, "seq": seq}
 
 
 def validar_pecas(dados, atual: dict) -> dict:
-    """`POST /api/pecas` → `{"pecas": {"motor_id", "bateria_id", "seq"}}` (`seq` +1 por pedido)."""
+    """`POST /api/pecas` → `{"pecas": {"preset_id", "motor_id", "bateria_id", "seq"}}` (`seq` +1 por pedido).
+    Aceita `preset_id` (um dos 6 presets calibrados) ou um par `(motor_id, bateria_id)` homologado; recusa
+    combinações livres não calibradas.
+    """
     if not isinstance(dados, dict):
-        raise ValueError("o corpo tem de ser um objeto JSON {motor_id?, bateria_id?}")  # noqa: TRY004
-    desconhecidas = set(dados) - {"motor_id", "bateria_id"}
+        raise ValueError("o corpo tem de ser um objeto JSON {preset_id} (ou par homologado {motor_id, bateria_id})")  # noqa: TRY004
+    desconhecidas = set(dados) - {"preset_id", "motor_id", "bateria_id"}
     if desconhecidas:
-        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['bateria_id', 'motor_id']")
-    if "motor_id" not in dados and "bateria_id" not in dados:
-        raise ValueError("indique `motor_id` e/ou `bateria_id`")
+        raise ValueError(f"chaves desconhecidas {sorted(desconhecidas)} — aceita ['bateria_id', 'motor_id', 'preset_id']")
+    if "preset_id" not in dados and "motor_id" not in dados and "bateria_id" not in dados:
+        raise ValueError("indique `preset_id` (ou par homologado `motor_id` + `bateria_id`)")
     base = pecas_do_controlo(atual)
-    if "motor_id" in dados:
-        m = dados["motor_id"]
+    if "preset_id" in dados:
+        pid = dados["preset_id"]
+        if not isinstance(pid, str) or pid not in PRESETS_PAINEL_MAPA:
+            raise ValueError(f"`preset_id` desconhecido {pid!r} — presets calibrados aceites: {list(PRESETS_PAINEL_MAPA)}")
+        m_novo, b_novo = PRESETS_PAINEL_MAPA[pid]
+        if "motor_id" in dados and dados["motor_id"] != m_novo:
+            raise ValueError(f"`motor_id` {dados['motor_id']!r} não pertence ao preset {pid!r} ({m_novo!r})")
+        if "bateria_id" in dados and dados["bateria_id"] != b_novo:
+            raise ValueError(f"`bateria_id` {dados['bateria_id']!r} não pertence ao preset {pid!r} ({b_novo!r})")
+        base["preset_id"] = pid
+        base["motor_id"] = m_novo
+        base["bateria_id"] = b_novo
+    else:
+        m = dados.get("motor_id", base["motor_id"])
+        b = dados.get("bateria_id", base["bateria_id"])
         if not isinstance(m, str) or m not in MOTORES_PAINEL_IDS:
             raise ValueError(f"`motor_id` desconhecido {m!r} — aceites: {list(MOTORES_PAINEL_IDS)}")
-        base["motor_id"] = m
-    if "bateria_id" in dados:
-        b = dados["bateria_id"]
         if not isinstance(b, str) or b not in BATERIAS_PAINEL_IDS:
             raise ValueError(f"`bateria_id` desconhecido {b!r} — aceites: {list(BATERIAS_PAINEL_IDS)}")
+        if (m, b) not in PARES_HOMOLOGADOS_PARA_PRESET:
+            raise ValueError(
+                f"combinação livre ({m!r} + {b!r}) bloqueada por segurança de estabilidade — "
+                f"escolha um dos 6 presets calibrados: {list(PRESETS_PAINEL_MAPA)}"
+            )
+        base["preset_id"] = PARES_HOMOLOGADOS_PARA_PRESET[(m, b)]
+        base["motor_id"] = m
         base["bateria_id"] = b
     base["seq"] = int(base.get("seq", 0)) + 1
     return {"pecas": base}

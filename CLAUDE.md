@@ -7,6 +7,7 @@ NVIDIA RTX 4070 Laptop 8 GB + iGPU Intel, Python 3.13 via `uv`). Aqui nascem exp
 - **Skill única do laboratório**: **`mujoco-lab-coala-agent-skill`** (`.agents/mujoco-lab-coala-agent-skill/SKILL.md`) — a memória CoALA local **e** o
   controle/conhecimento verificado do MuJoCo 3.15 (instalar, modelar MJCF/MjSpec, simular, renderizar, depurar, GPU/MJX, URDF,
   robôs/drones/veículos). A antiga skill `mujoco-agent-skill` foi **unificada** aqui e a pasta `.agents/mujoco-agent-skill/` foi **apagada após a unificação** (histórico no git).
+- **Skill de Evolução, Treino GPU/TensorFlow e Benchmark Determinístico do Drone**: **`drone-evolucao-benchmark-agent-skill`** (`.agents/drone-evolucao-benchmark-agent-skill/SKILL.md`; criada 2026-10-16) — governa o ciclo completo: (1) pesquisar algoritmos/IA na web (`tavily-agent-skill`), (2) explicar a lógica física/matemática e o uso seletivo de TensorFlow OpenXLA, (3) treinar em GPU (`treinar_mira_gpu.py`) com movimento **aleatório** da bola, (4) capturar o benchmark determinístico (`benchmark_evolucao.py`) com movimento **programado** da bola (`modo="programado"`, Lissajous 3D) e cenário **fixo** de vento ($0 \to 3 \to 5\text{ m/s}$), medindo Estabilidade ($\omega_{\text{RMS}}$, *jitter*, recuperação pós-tiro), **Tiros por Minuto (TPM)** e **Desvio sob Vento Fixo** nos 6 presets calibrados, e (5) atualizar `/evolucao_drone.png` na raiz, `README.md`, `AGENTS.md` e `CLAUDE.md` (`scripts/evoluir_e_benchmark.py --check | --ciclo-completo`).
 - **Comece SEMPRE pela memória** (primeiro passo de qualquer tarefa): `python3 .agents/mujoco-lab-coala-agent-skill/scripts/coala.py recall "<tarefa>" --budget 1500`
   (e `recall "<tarefa>" --type episodic --budget 600` para as decisões datadas; `search`/`graph` se precisar de fundo) — **depois** as
   referências MuJoCo (`references/*.md`), os scripts e os templates que o tema pedir. No fim, `add` do que for durável.
@@ -100,6 +101,28 @@ Preferir SEMPRE modelos prontos e de boa reputação (ex.: `mujoco_menagerie`) a
 > `09_drone_hover_rl`): `experiments/` tem apenas `09_drone_hover_rl/`. O plano de realismo do drone do
 > dono vive em `plano-drone-real.md` (raiz) e está **IMPLEMENTADO desde 2026-10-10** (secção 0 do plano). Os
 > `models/`, `lab/` e templates mantêm-se; os experimentos removidos estão no histórico do git.
+
+### Evolução de Estabilidade, Tiros/min (Bola Programada) e Benchmark de Vento Fixo (`evolucao_drone.png`)
+
+Gráfico oficial na raiz (`evolucao_drone.png`) e dados estruturados em `experiments/09_drone_hover_rl/out/evolucao/evolucao_estabilidade.json`, geridos pela skill `drone-evolucao-benchmark-agent-skill` (`.venv/bin/python .agents/drone-evolucao-benchmark-agent-skill/scripts/evoluir_e_benchmark.py --check | --ciclo-completo`):
+- **Treino GPU (`treinar_mira_gpu.py`)**: bola em movimento **aleatório** (Ornstein–Uhlenbeck) + perturbações estocásticas em 4096 ambientes paralelos (RTX 4070 JAX + TensorFlow 2.21 `@tf.function(jit_compile=True)` OpenXLA).
+- **Benchmark de Captura (`benchmark_evolucao.py`)**: bola em movimento **programado determinístico** (`modo="programado"`, Lissajous 3D a $0,55\text{ m/s}$, $r=1,35\text{ m}$, $15,0\text{ s}$) + **cenário de vento fixo** ($0\text{ m/s} \to 3,0\text{ m/s} @ 90^\circ \to 5,0\text{ m/s} @ 45^\circ$).
+
+| Geração | Tremor $\omega_{\text{RMS}}$ (°/s) | Jitter Motores (%) | Rec. Pós-Tiro (s) | Tiros/min (TPM) | Vento Fixo 3/5 m/s (cm) | Estabilidade (0–100) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **v1 · Bloco Fixo (Sem Filtro/Recuo)** | 2,04 | 4,37 % | 1,62 s | **32,0** (100 %) | 5,1 / 9,4 | **50,6** |
+| **v2 · Anti-Tremor + Mira GPU** | 0,77 | 0,68 % | 0,76 s | **32,0** (100 %) | 10,5 / 14,9 | **80,0** |
+| **v3 · Recuo Ativo 500 Hz + TF XLA** | 0,77 | 0,68 % | **0,10 s** | **40,0** (100 %) | 10,8 / 15,1 | **87,7** |
+| **v4 · Standoff Dinâmico + 6 Presets TF** | **0,77** | **0,68 %** | **0,10 s** | **44,0** (100 %) | 10,8 / 15,1 | **87,7** |
+
+| Preset Calibrado (`POST /api/pecas`) | Massa | Potência Média | Vazão Máx | Tiros/min (TPM) | Estabilidade |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `endurance_p50b` (MN4004 KV300 + 6S2P P50B) | 2968 g | 325,5 W | 120 A | **44,0 / min** | 87,7 / 100 |
+| `tatico_silicio` (MN4004 KV300 + 6S2P Amprius Si) | 2529 g | 254,7 W | 80 A | **28,0 / min** | 85,9 / 100 |
+| `interceptor_lipo` (MN4006 KV380 + 6S1P LiPo 45C) | 2912 g | 303,8 W | **225 A** | **44,0 / min** | **89,1 / 100** |
+| `heavy_6s3p` (MN4006 KV380 + 6S3P P50B Mega) | 3460 g | 376,5 W | 180 A | **44,0 / min** | **89,4 / 100** |
+| `forca_bruta_5006` (MN5006 KV450 + 6S2P P50B) | 3180 g | 358,7 W | 120 A | **48,0 / min** | **89,4 / 100** |
+| `agile_scout` (MN3508 KV380 + 6S1P P45B) | 2723 g | 293,2 W | 45 A | **36,0 / min** | 64,8 / 100 |
 
 ## Don't touch / segurança
 - Nunca versionar `memory/coala.sqlite`, `.venv/`, `docs/upstream/` (reproduzível) nem `experiments/*/out/`.

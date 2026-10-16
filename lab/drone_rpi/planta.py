@@ -36,10 +36,12 @@ from .bateria import EstadoDesgaste, ModeloBateria
 from .componentes import (
     CATALOGO_BATERIAS_PAINEL,
     CATALOGO_MOTORES_PAINEL,
+    PRESETS_PROPULSAO_PAINEL,
     Hardware,
     autonomia_estimada,
     catalogo_pecas_painel,
     criar_hardware_com_pecas,
+    preset_id_de_pecas,
 )
 from .modelo import (
     ALCANCE_PROJETIL_M,
@@ -191,6 +193,7 @@ class Planta:
         self._cache_limites_val: dict | None = None
         self._cache_pecas_chave: tuple | None = None
         self._cache_pecas_base: dict | None = None
+        self.dist_alvo_dinamica_m: float = 2.25
         # altura do eixo do cano acima do CM (m) e inércia de pitch I_yy (kg·m²) no corpo
         self.braco_z_arma = (
             float(model.site_pos[self.site_boca, 2]) if self.site_boca is not None else 0.0
@@ -767,15 +770,16 @@ class Planta:
         self.aero.definir_arrasto(*self.aero.d_xy, massa=m_nova)
         return self.hw.limites_carga(massa_total=m_nova, soc=self.bat.soc)
 
-    def trocar_pecas(self, motor_id: str | None = None, bateria_id: str | None = None) -> dict:
-        """Troca em tempo real os motores (`motor_id`) e/ou o pack de bateria (`bateria_id`):
+    def trocar_pecas(self, motor_id: str | None = None, bateria_id: str | None = None,
+                     preset_id: str | None = None) -> dict:
+        """Troca em tempo real o preset calibrado (`preset_id`) ou os motores (`motor_id`) / bateria (`bateria_id`):
 
           1. Recalcula `Hardware` (`kv`, `r_int`, `i0`, `j_rotor`, `kf`, `kq`, `curva_esc`, `bateria`, `massa_total`);
           2. Atualiza tamanho 3D (`model.geom_size`) e cor (`model.geom_rgba`) dos 4 motores e da bateria no MuJoCo;
           3. Atualiza massa e inércia do corpo (`mj_setConst` preservando o estado dinâmico `qpos`/`qvel`),
              `Propulsao` e `ModeloBateria` (preservando SoC e ω atuais) e devolve `telemetria_pecas()`.
         """
-        novo_hw = criar_hardware_com_pecas(self.hw, motor_id=motor_id, bateria_id=bateria_id)
+        novo_hw = criar_hardware_com_pecas(self.hw, motor_id=motor_id, bateria_id=bateria_id, preset_id=preset_id)
         omega_ant = self.prop.omega.copy()
         armado_ant = bool(self.prop.armado)
         soc_ant = float(self.bat.soc)
@@ -873,10 +877,14 @@ class Planta:
             meta_b = CATALOGO_BATERIAS_PAINEL.get(b.id, {})
             lc = self.limites_carga_rapido(m_atual, self.bat.soc, 0.0)
             aut = autonomia_estimada(self.hw, soc0=self.bat.soc, massa=m_atual)
-            vazao_max = float(b.i_max)
+            vazao_max = float(meta_b.get("vazao_max_a", b.i_max))
             pot_max = float(b.v_nominal * vazao_max)
+            pid = preset_id_de_pecas(mot.id, b.id)
+            p_meta = PRESETS_PROPULSAO_PAINEL.get(pid, {})
             self._cache_pecas_chave = chave
             self._cache_pecas_base = {
+                "preset_id": pid,
+                "preset_nome": p_meta.get("nome", f"{mot.modelo} + {b.s}S{b.p}P"),
                 "motor_id": mot.id,
                 "motor_modelo": f"{mot.fabricante} {mot.modelo}",
                 "motor_kv": float(mot.kv),
@@ -918,6 +926,7 @@ class Planta:
             "watts_eletronica": round(float(pw["eletronica"]), 1),
             "v_bus": round(float(self.v_bus), 2),
             "soc_pct": round(100.0 * float(self.bat.soc), 1),
+            "dist_alvo_dinamica_m": round(float(self.dist_alvo_dinamica_m), 2),
         }
 
     def _forca_tiro_passo(self) -> float:
