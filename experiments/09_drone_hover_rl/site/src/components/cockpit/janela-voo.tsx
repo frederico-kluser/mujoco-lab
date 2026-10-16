@@ -64,6 +64,8 @@ export function JanelaVoo({
   const rTiros = useRef<HTMLSpanElement>(null)
   const rSoco = useRef<HTMLSpanElement>(null)
   const rDirecaoSoco = useRef<HTMLSpanElement>(null)
+  const rRastro = useRef<HTMLSpanElement>(null)
+  const rCarga = useRef<HTMLSpanElement>(null)
   useDesenhoHud(({ hud: amostra, texto }) => {
     if (!texto) return
     if (rRumo.current !== null) {
@@ -82,6 +84,17 @@ export function JanelaVoo({
     if (rDirecaoSoco.current !== null && t !== null && t.azimuteSocoGraus !== null) {
       const txt = `−x̂ nariz (${fmtRumo(t.azimuteSocoGraus)}° mundo)`
       if (rDirecaoSoco.current.textContent !== txt) rDirecaoSoco.current.textContent = txt
+    }
+    if (rRastro.current !== null && t !== null) {
+      const txt = t.caminhoVisivel
+        ? `${t.fogoCanoAtivo ? "FOGO CANO · " : ""}${t.projetilVisivel ? "projétil" : "50 m atingido"}: ${fmtHud(t.distanciaProjetilM, 1)}/${fmtHud(t.alcanceRenderM ?? 50, 0)} m · rastro ${fmtHud(t.tempoCaminhoS, 2)}/${fmtHud(t.duracaoCaminhoS ?? 1, 1)} s`
+        : "alcance render 50 m · caminho 1,0 s"
+      if (rRastro.current.textContent !== txt) rRastro.current.textContent = txt
+    }
+    const cg = amostra?.carga ?? null
+    if (rCarga.current !== null && cg !== null) {
+      const txt = `${fmtHud(cg.massaTotalG, 0)} g (T/W ${fmtHud(cg.tWEfetivoOge, 2)} · máx ${fmtHud(cg.cargaMaxDescolagemOgeG, 0)} g · vento≤${fmtHud(cg.ventoMaxMS, 1)} m/s) · ${cg.podeAlcarVoo ? "VOA" : "NÃO ALÇA VOO"}`
+      if (rCarga.current.textContent !== txt) rCarga.current.textContent = txt
     }
   })
 
@@ -242,6 +255,12 @@ export function JanelaVoo({
           <strong ref={rDirecaoSoco} data-testid="voo-tiro-direcao" className="text-hud">
             −x̂ nariz (180° mundo)
           </strong>
+        </p>
+        <p className="font-mono text-[0.64rem] text-muted-foreground" data-testid="voo-tiro-rastro">
+          <span ref={rRastro}>alcance render 50 m · caminho 1,0 s</span>
+        </p>
+        <p className="font-mono text-[0.64rem] text-hud" data-testid="voo-carga-estado">
+          <span ref={rCarga}>2968 g (T/W 1,66 · máx 2745 g · vento≤11,8 m/s) · VOA</span>
         </p>
       </div>
     </div>

@@ -230,8 +230,11 @@ def secao_servidor() -> bool:
 
     b = s.validar_bola({"velocidade": 0.6}, {})["bola"]
     c.ok("bola: velocidade aceite com `seq` do servidor", b == {"velocidade": 0.6, "seq": 1}, str(b))
+    b_zero = s.validar_bola({"velocidade": 0.0, "auto_atirar": True}, {})["bola"]
+    c.ok("bola: velocidade 0,0 m/s (parada) e `auto_atirar: true` aceites",
+         b_zero == {"velocidade": 0.0, "auto_atirar": True, "seq": 1}, str(b_zero))
     for nome, corpo in (("acima do máximo", {"velocidade": s.BOLA_VEL_MAX + 0.01}),
-                        ("abaixo do mínimo", {"velocidade": 0.0}), ("sem velocidade", {}),
+                        ("abaixo do mínimo", {"velocidade": -0.01}), ("sem velocidade", {}),
                         ("chave desconhecida", {"velocidade": 0.5, "modo": "x"})):
         c.recusa(f"bola: {nome} → 400", s.validar_bola, corpo, {})
     c.ok("bola: sem bloco (ou com lixo) o eco é o padrão, com a faixa para o slider",
@@ -253,6 +256,29 @@ def secao_servidor() -> bool:
                         ("`gatilho` que não é booleano", {"gatilho": 1}),
                         ("corpo que não é objeto", [1])):
         c.recusa(f"tiro: {nome} → 400", s.validar_tiro, corpo, {})
+
+    # --- carga útil extra (POST /api/carga)
+    cg1 = s.validar_carga({"carga_extra_g": 1200.0}, {})
+    c.ok("carga: `carga_extra_g` aceite com `seq` do servidor (+1)",
+         cg1["carga"] == {"carga_extra_g": 1200.0, "seq": 1}, str(cg1["carga"]))
+    for nome, corpo in (("negativa", {"carga_extra_g": -10}),
+                        ("acima de 5000 g", {"carga_extra_g": 5001}),
+                        ("sem campo", {}),
+                        ("chave desconhecida", {"carga_extra_g": 100, "extra": 1})):
+        c.recusa(f"carga: {nome} → 400", s.validar_carga, corpo, {})
+
+    # --- otimização gráfica do MuJoCo (POST /api/graficos)
+    gr1 = s.validar_graficos({"sombras": False, "reflexos": False, "escala_resolucao": 0.5, "qualidade_jpeg": 65}, {})
+    c.ok("graficos: opções de otimização MuJoCo aceites com `seq` (+1)",
+         gr1["graficos"]["sombras"] is False and gr1["graficos"]["reflexos"] is False
+         and gr1["graficos"]["escala_resolucao"] == 0.5 and gr1["graficos"]["qualidade_jpeg"] == 65
+         and gr1["graficos"]["seq"] == 1, str(gr1["graficos"]))
+    for nome, corpo in (("vazio", {}),
+                        ("chave desconhecida", {"sombras": False, "aa": 4}),
+                        ("sombras não booleano", {"sombras": 1}),
+                        ("escala fora de [0.25, 1.0]", {"escala_resolucao": 1.5}),
+                        ("jpeg fora de [30, 95]", {"qualidade_jpeg": 10})):
+        c.recusa(f"graficos: {nome} → 400", s.validar_graficos, corpo, {})
 
     # --- arranque limpo: estado fixo, preferências preservadas
     velho = {"vento_simples": {"ligado": True, "intensidade": 4.0, "aleatorio": True, "direcao": 120.0, "seq": 7},
@@ -363,6 +389,17 @@ def secao_runner(pasta: Path) -> bool:
          rt.tiro is not None and rt.tiro.gatilho is True and rt.tiro.disparos == 3 and rt.tiro.seq == 5)
     c.recusa("ler_registo: `tiro.disparos` negativo é recusado",
              m.ler_registo, {"tiro": {"gatilho": True, "disparos": -1}})
+    rcg = m.ler_registo({"carga": {"carga_extra_g": 850.0, "seq": 2}})
+    c.ok("ler_registo: bloco `carga` validado",
+         rcg.carga is not None and rcg.carga.carga_extra_g == 850.0 and rcg.carga.seq == 2)
+    c.recusa("ler_registo: `carga.carga_extra_g` fora da faixa é recusada",
+             m.ler_registo, {"carga": {"carga_extra_g": -5.0}})
+    rgr = m.ler_registo({"graficos": {"sombras": False, "mostrar_fios_detalhes": False, "escala_resolucao": 0.5, "seq": 3}})
+    c.ok("ler_registo: bloco `graficos` validado",
+         rgr.graficos is not None and rgr.graficos.sombras is False
+         and rgr.graficos.mostrar_fios_detalhes is False and rgr.graficos.escala_resolucao == 0.5)
+    c.recusa("ler_registo: `graficos.escala_resolucao` fora da faixa é recusada",
+             m.ler_registo, {"graficos": {"escala_resolucao": 0.1}})
 
     # --- o Controlo aplica o registo: o vento antigo é neutralizado e o do gerador chega ao env
     pasta.mkdir(parents=True, exist_ok=True)
@@ -547,6 +584,16 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
         c.ok("o FoV da câmara de bordo vem em TODAS as amostras, antes de o modo bola ligar",
              isinstance(fovy, float) and 20.0 < fovy < 160.0 and sse.ultima().get("bola") is None,
              f"fovy {fovy}° · bola {sse.ultima().get('bola')}")
+        # --- otimização gráfica do MuJoCo + FPS ao vivo no HUD
+        cod_gr, resp_gr = _http(f"{url}/api/graficos", {"sombras": False, "reflexos": False, "mostrar_fios_detalhes": False})
+        time.sleep(0.25)
+        gr_hud = sse.ultima().get("graficos") or {}
+        c.ok("POST /api/graficos desliga sombras/reflexos/fios em tempo real e o HUD publica o FPS atual (> 0 fps)",
+             cod_gr == 200 and resp_gr.get("ok") is True and gr_hud.get("sombras") is False
+             and gr_hud.get("reflexos") is False and gr_hud.get("mostrar_fios_detalhes") is False
+             and float(gr_hud.get("fps_atual") or 0.0) > 10.0,
+             f"fps_atual={gr_hud.get('fps_atual')} · sombras={gr_hud.get('sombras')}")
+        _http(f"{url}/api/graficos", {"sombras": True, "reflexos": True, "mostrar_fios_detalhes": True})
 
         # --- W: para a frente do NARIZ
         x0 = sse.ultima()["real"]["x"]
@@ -577,7 +624,21 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
              tiro_hud.get("tiros") == 1 and abs(float(tiro_hud.get("impulso_ns") or 0.0) - 1.9162) < 0.01
              and min_vx_tiro - vx_antes_tiro < -0.30 and min_pitch_tiro < pitch_antes_tiro - 0.02,
              f"tiros={tiro_hud.get('tiros')} · J={tiro_hud.get('impulso_ns')} N·s · Δvx={min_vx_tiro - vx_antes_tiro:+.2f} m/s · Δpitch={min_pitch_tiro - pitch_antes_tiro:+.3f} rad")
-        time.sleep(2.5)
+        viu_fogo_ou_proj = any(
+            bool((a.get("tiro") or {}).get("fogo_cano_ativo")) or bool((a.get("tiro") or {}).get("projetil_visivel"))
+            for a in amostras_tiro
+        )
+        c.ok("no disparo: fogo do cano / projétil (< 50 m) e caminho de 1,0 s aparecem no HUD e o projétil apaga aos 50 m mantendo o caminho",
+             viu_fogo_ou_proj and tiro_hud.get("projetil_visivel") is False
+             and abs(float(tiro_hud.get("distancia_projetil_m") or 0.0) - 50.0) < 1e-3
+             and tiro_hud.get("caminho_visivel") is True,
+             f"proj_250ms={tiro_hud.get('projetil_visivel')} ({tiro_hud.get('distancia_projetil_m')} m) · caminho_250ms={tiro_hud.get('caminho_visivel')}")
+        time.sleep(1.0)
+        tiro_hud_depois = sse.ultima().get("tiro") or {}
+        c.ok("após 1,0 s do disparo o caminho do projétil desaparece (`caminho_visivel = false`)",
+             tiro_hud_depois.get("caminho_visivel") is False,
+             f"caminho_1,25s={tiro_hud_depois.get('caminho_visivel')}")
+        time.sleep(1.5)
         c.ok("após o soco do tiro a cascata recupera a pairagem (continua A VOAR)",
              sse.ultima()["fase"] == "a_voar", f"z {sse.ultima()['real']['z']:.2f} m")
 
@@ -634,10 +695,26 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
         frac = len(validos) / max(len(bolas), 1)
         erros = np.array([math.degrees(math.atan(math.hypot(*b["erro_tan"]))) for b in validos]) \
             if validos else np.array([90.0])
-        # limiar de 5°: a lei IBVS v2 mede 2,1° aqui (bola a 0,4 m/s, aquisição incluída); a lei antiga media 8,0°
+        # limiar de 5°: a lei de mira balística mantém a bola no centro da mira (< 5°); a lei antiga media 8,0°
         c.ok("o detetor de bordo VÊ a bola ≥ 90 % do tempo e o erro de centragem mediano é < 5°",
              frac >= 0.9 and float(np.median(erros)) < 5.0,
              f"vista {100 * frac:.0f} % · erro mediano {np.median(erros):.1f}° · p95 {np.percentile(erros, 95):.1f}°")
+        # Liga o AUTO SHOOT com bola a 0,0 m/s (parada) e verifica que o drone coloca a bola NO ALVO e dispara acertando 100 %
+        tiros_antes_auto = int((sse.ultima().get("tiro") or {}).get("tiros") or 0)
+        acertos_antes_auto = int((sse.ultima().get("tiro") or {}).get("acertos_bola") or 0)
+        erros_antes_auto = int((sse.ultima().get("tiro") or {}).get("erros_bola") or 0)
+        _http(f"{url}/api/bola", {"velocidade": 0.0, "auto_atirar": True})
+        time.sleep(2.5)
+        _http(f"{url}/api/bola", {"auto_atirar": False})
+        time.sleep(0.25)
+        tiro_apos_auto = sse.ultima().get("tiro") or {}
+        novos_tiros_auto = int(tiro_apos_auto.get("tiros") or 0) - tiros_antes_auto
+        novos_acertos_auto = int(tiro_apos_auto.get("acertos_bola") or 0) - acertos_antes_auto
+        novos_erros_auto = int(tiro_apos_auto.get("erros_bola") or 0) - erros_antes_auto
+        c.ok("AUTO SHOOT + bola a 0,0 m/s: coloca a mira NO ALVO e dispara automaticamente APENAS quando acerta (100 % de acerto)",
+             novos_tiros_auto >= 1 and novos_acertos_auto == novos_tiros_auto and novos_erros_auto == 0
+             and isinstance(tiro_apos_auto.get("mira"), dict),
+             f"auto_shoot: {novos_acertos_auto}/{novos_tiros_auto} acertos (erros={novos_erros_auto}) · mira={tiro_apos_auto.get('mira', {}).get('mensagem')}")
         c.ok("o drone não caiu a seguir a bola", sse.ultima()["fase"] == "a_voar")
         _http(f"{url}/api/voo", {"ativo": True, "teclas": teclas, "segui_alvo": False})
         time.sleep(1.5)

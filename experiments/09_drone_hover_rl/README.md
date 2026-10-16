@@ -98,16 +98,86 @@ preferências ficam). Achado e corrigido na revisão: se o bloco dos 3 botões s
 soprar, o nível da rampa ficava congelado e reaparecia como «vento fantasma» (1,93 m/s medidos) quando o bloco
 voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `teste_cockpit.py`.
 
-**Arma fixa no topo: Glock 25 (.380 Auto / 9×17mm) e botão de tiro `SPACE`** (`POST /api/tiro`, `valida_real.py` §I):
-- **Peça real no catálogo** (`models/drone_rpi/componentes.json` → `armas.glock_g25`): comprimento 187 mm, cano
-  102 mm, altura 128 mm, largura 32 mm (ferrolho 25,5 mm), 575 g sem carregador / 645 g vazia / **785 g com
-  carregador cheio (15 tiros)**, gatilho Safe Action® 28 N, blowback simples.
-- **Recalibração de peso, inércia e aerodinâmica**: massa total do `endurance_15pol_p50b` passa de 2182,6 g para
-  **2967,6 g**; o CM sobe +25,3 mm (eixo do cano `boca_cano` fica a $z_{\text{cano}} = +134,2\text{ mm}$ acima do
-  novo CM); inércias principais sobem para $I_{xx} = 0,2461$, $I_{yy} = 0,2508$, $I_{zz} = 0,4698\text{ kg}\cdot\text{m}^2$;
-  pairagem a 21,6 V passa para **3658 rpm, duty 67,2 %, 314,2 W (9,44 g/W), T/W 1,93, autonomia 40,7 min**;
-  arrasto anisotrópico recalibrado com a silhueta frontal/lateral da pistola ($d_x = 0,3020\text{ s}^{-1}$,
-  $d_y = 0,3105\text{ s}^{-1}$) mais a caixa de inércia de fluido do MuJoCo.
+**Arma fixa no topo: Glock 25 (.380 Auto / 9×17mm) e botão de tiro `SPACE`** (`POST /api/tiro`, `valida_real.py` §I e §J):
+- **Peça real e modelagem 3D detalhada** (`models/drone_rpi/componentes.json` → `armas.glock_g25`, `lab/drone_rpi/modelo.py`):
+  comprimento 187 mm, cano 102 mm, altura 128 mm, largura 32 mm (ferrolho 25,5 mm), 575 g sem carregador / 645 g vazia /
+  **785 g com carregador cheio (15 tiros)**, gatilho Safe Action® 28 N, blowback simples. Modelada no MuJoCo com 24 geoms
+  anatómicos: berço rígido de fixação no topo, quadro OD Green com ranhuras de trilho, punho inclinado a $22^\circ$ com
+  3 ranhuras de dedos e base preta do carregador, guarda-mato + gatilho + atuador solenoide de 28 N, ferrolho em aço
+  Tenifer/NDLC com janela de ejeção prateada, 6 serrilhas traseiras, cano de 102 mm com furo de 9 mm e miras a 153 mm
+  com pontos brancos.
+- **Efeito de fogo do cano (*muzzle flash*), projétil até 50 m, caminho por 1,0 s e colisão com a BOLA** (`lab/drone_rpi/planta.py`, `valida_real.py` `I6–I8`):
+  - No disparo, acende o **efeito de fogo do cano** (`arma_fogo_nucleo`, `arma_fogo_cone`, `arma_fogo_cruz_h/v`) durante
+    $60\text{ ms}$ na boca do cano e anima o ciclo **blowback** do ferrolho ($-32\text{ mm}$ em $12\text{ ms}$ e retorno
+    à bateria aos $45\text{ ms}$).
+  - O **projétil `.380 ACP`** ($9\text{ mm}$, $6,156\text{ g}$, $v_0 = 296\text{ m/s}$) sai de `boca_cano` sob gravidade e
+    arrasto balístico e verifica a cada passo a **interseção 3D exata com a bola (`ponto_esfera`, $R = 50\text{ mm}$)** e
+    com o chão ($z \le 0,005\text{ m}$):
+    - Se atingir a bola, pára exatamente na superfície da bola (`acertou_bola = True`, incrementa `acertos_bola` e pinta o
+      rastro de verde-esmeralda), ocultando o projétil;
+    - Caso contrário, é **renderizado apenas até ao ponto de impacto no chão ou até $50,0\text{ metros}$** ($\sim 169\text{ ms}$),
+      apagando-se imediatamente aos $50,0\text{ m}$ (`projetil_visivel = False`).
+  - O **caminho/rastro da trajetória** (`caminho_tiro`, com `geom_sameframe=0` e escrita direta de `geom_xpos`/`geom_xmat`
+    para ir sempre da boca do cano até ao ponto de impacto na bola/chão ou aos $50,0\text{ m}$, nunca vertical) permanece
+    visível durante **exatamente $1,0\text{ segundo}$** após o disparo (`caminho_visivel = True` para $\tau \le 1,0\text{ s}$
+    e `False` para $\tau > 1,0\text{ s}$).
+- **Mira Balística no Visor FPS (`NO ALVO` / `FORA DO ALVO`), Velocidade 0,0 m/s, Treino em GPU e Toggle `AUTO SHOOT`**
+  (`mira_balistica.py`, `treinar_mira_gpu.py`, `sim_view.py`, `hud.tsx`, `janela-bola.tsx`, `valida_real.py` `I9`):
+  - **Preditor balístico em tempo real (`Planta.prever_tiro_bola`)**: projeta na câmara FPV (`ponto_impacto_tan`) onde o
+    projétil disparado agora de `boca_cano` ($+140,5\text{ mm}$ acima da lente FPV!) vai chegar no plano da bola no instante
+    $t + \tau_{\text{voo}}$ ($\tau_{\text{voo}} = D / v_0$), descontando queda gravitacional $\frac{1}{2}g\tau_{\text{voo}}^2$,
+    arrasto, velocidade do drone e deslocamento da bola $\vec{v}_{\text{bola}}\tau_{\text{voo}}$ até a chegada do projétil.
+    Exibe no visor FPS o marcador verde do ponto de impacto com a mensagem **`NO ALVO`** ou **`FORA DO ALVO`** e o placar de
+    acertos (`ACERTOU A BOLA! (N/M)` / `ERROU A BOLA`).
+  - **Slider da velocidade da bola até `0,0 m/s`**: `BOLA_VEL_MIN = 0.0` permite colocar a bola parada (`0,00 m/s`) ou em
+    movimento aleatório (`0,05–0,80 m/s`) dentro do modo `SEGUIR A BOLA`.
+  - **Treino em GPU sem renderização 3D (`treinar_mira_gpu.py`, `.venv-gpu` JAX/CUDA na RTX 4070)**: 4096 ambientes em
+    paralelo (`8,54 M passos/s`, zero renderização 3D), otimizando com AdamW + Cosine Annealing + Global-Norm Clipping os
+    ganhos adaptativos e a MLP residual (`12 → 32 → 32 → 4`, LayerNorm + SiLU) para alinhar a **mira da arma** (e não só o
+    eixo da câmara) com o centro da bola (erro mediano de mira $0,95\text{–}1,14\text{ cm}$ a $0,0\text{ m/s}$ e $3,1\text{–}3,6\text{ cm}$ a $0,3\text{ m/s}$).
+  - **Toggle `AUTO SHOOT (ATIRAR NO ALVO)` na janela `Bola` (`POST /api/bola {"auto_atirar": bool}`)**: quando ativo em
+    conjunto com `SEGUIR A BOLA`, dispara automaticamente **apenas quando o tiro for literalmente acertar a bola na chegada**
+    ($d_{\min}(t + \tau_{\text{voo}}) \le 0,72 \, R_{\text{col}}$ e taxas angulares estabilizadas), garantindo **100 % de
+    taxa de acerto (`0 erros`)** tanto com bola parada ($0,0\text{ m/s}$) como em movimento ($0,3\text{–}0,8\text{ m/s}$).
+- **Modelagem 3D de Alta Estabilidade, Motor MN4004 Real, Raspberry Pi 5 Fiel, Hélices 3D Rotativas e Otimização Gráfica MuJoCo (`POST /api/graficos`)**
+  (`lab/drone_rpi/modelo.py`, `lab/drone_rpi/componentes.py`, `lab/drone_rpi/planta.py`, `lab/camera_rpi.py`, `painel-otimizacao-mujoco.tsx`, `valida_real.py` `A6`, `B9`, `B10`):
+  - **Estrutura de alta estabilidade e cablagem trifásica**: dupla placa central de carbono em sanduíche (`placa` +
+    `placa_superior` com 4 espaçadores CNC de alumínio vermelho), 4 treliças diagonais anti-torção (`trelica_estab_1..4`)
+    entre braços adjacentes para eliminar flexão e ressonância modal, suportes CNC de motor (`suporte_motor_1..4`), berço
+    de bateria de baixo CG com cintas (`cinta_bateria_1..2`) e cabos de potência XT90 (`conector_xt90`, `cabo_bateria_pos/neg`),
+    mais **3 fios trifásicos de silicone por braço** (`fio_motor1..4_a/b/c`: vermelho, preto, azul) presos por abraçadeiras
+    (`abracadeira_braco1..4_1..2`) desde o ESC central até cada motor.
+  - **Motor baseado no T-Motor Antigravity MN4004 KV300 real**: base CNC ventilada (`motor_base_cnc`), estator interno com
+    **bobinas de cobre visíveis** (`motor_estator_cobre`), anel magnético e sino anodizado preto com **raios superiores
+    vazados** (`motor_sino_anel`, `motor_raio_1..3`) e eixo oco em aço inox (`motor_eixo`).
+  - **Raspberry Pi 5 fiel ($85 \times 56\text{ mm}$)**: PCB verde (`el_rpi5`), SoC Broadcom BCM2712 com *heatspreader*
+    metálico (`rpi5_soc_bcm2712`), **Active Cooler** com dissipador de alumínio aletado (`rpi5_dissipador`) e ventoinha
+    radial (`rpi5_ventoinha`), chip I/O RP1 (`rpi5_rp1`), 2× torres USB 3.0 com interior azul (`rpi5_usb3_torre`,
+    `rpi5_usb3_azul`), torre USB 2.0 (`rpi5_usb2_torre`), porta Gigabit Ethernet RJ45 (`rpi5_rj45`), barramento GPIO de
+    40 pinos (`rpi5_gpio_40p`), USB-C de energia (`rpi5_usbc`) e 2× portas micro-HDMI (`rpi5_micro_hdmi_1..2`).
+  - **Hélices 3D com impacto físico do design e rotação por % de $\omega_{\max}$**:
+    - `Helice` (`componentes.py`): `corda_media`, `afunilamento` ($\lambda_{\text{taper}} \to \kappa_J$ na inércia
+      $J_{\text{rotor}}$), `solidez` ($\sigma = N_b \bar{c} / (\pi R)$), `angulo_passo_75_rad` ($\theta_{75}$), `perfil`
+      (`scimitar_cf`, `mr_naca`, `tri_pa_fpv`), `ct_cp_bemt()` e `com_design(...)` — alterar diâmetro, passo, número de
+      pás, corda ou afunilamento altera fisicamente $k_f, k_q, J_{\text{rotor}}$ e $\tau_{\text{motor}}$ (`B9`).
+    - **Rotação 3D (`B10`)**: cada hélice (`helice1..4_cubo` + pás `pa1..2_raiz/ponta/faixa` em carbono com pontas
+      identificadoras) gira no **sentido físico correto** (`CW` nos rotores 1 e 2, `CCW` nos rotores 3 e 4) com velocidade
+      angular proporcional à fração `%` de $\omega_{\max}(V_{\text{bus}})$ em que aquele motor está a operar.
+  - **Painel HTML de Otimização Gráfica do MuJoCo e FPS ao Vivo (`PainelOtimizacaoMuJoCo` + `POST /api/graficos`)**:
+    mostra o **FPS atual** (`fps_atual`, `fps_simulacao`, `fps_fpv`, `fps_fisica` e `ms_render`) no topo do HUD e nas
+    janelas **Gráficos (tecla 6)** e **Sistema (tecla 7)**, com presets rápidos (`⚡ MÁXIMO FPS`, `⚖ EQUILIBRADO`,
+    `✦ ULTRA 1080P`), interruptores em tempo real para desligar **Sombras (`mjRND_SHADOW`)**, **Reflexos
+    (`mjRND_REFLECTION`)**, **Fios e Detalhes RPi 5 (`group 3`)**, **Hélices 3D (`group 1`)**, **Efeitos (`group 2`)** e
+    **Nevoeiro (`mjRND_FOG`)**, além de sliders de **escala de resolução OpenGL (`25–100 %`)** e **qualidade JPEG (`30–95 %`)**.
+- **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
+  - No ponto de $100\%$ de acelerador sob queda de tensão real da bateria ($V_{\text{carga}} = 23,79\text{ V}$ a $28,9\text{ A}$,
+    queda de $1,41\text{ V}$ face ao OCV $25,20\text{ V}$) e descontando os $5\%$ de *download* na estrutura:
+    - **Empuxo máximo efetivo OGE**: $48,34\text{ N}$ ($4928\text{ gf}$) $\Rightarrow$ **carga máxima de descolagem OGE** = **$2745\text{ g}$** (massa total $\le 4928\text{ g}$).
+    - **Empuxo máximo efetivo IGE (no chão, $\kappa_{\text{solo}} = 1,1066$)**: $53,33\text{ N}$ ($5436\text{ gf}$) $\Rightarrow$ **carga máxima absoluta para sair do chão** = **$3253\text{ g}$** (massa total $\le 5436\text{ g}$; acima disto `pode_alcar_voo = False` e o drone não descola mesmo a $100\%$ de acelerador, drenando a bateria a $27,7\text{ A}$).
+    - **Carga máxima de voo seguro ($T/W_{\text{efetivo}} \ge 1,35$)**: **$1467\text{ g}$** (massa total $\le 3650\text{ g}$; com a Glock 25 de $785\text{ g}$ a massa total é $2968\text{ g}$, $T/W_{\text{OGE}} = 1,66$, `estado_voo = "voo_seguro"`).
+  - **Impacto da carga e do vento na bateria e autonomia**:
+    - Em ar parado: base c/ Glock 25 ($2968\text{ g}$) = **$40,7\text{ min}$** ($314,2\text{ W}$); $+600\text{ g}$ ($3568\text{ g}$) = **$28,3\text{ min}$**; $+1200\text{ g}$ ($4168\text{ g}$) = **$10,7\text{ min}$**; acima de $4928\text{ g}$ = **$0,0\text{ min}$** (`saturacao_carga_ou_vento`).
+    - Com vento lateral (a $2968\text{ g}$): $0\text{ m/s} \to 314,2\text{ W}$ ($40,7\text{ min}$) · $2\text{ m/s} \to F_w = 2,02\text{ N}, \theta_{\text{eq}} = 4,0^\circ, 319,5\text{ W}$ ($39,3\text{ min}$) · $3\text{ m/s} \to F_w = 3,16\text{ N}, \theta_{\text{eq}} = 6,2^\circ, 326,7\text{ W}$ ($38,4\text{ min}$) · $5\text{ m/s} \to F_w = 5,69\text{ N}, \theta_{\text{eq}} = 11,1^\circ, 353,5\text{ W}$ ($34,8\text{ min}$); vento máximo sustentável cai de $10,8\text{ m/s}$ para $5,2\text{ m/s}$ com $+1,2\text{ kg}$ e para $0,0\text{ m/s}$ acima do limite de carga.
 - **Balística e cálculo do soco no drone**: projétil de 95 gr ($m_p = 6,156\text{ g}$) a $v_0 = 296\text{ m/s}$
   ($E_0 = \frac{1}{2}m_p v_0^2 = 269,68\text{ J} \approx 270\text{ J}$) mais gases propelentes ($m_c = 0,20\text{ g}$
   a $v_g = 470\text{ m/s}$) $\Rightarrow$ impulso total por disparo:
@@ -115,8 +185,8 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
   entregue fisicamente (`xfrc_applied` no site `boca_cano` antes de `mj_step2`) durante $\Delta t_{\text{soco}} = 20\text{ ms}$
   (10 passos de 2 ms, força média $F_{\text{soco}} = 95,81\text{ N}$) na direção oposta ao nariz ($-\hat{x}_{\text{corpo}}$):
   - **Soco linear**: $\Delta \vec{v} = -\frac{J_{\text{tiro}}}{m_{\text{total}}} \hat{x}_{\text{corpo}} \implies \Delta v_x = -0,6457\text{ m/s}$ (para trás).
-  - **Soco angular (cabragem)**: como a arma está fixa **em cima** do drone ($z_{\text{cano}} = +0,1342\text{ m}$ acima do CM),
-    gera momento de cabragem $\Delta L_y = -z_{\text{cano}} \cdot J_{\text{tiro}} = -0,2572\text{ N}\cdot\text{m}\cdot\text{s} \implies \Delta\omega_y = -1,0254\text{ rad/s}$ (nariz sobe ao disparar; a cascata absorve o recuo e recupera a pairagem).
+  - **Soco angular (cabragem)**: como a arma está fixa **em cima** do drone ($z_{\text{cano}} = +0,1295\text{ m}$ acima do CM),
+    gera momento de cabragem $\Delta L_y = -z_{\text{cano}} \cdot J_{\text{tiro}} = -0,2482\text{ N}\cdot\text{m}\cdot\text{s} \implies \Delta\omega_y = -0,9814\text{ rad/s}$ (nariz sobe ao disparar; a cascata absorve o recuo e recupera a pairagem).
 
 **Aguentar o vento — clássico ou IA?** (`avaliar_vento.py`, `teste_vento_classico.py`). A cascata clássica
 da fase 1 (sem vento) perdia para a política RL assim que o vento apertava: a 5 m/s constantes derivava 3,7 m.

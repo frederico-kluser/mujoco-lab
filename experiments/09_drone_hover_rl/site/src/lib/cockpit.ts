@@ -157,6 +157,18 @@ export interface HudBola {
   alvoMundo: [number, number, number] | null
 }
 
+/** Mira balística calculada em tempo real (onde o tiro da Glock 25 vai pegar e se acerta a bola na chegada). */
+export interface HudMiraBalistica {
+  noAlvo: boolean
+  vaiAcertarCerteza: boolean
+  mensagem: "NO ALVO" | "FORA DO ALVO"
+  erroBolaM: number | null
+  raioColisaoM: number | null
+  tempoVooMs: number | null
+  distanciaBolaM: number | null
+  pontoImpactoTan: [number, number] | null
+}
+
 /** Estado e balística da arma fixa no topo do drone (Glock 25 .380 Auto; botão SPACE). */
 export interface HudTiro {
   id: string | null
@@ -166,8 +178,20 @@ export interface HudTiro {
   capacidade: number | null
   municao: number | null
   tiros: number
+  acertosBola: number
+  errosBola: number
+  autoAtirar: boolean
+  ultimoResultado: string | null
+  mira: HudMiraBalistica | null
   gatilho: boolean
   emRecuo: boolean
+  fogoCanoAtivo: boolean
+  projetilVisivel: boolean
+  caminhoVisivel: boolean
+  distanciaProjetilM: number | null
+  tempoCaminhoS: number | null
+  alcanceRenderM: number | null
+  duracaoCaminhoS: number | null
   impulsoNs: number | null
   forcaPicoN: number | null
   forcaAtualN: number | null
@@ -181,6 +205,41 @@ export interface HudTiro {
   direcaoTiro: [number, number, number] | null
   direcaoSoco: [number, number, number] | null
   azimuteSocoGraus: number | null
+}
+
+/** Envelope de carga útil, impacto na bateria/vento e viabilidade de descolagem/voo. */
+export interface HudCarga {
+  massaSemCargaG: number | null
+  massaTotalG: number | null
+  cargaAtualG: number | null
+  cargaMaxVooSeguroG: number | null
+  cargaMaxDescolagemOgeG: number | null
+  cargaMaxDescolagemIgeG: number | null
+  tWEfetivoOge: number | null
+  tWEfetivoIge: number | null
+  podeAlcarVoo: boolean
+  podePairarOge: boolean
+  podeVoarSeguro: boolean
+  estadoVoo: string | null
+  ventoMaxMS: number | null
+}
+
+/** Estado das opções de otimização gráfica do MuJoCo e FPS medido em tempo real. */
+export interface HudGraficos {
+  sombras: boolean
+  reflexos: boolean
+  nevoeiro: boolean
+  mostrarHelices: boolean
+  mostrarEfeitos: boolean
+  mostrarFiosDetalhes: boolean
+  escalaResolucao: number
+  qualidadeJpeg: number
+  fpsAtual: number | null
+  fpsSimulacao: number | null
+  fpsFpv: number | null
+  fpsFisica: number | null
+  msRenderSim: number | null
+  msRenderFpv: number | null
 }
 
 export interface AmostraHud {
@@ -212,6 +271,10 @@ export interface AmostraHud {
   ventoBordo: HudVentoBordo | null
   /** Estado e balística da arma fixa no topo do drone (Glock 25, tecla SPACE); `null` sem arma. */
   tiro: HudTiro | null
+  /** Envelope de carga útil e viabilidade de alçar voo; `null` sem planta real. */
+  carga: HudCarga | null
+  /** Otimização gráfica do MuJoCo e FPS em tempo real; `null` num runner antigo. */
+  graficos: HudGraficos | null
 }
 
 export interface HudVentoBordo {
@@ -347,10 +410,29 @@ function lerBolaHud(bruto: unknown): HudBola | null {
   }
 }
 
+function lerMiraHud(bruto: unknown): HudMiraBalistica | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  const noAlvo = o.no_alvo === true
+  return {
+    noAlvo,
+    vaiAcertarCerteza: o.vai_acertar_certeza === true,
+    mensagem: noAlvo ? "NO ALVO" : "FORA DO ALVO",
+    erroBolaM: finito(o.erro_bola_m),
+    raioColisaoM: finito(o.raio_colisao_m),
+    tempoVooMs: finito(o.tempo_voo_ms),
+    distanciaBolaM: finito(o.distancia_bola_m),
+    pontoImpactoTan: lerPar(o.ponto_impacto_tan),
+  }
+}
+
 function lerTiroHud(bruto: unknown): HudTiro | null {
   const o = objetoSimples(bruto)
   if (o === null) return null
   const tiros = finito(o.tiros)
+  const acertos = finito(o.acertos_bola)
+  const erros = finito(o.erros_bola)
+  const ult = objetoSimples(o.ultimo_tiro)
   return {
     id: typeof o.id === "string" ? o.id : null,
     modelo: typeof o.modelo === "string" ? o.modelo : null,
@@ -359,8 +441,20 @@ function lerTiroHud(bruto: unknown): HudTiro | null {
     capacidade: finito(o.capacidade),
     municao: finito(o.municao),
     tiros: tiros === null ? 0 : Math.max(0, Math.trunc(tiros)),
+    acertosBola: acertos === null ? 0 : Math.max(0, Math.trunc(acertos)),
+    errosBola: erros === null ? 0 : Math.max(0, Math.trunc(erros)),
+    autoAtirar: o.auto_atirar === true,
+    ultimoResultado: typeof ult?.resultado === "string" ? ult.resultado : null,
+    mira: lerMiraHud(o.mira),
     gatilho: o.gatilho === true,
     emRecuo: o.em_recuo === true,
+    fogoCanoAtivo: o.fogo_cano_ativo === true,
+    projetilVisivel: o.projetil_visivel === true,
+    caminhoVisivel: o.caminho_visivel === true,
+    distanciaProjetilM: finito(o.distancia_projetil_m),
+    tempoCaminhoS: finito(o.tempo_caminho_s),
+    alcanceRenderM: finito(o.alcance_render_m),
+    duracaoCaminhoS: finito(o.duracao_caminho_s),
     impulsoNs: finito(o.impulso_ns),
     forcaPicoN: finito(o.forca_pico_n),
     forcaAtualN: finito(o.forca_atual_n),
@@ -374,6 +468,47 @@ function lerTiroHud(bruto: unknown): HudTiro | null {
     direcaoTiro: lerTrio(o.direcao_tiro),
     direcaoSoco: lerTrio(o.direcao_soco),
     azimuteSocoGraus: finito(o.azimute_soco_graus),
+  }
+}
+
+function lerCargaHud(bruto: unknown): HudCarga | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  return {
+    massaSemCargaG: finito(o.massa_sem_carga_g),
+    massaTotalG: finito(o.massa_total_g),
+    cargaAtualG: finito(o.carga_atual_g),
+    cargaMaxVooSeguroG: finito(o.carga_max_voo_seguro_g),
+    cargaMaxDescolagemOgeG: finito(o.carga_max_descolagem_oge_g),
+    cargaMaxDescolagemIgeG: finito(o.carga_max_descolagem_ige_g),
+    tWEfetivoOge: finito(o.t_w_efetivo_oge),
+    tWEfetivoIge: finito(o.t_w_efetivo_ige),
+    podeAlcarVoo: o.pode_alcar_voo !== false,
+    podePairarOge: o.pode_pairar_oge !== false,
+    podeVoarSeguro: o.pode_voar_seguro !== false,
+    estadoVoo: typeof o.estado_voo === "string" ? o.estado_voo : null,
+    ventoMaxMS: finito(o.vento_max_m_s),
+  }
+}
+
+function lerGraficosHud(bruto: unknown): HudGraficos | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  return {
+    sombras: o.sombras !== false,
+    reflexos: o.reflexos !== false,
+    nevoeiro: o.nevoeiro === true,
+    mostrarHelices: o.mostrar_helices !== false,
+    mostrarEfeitos: o.mostrar_efeitos !== false,
+    mostrarFiosDetalhes: o.mostrar_fios_detalhes !== false,
+    escalaResolucao: finito(o.escala_resolucao) ?? 1.0,
+    qualidadeJpeg: finito(o.qualidade_jpeg) ?? 80,
+    fpsAtual: finito(o.fps_atual),
+    fpsSimulacao: finito(o.fps_simulacao),
+    fpsFpv: finito(o.fps_fpv),
+    fpsFisica: finito(o.fps_fisica),
+    msRenderSim: finito(o.ms_render_sim),
+    msRenderFpv: finito(o.ms_render_fpv),
   }
 }
 
@@ -411,6 +546,8 @@ export function lerHud(bruto: unknown): AmostraHud | null {
     fovy: finito(o.fovy),
     ventoBordo: lerVentoBordo(o.vento_bordo),
     tiro: lerTiroHud(o.tiro),
+    carga: lerCargaHud(o.carga),
+    graficos: lerGraficosHud(o.graficos),
   }
 }
 
@@ -649,11 +786,12 @@ export function erroCentragem(
   }
 }
 
-/** Bloco `bola` do `/api/state`: a velocidade da bola aleatória e a faixa que o slider pode usar. */
+/** Bloco `bola` do `/api/state`: a velocidade da bola (0 = parada), a faixa do slider e o toggle `autoAtirar`. */
 export interface BolaConfig {
   velocidade: number
   min: number
   max: number
+  autoAtirar?: boolean
 }
 
 export function lerBolaConfig(bruto: unknown): BolaConfig | null {
@@ -664,7 +802,9 @@ export function lerBolaConfig(bruto: unknown): BolaConfig | null {
   const max = finito(o.max)
   if (velocidade === null || min === null || max === null || !(max > min))
     return null
-  return { velocidade: limitar(velocidade, min, max), min, max }
+  const base: BolaConfig = { velocidade: limitar(velocidade, min, max), min, max }
+  if (typeof o.auto_atirar === "boolean") base.autoAtirar = o.auto_atirar
+  return base
 }
 
 /** Passo do slider da bola (m/s). */
@@ -1969,6 +2109,7 @@ export type EstadoBola = BolaConfig | null
 /** A velocidade da BOLA aleatória (`POST /api/bola`), com a mesma política do vento. */
 export class ControloBola extends Observavel<EstadoBola> {
   private readonly emissor: Emissor<number, number | null>
+  private readonly enviarAuto?: (autoAtirar: boolean) => Promise<boolean | null>
   private readonly relogio: () => number
   private readonly aoFalhar?: (erro: unknown) => void
   private ultimaMudanca = Number.NEGATIVE_INFINITY
@@ -1977,12 +2118,14 @@ export class ControloBola extends Observavel<EstadoBola> {
   constructor(
     opcoes: ControloOpcoes & {
       enviar: (velocidade: number) => Promise<number | null>
+      enviarAuto?: (autoAtirar: boolean) => Promise<boolean | null>
       intervaloMs?: number
     }
   ) {
     super(null)
     this.relogio = opcoes.relogio ?? (() => Date.now())
     this.aoFalhar = opcoes.aoFalhar
+    this.enviarAuto = opcoes.enviarAuto
     this.emissor = new Emissor<number, number | null>({
       enviar: opcoes.enviar,
       intervaloMs: opcoes.intervaloMs ?? 100,
@@ -2009,6 +2152,20 @@ export class ControloBola extends Observavel<EstadoBola> {
     else this.emissor.pedir(v)
   }
 
+  /** Liga/desliga o AUTO SHOOT (`POST /api/bola {"auto_atirar": bool}`), só disparando quando vai acertar. */
+  alternarAutoAtirar(autoAtirar: boolean): void {
+    const cfg = this.valor ?? { velocidade: 0.5, min: 0.0, max: 0.8 }
+    const novo = Boolean(autoAtirar)
+    this.ultimaMudanca = this.relogio()
+    this.publicar({ ...cfg, autoAtirar: novo })
+    if (this.enviarAuto !== undefined) {
+      this.enviarAuto(novo).catch((erro: unknown) => {
+        if (this.servidor !== null) this.publicar(this.servidor)
+        this.aoFalhar?.(erro)
+      })
+    }
+  }
+
   adotarServidor(cfg: BolaConfig | null): void {
     if (cfg === null) return
     this.servidor = cfg
@@ -2022,7 +2179,8 @@ export class ControloBola extends Observavel<EstadoBola> {
       v !== null &&
       v.velocidade === cfg.velocidade &&
       v.min === cfg.min &&
-      v.max === cfg.max
+      v.max === cfg.max &&
+      Boolean(v.autoAtirar) === Boolean(cfg.autoAtirar)
     )
       return
     this.publicar(cfg)

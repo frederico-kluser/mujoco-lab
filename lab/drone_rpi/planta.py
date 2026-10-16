@@ -34,7 +34,16 @@ from . import escalar
 from .aero import Aerodinamica, FlagsAero
 from .bateria import EstadoDesgaste, ModeloBateria
 from .componentes import Hardware
-from .modelo import REACOES, ROTORES, SITE_BOCA_CANO, SITES_ROTOR
+from .modelo import (
+    ALCANCE_PROJETIL_M,
+    DURACAO_CAMINHO_TIRO_S,
+    DURACAO_FOGO_CANO_S,
+    N_SLOTS_TIRO,
+    REACOES,
+    ROTORES,
+    SITE_BOCA_CANO,
+    SITES_ROTOR,
+)
 from .propulsao import Propulsao
 from .sensores import IMU, Barometro, FluxoOptico, MonitorBateria, Telemetro, _sortear
 
@@ -117,17 +126,60 @@ class Planta:
         self._v_ctrl, self._v_xfrc, self._v_sd = data.ctrl, data.xfrc_applied[c], data.sensordata
         self._i_t = [int(i) for i in self.slot_t]
         self._i_q = [int(i) for i in self.slot_q]
-        # arma fixa no topo (Glock 25 .380 Auto): site `boca_cano` e estado de disparo/recuo
+        # arma fixa no topo (Glock 25 .380 Auto): site `boca_cano`, geoms de fogo/ferrolho/projéteis e estado de tiro
         try:
             self.site_boca: int | None = int(model.site(SITE_BOCA_CANO).id)
         except KeyError:
             self.site_boca = None
         self._v_boca = data.site_xpos[self.site_boca] if self.site_boca is not None else None
+        self._gid_ferrolho = self._geom_id("arma_ferrolho")
+        self._pos_ferrolho0 = (
+            model.geom_pos[self._gid_ferrolho].copy() if self._gid_ferrolho is not None else None
+        )
+        self._gids_fogo = [
+            g for g in (
+                self._geom_id("arma_fogo_nucleo"),
+                self._geom_id("arma_fogo_cone"),
+                self._geom_id("arma_fogo_cruz_h"),
+                self._geom_id("arma_fogo_cruz_v"),
+            ) if g is not None
+        ]
+        self._gids_projetil = [
+            g for g in (self._geom_id(f"projetil_tiro_{k}") for k in range(N_SLOTS_TIRO)) if g is not None
+        ]
+        self._gids_caminho = [
+            g for g in (self._geom_id(f"caminho_tiro_{k}") for k in range(N_SLOTS_TIRO)) if g is not None
+        ]
+        for gid in (*self._gids_fogo, *self._gids_projetil, *self._gids_caminho):
+            model.geom_sameframe[gid] = 0
+        if self._gid_ferrolho is not None:
+            model.geom_sameframe[self._gid_ferrolho] = 0
+        # bola alvo (`ponto` mocap + `ponto_esfera` geom) e câmara `fpv` para interseção balística e mira FPS
+        self._gid_bola = self._geom_id("ponto_esfera")
+        try:
+            bid_bola = int(model.body("ponto").id)
+            self._mocap_bola: int | None = int(model.body_mocapid[bid_bola])
+        except KeyError:
+            self._mocap_bola = None
+        self.raio_bola = float(model.geom_size[self._gid_bola, 0]) if self._gid_bola is not None else 0.05
+        try:
+            self._cid_fpv: int | None = int(model.camera("fpv").id)
+        except KeyError:
+            self._cid_fpv = None
         self._tiros_ativos: list[list[float]] = []    # [[forca_n, passos_restantes], ...]
+        self._disparos_visuais: list[dict] = []       # projéteis em voo (≤ 50 m) e caminhos visíveis (≤ 1,0 s)
+        self._fogo_restante_s = 0.0                   # contador decrescente do efeito de fogo do cano (s)
+        self._ferrolho_restante_s = 0.0               # ciclo de blowback do ferrolho (s)
         self.n_tiros = 0
+        self.n_acertos_bola = 0
+        self.n_erros_bola = 0
         self.gatilho_tiro = False
         self.forca_tiro_atual = 0.0
         self.ultimo_tiro: dict | None = None
+        # carga útil dinâmica extra (kg) e massa/inércia de base do corpo `drone`
+        self._massa_corpo_base = float(model.body_mass[c])
+        self._inercia_corpo_base = model.body_inertia[c].copy()
+        self.carga_extra_kg = 0.0
         # altura do eixo do cano acima do CM (m) e inércia de pitch I_yy (kg·m²) no corpo
         self.braco_z_arma = (
             float(model.site_pos[self.site_boca, 2]) if self.site_boca is not None else 0.0
@@ -137,6 +189,40 @@ class Planta:
         r_inercia = q_inercia.reshape(3, 3)
         i_corpo = r_inercia @ np.diag(model.body_inertia[c]) @ r_inercia.T
         self.inercia_corpo = np.diag(i_corpo).copy()
+        # Hélices 3D rotativas (rotores 1..4): sentido correto (CW = -1 nos rotores 1,2; CCW = +1 nos rotores 3,4)
+        # e velocidade angular visual proporcional à fração % de ω_max de cada motor.
+        self.sentido_rotacao_helices = [int(g) for g in hw.GIRO]
+        self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
+        self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
+        self._helices_pas: list[tuple[np.ndarray, list[tuple[int, float, float, float, float]]]] = []
+        r_hel = hw.helice.raio
+        theta_pa = hw.helice.angulo_passo_75_rad
+        n_pas = max(int(hw.helice.pas), 2)
+        for i in range(4):
+            centro_r = model.site_pos[int(self.sites[i])].copy()
+            s_giro = float(self.sentido_rotacao_helices[i])
+            pecas_pa: list[tuple[int, float, float, float, float]] = []
+            gid_cubo = self._geom_id(f"helice{i + 1}_cubo")
+            if gid_cubo is not None:
+                model.geom_sameframe[gid_cubo] = 0
+            for b_idx in range(n_pas):
+                psi_b = 2.0 * math.pi * b_idx / n_pas
+                for sufixo, r_frac, dz_pa, k_pitch in (
+                    ("raiz", 0.29, 0.0005, 1.00),
+                    ("ponta", 0.73, 0.0005, 0.75),
+                    ("faixa", 0.93, 0.0006, 0.65),
+                ):
+                    gid_pa = self._geom_id(f"helice{i + 1}_pa{b_idx + 1}_{sufixo}")
+                    if gid_pa is not None:
+                        model.geom_sameframe[gid_pa] = 0
+                        pecas_pa.append((gid_pa, r_frac * r_hel, dz_pa, psi_b, k_pitch * s_giro * theta_pa))
+            self._helices_pas.append((centro_r, pecas_pa))
+
+    def _geom_id(self, nome: str) -> int | None:
+        try:
+            return int(self.model.geom(nome).id)
+        except KeyError:
+            return None
 
     # ------------------------------------------------------------------ vistas ndarray (a API de sempre)
     @property
@@ -192,7 +278,13 @@ class Planta:
         self.data.ctrl[self.slot_q] = 0.0
         self.data.xfrc_applied[self.corpo] = 0.0
         self._tiros_ativos.clear()
+        self._limpar_visuais_tiro()
+        self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
+        self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
+        self._aplicar_geoms_helices()
         self.n_tiros = 0
+        self.n_acertos_bola = 0
+        self.n_erros_bola = 0
         self.gatilho_tiro = False
         self.forca_tiro_atual = 0.0
         self.ultimo_tiro = None
@@ -250,10 +342,48 @@ class Planta:
         l_vec = np.cross(braco_mundo, j_vec)
         massa_atual = float(self.model.body_mass.sum())
         azim_soco = float(math.degrees(math.atan2(soco_dir[1], soco_dir[0])) % 360.0)
+        # velocidade inicial do projétil no mundo = velocidade da boca do cano + v₀·x̂_corpo (296 m/s)
+        w_mundo = rmat @ self.data.qvel[3:6]
+        v_boca = self.data.qvel[0:3] + np.cross(w_mundo, braco_mundo)
+        v_proj0 = v_boca + arma.velocidade_boca * ex
+        slot = (self.n_tiros - 1) % max(len(self._gids_projetil), 1)
+        # Se o slot já estava ocupado por um tiro anterior (< 1 s), apaga o anterior e assume o slot
+        self._disparos_visuais = [d for d in self._disparos_visuais if d["slot"] != slot]
+        disp_visual = {
+            "id": int(self.n_tiros),
+            "slot": int(slot),
+            "t0": float(self.data.time),
+            "origem": p_boca.copy(),
+            "direcao": ex.copy(),
+            "pos": p_boca.copy(),
+            "vel": v_proj0.copy(),
+            "distancia_m": 0.0,
+            "alcance_max_render_m": ALCANCE_PROJETIL_M,
+            "duracao_caminho_s": DURACAO_CAMINHO_TIRO_S,
+            "alcancou_50m": False,
+            "acertou_bola": False,
+            "bateu_chao": False,
+            "parou": False,
+            "resultado": "em_voo",
+            "projetil_visivel": True,
+            "caminho_visivel": True,
+            "tempo_vida_s": 0.0,
+        }
+        self._disparos_visuais.append(disp_visual)
+        self._fogo_restante_s = DURACAO_FOGO_CANO_S
+        self._ferrolho_restante_s = 0.045
+        self._aplicar_geoms_disparo(disp_visual)
+        self._aplicar_fogo_e_ferrolho()
         self.ultimo_tiro = {
             "t": round(float(self.data.time), 4),
             "n": n,
             "tiros_acumulados": self.n_tiros,
+            "acertos_bola": self.n_acertos_bola,
+            "erros_bola": self.n_erros_bola,
+            "acertou_bola": None,
+            "resultado": "em_voo",
+            "ponto_impacto": None,
+            "distancia_impacto_m": None,
             "impulso_ns": round(j_total, 5),
             "forca_n": round(f_passo, 3),
             "duracao_s": round(n_passos * self.dt, 4),
@@ -266,8 +396,365 @@ class Planta:
             "delta_v_m_s": round(j_total / max(massa_atual, 1e-6), 5),
             "braco_z_m": round(self.braco_z_arma, 5),
             "delta_omega_pitch_rad_s": round(-self.braco_z_arma * j_total / max(float(self.inercia_corpo[1]), 1e-6), 5),
+            "origem_boca": [round(float(v), 4) for v in p_boca],
+            "velocidade_projetil_m_s": round(float(np.linalg.norm(v_proj0)), 2),
+            "alcance_render_m": ALCANCE_PROJETIL_M,
+            "duracao_caminho_s": DURACAO_CAMINHO_TIRO_S,
         }
         return self.ultimo_tiro
+
+    def _limpar_visuais_tiro(self) -> None:
+        """Esconde todos os geoms visuais de fogo do cano, projéteis e caminhos de tiro e repõe o ferrolho."""
+        self._disparos_visuais.clear()
+        self._fogo_restante_s = 0.0
+        self._ferrolho_restante_s = 0.0
+        m = self.model
+        for gid in self._gids_fogo:
+            m.geom_rgba[gid, 3] = 0.0
+        for gid in self._gids_projetil:
+            m.geom_rgba[gid, 3] = 0.0
+            m.geom_pos[gid] = [0.0, 0.0, -10.0]
+        for gid in self._gids_caminho:
+            m.geom_rgba[gid, 3] = 0.0
+            m.geom_pos[gid] = [0.0, 0.0, -10.0]
+        if self._gid_ferrolho is not None and self._pos_ferrolho0 is not None:
+            m.geom_pos[self._gid_ferrolho] = self._pos_ferrolho0
+
+    def _aplicar_geoms_helices(self) -> None:
+        """Atualiza `geom_pos` e `geom_quat` das pás 3D das 4 hélices segundo `self.angulos_helices`."""
+        m = self.model
+        gpos, gquat = m.geom_pos, m.geom_quat
+        for i, (centro_r, pecas_pa) in enumerate(self._helices_pas):
+            if not pecas_pa:
+                continue
+            ang_i = self.angulos_helices[i]
+            cx_r, cy_r, cz_r = float(centro_r[0]), float(centro_r[1]), float(centro_r[2])
+            for gid_pa, r_dist, dz_pa, psi_b, pitch_rad in pecas_pa:
+                psi = ang_i + psi_b
+                c_p, s_p = math.cos(psi), math.sin(psi)
+                gpos[gid_pa, 0] = cx_r + r_dist * c_p
+                gpos[gid_pa, 1] = cy_r + r_dist * s_p
+                gpos[gid_pa, 2] = cz_r + dz_pa
+                cz_h, sz_h = math.cos(0.5 * psi), math.sin(0.5 * psi)
+                cx_h, sx_h = math.cos(0.5 * pitch_rad), math.sin(0.5 * pitch_rad)
+                gquat[gid_pa, 0] = cz_h * cx_h
+                gquat[gid_pa, 1] = cz_h * sx_h
+                gquat[gid_pa, 2] = sz_h * sx_h
+                gquat[gid_pa, 3] = sz_h * cx_h
+
+    def _passo_helices_visuais(self, omega_rotores) -> None:
+        """Avança o ângulo de cada hélice no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4)
+        com velocidade proporcional à % de rotação máxima (`ω_i / ω_max(V_bus)`)."""
+        w_max = max(self.hw.omega_max(self.v_bus), 1.0)
+        dt = self.dt
+        omega_vis_max = 36.0  # rad/s a 100 % de ω_max (abaixo do Nyquist de 50 fps para nunca inverter sentido)
+        mexeu = False
+        for i in range(4):
+            w_i = float(omega_rotores[i])
+            pct = min(max(w_i / w_max, 0.0), 1.0)
+            self.pct_rotacao_helices[i] = pct
+            if pct > 1e-6:
+                s = self.sentido_rotacao_helices[i]
+                self.angulos_helices[i] = (self.angulos_helices[i] + s * omega_vis_max * pct * dt) % (2.0 * math.pi)
+                mexeu = True
+        if mexeu and (self.n_passos < 20 or (self.n_passos & 1) == 0):
+            self._aplicar_geoms_helices()
+
+    def _aplicar_fogo_e_ferrolho(self) -> None:
+        """Atualiza o efeito de fogo do cano (muzzle flash) e o recuo blowback do ferrolho da Glock 25."""
+        m = self.model
+        if self._fogo_restante_s > 0.0 and self._gids_fogo:
+            frac = min(1.0, max(0.0, self._fogo_restante_s / DURACAO_FOGO_CANO_S))
+            escala = 0.65 + 0.55 * math.sin(math.pi * frac)
+            # nucleo branco-amarelado + cone laranja + labaredas cruzadas
+            alphas = (0.96 * frac, 0.88 * frac, 0.78 * frac, 0.78 * frac)
+            for gid, a in zip(self._gids_fogo, alphas, strict=False):
+                m.geom_rgba[gid, 3] = a
+            if len(self._gids_fogo) >= 2:
+                m.geom_size[self._gids_fogo[0]] = [0.022 * escala, 0.012 * escala, 0.012 * escala]
+                m.geom_size[self._gids_fogo[1]] = [0.065 * escala, 0.022 * escala, 0.022 * escala]
+        elif self._gids_fogo:
+            for gid in self._gids_fogo:
+                m.geom_rgba[gid, 3] = 0.0
+        if self._gid_ferrolho is not None and self._pos_ferrolho0 is not None:
+            if self._ferrolho_restante_s > 0.0:
+                # Blowback: recua 32 mm nos primeiros 12 ms e regressa à bateria até aos 45 ms
+                tau = 0.045 - self._ferrolho_restante_s
+                recuo = (tau / 0.012) if tau <= 0.012 else max(0.0, (0.045 - tau) / 0.033)
+                m.geom_pos[self._gid_ferrolho, 0] = self._pos_ferrolho0[0] - 0.032 * recuo
+            else:
+                m.geom_pos[self._gid_ferrolho, 0] = self._pos_ferrolho0[0]
+
+    def _aplicar_geoms_disparo(self, disp: dict) -> None:
+        """Posiciona o geom do projétil (se d <= 50 m e não bateu) e a cápsula do caminho (se τ <= 1,0 s) no mundo.
+
+        Escreve tanto em `model.geom_pos/quat/size` como diretamente em `data.geom_xpos/xmat` (e com
+        `geom_sameframe=0`) para que a cápsula vá SEMPRE da boca do cano até ao ponto de impacto/50 m e
+        NUNCA fique vertical do céu ao chão.
+        """
+        slot = disp["slot"]
+        m, d = self.model, self.data
+        if slot < len(self._gids_projetil):
+            gid_p = self._gids_projetil[slot]
+            if disp["projetil_visivel"]:
+                m.geom_pos[gid_p] = disp["pos"]
+                d.geom_xpos[gid_p] = disp["pos"]
+                m.geom_rgba[gid_p] = [1.0, 0.84, 0.28, 1.0]
+            else:
+                m.geom_rgba[gid_p, 3] = 0.0
+                m.geom_pos[gid_p] = [0.0, 0.0, -10.0]
+                d.geom_xpos[gid_p] = [0.0, 0.0, -10.0]
+        if slot < len(self._gids_caminho):
+            gid_c = self._gids_caminho[slot]
+            if disp["caminho_visivel"]:
+                p0 = disp["origem"]
+                p1 = disp["pos"]
+                delta = p1 - p0
+                comp = float(np.linalg.norm(delta))
+                if comp > 1e-4:
+                    u = delta / comp
+                    meio = 0.5 * (p0 + p1)
+                else:
+                    u = disp["direcao"]
+                    comp = 0.02
+                    meio = p0 + 0.01 * u
+                quat = np.zeros(4)
+                mujoco.mju_quatZ2Vec(quat, u)
+                tau = disp["tempo_vida_s"]
+                alpha = 0.90 if tau <= 0.80 else max(0.10, 0.90 * (1.0 - (tau - 0.80) / 0.20))
+                cor = [0.18, 1.0, 0.55, alpha] if disp.get("acertou_bola") else [1.0, 0.72, 0.16, alpha]
+                m.geom_pos[gid_c] = meio
+                m.geom_quat[gid_c] = quat
+                m.geom_size[gid_c] = [0.008, 0.5 * comp, 0.0]
+                m.geom_rgba[gid_c] = cor
+                d.geom_xpos[gid_c] = meio
+                mujoco.mju_quat2Mat(d.geom_xmat[gid_c], quat)
+            else:
+                m.geom_rgba[gid_c, 3] = 0.0
+                m.geom_pos[gid_c] = [0.0, 0.0, -10.0]
+                d.geom_xpos[gid_c] = [0.0, 0.0, -10.0]
+
+    def _passo_visuais_tiro(self) -> None:
+        """Avança o fogo do cano, o(s) projétil(eis) até ao impacto (bola/chão) ou 50 m e o(s) caminho(s) durante 1,0 s."""
+        if not self._disparos_visuais and self._fogo_restante_s <= 0.0 and self._ferrolho_restante_s <= 0.0:
+            return
+        dt = self.dt
+        if self._fogo_restante_s > 0.0:
+            self._fogo_restante_s = max(0.0, self._fogo_restante_s - dt)
+        if self._ferrolho_restante_s > 0.0:
+            self._ferrolho_restante_s = max(0.0, self._ferrolho_restante_s - dt)
+        self._aplicar_fogo_e_ferrolho()
+        if not self._disparos_visuais:
+            return
+        grav = self.model.opt.gravity.copy()
+        vento = self.model.opt.wind.copy()
+        pos_bola = (
+            self.data.mocap_pos[self._mocap_bola].copy()
+            if self._mocap_bola is not None and self._mocap_bola >= 0
+            else None
+        )
+        r_col_bola = self.raio_bola + 0.0045     # raio da bola (50 mm) + raio do projétil 9 mm (4,5 mm)
+        # Coeficiente balístico do projétil .380 ACP (9 mm, 6,156 g, C_d ≈ 0,295): k_ar = ρ·C_d·A/(2·m_p) ≈ 0,0018 m⁻¹
+        k_ar = 0.00180
+        vivos: list[dict] = []
+        for disp in self._disparos_visuais:
+            disp["tempo_vida_s"] = round(disp["tempo_vida_s"] + dt, 6)
+            tau = disp["tempo_vida_s"]
+            if not disp["parou"]:
+                p_ant = disp["pos"].copy()
+                v_rel = disp["vel"] - vento
+                v_norm = float(np.linalg.norm(v_rel))
+                acc = grav - k_ar * v_norm * v_rel
+                p_novo = p_ant + disp["vel"] * dt + 0.5 * acc * (dt * dt)
+                v_novo = disp["vel"] + acc * dt
+
+                # 1. Verifica impacto com a BOLA (`ponto_esfera`) ao longo do segmento [p_ant, p_novo]
+                bateu_bola = False
+                if pos_bola is not None:
+                    seg = p_novo - p_ant
+                    seg2 = float(np.dot(seg, seg))
+                    s_min = float(np.clip(np.dot(pos_bola - p_ant, seg) / max(seg2, 1e-12), 0.0, 1.0))
+                    p_prox = p_ant + s_min * seg
+                    d_bola = float(np.linalg.norm(p_prox - pos_bola))
+                    if d_bola <= r_col_bola:
+                        bateu_bola = True
+                        disp["pos"] = p_prox
+                        disp["vel"] = v_novo
+                        disp["distancia_m"] = min(float(np.linalg.norm(p_prox - disp["origem"])), ALCANCE_PROJETIL_M)
+                        disp["acertou_bola"] = True
+                        disp["parou"] = True
+                        disp["resultado"] = "acertou_bola"
+                        disp["projetil_visivel"] = False
+                        self.n_acertos_bola += 1
+                        if self.ultimo_tiro is not None and self.ultimo_tiro.get("tiros_acumulados") == disp["id"]:
+                            self.ultimo_tiro["acertou_bola"] = True
+                            self.ultimo_tiro["resultado"] = "acertou_bola"
+                            self.ultimo_tiro["acertos_bola"] = self.n_acertos_bola
+                            self.ultimo_tiro["erros_bola"] = self.n_erros_bola
+                            self.ultimo_tiro["ponto_impacto"] = [round(float(v), 4) for v in p_prox]
+                            self.ultimo_tiro["distancia_impacto_m"] = round(disp["distancia_m"], 4)
+
+                # 2. Verifica impacto com o CHÃO (z <= 0,005 m) antes dos 50 m
+                if not bateu_bola and p_novo[2] <= 0.005 and p_ant[2] > 0.005:
+                    s_chao = float(np.clip((p_ant[2] - 0.005) / max(p_ant[2] - p_novo[2], 1e-9), 0.0, 1.0))
+                    p_chao = p_ant + s_chao * (p_novo - p_ant)
+                    dist_chao = float(np.linalg.norm(p_chao - disp["origem"]))
+                    if dist_chao <= ALCANCE_PROJETIL_M:
+                        disp["pos"] = p_chao
+                        disp["vel"] = v_novo
+                        disp["distancia_m"] = dist_chao
+                        disp["bateu_chao"] = True
+                        disp["parou"] = True
+                        disp["resultado"] = "errou_chao"
+                        disp["projetil_visivel"] = False
+                        self.n_erros_bola += 1
+                        if self.ultimo_tiro is not None and self.ultimo_tiro.get("tiros_acumulados") == disp["id"]:
+                            self.ultimo_tiro["acertou_bola"] = False
+                            self.ultimo_tiro["resultado"] = "errou_chao"
+                            self.ultimo_tiro["acertos_bola"] = self.n_acertos_bola
+                            self.ultimo_tiro["erros_bola"] = self.n_erros_bola
+                            self.ultimo_tiro["ponto_impacto"] = [round(float(v), 4) for v in p_chao]
+                            self.ultimo_tiro["distancia_impacto_m"] = round(dist_chao, 4)
+
+                # 3. Verifica limite de 50 metros de alcance de renderização do projétil
+                if not disp["parou"]:
+                    delta = p_novo - disp["origem"]
+                    dist = float(np.linalg.norm(delta))
+                    if dist >= ALCANCE_PROJETIL_M:
+                        p_50m = disp["origem"] + (ALCANCE_PROJETIL_M / max(dist, 1e-9)) * delta
+                        disp["pos"] = p_50m
+                        disp["vel"] = v_novo
+                        disp["distancia_m"] = ALCANCE_PROJETIL_M
+                        disp["alcancou_50m"] = True
+                        disp["parou"] = True
+                        disp["resultado"] = "errou_50m"
+                        disp["projetil_visivel"] = False
+                        self.n_erros_bola += 1
+                        if self.ultimo_tiro is not None and self.ultimo_tiro.get("tiros_acumulados") == disp["id"]:
+                            self.ultimo_tiro["acertou_bola"] = False
+                            self.ultimo_tiro["resultado"] = "errou_50m"
+                            self.ultimo_tiro["acertos_bola"] = self.n_acertos_bola
+                            self.ultimo_tiro["erros_bola"] = self.n_erros_bola
+                            self.ultimo_tiro["ponto_impacto"] = [round(float(v), 4) for v in p_50m]
+                            self.ultimo_tiro["distancia_impacto_m"] = ALCANCE_PROJETIL_M
+                    else:
+                        disp["pos"] = p_novo
+                        disp["vel"] = v_novo
+                        disp["distancia_m"] = dist
+                        disp["projetil_visivel"] = True
+            if tau <= DURACAO_CAMINHO_TIRO_S + 1e-9:
+                disp["caminho_visivel"] = True
+                self._aplicar_geoms_disparo(disp)
+                vivos.append(disp)
+            else:
+                disp["caminho_visivel"] = False
+                disp["projetil_visivel"] = False
+                self._aplicar_geoms_disparo(disp)
+        self._disparos_visuais = vivos
+
+    def prever_tiro_bola(self, pos_bola: np.ndarray | None = None, vel_bola: np.ndarray | None = None) -> dict:
+        """Calcula em tempo real ONDE O TIRO VAI PEGAR e se ACERTA A BOLA (considerando o movimento da bola
+        até o projétil chegar):
+
+          · Simula o voo balístico do projétil desde `boca_cano` com v₀ = v_boca + 296·x̂_corpo, gravidade e vento;
+          · Compara a trajetória do projétil p_proj(τ) com a trajetória futura da bola p_bola(τ) = p_bola(0) + v_bola·τ;
+          · Projeta o ponto de impacto na câmara FPV (`ponto_impacto_tan = [tx, ty]`, mesma convenção de `erro_tan`)
+            para o visor FPS mostrar exatamente onde o tiro vai pegar e «NO ALVO» vs «FORA DO ALVO».
+        """
+        arma = self.hw.arma
+        v0_boca = arma.velocidade_boca if arma is not None else 296.0
+        rmat = self._v_xmat.reshape(3, 3)
+        ex = rmat[:, 0]
+        com = self._v_xipos
+        p_boca = self._v_boca.copy() if self._v_boca is not None else (com + rmat @ np.array([0.0965, 0.0, self.braco_z_arma]))
+        w_mundo = rmat @ self.data.qvel[3:6]
+        v_boca = self.data.qvel[0:3] + np.cross(w_mundo, p_boca - com)
+        v_proj0 = v_boca + v0_boca * ex
+        grav = self.model.opt.gravity
+        vento = self.model.opt.wind
+        k_ar = 0.00180
+        r_col = self.raio_bola + 0.0045
+
+        if pos_bola is None and self._mocap_bola is not None and self._mocap_bola >= 0:
+            pos_bola = self.data.mocap_pos[self._mocap_bola].copy()
+        v_b = np.zeros(3) if vel_bola is None else np.asarray(vel_bola, dtype=float)
+
+        if pos_bola is not None:
+            pos_b0 = np.asarray(pos_bola, dtype=float)
+            dist_b0 = float(np.linalg.norm(pos_b0 - p_boca))
+            # Tempo de voo estimado até o plano da bola: τ_voo ≈ D / v₀ (≈ 5–15 ms a 1,5–4 m)
+            v_rel0 = v_proj0 - vento
+            a_proj0 = grav - k_ar * float(np.linalg.norm(v_rel0)) * v_rel0
+            # Posição relativa inicial r₀ = p_boca − p_bola(0) e velocidade relativa u_rel = v_proj0 − v_bola
+            r0 = p_boca - pos_b0
+            u_rel = v_proj0 - v_b
+            u2 = float(np.dot(u_rel, u_rel))
+            tau_min = float(np.clip(-np.dot(r0, u_rel) / max(u2, 1e-6), 0.0, ALCANCE_PROJETIL_M / max(v0_boca, 1.0)))
+            # Refina com a aceleração gravitacional/arrasto em τ_min
+            p_proj_t = p_boca + v_proj0 * tau_min + 0.5 * a_proj0 * (tau_min * tau_min)
+            p_bola_t = pos_b0 + v_b * tau_min
+            erro_m = float(np.linalg.norm(p_proj_t - p_bola_t))
+            p_imp = p_proj_t
+            no_alvo = bool(erro_m <= r_col and tau_min > 0.0)
+            # Para o AUTO SHOOT: exige margem estrita (≤ 76 % do raio de colisão) considerando o deslocamento da bola até τ_min
+            vai_acertar = bool(erro_m <= 0.76 * r_col and tau_min > 0.0 and dist_b0 <= ALCANCE_PROJETIL_M)
+        else:
+            dist_b0 = 2.0
+            tau_min = dist_b0 / max(v0_boca, 1.0)
+            v_rel0 = v_proj0 - vento
+            a_proj0 = grav - k_ar * float(np.linalg.norm(v_rel0)) * v_rel0
+            p_imp = p_boca + v_proj0 * tau_min + 0.5 * a_proj0 * (tau_min * tau_min)
+            erro_m = None
+            no_alvo = False
+            vai_acertar = False
+
+        # Projeção de `p_imp` na câmara FPV (`ponto_impacto_tan = [tx, ty]`, x direita, y baixo)
+        imp_tan = None
+        if self._cid_fpv is not None:
+            cam_pos = self.data.cam_xpos[self._cid_fpv]
+            cam_mat = self.data.cam_xmat[self._cid_fpv].reshape(3, 3)
+            dc = cam_mat.T @ (p_imp - cam_pos)
+            xc, yc, zc = float(dc[0]), float(dc[1]), -float(dc[2])
+            if zc > 0.05:
+                imp_tan = [round(xc / zc, 5), round(-yc / zc, 5)]
+
+        return {
+            "no_alvo": no_alvo,
+            "vai_acertar_certeza": vai_acertar,
+            "mensagem": "NO ALVO" if no_alvo else "FORA DO ALVO",
+            "erro_bola_m": None if erro_m is None else round(erro_m, 4),
+            "raio_colisao_m": round(r_col, 4),
+            "tempo_voo_ms": round(tau_min * 1000.0, 2),
+            "distancia_bola_m": round(dist_b0, 3),
+            "ponto_impacto_mundo": [round(float(v), 4) for v in p_imp],
+            "ponto_impacto_tan": imp_tan,
+        }
+
+    def definir_carga_extra(self, carga_kg: float) -> dict:
+        """Define uma carga útil extra `carga_kg` (≥ 0 kg) acoplada ao drone, atualizando a massa/inércia
+        no MuJoCo (`mj_setConst` preservando o estado dinâmico atual) e recalibrando a aerodinâmica."""
+        carga = max(0.0, float(carga_kg))
+        self.carga_extra_kg = carga
+        c = self.corpo
+        m_nova = self._massa_corpo_base + carga
+        fator_m = m_nova / max(self._massa_corpo_base, 1e-6)
+        qpos_atual = self.data.qpos.copy()
+        qvel_atual = self.data.qvel.copy()
+        ctrl_atual = self.data.ctrl.copy()
+        t_atual = float(self.data.time)
+        self.model.body_mass[c] = m_nova
+        self.model.body_inertia[c] = self._inercia_corpo_base * fator_m
+        mujoco.mj_setConst(self.model, self.data)
+        self.data.qpos[:] = qpos_atual
+        self.data.qvel[:] = qvel_atual
+        self.data.ctrl[:] = ctrl_atual
+        self.data.time = t_atual
+        mujoco.mj_forward(self.model, self.data)
+        ph = self.hw.ponto_pairagem(self.hw.bateria.v_nominal, massa=m_nova)
+        self.aero.omega_h = ph["omega"]
+        self.omega_h = ph["omega"]
+        self.aero.definir_arrasto(*self.aero.d_xy, massa=m_nova)
+        return self.hw.limites_carga(massa_total=m_nova, soc=self.bat.soc)
 
     def _forca_tiro_passo(self) -> float:
         """Força escalar de recuo (N) a aplicar NESTE passo de física (avança os contadores ativos)."""
@@ -430,6 +917,8 @@ class Planta:
             self.forca_tiro_atual = 0.0
 
         _mj_step2(m, d)
+        self._passo_visuais_tiro()
+        self._passo_helices_visuais(omega)
 
         # bateria: corrente REAL deste passo (motores + eletrónica)
         p_e = 0.0 if self.brownout else self.p_eletronica
@@ -524,6 +1013,8 @@ class Planta:
             self.forca_tiro_atual = 0.0
 
         mujoco.mj_step2(m, d)
+        self._passo_visuais_tiro()
+        self._passo_helices_visuais(omega)
 
         # bateria: corrente REAL deste passo (motores + eletrónica)
         p_e = 0.0 if self.brownout else self.p_eletronica
@@ -560,7 +1051,7 @@ class Planta:
         """Teto de rotação com a tensão ATUAL do barramento (rad/s) — decai com a descarga."""
         return self.hw.omega_max(self.v_bus)
 
-    def telemetria_arma(self) -> dict | None:
+    def telemetria_arma(self, pos_bola: np.ndarray | None = None, vel_bola: np.ndarray | None = None) -> dict | None:
         """Estado e balística da arma montada no topo do drone (`None` sem arma no build)."""
         arma = self.hw.arma
         if arma is None:
@@ -574,6 +1065,8 @@ class Planta:
         iyy = max(float(self.inercia_corpo[1]), 1e-6)
         cap = max(arma.capacidade, 1)
         municao = cap if self.n_tiros == 0 else (cap - (self.n_tiros % cap))
+        ultimo_vis = self._disparos_visuais[-1] if self._disparos_visuais else None
+        mira = self.prever_tiro_bola(pos_bola=pos_bola, vel_bola=vel_bola)
         return {
             "id": arma.id,
             "modelo": f"{arma.fabricante} {arma.modelo}".strip(),
@@ -582,8 +1075,35 @@ class Planta:
             "capacidade": cap,
             "municao": int(municao),
             "tiros": int(self.n_tiros),
+            "acertos_bola": int(self.n_acertos_bola),
+            "erros_bola": int(self.n_erros_bola),
             "gatilho": bool(self.gatilho_tiro),
             "em_recuo": bool(self._tiros_ativos),
+            "fogo_cano_ativo": bool(self._fogo_restante_s > 0.0),
+            "fogo_restante_ms": round(self._fogo_restante_s * 1000.0, 1),
+            "projetil_visivel": any(d["projetil_visivel"] for d in self._disparos_visuais),
+            "caminho_visivel": any(d["caminho_visivel"] for d in self._disparos_visuais),
+            "distancia_projetil_m": round(float(ultimo_vis["distancia_m"]), 3) if ultimo_vis else 0.0,
+            "tempo_caminho_s": round(float(ultimo_vis["tempo_vida_s"]), 4) if ultimo_vis else 0.0,
+            "alcance_render_m": ALCANCE_PROJETIL_M,
+            "duracao_caminho_s": DURACAO_CAMINHO_TIRO_S,
+            "mira": mira,
+            "disparos_visuais": [
+                {
+                    "id": d["id"],
+                    "distancia_m": round(float(d["distancia_m"]), 3),
+                    "tempo_vida_s": round(float(d["tempo_vida_s"]), 4),
+                    "projetil_visivel": bool(d["projetil_visivel"]),
+                    "caminho_visivel": bool(d["caminho_visivel"]),
+                    "alcancou_50m": bool(d["alcancou_50m"]),
+                    "acertou_bola": bool(d.get("acertou_bola", False)),
+                    "bateu_chao": bool(d.get("bateu_chao", False)),
+                    "resultado": str(d.get("resultado", "em_voo")),
+                    "origem": [round(float(v), 3) for v in d["origem"]],
+                    "pos": [round(float(v), 3) for v in d["pos"]],
+                }
+                for d in self._disparos_visuais
+            ],
             "impulso_ns": round(j_tiro, 5),
             "forca_pico_n": round(arma.forca_media_tiro, 2),
             "forca_atual_n": round(float(self.forca_tiro_atual), 2),

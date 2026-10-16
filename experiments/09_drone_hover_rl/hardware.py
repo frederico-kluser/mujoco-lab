@@ -126,6 +126,20 @@ def cmd_mostrar(args) -> int:
     print(f"  T/W com a bateria cheia {r['t_w_cheia']:.2f} · ω_max {r['omega_max_cheia_rpm']:.0f} rpm")
     print(f"  AUTONOMIA de pairagem estimada: {r['autonomia_min']:.1f} min (até {r['autonomia']['v_pouso']:.1f} V "
           f"sob carga; {r['autonomia']['energia_wh']:.1f} Wh)")
+    lc = r["limites_carga"]
+    print(f"  CARGA ÚTIL (base {lc['massa_sem_carga_g']:.0f} g + carga {lc['carga_atual_g']:.0f} g = {lc['massa_total_g']:.0f} g · "
+          f"estado: {lc['estado_voo']} · alça voo: {'SIM' if lc['pode_alcar_voo'] else 'NÃO'}):")
+    print(f"    carga máx. voo seguro (T/W≥1,35): {lc['carga_max_voo_seguro_g']:.0f} g (massa ≤ {lc['massa_max_voo_seguro_g']:.0f} g)")
+    print(f"    carga máx. descolagem OGE (T/W=1): {lc['carga_max_descolagem_oge_g']:.0f} g (massa ≤ {lc['massa_max_descolagem_oge_g']:.0f} g)")
+    print(f"    carga máx. descolagem IGE (solo):  {lc['carga_max_descolagem_ige_g']:.0f} g (massa ≤ {lc['massa_max_descolagem_ige_g']:.0f} g)")
+    print(f"    vento máximo sustentável no peso atual: {lc['vento_max_m_s']:.1f} m/s")
+    print("  IMPACTO DO VENTO (acoplado ao peso e à bateria):")
+    for w_v in (0.0, 2.0, 3.0, 5.0):
+        iv = hw.impacto_vento(w_v, soc=0.8)
+        aut_w = comp.autonomia_estimada(hw, vento_m_s=w_v)["minutos"]
+        print(f"    vento {w_v:3.0f} m/s: F_vento {iv['forca_vento_n']:5.2f} N · incl {iv['inclinacao_eq_graus']:4.1f}° · "
+              f"P {iv['p_total']:6.1f} W · I {iv['i_total']:5.2f} A · aut {aut_w:5.1f} min · "
+              f"{'OK' if iv['sustenta_voo'] else 'SATURA'}")
     print("  limite de rotação (sob a corrente de pairagem):")
     i_ref = ph["i_total"]
     for soc in (1.0, 0.8, 0.5, 0.2, 0.1):

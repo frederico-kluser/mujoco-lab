@@ -31,6 +31,7 @@ import { JanelaBola } from "@/components/cockpit/janela-bola"
 import { JanelaEnergia } from "@/components/cockpit/janela-energia"
 import { JanelaVento } from "@/components/cockpit/janela-vento"
 import { JanelaVoo } from "@/components/cockpit/janela-voo"
+import { PainelOtimizacaoMuJoCo } from "@/components/cockpit/painel-otimizacao-mujoco"
 import { Vista } from "@/components/cockpit/vista"
 import {
   ACarregar,
@@ -349,7 +350,12 @@ export function App() {
           />
         )
       case "graficos":
-        return <Curvas linhas={sim.linhas} zAlvo={ALVO_Z} grande />
+        return (
+          <div className="flex flex-col gap-3">
+            <PainelOtimizacaoMuJoCo />
+            <Curvas linhas={sim.linhas} zAlvo={ALVO_Z} grande />
+          </div>
+        )
       case "sistema":
         return (
           <JanelaSistema

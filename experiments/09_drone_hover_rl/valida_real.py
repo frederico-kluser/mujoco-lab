@@ -166,6 +166,23 @@ def checa_catalogo(v: Validador) -> None:
                     max(erros) < 0.12, f"{len(linhas)} pontos, erro máx {100 * max(erros):.1f} % ({hw.origem_kf_kq})")
             if hw.motor.tabela:
                 _checa_tabela_motor(v, nome, hw, linhas)
+    # A6: verificação da modelagem 3D detalhada do build ativo (frame de estabilidade, fios trifásicos, motor MN4004, RPi 5 e hélices 3D)
+    hw_at = dr.hardware()
+    m_at, _ = dr.carregar(hw_at)
+    geoms_drone_3d = (
+        "placa", "placa_superior", "espacador_placa_1", "espacador_placa_4",
+        "trelica_estab_1", "trelica_estab_4", "suporte_motor_1", "suporte_motor_4",
+        "fio_motor1_a", "fio_motor1_b", "fio_motor1_c", "fio_motor4_a", "fio_motor4_b", "fio_motor4_c",
+        "abracadeira_braco1_1", "abracadeira_braco4_2",
+        "motor1_estator_cobre", "motor1_sino_anel", "motor1_base_cnc", "motor1_raio_1", "motor1_eixo",
+        "helice1_cubo", "helice1_pa1_raiz", "helice1_pa1_ponta", "helice1_pa1_faixa", "helice1_pa2_ponta",
+        "el_rpi5", "rpi5_soc_bcm2712", "rpi5_dissipador", "rpi5_ventoinha", "rpi5_rp1",
+        "rpi5_rj45", "rpi5_usb3_torre", "rpi5_usb3_azul", "rpi5_usb2_torre", "rpi5_gpio_40p", "rpi5_usbc", "rpi5_micro_hdmi_1",
+        "cinta_bateria_1", "conector_xt90", "cabo_bateria_pos", "cabo_bateria_neg",
+    )
+    v.check("A6 modelagem 3D detalhada: treliças de estabilidade, fios trifásicos A/B/C até aos motores, motor MN4004 com bobinas e sino ventilado, Raspberry Pi 5 fiel e hélices 3D",
+            all(m_at.geom(g).id >= 0 for g in geoms_drone_3d),
+            f"{len(geoms_drone_3d)}/{len(geoms_drone_3d)} geoms estruturais, fios, motor, RPi 5 e hélices presentes")
 
 
 def _checa_tabela_motor(v: Validador, nome: str, hw, linhas: list) -> None:
@@ -243,6 +260,42 @@ def checa_motor(v: Validador, hw) -> None:
             float(np.abs(q - u).max()) <= 0.5 * passo + 1e-12 and q[0] == 0.0
             and len(np.unique(np.round(q[1:] / passo))) <= 2000,
             f"erro máx {float(np.abs(q - u).max()):.2e} (½ nível = {0.5 * passo:.2e})")
+
+    # B9: impacto físico do tamanho e design da hélice (diâmetro, passo, nº de pás, corda/solidez, afunilamento e perfil)
+    h_base = hw.helice
+    h_maior_d = h_base.com_design(diametro_pol=16.5)
+    h_maior_passo = h_base.com_design(passo_pol=6.2)
+    h_tripa = h_base.com_design(pas=3)
+    h_ponta_larga = h_base.com_design(afunilamento=0.65)
+    kf0, kq0, _ = dr.componentes.kf_kq(hw.motor, h_base)
+    kf_d, kq_d, _ = dr.componentes.kf_kq(hw.motor, h_maior_d)
+    kf_p, kq_p, _ = dr.componentes.kf_kq(hw.motor, h_maior_passo)
+    kf_3, kq_3, _ = dr.componentes.kf_kq(hw.motor, h_tripa)
+    j0 = dr.componentes.inercia_rotor(hw.motor, h_base)
+    j_d = dr.componentes.inercia_rotor(hw.motor, h_maior_d)
+    j_taper = dr.componentes.inercia_rotor(hw.motor, h_ponta_larga)
+    v.check("B9 design e tamanho da hélice impactam a física: maior D, passo ou nº de pás aumentam kf/kq e inércia J_rotor (e afunilamento altera κ_J)",
+            kf_d > kf0 and kq_d > kq0 and kf_p > kf0 and kq_p > kq0 and kf_3 > kf0 and j_d > j0 and j_taper > j0,
+            f"kf: 15x5={kf0:.2e} → 16.5x5={kf_d:.2e}, 15x6.2={kf_p:.2e}, 3-pás={kf_3:.2e} · J_rotor: {j0:.2e} → D16.5={j_d:.2e}, taper0.65={j_taper:.2e}")
+
+    # B10: rotação 3D das hélices no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4) proporcional a % de ω_max
+    m_rot, d_rot, pl_rot = _planta(hw, flags=dra.FlagsAero.base(), seed=0)
+    pl_rot.reiniciar(1.0, armado=True)
+    for _ in range(100):
+        pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pct = pl_rot.pct_rotacao_helices
+    gid_ponta1 = m_rot.geom("helice1_pa1_ponta").id
+    pos_pa_antes = m_rot.geom_pos[gid_ponta1].copy()
+    ang_antes = list(pl_rot.angulos_helices)
+    pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pl_rot.passo([0.9, 0.45, 0.9, 0.45])
+    pos_pa_depois = m_rot.geom_pos[gid_ponta1].copy()
+    dang = [((pl_rot.angulos_helices[i] - ang_antes[i] + math.pi) % (2.0 * math.pi)) - math.pi for i in range(4)]
+    v.check("B10 hélices 3D rodam no sentido físico correto (CW: Δθ₁,₂ < 0; CCW: Δθ₃,₄ > 0) com velocidade proporcional à % de ω_max de cada motor",
+            dang[0] < 0.0 and dang[1] < 0.0 and dang[2] > 0.0 and dang[3] > 0.0
+            and abs(dang[0]) > 1.5 * abs(dang[1]) and abs(dang[2]) > 1.5 * abs(dang[3])
+            and float(np.linalg.norm(pos_pa_depois - pos_pa_antes)) > 1e-3,
+            f"%ω_max={[round(100*x, 1) for x in pct]} % · Δθ={[round(x, 4) for x in dang]} rad")
     # B6 ω_max(V) e T_max
     b = hw.bateria
     i_ref = ph["i_total"]
@@ -872,6 +925,201 @@ def checa_arma_tiro(v: Validador, hw) -> None:
             and abs(x_depois - x_antes) < 0.12 and abs(z_depois - 1.0) < 0.08,
             f"soco imediato: Δv_x={dvx_voo:+.3f} m/s, Δω_y={dwy_voo:+.3f} rad/s → após 4 s: Δx={x_depois - x_antes:+.3f} m, z={z_depois:.3f} m")
 
+    # I6 e I7: modelagem detalhada da Glock 25, efeito de fogo do cano, projétil visível SÓ até 50 m e caminho por 1,0 s
+    m_vis, d_vis, pl_vis = _planta(hw, flags=dra.FlagsAero.base(), seed=0)
+    d_vis.qpos[2] = 5.0
+    d_vis.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    d_vis.qvel[:] = 0.0
+    mujoco.mj_forward(m_vis, d_vis)
+    pl_vis.reiniciar(1.0, armado=False)
+    geoms_anatomia = (
+        "arma_suporte_base", "arma_quadro", "arma_punho", "arma_base_carregador", "arma_dedo_1", "arma_dedo_2",
+        "arma_dedo_3", "arma_guarda_mato_baixo", "arma_guarda_mato_frente", "arma_gatilho", "arma_solenoide_gatilho",
+        "arma_ferrolho", "arma_janela_ejecao", "arma_serrilha_1", "arma_serrilha_6", "arma_cano", "arma_boca_furo",
+        "arma_mira_frente", "arma_ponto_mira_frente", "arma_mira_tras", "arma_fogo_nucleo", "arma_fogo_cone",
+        "projetil_tiro_0", "caminho_tiro_0",
+    )
+    todos_existem = all(m_vis.geom(g).id >= 0 for g in geoms_anatomia)
+    gid_fogo = m_vis.geom("arma_fogo_nucleo").id
+    gid_proj = m_vis.geom("projetil_tiro_0").id
+    gid_cam = m_vis.geom("caminho_tiro_0").id
+    gid_fer = m_vis.geom("arma_ferrolho").id
+    x_fer0 = float(m_vis.geom_pos[gid_fer, 0])
+    alpha_fogo_antes = float(m_vis.geom_rgba[gid_fogo, 3])
+    pl_vis.disparar(1)
+    alpha_fogo_t0 = float(m_vis.geom_rgba[gid_fogo, 3])
+    # avança 10 ms (5 passos de 2 ms): fogo do cano ativo, ferrolho recuado (blowback), projétil a ~3 m (< 50 m)
+    for _ in range(5):
+        pl_vis.passo([0.0] * 4)
+    dx_fer_10ms = float(m_vis.geom_pos[gid_fer, 0]) - x_fer0
+    tel_10ms = pl_vis.telemetria_arma()
+    proj_vis_10ms = bool(tel_10ms["projetil_visivel"]) and float(m_vis.geom_rgba[gid_proj, 3]) > 0.9
+    cam_vis_10ms = bool(tel_10ms["caminho_visivel"]) and float(m_vis.geom_rgba[gid_cam, 3]) > 0.8
+    dist_10ms = float(tel_10ms["distancia_projetil_m"])
+    # avança até t = 70 ms (mais 30 passos): fogo do cano e blowback já terminaram; projétil a ~20 m (< 50 m) ainda visível
+    for _ in range(30):
+        pl_vis.passo([0.0] * 4)
+    alpha_fogo_70ms = float(m_vis.geom_rgba[gid_fogo, 3])
+    v.check("I6 modelagem anatómica da Glock 25 (24 geoms: punho 22°, guarda-mato, gatilho, ferrolho, janela de ejeção, "
+            "serrilhas, miras) + efeito de fogo do cano e blowback no disparo",
+            todos_existem and alpha_fogo_antes == 0.0 and alpha_fogo_t0 > 0.9 and dx_fer_10ms < -0.020
+            and alpha_fogo_70ms == 0.0,
+            f"fogo α: antes={alpha_fogo_antes:.2f} → disparo={alpha_fogo_t0:.2f} → 70 ms={alpha_fogo_70ms:.2f} · "
+            f"recuo blowback ferrolho={1000 * dx_fer_10ms:.1f} mm")
+    # avança até t = 200 ms (mais 65 passos, total 100 passos = 0,200 s): a 296 m/s já passou dos 50 m (~169 ms)
+    for _ in range(65):
+        pl_vis.passo([0.0] * 4)
+    tel_200ms = pl_vis.telemetria_arma()
+    proj_vis_200ms = bool(tel_200ms["projetil_visivel"]) or float(m_vis.geom_rgba[gid_proj, 3]) > 0.0
+    cam_vis_200ms = bool(tel_200ms["caminho_visivel"]) and float(m_vis.geom_rgba[gid_cam, 3]) > 0.8
+    dist_200ms = float(tel_200ms["distancia_projetil_m"])
+    comp_capsula_200ms = 2.0 * float(m_vis.geom_size[gid_cam, 1])
+    # avança até t = 980 ms (mais 390 passos, total 490 passos = 0,980 s <= 1,0 s): caminho AINDA visível
+    for _ in range(390):
+        pl_vis.passo([0.0] * 4)
+    tel_980ms = pl_vis.telemetria_arma()
+    cam_vis_980ms = bool(tel_980ms["caminho_visivel"]) and float(m_vis.geom_rgba[gid_cam, 3]) > 0.05
+    # avança até t = 1004 ms (mais 12 passos, total 502 passos = 1,004 s > 1,0 s): caminho apaga-se
+    for _ in range(12):
+        pl_vis.passo([0.0] * 4)
+    tel_1004ms = pl_vis.telemetria_arma()
+    cam_vis_1004ms = bool(tel_1004ms["caminho_visivel"]) or float(m_vis.geom_rgba[gid_cam, 3]) > 0.0
+    v.check("I7 projétil renderizado APENAS até 50,0 m (~169 ms a 296 m/s) e caminho da trajetória visível por exatamente 1,0 s",
+            proj_vis_10ms and 2.5 < dist_10ms < 3.5 and cam_vis_10ms
+            and (not proj_vis_200ms) and abs(dist_200ms - 50.0) < 1e-6 and abs(comp_capsula_200ms - 50.0) < 1e-4
+            and cam_vis_200ms and cam_vis_980ms and (not cam_vis_1004ms),
+            f"10 ms: proj={proj_vis_10ms} ({dist_10ms:.2f} m) · 200 ms: proj={proj_vis_200ms} ({dist_200ms:.1f} m, "
+            f"cápsula {comp_capsula_200ms:.1f} m), caminho={cam_vis_200ms} · 980 ms: caminho={cam_vis_980ms} · "
+            f"1004 ms: caminho={cam_vis_1004ms}")
+
+    # I8: orientação 3D do rastro (horizontal ao longo do cano, NUNCA vertical do céu ao chão) e colisão exata com a BOLA
+    m_bola, d_bola = dr.carregar(hw, com_alvo=True)
+    pl_bola = dr.Planta(hw, m_bola, d_bola, flags_aero=dra.FlagsAero.base())
+    d_bola.qpos[2] = 1.0
+    d_bola.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    d_bola.qvel[:] = 0.0
+    mujoco.mj_forward(m_bola, d_bola)
+    pl_bola.reiniciar(1.0, armado=False)
+    z_boca_mundo = float(d_bola.site_xpos[pl_bola.site_boca, 2])
+    # Coloca a bola a 2,0 m à frente na linha de tiro do cano
+    d_bola.mocap_pos[pl_bola._mocap_bola] = [2.0, 0.0, z_boca_mundo - 0.002]
+    mujoco.mj_kinematics(m_bola, d_bola)
+    mira_antes = pl_bola.prever_tiro_bola()
+    pl_bola.disparar(1)
+    for _ in range(10):
+        pl_bola.passo([0.0] * 4)
+    gid_c_bola = m_bola.geom("caminho_tiro_0").id
+    eixo_z_capsula = d_bola.geom_xmat[gid_c_bola].reshape(3, 3)[:, 2]
+    comp_ate_bola = 2.0 * float(m_bola.geom_size[gid_c_bola, 1])
+    tel_bola = pl_bola.telemetria_arma()
+    v.check("I8 rastro 3D alinhado do cano até ao impacto (eixo da cápsula horizontal +x̂, nunca vertical) e colisão com a BOLA detetada",
+            mira_antes["no_alvo"] is True and mira_antes["mensagem"] == "NO ALVO"
+            and abs(float(eixo_z_capsula[0]) - 1.0) < 1e-3 and abs(float(eixo_z_capsula[2])) < 1e-2
+            and tel_bola["acertos_bola"] == 1 and tel_bola["ultimo_tiro"]["acertou_bola"] is True
+            and 1.80 < comp_ate_bola < 1.98,
+            f"eixo_capsula=({eixo_z_capsula[0]:+.4f}, {eixo_z_capsula[1]:+.4f}, {eixo_z_capsula[2]:+.4f}) · "
+            f"comp={comp_ate_bola:.3f} m (cano→bola) · acertou_bola={tel_bola['ultimo_tiro']['acertou_bola']}")
+
+    # I9: IA de Mira Balística (treinada em GPU) + AUTO SHOOT em bola parada (0 m/s) e móvel (0,4 m/s) — 100 % de acerto
+    from mira_balistica import MiraBalisticaIA
+    mira_ia = MiraBalisticaIA()
+    acertos_tot, tiros_tot, erros_tot = 0, 0, 0
+    for vel_teste in (0.0, 0.4):
+        env_m = DroneRealEnv(modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=12.0)
+        nuc_m = sv.NucleoClassico.criar(env_m)
+        nuc_m.instalar()
+        env_m.reset(seed=6200)
+        nuc_m.pos_reset()
+        mira_ia.reiniciar()
+        for _ in range(180):
+            nuc_m.comando({"modo": "velocidade", "vx": 0.0, "vy": 0.0, "vz": 0.0, "yaw_taxa": 0.0})
+            env_m.step(np.zeros(4, dtype=np.float32))
+        env_m.definir_trajetoria_ponto("aleatorio" if vel_teste > 0.0 else "parado", vel=vel_teste, semente=6200)
+        for k in range(220):
+            cmd_m = mira_ia.passo(env_m, dt=env_m.dt_decisao)
+            nuc_m.comando(cmd_m)
+            if k >= 30 and mira_ia.deve_atirar(env_m):
+                env_m.disparar(1)
+            env_m.step(np.zeros(4, dtype=np.float32))
+        for _ in range(10):
+            nuc_m.comando(mira_ia.passo(env_m, dt=env_m.dt_decisao))
+            env_m.step(np.zeros(4, dtype=np.float32))
+        tiros_tot += env_m.planta.n_tiros
+        acertos_tot += env_m.planta.n_acertos_bola
+        erros_tot += env_m.planta.n_erros_bola
+        nuc_m.remover()
+    v.check("I9 modo SEGUIR A BOLA + AUTO SHOOT (0,0 m/s parada e 0,4 m/s móvel): alinha a mira balística na bola e dispara SÓ quando vai acertar (100 % acerto)",
+            tiros_tot >= 4 and acertos_tot == tiros_tot and erros_tot == 0,
+            f"AUTO SHOOT: {acertos_tot}/{tiros_tot} acertos na bola (100,0 %, {erros_tot} erros)")
+
+
+# ============================================================================================ J. carga e vento
+def checa_carga_e_vento(v: Validador, hw) -> None:
+    """J1–J4: limite de carga, impacto na bateria/autonomia, impossibilidade de alçar voo com excesso de peso e impacto do vento."""
+    print("\n— J. limite de carga, impacto na bateria/voo e impacto do vento —")
+    pm = hw.ponto_maximo(soc=1.0)
+    lc = hw.limites_carga(soc=1.0, vento_m_s=0.0)
+    f_dl = 1.0 - hw.frame.perda_download
+    t_oge_esp = 4.0 * f_dl * hw.kf * (pm["omega_max"] ** 2)
+    v.check("J1 ponto máximo sob carga: V_bus = OCV − I_tot·R_tot, T_efetivo_OGE = 4·(1−δ_dl)·kf·ω_max(V)² e limites das peças",
+            abs(pm["v_bus_carga"] - (pm["v_ocv"] - pm["i_total"] * pm["r_total_mohm"] / 1000.0)) < 1e-6
+            and _rel(pm["empuxo_efetivo_oge_n"], t_oge_esp) < 1e-12
+            and lc["massa_max_descolagem_oge_g"] > lc["massa_max_voo_seguro_g"] > hw.massa_total * 1000.0
+            and lc["pode_alcar_voo"] is True and lc["estado_voo"] == "voo_seguro",
+            f"V_carga={pm['v_bus_carga']:.2f} V (queda {pm['queda_tensao_v']:.2f} V a {pm['i_total']:.1f} A) · "
+            f"carga máx segura={lc['carga_max_voo_seguro_g']:.0f} g · OGE={lc['carga_max_descolagem_oge_g']:.0f} g · "
+            f"IGE={lc['carga_max_descolagem_ige_g']:.0f} g")
+
+    # J2: impacto progressivo da carga na corrente da bateria, queda de tensão e autonomia
+    aut0 = dr.autonomia_estimada(hw, massa=hw.massa_total)["minutos"]
+    aut1 = dr.autonomia_estimada(hw, massa=hw.massa_total + 0.600)["minutos"]
+    aut2 = dr.autonomia_estimada(hw, massa=hw.massa_total + 1.200)["minutos"]
+    aut_excesso = dr.autonomia_estimada(hw, massa=lc["massa_max_descolagem_oge_g"] / 1000.0 + 0.500)
+    v.check("J2 impacto da carga na bateria: +0,6 kg e +1,2 kg aumentam a corrente e reduzem a autonomia; acima de T_max a autonomia é 0 min",
+            aut0 > aut1 > aut2 > 10.0 and aut_excesso["minutos"] == 0.0 and not aut_excesso["pode_voar"],
+            f"autonomia: base={aut0:.1f} min → +600 g={aut1:.1f} min → +1200 g={aut2:.1f} min → excesso={aut_excesso['minutos']:.1f} min ({aut_excesso['motivo_fim']})")
+
+    # J3: excesso de peso impede fisicamente de alçar voo no simulador MuJoCo (mesmo a 100 % de acelerador)
+    env_pesado = DroneRealEnv(modo_acao="motores", episodio_s=4.0)
+    env_pesado.reset(seed=0)
+    z_chao_p = float(env_pesado.data.qpos[2])
+    soc_ini_p = float(env_pesado.planta.bat.soc)
+    # Adiciona +3,0 kg (massa total ~5,97 kg > massa_max_descolagem_ige ~5,38 kg)
+    est_carga = env_pesado.definir_carga(3.0)
+    z_max_p = z_chao_p
+    for _ in range(50):                           # 1,0 s a 100 % de comando nos 4 motores
+        env_pesado.step(np.ones(4, dtype=np.float32))
+        z_max_p = max(z_max_p, float(env_pesado.data.qpos[2]))
+    soc_fim_p = float(env_pesado.planta.bat.soc)
+    i_pesado = float(env_pesado.planta.i_total)
+    v.check("J3 carga acima do limite (5968 g > 5381 g IGE): `pode_alcar_voo=False` e o drone NÃO sai do chão no MuJoCo mesmo a 100 % de acelerador (drenando a bateria no pico)",
+            est_carga["pode_alcar_voo"] is False and est_carga["estado_voo"] == "impossivel_alcar_voo"
+            and (z_max_p - z_chao_p) < 0.003 and env_pesado.data.ncon > 0
+            and i_pesado > 25.0 and soc_fim_p < soc_ini_p,
+            f"estado={est_carga['estado_voo']} · Δz_máx={1000 * (z_max_p - z_chao_p):.2f} mm (ncon={env_pesado.data.ncon}) · "
+            f"I_bat={i_pesado:.1f} A · ΔSoC={100 * (soc_fim_p - soc_ini_p):.3f} %")
+
+    # J4: cálculo acoplado do impacto do vento (força, inclinação, potência, autonomia e vento máximo vs peso)
+    iv0 = hw.impacto_vento(0.0, soc=0.8)
+    iv3 = hw.impacto_vento(3.0, soc=0.8)
+    iv5 = hw.impacto_vento(5.0, soc=0.8)
+    aut_v0 = dr.autonomia_estimada(hw, vento_m_s=0.0)["minutos"]
+    aut_v3 = dr.autonomia_estimada(hw, vento_m_s=3.0)["minutos"]
+    aut_v5 = dr.autonomia_estimada(hw, vento_m_s=5.0)["minutos"]
+    w_max_leve = hw.vento_maximo_sustentavel(massa=hw.massa_estrutura_sem_carga, soc=0.8)
+    w_max_arma = hw.vento_maximo_sustentavel(massa=hw.massa_total, soc=0.8)
+    w_max_pesado = hw.vento_maximo_sustentavel(massa=hw.massa_total + 1.200, soc=0.8)
+    w_max_impossivel = hw.vento_maximo_sustentavel(massa=lc["massa_max_descolagem_oge_g"] / 1000.0 + 0.5, soc=0.8)
+    v.check("J4 impacto do vento acoplado ao peso: vento maior exige maior inclinação e potência (reduzindo a autonomia), e carga maior reduz o vento máximo sustentável até 0 m/s",
+            0.0 == iv0["forca_vento_n"] < iv3["forca_vento_n"] < iv5["forca_vento_n"]
+            and 0.0 == iv0["inclinacao_eq_graus"] < iv3["inclinacao_eq_graus"] < iv5["inclinacao_eq_graus"]
+            and iv0["p_total"] < iv3["p_total"] < iv5["p_total"]
+            and aut_v0 > aut_v3 > aut_v5
+            and w_max_leve > w_max_arma > w_max_pesado > 0.0 and w_max_impossivel == 0.0,
+            f"P(0/3/5 m/s)={iv0['p_total']:.1f}/{iv3['p_total']:.1f}/{iv5['p_total']:.1f} W · "
+            f"aut(0/3/5 m/s)={aut_v0:.1f}/{aut_v3:.1f}/{aut_v5:.1f} min · "
+            f"W_máx(sem arma / com G25 / +1,2 kg / excesso)={w_max_leve:.1f} / {w_max_arma:.1f} / {w_max_pesado:.1f} / {w_max_impossivel:.1f} m/s")
+
 
 def checa_planta_real(v) -> None:
     """Todas as checagens da planta real (chamada pelo `run.py`)."""
@@ -891,6 +1139,7 @@ def checa_planta_real(v) -> None:
     checa_fc(v, hw)
     checa_autonomia(v, hw)
     checa_arma_tiro(v, hw)
+    checa_carga_e_vento(v, hw)
     print(f"(planta real validada em {time.perf_counter() - t0:.1f} s)")
 
 

@@ -704,10 +704,24 @@ class ModuloCamera:
         self.camera_nome = camera
         self.modulo = modulo
         self.qualidade = int(qualidade)
+        self._qualidade_base = int(qualidade)
         self.com_latencia = bool(com_latencia)
         self._modo = modo_inicial
         self._renderer = None
         self._render_tamanho = None
+        self._scene_opt = mujoco.MjvOption()
+        for g_idx in range(4):
+            self._scene_opt.geomgroup[g_idx] = 1
+        self.opcoes_graficos = {
+            "sombras": True,
+            "reflexos": True,
+            "nevoeiro": False,
+            "mostrar_helices": True,
+            "mostrar_efeitos": True,
+            "mostrar_fios_detalhes": True,
+            "escala_resolucao": 1.0,
+            "qualidade_jpeg": int(qualidade),
+        }
         self._pronto = mujoco.MjData(model)      # snapshot publicado pelo simulador
         self._local = mujoco.MjData(model)        # cópia privada de quem renderiza
         self._t_pronto = 0.0
@@ -738,6 +752,38 @@ class ModuloCamera:
         if not self._ligada:
             self._descartar_fila()
         return self.estado()
+
+    def configurar_graficos(self, **opcoes) -> dict:
+        """Atualiza as opções de otimização gráfica do MuJoCo (sombras, reflexos, nevoeiro, grupos de geoms,
+        escala de resolução e qualidade JPEG) em tempo real para aumentar o FPS."""
+        with self._trava_estado:
+            for k in ("sombras", "reflexos", "nevoeiro", "mostrar_helices", "mostrar_efeitos", "mostrar_fios_detalhes"):
+                if k in opcoes and opcoes[k] is not None:
+                    self.opcoes_graficos[k] = bool(opcoes[k])
+            if "escala_resolucao" in opcoes and opcoes["escala_resolucao"] is not None:
+                esc = float(opcoes["escala_resolucao"])
+                self.opcoes_graficos["escala_resolucao"] = max(0.25, min(1.0, esc))
+            if "qualidade_jpeg" in opcoes and opcoes["qualidade_jpeg"] is not None:
+                q = int(round(float(opcoes["qualidade_jpeg"])))
+                self.qualidade = max(30, min(95, q))
+                self.opcoes_graficos["qualidade_jpeg"] = self.qualidade
+            self._scene_opt.geomgroup[1] = 1 if self.opcoes_graficos["mostrar_helices"] else 0
+            self._scene_opt.geomgroup[2] = 1 if self.opcoes_graficos["mostrar_efeitos"] else 0
+            self._scene_opt.geomgroup[3] = 1 if self.opcoes_graficos["mostrar_fios_detalhes"] else 0
+            return dict(self.opcoes_graficos)
+
+    def estado_graficos(self) -> dict:
+        """Estado atual das opções gráficas do MuJoCo + FPS e tempos de renderização (ms)."""
+        est = self.estado()
+        host = est.get("host_ms") or {}
+        return {
+            **self.opcoes_graficos,
+            "fps_medido": float(est.get("fps_medido") or 0.0),
+            "fps_alvo": float(est.get("fps_nominal") or 50.0),
+            "ms_render": float(host.get("render") or 0.0),
+            "ms_isp": float(host.get("isp") or 0.0),
+            "ms_jpeg": float(host.get("jpeg") or 0.0),
+        }
 
     @property
     def modo(self) -> str:
@@ -821,7 +867,12 @@ class ModuloCamera:
         mo = self._modo
         t0 = time.perf_counter()
         t_estado = self._snapshot()
-        tamanho = mo.render
+        esc_res = float(self.opcoes_graficos.get("escala_resolucao", 1.0))
+        if esc_res < 0.999:
+            tamanho = (max(160, int(round(mo.render[0] * esc_res)) & ~1),
+                       max(120, int(round(mo.render[1] * esc_res)) & ~1))
+        else:
+            tamanho = mo.render
         if self._renderer is None or self._render_tamanho != tamanho:   # contexto GL NA thread do render
             preparar_framebuffer(self.model)
             if self._renderer is not None:
@@ -831,11 +882,16 @@ class ModuloCamera:
         # FONTE DE IMAGEM: a `<camera>` do modelo (com o FoV do modo, escrito aqui — única escritora em
         # `model.cam_fovy`, na thread do render) OU a `MjvCamera` livre de `camera_livre()` (fonte
         # `simulacao`; o seu FoV é o GLOBAL do MuJoCo, `model.vis.global_.fovy` — não há FoV de modo).
+        mujoco.mj_kinematics(self.model, self._local)
         if self.camera_livre is not None:
-            self._renderer.update_scene(self._local, camera=self.camera_livre())
+            self._renderer.update_scene(self._local, camera=self.camera_livre(), scene_option=self._scene_opt)
         else:
             self.model.cam_fovy[self.camera_id] = fovy_graus(self.modulo, mo.id)
-            self._renderer.update_scene(self._local, camera=self.camera_nome)
+            self._renderer.update_scene(self._local, camera=self.camera_nome, scene_option=self._scene_opt)
+        flags_scn = self._renderer.scene.flags
+        flags_scn[mujoco.mjtRndFlag.mjRND_SHADOW] = 1 if self.opcoes_graficos["sombras"] else 0
+        flags_scn[mujoco.mjtRndFlag.mjRND_REFLECTION] = 1 if self.opcoes_graficos["reflexos"] else 0
+        flags_scn[mujoco.mjtRndFlag.mjRND_FOG] = 1 if self.opcoes_graficos["nevoeiro"] else 0
         rgb = self._renderer.render()
         t1 = time.perf_counter()
         img = self._isp(rgb, mo)
@@ -866,7 +922,8 @@ class ModuloCamera:
         (`para_cinza`) — só na câmara de BORDO: a fonte `simulacao` é a vista do simulador, não hardware, e fica a cores.
         """
         largura = rgb.shape[1]
-        alvo = mo.saida[0]
+        esc_res = float(self.opcoes_graficos.get("escala_resolucao", 1.0))
+        alvo = mo.saida[0] if esc_res >= 0.999 else min(largura, max(160, int(round(mo.saida[0] * esc_res)) & ~1))
         if largura != alvo:
             x0 = (largura - alvo) // 2
             rgb = rgb[:, x0:x0 + alvo]
