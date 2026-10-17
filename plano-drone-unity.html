@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="plannotator-theme" content="host">
+<title>Drone nosso dentro do Unity — explicação visual</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232b2140'/%3E%3Cpath d='M14 44V22l18-8 18 8v22l-18 8-18-8Z' fill='none' stroke='%23b7a5f5' stroke-width='4' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23e8a33d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============ PLANNOTATOR TOKENS (host-theme opt-in) ============ */
+  :root {
+    --background: oklch(0.97 0.005 260);
+    --foreground: oklch(0.18 0.02 260);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.18 0.02 260);
+    --muted: oklch(0.92 0.01 260);
+    --muted-foreground: oklch(0.40 0.02 260);
+    --primary: oklch(0.50 0.25 280);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.50 0.18 180);
+    --accent: oklch(0.60 0.22 50);
+    --accent-foreground: oklch(0.18 0.02 260);
+    --destructive: oklch(0.50 0.25 25);
+    --success: oklch(0.45 0.20 150);
+    --warning: oklch(0.55 0.18 85);
+    --border: oklch(0.88 0.01 260);
+    --code-bg: oklch(0.92 0.01 260);
+    --ring: oklch(0.50 0.25 280);
+    --radius: 0.625rem;
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    --font-display: ui-serif, Georgia, 'Times New Roman', serif;
+    --primary-dim: color-mix(in oklab, var(--primary) 12%, transparent);
+    --success-dim: color-mix(in oklab, var(--success) 12%, transparent);
+    --warning-dim: color-mix(in oklab, var(--warning) 14%, transparent);
+    --destructive-dim: color-mix(in oklab, var(--destructive) 12%, transparent);
+    --accent-dim: color-mix(in oklab, var(--accent) 12%, transparent);
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: oklch(0.15 0.02 260);
+      --foreground: oklch(0.90 0.01 260);
+      --card: oklch(0.22 0.02 260);
+      --card-foreground: oklch(0.90 0.01 260);
+      --muted: oklch(0.26 0.02 260);
+      --muted-foreground: oklch(0.72 0.02 260);
+      --primary: oklch(0.75 0.18 280);
+      --primary-foreground: oklch(0.15 0.02 260);
+      --accent: oklch(0.70 0.20 60);
+      --border: oklch(0.35 0.02 260);
+      --code-bg: oklch(0.26 0.02 260);
+      --destructive: oklch(0.65 0.20 25);
+      --success: oklch(0.72 0.17 150);
+      --warning: oklch(0.75 0.15 85);
+      color-scheme: dark;
+    }
+  }
+
+  /* ============ BASE ============ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.65;
+    padding: 48px 24px 96px;
+    min-height: 100vh;
+  }
+
+  .container { max-width: 1080px; margin: 0 auto; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate { animation: fadeUp 0.4s ease-out both; animation-delay: calc(var(--i, 0) * 0.05s); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  /* ============ TYPE ============ */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--primary);
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4.5vw, 44px);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 10px 0 16px;
+  }
+  h2 {
+    font-family: var(--font-display);
+    font-size: 27px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 6px;
+  }
+  h3 {
+    font-family: var(--font-sans);
+    font-size: 18px;
+    font-weight: 650;
+    margin: 0 0 8px;
+  }
+  .lede { font-size: 18px; color: var(--muted-foreground); max-width: 68ch; }
+  .section-note { color: var(--muted-foreground); max-width: 72ch; margin-bottom: 22px; }
+  p, li { max-width: 72ch; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+  abbr[title] { text-decoration: underline dotted; cursor: help; }
+  a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  /* ============ HEADER ============ */
+  header { margin-bottom: 44px; }
+  .prompt-box {
+    margin-top: 26px;
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-left: 4px solid var(--primary);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    max-width: 76ch;
+  }
+  .prompt-box .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .prompt-box p { font-size: 15px; color: var(--foreground); }
+
+  /* ============ ANSWER CARD ============ */
+  .answer-card {
+    margin: 34px 0 8px;
+    background: color-mix(in oklab, var(--success) 7%, var(--card));
+    border: 1.5px solid color-mix(in oklab, var(--success) 40%, var(--border));
+    border-radius: var(--radius);
+    padding: 26px 28px;
+  }
+  .answer-card .verdict {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--success);
+  }
+  .answer-card p { font-size: 18px; margin-top: 8px; max-width: 70ch; }
+
+  /* ============ STATS ============ */
+  .summary-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    margin: 30px 0 8px;
+  }
+  .stat-card {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    text-align: center;
+    background: var(--card);
+  }
+  .stat-value {
+    font-family: var(--font-display);
+    font-size: 1.75rem;
+    font-weight: 500;
+    display: block;
+    line-height: 1.2;
+  }
+  .stat-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted-foreground);
+    margin-top: 6px;
+    display: block;
+    line-height: 1.45;
+  }
+
+  /* ============ SECTIONS ============ */
+  section { margin-top: 64px; }
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 18px;
+    padding-bottom: 8px;
+    border-bottom: 1.5px solid var(--border);
+  }
+  .section-number {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary);
+  }
+
+  /* ============ FIGURES ============ */
+  figure {
+    margin: 22px 0 8px;
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    overflow-x: auto;
+  }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted-foreground);
+    margin-top: 14px;
+    text-align: center;
+    line-height: 1.55;
+    max-width: none;
+  }
+  figcaption strong { color: var(--foreground); }
+
+  /* ============ TABLES ============ */
+  .table-wrap { overflow-x: auto; margin: 18px 0; border: 1.5px solid var(--border); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--card); }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  tr:last-child td { border-bottom: none; }
+  td { font-size: 14.5px; }
+  td p, td li { max-width: none; }
+
+  .chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .chip.ok { background: var(--success-dim); color: var(--success); }
+  .chip.warn { background: var(--warning-dim); color: var(--warning); }
+  .chip.err { background: var(--destructive-dim); color: var(--destructive); }
+  .chip.info { background: var(--primary-dim); color: var(--primary); }
+
+  /* ============ TWO-COL / CARDS ============ */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 22px 0;
+  }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  .ve-card {
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    min-width: 0;
+  }
+  .ve-card--hero {
+    background: color-mix(in oklab, var(--primary) 6%, var(--card));
+    border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
+  }
+  .ve-card--recessed { background: var(--muted); border-color: transparent; }
+  .ve-card h3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ve-card p { font-size: 14.5px; color: var(--muted-foreground); margin-top: 6px; }
+  .ve-card p strong { color: var(--foreground); }
+
+  /* ============ PIPELINE STEPS ============ */
+  .steps { display: grid; gap: 0; margin: 22px 0; }
+  .step {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .step:last-child { border-bottom: none; }
+  .step .n {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-weight: 600; font-size: 15px;
+    background: var(--primary-dim); color: var(--primary);
+    border: 1.5px solid color-mix(in oklab, var(--primary) 45%, var(--border));
+  }
+  .step.hot .n { background: var(--accent-dim); color: var(--accent); border-color: color-mix(in oklab, var(--accent) 55%, var(--border)); }
+  .step h3 { margin-bottom: 2px; font-size: 16.5px; }
+  .step p { font-size: 14.5px; color: var(--muted-foreground); }
+  .step .where {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--primary);
+    margin-top: 4px;
+    display: block;
+  }
+  .step.hot .where { color: var(--accent); }
+
+  /* ============ TIMELINE ============ */
+  .milestones { display: flex; flex-direction: column; gap: 0; margin: 22px 0; }
+  .milestone { display: grid; grid-template-columns: 96px 28px 1fr; gap: 0 16px; }
+  .milestone .when {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted-foreground);
+    padding-top: 4px;
+  }
+  .milestone .dot-col { display: flex; flex-direction: column; align-items: center; }
+  .milestone .dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--card);
+    border: 3px solid var(--primary);
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+  .milestone .line { width: 2px; flex: 1; background: var(--border); margin: 4px 0; }
+  .milestone:last-child .line { display: none; }
+  .milestone .body { padding-bottom: 30px; }
+  .milestone .body h3 { font-size: 17px; margin-bottom: 3px; }
+  .milestone .body p { font-size: 14.5px; color: var(--muted-foreground); max-width: 62ch; margin-bottom: 8px; }
+
+  /* ============ DETAILS ============ */
+  details {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    margin: 18px 0;
+    background: var(--card);
+  }
+  summary {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: 15px;
+    padding: 15px 22px;
+    cursor: pointer;
+    list-style: none;
+  }
+  summary::before { content: '▸'; display: inline-block; margin-right: 9px; transition: transform 0.2s; }
+  details[open] summary::before { transform: rotate(90deg); }
+  .details-body { padding: 0 22px 20px; }
+  .details-body p, .details-body li { font-size: 14.5px; color: var(--muted-foreground); }
+  .details-body ul { margin: 8px 0 8px 20px; }
+  .details-body li { margin: 5px 0; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding: 14px 20px;
+    margin: 18px 0;
+    background: var(--accent-dim);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    max-width: 74ch;
+  }
+  .callout p { font-size: 14.5px; }
+  .callout strong { color: var(--foreground); }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+  }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1.5px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted-foreground);
+    line-height: 1.7;
+  }
+  footer a { color: var(--muted-foreground); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ============ HERO ============ -->
+  <header class="animate" style="--i:0">
+    <span class="eyebrow">Estudo de viabilidade · MuJoCo Lab · 2026-10-16</span>
+    <h1>Sim: o drone voa com a NOSSA física dentro do Unity — e os tiros acertam nos NPCs</h1>
+    <p class="lede">Duas explicações para chegar lá: o <strong>Unity</strong> (o motor de jogos) continua a tratar da
+      cidade, dos carros e das pessoas; o <strong>MuJoCo</strong> (o simulador de física que usamos no laboratório)
+      continua a tratar do drone — cada batida de asa, cada gota de bateria e o recuo do tiro. Esta página explica
+      como os dois se entendem, sem jargão.</p>
+    <div class="prompt-box">
+      <span class="label">A pergunta que motivou este estudo</span>
+      <p>«Será possível abrir um projeto Unity, meter o nosso drone lá dentro <em>apenas com a nossa física</em>,
+        deixar o cenário, os elementos e os NPCs a correr no motor Unity, e ainda assim os nossos disparos atingirem
+        os NPCs?»</p>
+    </div>
+  </header>
+
+  <!-- ============ ANSWER ============ -->
+  <div class="answer-card animate" style="--i:1">
+    <span class="verdict">Resposta em uma frase</span>
+    <p><strong>É possível</strong>: ligamos os dois programas com uma «ponte de memória» super-rápida — o MuJoCo
+      manda para o Unity onde o drone está (500 vezes por segundo) e o Unity devolve onde está o chão, as paredes e
+      as pessoas; o tiro sai da arma no MuJoCo (com o recuo a empurrar o drone de verdade) e é o Unity que confirma
+      onde a bala acertou.</p>
+  </div>
+
+  <div class="summary-strip animate" style="--i:2">
+    <div class="stat-card"><span class="stat-value">2</span><span class="stat-label">motores de física,<br>cada um no que sabe</span></div>
+    <div class="stat-card"><span class="stat-value">500 Hz</span><span class="stat-label">física do drone<br>(2 milissegundos por passo)</span></div>
+    <div class="stat-card"><span class="stat-value">0,2 µs</span><span class="stat-label">latência da ponte<br>de memória partilhada</span></div>
+    <div class="stat-card"><span class="stat-value">296 m/s</span><span class="stat-label">velocidade da bala<br>(4,9 m por ecrã!)</span></div>
+    <div class="stat-card"><span class="stat-value">5</span><span class="stat-label">ondas de trabalho<br>até ao jogo a correr</span></div>
+  </div>
+
+  <!-- ============ 1. OS DOIS MUNDOS ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">01</span><h2>Os dois mundos e a ponte entre eles</h2></div>
+    <p class="section-note">Antes de tudo, uma palavra nova: <abbr title="Motor de simulação física da Google DeepMind, usado no laboratório para o drone"><strong>MuJoCo</strong></abbr>
+      é o «cérebro da física» do drone — é ele que calcula gravidade, motores, bateria e contactos.
+      O <strong>Unity</strong> é o motor de jogos que desenha o mundo e gere as pessoas (com o seu próprio sistema
+      de física, chamado <abbr title="O motor de física embutido no Unity, usado para objetos, NPCs e animações"><strong>PhysX</strong></abbr>).
+      E <strong>memória partilhada</strong> é a ponte: uma zona de memória onde um programa escreve e o outro lê,
+      quase sem gastar tempo — 20 a 60 vezes mais rápido do que mensagens pela rede do próprio computador.</p>
+
+    <figure role="img" aria-label="Diagrama: processo MuJoCo à esquerda com o drone; processo Unity à direita com a cidade e NPCs; ponte de memória partilhada ao centro com duas setas rotuladas">
+      <svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg">
+        <style>
+          .bx { fill: var(--card); stroke: var(--border); stroke-width: 1.5; }
+          .bx-hot { fill: color-mix(in oklab, var(--primary) 8%, transparent); stroke: var(--primary); stroke-width: 2; }
+          .bx-warm { fill: color-mix(in oklab, var(--accent) 8%, transparent); stroke: var(--accent); stroke-width: 2; }
+          .lbl { font-family: var(--font-sans); font-size: 15px; font-weight: 600; fill: var(--foreground); }
+          .sub { font-family: var(--font-mono); font-size: 11px; fill: var(--muted-foreground); }
+          .edge { stroke: var(--muted-foreground); stroke-width: 2; }
+          .edge-hot { stroke: var(--primary); stroke-width: 2.5; }
+          .edge-warm { stroke: var(--accent); stroke-width: 2.5; }
+          .elbl { font-family: var(--font-mono); font-size: 11px; font-weight: 600; fill: var(--primary); }
+          .elbl-warm { font-family: var(--font-mono); font-size: 11px; font-weight: 600; fill: var(--accent); }
+          .mini { font-family: var(--font-sans); font-size: 12.5px; fill: var(--foreground); }
+        </style>
+        <defs>
+          <marker id="ar-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--primary)"/></marker>
+          <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        </defs>
+
+        <!-- MuJoCo world -->
+        <rect x="24" y="40" width="300" height="300" rx="14" class="bx-hot"/>
+        <text x="174" y="72" text-anchor="middle" class="lbl">MuJoCo · o NOSSO drone</text>
+        <text x="174" y="92" text-anchor="middle" class="sub">física própria · 500 Hz · 2 ms/passo</text>
+        <rect x="48" y="112" width="252" height="40" rx="8" class="bx"/>
+        <text x="174" y="137" text-anchor="middle" class="mini">Motores + hélices + bateria</text>
+        <rect x="48" y="162" width="252" height="40" rx="8" class="bx"/>
+        <text x="174" y="187" text-anchor="middle" class="mini">Ar: efeito solo, vento, VRS</text>
+        <rect x="48" y="212" width="252" height="40" rx="8" class="bx"/>
+        <text x="174" y="237" text-anchor="middle" class="mini">Firmware de voo (500 Hz)</text>
+        <rect x="48" y="262" width="252" height="56" rx="8" class="bx"/>
+        <text x="174" y="286" text-anchor="middle" class="mini">Arma: recuo real empurra o drone</text>
+        <text x="174" y="304" text-anchor="middle" class="sub">J = 1,92 N·s por tiro</text>
+
+        <!-- Unity world -->
+        <rect x="576" y="40" width="300" height="300" rx="14" class="bx-warm"/>
+        <text x="726" y="72" text-anchor="middle" class="lbl">Unity · o mundo do jogo</text>
+        <text x="726" y="92" text-anchor="middle" class="sub">física PhysX · 60–120 Hz</text>
+        <rect x="600" y="112" width="252" height="40" rx="8" class="bx"/>
+        <text x="726" y="137" text-anchor="middle" class="mini">Cidade: prédios, terreno, carros</text>
+        <rect x="600" y="162" width="252" height="40" rx="8" class="bx"/>
+        <text x="726" y="187" text-anchor="middle" class="mini">NPCs: a andar, a fugir, a conversar</text>
+        <rect x="600" y="212" width="252" height="40" rx="8" class="bx"/>
+        <text x="726" y="237" text-anchor="middle" class="mini">Hitboxes: cada osso tem um alvo</text>
+        <rect x="600" y="262" width="252" height="56" rx="8" class="bx"/>
+        <text x="726" y="286" text-anchor="middle" class="mini">Bala viaja e acerta (sem buracos no</text>
+        <text x="726" y="304" text-anchor="middle" class="mini">meio: testada pedaço a pedaço)</text>
+
+        <!-- Bridge -->
+        <rect x="388" y="150" width="124" height="80" rx="12" class="bx"/>
+        <text x="450" y="182" text-anchor="middle" class="lbl" style="font-size:13px">Ponte</text>
+        <text x="450" y="202" text-anchor="middle" class="sub">/dev/shm</text>
+        <text x="450" y="218" text-anchor="middle" class="sub">0,2 µs</text>
+
+        <!-- Arrows -->
+        <line x1="324" y1="128" x2="388" y2="168" class="edge-hot" marker-end="url(#ar-p)"/>
+        <text x="322" y="118" class="elbl">pose do drone + tiro →</text>
+        <line x1="576" y1="212" x2="512" y2="200" class="edge-warm" marker-end="url(#ar-a)"/>
+        <text x="524" y="238" class="elbl-warm">← chão, paredes, NPCs</text>
+        <line x1="324" y1="290" x2="388" y2="215" class="edge-hot" marker-end="url(#ar-p)"/>
+        <text x="300" y="322" class="elbl">recuo real no drone →</text>
+        <line x1="576" y1="290" x2="512" y2="218" class="edge-warm" marker-end="url(#ar-a)"/>
+        <text x="520" y="318" class="elbl-warm">← «acertou no NPC!»</text>
+      </svg>
+      <figcaption><strong>Afigura 1 — O drone é do MuJoCo, o mundo é do Unity, e a ponte só troca poses, alturas e
+        eventos.</strong> As setas coloridas são o caminho crítico: sem elas o drone não voa no mundo do jogo.</figcaption>
+    </figure>
+
+    <div class="callout">
+      <p><strong>O segredo todo está nesta frase:</strong> ninguém tenta meter dois «cérebros de física» a discutir
+        sobre o mesmo objeto. O drone pertence <em>inteirinho</em> ao MuJoCo; o mundo pertence <em>inteirinho</em>
+        ao Unity. Eles apenas se <em>informam</em> mutuamente — e é isso que a ponte faz.</p>
+    </div>
+  </section>
+
+  <!-- ============ 2. O DISPARO ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">02</span><h2>O segundo em que carrega no gatilho</h2></div>
+    <p class="section-note">O caso mais difícil do projeto: o tiro tem de ser <em>físico para o drone</em> (o recuo
+      empurra-o mesmo) e <em>realista para o NPC</em> (a bala acerta mesmo). O caminho crítico — destacado a laranja
+      abaixo e na figura — vai do MuJoCo (recuo) ao Unity (impacto) e volta.</p>
+
+    <div class="steps">
+      <div class="step hot">
+        <div class="n">1</div>
+        <div>
+          <h3>O dedo carrega no gatilho</h3>
+          <p>O MuJoCo recebe a ordem de disparo. Tudo o que é físico acontece aqui, dentro dele.</p>
+          <span class="where">MuJoCo · 500 Hz</span>
+        </div>
+      </div>
+      <div class="step hot">
+        <div class="n">2</div>
+        <div>
+          <h3>O recuo empurra o drone — a sério</h3>
+          <p>Um impulso de 1,92 N·s é aplicado na boca do cano durante 20 ms. O nariz sobe, o drone recua, e o
+            controlador de voo luta para voltar à mira em 0,10 s (já medido no laboratório).</p>
+          <span class="where">MuJoCo · física real, sem truques</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <div>
+          <h3>A bala viaja a 296 m/s</h3>
+          <p>Por cada passo do jogo (50 a 60 por segundo) a bala anda <strong>entre 4,9 e 5,9 metros</strong> — mais
+            do que uma pessoa inteira. Se a deixássemos andar «às saltos», ela atravessava o NPC sem o tocar.</p>
+          <span class="where">evento na ponte</span>
+        </div>
+      </div>
+      <div class="step hot">
+        <div class="n">4</div>
+        <div>
+          <h3>O Unity testa o caminho pedaço a pedaço</h3>
+          <p>Em vez de «teleportar» a bala, o Unity desenha o seu trajeto e testa cada pedacinho com um raio
+            invisível (<em>raycast</em>) contra cada osso do NPC — nunca há buracos no meio. É o mesmo truque que
+            os jogos usam para balas rápidas.</p>
+          <span class="where">Unity · raycasts em lote</span>
+        </div>
+      </div>
+      <div class="step hot">
+        <div class="n">5</div>
+        <div>
+          <h3>O NPC cai como um boneco de trapos</h3>
+          <p>Acertou num osso: a animação desliga-se, o corpo passa a ser governado pela física (isto chama-se
+            <abbr title="Boneco articulado que obedece à física quando é atingido — a animação desliga e o corpo cai de forma natural"><strong>ragdoll</strong></abbr>)
+            e recebe o empurrão da bala exatamente no ponto do impacto. O resultado volta pela ponte: «acertou,
+            osso X, ponto Y».</p>
+          <span class="where">Unity → ponte → HUD</span>
+        </div>
+      </div>
+    </div>
+
+    <figure role="img" aria-label="Fluxo do disparo: gatilho, recuo no MuJoCo, voo da bala, teste por raios no Unity, NPC cai e resultado volta ao HUD">
+      <svg viewBox="0 0 900 170" xmlns="http://www.w3.org/2000/svg">
+        <style>
+          .flow-bx { fill: var(--card); stroke: var(--border); stroke-width: 1.5; }
+          .flow-hot { fill: color-mix(in oklab, var(--accent) 10%, transparent); stroke: var(--accent); stroke-width: 2; }
+          .flow-t { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; fill: var(--foreground); }
+          .flow-s { font-family: var(--font-mono); font-size: 10px; fill: var(--muted-foreground); }
+          .flow-e { stroke: var(--accent); stroke-width: 2.5; }
+          .flow-el { font-family: var(--font-mono); font-size: 10px; font-weight: 600; fill: var(--accent); }
+        </style>
+        <defs>
+          <marker id="ar-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        </defs>
+        <rect x="16" y="50" width="140" height="70" rx="10" class="flow-hot"/>
+        <text x="86" y="80" text-anchor="middle" class="flow-t">Gatilho</text>
+        <text x="86" y="100" text-anchor="middle" class="flow-s">ordem de disparo</text>
+
+        <line x1="156" y1="85" x2="196" y2="85" class="flow-e" marker-end="url(#ar-f)"/>
+        <text x="176" y="76" text-anchor="middle" class="flow-el">J=1,92 N·s</text>
+
+        <rect x="196" y="50" width="150" height="70" rx="10" class="flow-hot"/>
+        <text x="271" y="80" text-anchor="middle" class="flow-t">Recuo real</text>
+        <text x="271" y="100" text-anchor="middle" class="flow-s">MuJoCo empurra o drone</text>
+
+        <line x1="346" y1="85" x2="386" y2="85" class="flow-e" marker-end="url(#ar-f)"/>
+        <text x="366" y="76" text-anchor="middle" class="flow-el">v₀ = 296 m/s</text>
+
+        <rect x="386" y="50" width="160" height="70" rx="10" class="flow-hot"/>
+        <text x="466" y="80" text-anchor="middle" class="flow-t">Raios no caminho</text>
+        <text x="466" y="100" text-anchor="middle" class="flow-s">4,9 m/imagem · sem buracos</text>
+
+        <line x1="546" y1="85" x2="586" y2="85" class="flow-e" marker-end="url(#ar-f)"/>
+        <text x="566" y="76" text-anchor="middle" class="flow-el">impacto</text>
+
+        <rect x="586" y="50" width="150" height="70" rx="10" class="flow-hot"/>
+        <text x="661" y="80" text-anchor="middle" class="flow-t">NPC cai</text>
+        <text x="661" y="100" text-anchor="middle" class="flow-s">ragdoll + empurrão</text>
+
+        <line x1="736" y1="85" x2="776" y2="85" class="flow-e" marker-end="url(#ar-f)"/>
+        <text x="756" y="76" text-anchor="middle" class="flow-el">«acertou!»</text>
+
+        <rect x="776" y="50" width="108" height="70" rx="10" class="flow-bx"/>
+        <text x="830" y="80" text-anchor="middle" class="flow-t">HUD</text>
+        <text x="830" y="100" text-anchor="middle" class="flow-s">pontuação</text>
+      </svg>
+      <figcaption><strong>Afigura 2 — O disparo é resolvido a meias: o recuo fica no MuJoCo (física real do drone),
+        o impacto no Unity (o mundo das pessoas).</strong> O caminho crítico é a linha laranja: qualquer quebra
+        nela e o tiro deixa de ser credível.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 3. AUDITORIA ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">03</span><h2>O texto que nos deu: o que estava certo… e o que não estava</h2></div>
+    <p class="section-note">Verificámos cada frase do excerto técnico contra o código-fonte oficial do MuJoCo e os
+      relatórios de problemas da própria Google DeepMind. Resultado: quase tudo certo, um ponto errado e um
+      desatualizado.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th style="width:36%">O que o texto dizia</th><th style="width:14%">Veredito</th><th>A verdade (verificada)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Instalar o plugin oficial do MuJoCo no Unity e truncar <code>libmujoco.so.3.1.3</code> para <code>libmujoco.so</code></td>
+            <td><span class="chip ok">Certo</span></td>
+            <td>Confirmado nos documentos oficiais, quase palavra por palavra — o Unity ignora o ficheiro se não truncarmos a extensão.</td>
+          </tr>
+          <tr>
+            <td>O plugin <code>MjScene</code> dá acesso direto ao «coração» do MuJoCo (ponteiros para o modelo e os dados)</td>
+            <td><span class="chip ok">Certo</span></td>
+            <td>Sim: o singleton <code>MjScene</code> expõe esses ponteiros e eventos (antes/depois de cada passo).</td>
+          </tr>
+          <tr>
+            <td>Existe um <code>ManualStep()</code> oficial para avançar a física à mão</td>
+            <td><span class="chip err">Errado</span></td>
+            <td><strong>Não existe.</strong> O método oficial é <code>StepScene()</code>. O <code>ManualStep()</code> era um remendo caseiro que um utilizador publicou num fórum — útil, mas não é API oficial.</td>
+          </tr>
+          <tr>
+            <td>Versões recentes (3.3.7 / 3.6.0) não conseguem importar malhas .STL/.OBJ («no decoder found»)</td>
+            <td><span class="chip warn">Quase</span></td>
+            <td>O problema existiu mesmo (o «tradutor» de malhas virou um plugin separado e o Unity não o encontrava), mas <strong>já foi corrigido</strong> na versão 3.7.0 — e a nossa versão (3.15) já traz tudo dentro. O contorno de usar a 3.2.7 e mudar materiais para o shader <code>Lit</code> continua válido.</td>
+          </tr>
+          <tr>
+            <td>Dá para deixar o MuJoCo a correr fora do Unity e só mandar posições para renderizar</td>
+            <td><span class="chip ok">Certo</span></td>
+            <td>Confirmado pela equipa do MuJoCo — é exatamente a ideia da nossa ponte (eles sugerem sockets; nós usamos memória partilhada, que é mais rápida).</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 4. PORQUÊ ASSIM ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">04</span><h2>Porque não metemos simplesmente o plugin dentro do Unity?</h2></div>
+    <p class="section-note">Duas maneiras de pôr o MuJoCo dentro de um jogo. Escolhemos a da direita — e a razão é
+      simples: o nosso drone não é só um desenho 3D, é um laboratório inteiro de física (motores elétricos,
+      bateria com desgaste, aerodinâmica, firmware a 500 Hz) escrito em Python/C++, e não queremos reescrever
+      nada.</p>
+
+    <div class="two-col">
+      <div class="ve-card ve-card--recessed">
+        <h3><span class="chip err">Descartado</span> Plugin dentro do Unity</h3>
+        <p>O MuJoCo correria <strong>dentro</strong> do Unity, ao ritmo do Unity. Exigiria <strong>reescrever toda a
+          física do drone</strong> na linguagem do Unity (C#) ou obrigar o jogo inteiro a correr a 500 Hz — o que
+          desperdiça poder e torna os NPCs instáveis. E cada objeto que mexêssemos no cenário recriaria a cena
+          física toda.</p>
+        <div class="tags"><span class="tag">reescrever a planta</span><span class="tag">ritmo acoplado</span><span class="tag">recriação de cena</span></div>
+      </div>
+      <div class="ve-card ve-card--hero">
+        <h3><span class="chip ok">Escolhido</span> Dois programas + ponte</h3>
+        <p>O MuJoCo corre <strong>sozinho</strong>, a 500 Hz, com o nosso código todo intacto. O Unity recebe as
+          posições por memória partilhada e manda de volta o mundo. É a arquitetura usada por simuladores de
+          ponta da área (Flightmare, Unreal Robotics Lab, AirSim) — comprovada, não experimental.</p>
+        <div class="tags"><span class="tag">código intacto</span><span class="tag">cada um no seu ritmo</span><span class="tag">provado na literatura</span></div>
+      </div>
+    </div>
+
+    <details>
+      <summary>Detalhe técnico para quem já programa (a parte chata, resumida)</summary>
+      <div class="details-body">
+        <ul>
+          <li><strong>Ponte:</strong> bloco de memória em <code>/dev/shm</code> com «seqlock» (o escritor nunca espera
+            pelo leitor; o leitor repete a leitura se o escritor estava no meio). Latência medida por terceiros:
+            0,2 µs contra 5–11 µs de sockets. Zero alocações de memória no laço do Unity (sem «pausas de limpeza»).</li>
+          <li><strong>Coordenadas:</strong> o MuJoCo usa «mão direita, Z para cima» e quaterniões <code>[w,x,y,z]</code>;
+            o Unity usa «mão esquerda, Y para cima» e <code>(x,y,z,w)</code>. A conversão exata está no código oficial
+            do plugin: vetores <code>(x,y,z)→(x,z,y)</code>, quaterniões <code>(x,z,y,−w)</code>, e velocidades
+            angulares/torques ganham sinal negativo.</li>
+          <li><strong>Bala:</strong> trajetória parabólica integrada por segmentos com <code>Physics.Raycast</code> /
+            <code>RaycastCommand.ScheduleBatch</code>; alvo a mover-se → raio lançado em velocidade relativa;
+            impacto → <code>AddForceAtPosition(impulso, ponto, ForceMode.Impulse)</code> (N·s, independente do passo).
+            Existe ainda a deteção contínua nativa (CCD), mas ela não serve para alvos «controlados à mão» como os
+            ossos das hitboxes — daí os raios.</li>
+          <li><strong>Ambiente de volta:</strong> 5 raios verticais (4 rotores + sensor de altura) para o efeito solo;
+            <code>OverlapSphere</code> + <code>ClosestPoint</code> para posicionar «fantasmas» (<em>mocap</em>) que o
+            MuJoCo usa para o drone colidir de verdade com as paredes; câmara lida de forma assíncrona
+            (<code>AsyncGPUReadback</code>) sem bloquear a imagem.</li>
+          <li><strong>Cuidados:</strong> em Linux, os mapas de memória com nome do .NET não existem — abre-se o ficheiro
+            de <code>/dev/shm</code> diretamente; e o Python tem um bug de rastreio que apaga o bloco se um processo
+            terminar (solução: <code>track=False</code> ou <code>mmap</code> puro).</li>
+        </ul>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 5. ROADMAP ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">05</span><h2>O caminho, em 5 ondas de trabalho</h2></div>
+    <p class="section-note">Cada onda só começa quando a anterior está fechada e testada. Não há estimativas de tempo
+      aqui de propósito: o que conta é a ordem e o que cada etapa entrega de observável.</p>
+
+    <div class="milestones">
+      <div class="milestone">
+        <div class="when">Onda 0–1</div>
+        <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+        <div class="body">
+          <h3>A ponte de memória (lado Python)</h3>
+          <p>Contrato do bloco de memória congelado; publicação da pose do drone a 500 Hz; conversão de coordenadas
+            com testes de paridade contra o código oficial; prova de que a física do drone continua
+            <strong>bit-a-bit igual</strong> com a ponte ligada.</p>
+          <div class="tags"><span class="tag">/dev/shm</span><span class="tag">seqlock</span><span class="tag">sem alterar a planta</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">Onda 2</div>
+        <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+        <div class="body">
+          <h3>O projeto Unity e o «avatar» do drone</h3>
+          <p>Projeto Unity 6 (Linux) com cidade de teste; leitor da ponte em C# sem pausas de memória; o drone vira
+            um objeto «cinemático» — o Unity desenha-o e deixa-o empurrar coisas, mas quem manda na física dele é
+            sempre o MuJoCo.</p>
+          <div class="tags"><span class="tag">Unity 6 URP</span><span class="tag">proxy cinemático</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">Onda 3</div>
+        <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+        <div class="body">
+          <h3>NPCs, balística e o tiro que acerta</h3>
+          <p>NPCs com alvos por osso («hitboxes») que caem em ragdoll ao levar o tiro; bala testada pedaço a pedaço
+            (sem atravessar ninguém); disparo sincronizado com o recuo real no MuJoCo; acertos/erros no HUD.</p>
+          <div class="tags"><span class="tag">hitboxes</span><span class="tag">ragdoll</span><span class="tag">recuo real</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">Onda 4</div>
+        <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+        <div class="body">
+          <h3>O mundo de volta ao drone</h3>
+          <p>O drone «sente» o terreno do Unity: efeito solo sobre prédios, sensor de altura, colisão física real
+            contra paredes (resolvida pelo MuJoCo), e a câmara de bordo a transmitir sem bloquear o jogo.</p>
+          <div class="tags"><span class="tag">efeito solo</span><span class="tag">colisão real</span><span class="tag">câmara FPV</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">Onda 5</div>
+        <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+        <div class="body">
+          <h3>Integração, provas e números</h3>
+          <p>HUD completo (bateria, motores, acertos); cenários de teste fechados (10 disparos → 10 NPCs atingidos,
+            efeito solo validado contra as fórmulas); relatório de latência e fluidez (≥ 60 fps com 20 NPCs).</p>
+          <div class="tags"><span class="tag">testes E2E</span><span class="tag">benchmark</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. RISCOS ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">06</span><h2>O que pode correr mal (e o que fazemos)</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:34%">Risco</th><th style="width:14%">Serião</th><th>Defesa</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>A licença do Unity precisa de login na janela gráfica (o diagnóstico ainda a acusa em falta)</td>
+            <td><span class="chip err">Alto</span></td>
+            <td>Confirmar o login no Unity Hub <em>antes</em> da Onda 2 — sem isso não há Editor, não há jogo.</td>
+          </tr>
+          <tr>
+            <td>O mundo do Unity não é perfeitamente reprodutível de corrida para corrida</td>
+            <td><span class="chip warn">Médio</span></td>
+            <td>Exigimos determinismo só ao drone (que o tem); registamos a «verdade» de cada imagem para poder provar o que aconteceu.</td>
+          </tr>
+          <tr>
+            <td>Um esquecimento de programação («lixo» de memória) atrasar o laço a 500 Hz</td>
+            <td><span class="chip warn">Médio</span></td>
+            <td>Regras rígidas de código + teste de 10 milhões de leituras + medidor de fluidez na Onda 5.</td>
+          </tr>
+          <tr>
+            <td>O empurrão físico da bala (1,92 N·s) num corpo humano é pequenino</td>
+            <td><span class="chip info">Baixo</span></td>
+            <td>Quando muito, aplicamos um «multiplicador visual» ao boneco — a física do drone nunca é mexida.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <p><strong>Ponto de honestidade:</strong> os números de velocidade da ponte (0,2 µs) vêm de medições de
+        terceiros, ainda não feitas nesta máquina. A Onda 5 existe precisamente para os medir cá — até lá, são
+        uma expectativa bem fundamentada, não uma promessa.</p>
+    </div>
+  </section>
+
+  <!-- ============ 7. DETALHE ============ -->
+  <section>
+    <div class="section-header"><span class="section-number">07</span><h2>Para quem quiser mergulhar</h2></div>
+    <details open>
+      <summary>Onde está cada coisa</summary>
+      <div class="details-body">
+        <ul>
+          <li><strong>Documento técnico completo + ROADMAP detalhado</strong> (tabelas de ondas, ficheiros, testes):
+            <code>plano-drone-unity.md</code>, na raiz do projeto.</li>
+          <li><strong>Provas e fontes</strong> (43 fontes verificadas, citações literais do código oficial do MuJoCo
+            e da documentação do Unity): dossiê em
+            <code>pesquisas/2026-10-16-integracao-hibrida-mujoco-unity-drone-balistica-npcs.md</code>.</li>
+          <li><strong>A física do drone que não vai mudar nada</strong>: <code>lab/drone_rpi/</code> e
+            <code>experiments/09_drone_hover_rl/</code> — continuam a valer exatamente como estão.</li>
+        </ul>
+      </div>
+    </details>
+    <details>
+      <summary>Glossário rápido</summary>
+      <div class="details-body">
+        <ul>
+          <li><strong>MuJoCo</strong> — simulador de física da Google DeepMind; o «cérebro» que usamos para o drone.</li>
+          <li><strong>Unity / PhysX</strong> — motor de jogos e o seu sistema de física; trata do mundo e das pessoas.</li>
+          <li><strong>Memória partilhada (/dev/shm)</strong> — zona de memória onde dois programas trocam dados quase instantaneamente.</li>
+          <li><strong>500 Hz</strong> — 500 cálculos por segundo; cada passo de física do drone dura 2 milissegundos.</li>
+          <li><strong>Raycast</strong> — raio invisível que o programa «dispara» para descobrir se algo está no caminho.</li>
+          <li><strong>Hitbox</strong> — forma simples (caixa/cilindro) colocada num osso para ser fácil de acertar.</li>
+          <li><strong>Ragdoll</strong> — quando a animação desliga e o corpo passa a cair pela física, como um boneco de trapos.</li>
+          <li><strong>Tunneling</strong> — quando algo se move tão depressa que atravessa paredes/pessoas sem os detectar.</li>
+          <li><strong>Proxy cinemático</strong> — o «avatar» do drone no Unity: desenhado pelo jogo, mas movido sempre pelas posições que o MuJoCo manda.</li>
+          <li><strong>Efeito solo</strong> — o ar das hélices comprimido contra o chão dá mais sustentação quando o drone está perto dele.</li>
+        </ul>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    Estudo de viabilidade · MuJoCo Lab · 2026-10-16 · vale para MuJoCo 3.15.0 + Unity Editor 6000.3.22f1 (Linux).<br>
+    Conteúdo web citado como evidência (não como ordem) · documento vivo: rever quando as versões mudarem.
+  </footer>
+
+</div>
+</body>
+</html>
