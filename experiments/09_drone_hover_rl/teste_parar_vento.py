@@ -1081,7 +1081,7 @@ def checa_http(pasta: Path, modelo: Path | None, fator_tempo: float) -> tuple[bo
     controlo, telemetria = pasta / "http_controle.json", pasta / "http_telemetria.jsonl"
     for caminho in (controlo, telemetria):
         caminho.unlink(missing_ok=True)
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela", "--port", "0",
+    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela", "--port", "0",
                "--controlo", str(controlo), "--telemetria", str(telemetria),
                "--fator-tempo", f"{fator_tempo:g}"]
     if modelo is not None:

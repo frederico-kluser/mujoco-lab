@@ -21,6 +21,7 @@ do corpo.
 from __future__ import annotations
 
 import math
+import os
 import pathlib
 
 import mujoco
@@ -79,6 +80,9 @@ _COR_ARMA = {
 _COR_BRACOS = {
     "servo": [0.07, 0.07, 0.08, 1.0],          # caixa preta dos DYNAMIXEL
     "sem_fim": [0.62, 0.64, 0.68, 1.0],        # caixa de alumínio do sem-fim
+    "dobradica": [1.0, 0.52, 0.04, 1.0],       # pino/charneira das 8 juntas (laranja anodizado: vê-se de longe)
+    "corneta": [0.86, 0.87, 0.89, 1.0],        # disco de saída do servo (horn), roda com a junta
+    "marca_corneta": [0.85, 0.08, 0.08, 1.0],  # risco no disco: mostra o QUANTO a junta rodou
 }
 _COR_EFEITOS_ARMA = {
     "fogo_nucleo": ([1.0, 0.97, 0.70, 1.0], 1.0),
@@ -228,6 +232,28 @@ def geometria_bracos(hw: Hardware) -> dict:
     return {"r_s": r_s, "l1": hw.braco - r_s, "l_m": hw.helice.raio + mec.folga_helice, "r_hel": hw.helice.raio}
 
 
+def _charneira(corpo_movel, nome: str, y_disco: float, sx: float, sz: float, sem_contacto: dict) -> None:
+    """DOBRADIÇA visível de uma junta (só VISUAL: massa 0, sem contacto, grupo 3 dos detalhes — o cockpit mostra-o, a câmara do detetor não): o pino laranja ao
+    longo do eixo y, que sai 7 mm para fora dos dois lados, e em cada lado o disco de saída do servo (horn) com um RISCO
+    vermelho que roda com a junta — olhando para o risco vê-se o quanto ela rodou. Vai no corpo que RODA (braço no
+    ombro, mastro no cotovelo), com a origem no eixo; os discos ficam a ±`y_disco` (logo fora da caixa do sem-fim /
+    do garfo). O risco aponta para (sx, 0, sz) no referencial desse corpo com a junta a 0 (ombro: ao longo do braço;
+    cotovelo: ao longo do mastro). A física não muda (provado bit a bit em `teste_bracos.py` §2)."""
+    eixo_y = [math.sqrt(0.5), -math.sqrt(0.5), 0.0, 0.0]          # cilindro z → y
+    corpo_movel.add_geom(name=f"dobradica_{nome}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                         size=[0.0075, y_disco + 0.0095, 0], quat=eixo_y, group=3, mass=0.0, material="dobradica",
+                         **sem_contacto)
+    for lado, sufixo in ((1.0, "a"), (-1.0, "b")):
+        y = lado * y_disco
+        corpo_movel.add_geom(name=f"corneta_{nome}_{sufixo}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                             size=[0.019, 0.0025, 0], pos=[0.0, y, 0.0], quat=eixo_y, group=3, mass=0.0,
+                             material="corneta", **sem_contacto)
+        corpo_movel.add_geom(name=f"marca_{nome}_{sufixo}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                             size=[0.003 + 0.0075 * abs(sx), 0.0012, 0.003 + 0.0075 * abs(sz)],
+                             pos=[0.0105 * sx, y + lado * 0.0028, 0.0105 * sz], group=3, mass=0.0,
+                             material="marca_corneta", **sem_contacto)
+
+
 def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contacto: dict, massas: dict, braco: float,
                         rot, lado: float) -> list:
     """Braços ARTICULADOS (`hw.bracos`): por braço, um corpo `braco{i}` preso à placa pela junta `ombro{i}` e um
@@ -285,6 +311,7 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
         j.limited = mujoco.mjtLimited.mjLIMITED_TRUE
         j.range = [float(so.limites[0]), float(so.limites[1])]
         j.damping = [0.02, 0.0, 0.0]          # 3.15: polinómio a·v + b·v|v| + c·v³
+        _charneira(b, f"ombro{k}", y_disco=0.0215, sx=math.copysign(1.0, ux), sz=0.0, sem_contacto=sem_contacto)
         b.add_geom(name=f"braco{k}_tubo", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.5 * l1, 0.012, 0.005],
                    pos=[0.5 * l1 * ux, 0.5 * l1 * uy, 0.0], quat=q_ang, mass=m_tubo * l1 / braco,
                    material="frame", **sem_contacto)
@@ -312,6 +339,7 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
         jc.armature = float(sc.servo.inercia_rotor * sc.servo.reducao_interna ** 2)   # rotor refletido (× N²)
         jc.frictionloss = float(sc.servo.atrito_saida)
         jc.damping = [0.002 + sc.servo.binario_bloqueio / sc.servo.omega_vazio, 0.0, 0.0]   # mecânico + contra-eletromotriz
+        _charneira(m, f"cotovelo{k}", y_disco=0.0255, sx=0.0, sz=1.0, sem_contacto=sem_contacto)
         z0_m, z1_m = 0.012, z_suporte - 0.0025
         m.add_geom(name=f"mastro{k}_tubo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
                    size=[0.008, 0.5 * (z1_m - z0_m), 0], pos=[0.0, 0.0, 0.5 * (z0_m + z1_m)],
@@ -383,7 +411,7 @@ def _pernas_articuladas(corpos_braco: list, hw: Hardware, massas: dict, h_pernas
 
 
 def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.3,
-             com_alvo: bool = False) -> mujoco.MjSpec:
+             com_alvo: bool = False, detalhes: bool = True) -> mujoco.MjSpec:
     """Constrói o spec; `deslocamento` é subtraído a todas as posições do corpo (põe a origem no CM)."""
     spec = mujoco.MjSpec()
     spec.modelname = f"drone_rpi_{hw.nome}"
@@ -785,6 +813,12 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     if com_alvo:
         cam_rpi.adicionar_ponto(spec)
 
+    # ---- DETALHE VISUAL realista (só aparência: massa 0, sem contacto, grupo 3) — `lab/drone_rpi/detalhes/`;
+    # `DRONE_DETALHES=nenhum` desliga (a física é a MESMA com e sem: `python -m lab.drone_rpi.detalhes.ver`)
+    if detalhes:
+        from .detalhes import adicionar_detalhes
+        adicionar_detalhes(spec, hw, p)
+
     spec.add_key(name="pousado", qpos=[0, 0, z0, 1, 0, 0, 0] + ([0.0] * N_JUNTAS if corpos_braco is not None else []))
     return spec
 
@@ -795,7 +829,7 @@ def construir_spec(hw: Hardware, com_alvo: bool = False) -> mujoco.MjSpec:
     Braços articulados: a origem vai para o CM do CONJUNTO (corpo + braços + mastros) com as juntas a 0 — o que
     o `subtree_com` do MuJoCo dá na pose de construção (corpo na origem, sem rotação); nos rígidos é o CM do corpo
     (o `body_ipos`, como sempre: a mesma conta, o mesmo MJCF)."""
-    m1 = _montar(hw, com_alvo=com_alvo).compile()
+    m1 = _montar(hw, com_alvo=com_alvo, detalhes=False).compile()   # só o CM: os detalhes (massa 0) não o mudam
     bid = m1.body("drone").id
     if hw.bracos is None:
         cm = np.array(m1.body_ipos[bid])
@@ -859,11 +893,26 @@ def carregar(hw: Hardware, com_alvo: bool = False) -> tuple[mujoco.MjModel, mujo
     return model, data
 
 
-def exportar_xml(hw: Hardware, caminho: pathlib.Path | str) -> str:
-    """Escreve o MJCF gerado (para inspecionar com `inspect_model.py`/viewer) e devolve o texto."""
-    xml = construir_spec(hw).to_xml()
+def exportar_xml(hw: Hardware, caminho: pathlib.Path | str, detalhes: bool = False) -> str:
+    """Escreve o MJCF gerado (para inspecionar com `inspect_model.py`/viewer) e devolve o texto.
+
+    Por omissão SEM o detalhe visual realista (`lab/drone_rpi/detalhes`): as malhas dos motores, da estrutura e dos fios
+    levam o MJCF de ~40 kB a 5–6 MB (vértices inline) e este ficheiro vive no git; a física é a MESMA (prova:
+    `python -m lab.drone_rpi.detalhes.ver`). `detalhes=True` exporta o modelo completo (para um viewer externo)."""
+    anterior = os.environ.get("DRONE_DETALHES")
+    if not detalhes:
+        os.environ["DRONE_DETALHES"] = "nenhum"
+    try:
+        xml = construir_spec(hw).to_xml()
+    finally:
+        if not detalhes:
+            if anterior is None:
+                os.environ.pop("DRONE_DETALHES", None)
+            else:
+                os.environ["DRONE_DETALHES"] = anterior
     cabeca = (f"<!-- GERADO por lab/drone_rpi/modelo.py a partir do build '{hw.nome}' "
               f"(models/drone_rpi/builds.json) — NÃO editar à mão: troque peças no catálogo e regenere com "
-              f"`experiments/09_drone_hover_rl/hardware.py xml`. -->\n")
+              f"`experiments/09_drone_hover_rl/hardware.py xml`"
+              f"{'' if detalhes else ' (sem o detalhe visual: as malhas acrescentam-se ao carregar, lab/drone_rpi/detalhes)'}. -->\n")
     pathlib.Path(caminho).write_text(cabeca + xml, encoding="utf-8")
     return xml

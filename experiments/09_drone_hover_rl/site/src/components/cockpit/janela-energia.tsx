@@ -46,6 +46,11 @@ export function JanelaEnergia({
   const rAutonomia = useRef<HTMLSpanElement>(null)
   const rBarras = useRef<(HTMLSpanElement | null)[]>([])
   const rDuty = useRef<(HTMLSpanElement | null)[]>([])
+  const rRepMotores = useRef<HTMLSpanElement>(null)
+  const rRepEletronica = useRef<HTMLSpanElement>(null)
+  const rRepServos = useRef<HTMLSpanElement>(null)
+  const rRepServosE = useRef<HTMLSpanElement>(null)
+  const rRepServosLinha = useRef<HTMLDivElement>(null)
 
   useDesenhoHud(({ hud, texto }) => {
     const b = hud?.bateria ?? null
@@ -66,6 +71,15 @@ export function JanelaEnergia({
     escrever(rI.current, b?.i == null ? "—" : `${fmtHud(b.i, 1)} A`)
     escrever(rP.current, b?.p == null ? "—" : `${fmtHud(b.p, 0)} W`)
     escrever(rAutonomia.current, fmtAutonomia(b?.autonomiaMin))
+    // para onde vai a potência: motores + eletrónica (+ servos dos braços articulados) = total
+    const pot = hud?.potencia ?? null
+    escrever(rRepMotores.current, pot?.motores == null ? "—" : `${fmtHud(pot.motores, 0)} W`)
+    escrever(rRepEletronica.current, pot?.eletronica == null ? "—" : `${fmtHud(pot.eletronica, 1)} W`)
+    const comServos = pot?.servos != null
+    if (rRepServosLinha.current !== null) rRepServosLinha.current.hidden = !comServos
+    escrever(rRepServos.current, pot?.servos == null ? "—" : `${fmtHud(pot.servos, 1)} W`)
+    const eServos = hud?.bracos?.energiaWh ?? null
+    escrever(rRepServosE.current, eServos === null ? "—" : `${fmtHud(eServos, 3)} Wh`)
     for (let i = 0; i < 4; i += 1) {
       const duty = motores?.[i]
       escrever(
@@ -110,6 +124,21 @@ export function JanelaEnergia({
         <Leitura rotulo="corrente" refValor={rI} testid="energia-corrente" />
         <Leitura rotulo="potência" refValor={rP} testid="energia-potencia" />
         <Leitura rotulo="autonomia" refValor={rAutonomia} testid="energia-autonomia" />
+      </div>
+
+      <div className="flex flex-col gap-1.5" data-testid="energia-reparticao">
+        <Legenda>para onde vai a potência</Legenda>
+        <div className="grid grid-cols-3 gap-2">
+          <Leitura rotulo="motores" refValor={rRepMotores} testid="energia-rep-motores" />
+          <Leitura rotulo="eletrónica" refValor={rRepEletronica} testid="energia-rep-eletronica" />
+          <div ref={rRepServosLinha} hidden>
+            <Leitura rotulo="servos braços" refValor={rRepServos} testid="energia-rep-servos" />
+          </div>
+        </div>
+        <span className="text-[0.66rem] text-muted-foreground">
+          servos gastaram <span ref={rRepServosE} data-testid="energia-rep-servos-wh">—</span> desde o arranque
+          (só no build com braços articulados)
+        </span>
       </div>
 
       <div className="flex items-end justify-between gap-3 border-t border-white/10 pt-3">

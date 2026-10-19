@@ -20,6 +20,7 @@ import {
 import { motion, useTransform } from "motion/react"
 import {
   ChartLine,
+  Cog,
   Cpu,
   Crosshair,
   Drone,
@@ -44,6 +45,7 @@ export const ICONE_JANELA: Record<IdJanela, ReactNode> = {
   graficos: <ChartLine />,
   sistema: <Cpu />,
   ajuda: <Keyboard />,
+  bracos: <Cog />,
 }
 
 /** Segundos a manter para reiniciar (curto para não cansar, longo para não ser um toque). */
@@ -138,6 +140,8 @@ export interface DocaProps {
   /** Sem ligação à API o REINICIAR não tem a quem pedir. */
   podeReiniciar: boolean
   gestoReiniciar: Ref<GestoReiniciar>
+  /** Janelas sem botão (a Braços só aparece no build com braços articulados; a tecla continua a abri-la). */
+  ocultas?: readonly IdJanela[]
 }
 
 export function Doca({
@@ -146,6 +150,7 @@ export function Doca({
   onReiniciar,
   podeReiniciar,
   gestoReiniciar,
+  ocultas = [],
 }: DocaProps) {
   return (
     <nav
@@ -153,7 +158,7 @@ export function Doca({
       data-testid="doca"
       className="vidro pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-2xl p-1.5"
     >
-      {JANELAS.map((janela) => {
+      {JANELAS.filter((janela) => !ocultas.includes(janela.id)).map((janela) => {
         const aberta = abertas.includes(janela.id)
         return (
           <span key={janela.id} className="group relative flex">

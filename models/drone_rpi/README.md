@@ -179,6 +179,40 @@ Inércias de ATITUDE do corpo (MEDIDAS no modelo compilado): Jxx 0,467 · Jyy 0,
 | 20 % | 21,00 V | 4242 rpm | 4,20 kgf | 2,52 |
 | 10 % | 20,40 V | 4138 rpm | 4,00 kgf | 2,40 |
 
+## Detalhe visual realista (2026-10-19) — `lab/drone_rpi/detalhes/`
+
+O aspeto 3D das peças vive num pacote à parte, um módulo por subsistema, chamado no FIM do `modelo._montar` (depois de
+todas as peças com massa). Feito por 4 agentes em paralelo (um módulo cada), com fichas/desenhos oficiais citados no
+docstring de cada módulo:
+
+| módulo | o que desenha (medidas reais) | peças (ativo · articulado) |
+|---|---|---|
+| `eletronica` | **Raspberry Pi 5** (placa 85×56, furos 58×49, todas as portas no sítio do desenho mecânico: USB 3 azuis junto à RJ45 com LEDs, 2× micro-HDMI, 2× FPC CAM/DISP, PCIe, GPIO 40 pinos, botão) com o **Active Cooler** oficial (63,5×42,5×13,7, alhetas, ventoinha de 30 mm); ponte de carbono + **FC H743** (36×36, grommets, MCU, BMI088, barómetro); placa de potência 60×40 com o INA226 e o BEC 5 V; **4× T-Motor AIR 40A** (55,6×25,2×11,3, termo-retrátil); **Camera Module 3 Wide** com suporte; PMW3901 e VL53L1X por baixo; **pack 6S2P de 21700 Molicel P50B** com rótulo, XT90, borracha e 2 fitas; no articulado o regulador de 24 V dos servos (no Arduino: Portenta H7) | 192 · 203 |
+| `motores` | **T-Motor MN4004** (Φ44,35×19, 18N24P) / **MN5006** (Φ55,6×30, 24N28P): base com janelas e 4 braços, núcleo e bobinas de cobre, sino com aresta polida e topo de 6 raios curvos (RODA com a hélice), veio, rolamento, 4 M3, adaptador, manga e 3 fases com balas de 3,5 mm; **hélice P15×5 de carbono** (forma real: colo fino, corda máxima a ~27 % do raio, ponta arredondada, corda média = a do catálogo, torção do passo — 7,8° a 75 % do raio contra 8,05° do catálogo, perfil fino com curvatura), CW/CCW espelhadas, grampo com 2 parafusos | 108 · 108 |
+| `estrutura` | placa de baixo 208×208×3 de carbono (textura builtin), furo de cabos, ranhuras das fitas, aligeiramentos; placa de cima com janela; espaçadores Ø5 M3 com parafusos ISO 4762; tubos de carbono 25×23; abraçadeiras CNC, suportes dos motores, varões de travamento, pernas com pé de borracha — e o **MECANISMO**: no ombro, caixa de alumínio com janelas (sem-fim de aço m 0,8 a engrenar a roda de bronze de 20 dentes), 2 rolamentos 6800, servo XH430 deitado na placa, placa AS5048A no veio, cubo LARANJA com ponteiro sobre escala −40…+40°; no cotovelo, XH430 com horn e polia, garfo LARANJA estilo FR12-H101K, ponteiro sobre escala −45…+45°, mastro Ø16 com abraçadeiras. Cada peça no corpo que RODA (`drone` / `braco{k}` / `mastro{k}`); sem interpenetração em todo o curso das juntas (verificado de 5 em 5°) | 6 · 105 (malhas fundidas por material) |
+| `fios` | fases 3×16 AWG laranja (cabos do ESC) com junções termo-retrácteis e balas fêmea nas balas dos motores, braçadeiras; ESC → placa de potência 14 AWG + par trançado de sinal; bateria 10 AWG do XT90 às ilhas + balanceamento 6S; USB-C 5 V ao RPi 5, UART Dupont ↔ JST-GH na FC, I2C ao INA226, sensores de baixo; **FPC da câmara** (16 → 11,5 mm) a entrar no conector CAM pelo lado da trava; no articulado o **barramento DYNAMIXEL** (X4P, JST EHR-04) do regulador aos ombros e de cada ombro ao cotovelo, e mangas que CRUZAM cada junta em segmentos por corpo (dobram no eixo) | 13 · 65 (tubos varridos, malhas fundidas) |
+
+Regras (impostas pelo `Contexto.geom`): **massa 0, sem contacto, grupo 3** (o «fios e detalhes» do cockpit — a câmara
+do detetor da bola só vê o grupo 0), nenhum corpo/junta/site/sensor/atuador novo. As caixas grosseiras com massa ficam
+invisíveis (`esconder`: só a cor muda) quando um detalhe as representa — nenhuma peça do drone com massa aparece na
+câmara do detetor (medido por segmentação da câmara `fpv`).
+
+- `DRONE_DETALHES=nenhum` desliga (ou uma lista: `eletronica,fios`); por omissão todos. A física é a mesma com e sem.
+- **Custo**: construir o modelo passa de ~8 ms a ~0,5 s por env (uma vez — os detalhes não entram na passagem do CM);
+  render 1080p ~300 fps (antes ~400; o cockpit precisa de 50). Para corridas sem render, `DRONE_DETALHES=nenhum`.
+- **Cockpit**: com «fios e detalhes» desligado, a câmara volta a desenhar as caixas escondidas (`detalhes.acrescentar_escondidos`,
+  na cena — o modelo não muda), para o drone não ficar sem motores nem eletrónica. Na **troca ao vivo** de motor/bateria
+  (`trocar_pecas`) a caixa física muda de tamanho mas continua escondida; o sino do motor e o invólucro do pack mudam de
+  COR, com o tamanho das peças do build (malhas não se redimensionam ao vivo).
+- `modelo.exportar_xml` (`hardware.py xml`) exporta SEM o detalhe por omissão (~39 kB; com as malhas inline seriam 5–6 MB
+  no git); `detalhes=True` exporta tudo.
+- Prova e imagens: `MUJOCO_GL=egl .venv/bin/python -m lab.drone_rpi.detalhes.ver --so todos` — os 13 builds compilam,
+  regras (massa, inércia e CM de TODOS os corpos iguais; MJCF exportável), o mesmo voo de 600 passos (pairar, arfar, tiro)
+  com e sem detalhes nos dois builds principais (**idêntico bit a bit**) e as vistas (geral, centro, motor, braço,
+  cotovelo, mira…).
+- Estimado (sem número oficial): posições dos chips do RPi 5, base em L do cooler, círculo de furação da base dos
+  motores, alturas internas, forma do horn do XH430 (só em .dwg), caixa do XT90, disposição do regulador.
+
 ## Como as peças viram física (o que o catálogo alimenta)
 
 - **Hélice**: kf/kq por mínimos quadrados sobre a tabela do fabricante (empuxo e binário medidos vs ω²);

@@ -264,7 +264,7 @@ def secao_runner_servidor(c: Checagens) -> None:
     # servidor: /api/state + /api/sim levam multi_ia
     porta = 8692
     servidor = subprocess.Popen(
-        [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela", "--port", str(porta),
+        [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela", "--port", str(porta),
          "--controlador", "rl",
          "--controlo", str(controlo), "--telemetria", str(telemetria), "--model", str(MODELO_VOO)],
         cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)

@@ -109,10 +109,53 @@ quando acha que acerta). Build novo **`articulado_15pol_mn5006`** — o build AT
   *jitter* 1,52 % (v4: 0,77 °/s · 0,68 %) ⇒ estabilidade **79,5/100** (v4 88,4) — o preço de um drone 50 % mais pesado com um
   laço mais rápido; a arma não sente quase nada do rolamento (é rotação em torno do cano).
 
+### No COCKPIT — ver o mecanismo a funcionar (2026-10-19)
+
+```bash
+mujoco 09                                                     # ou, sem o seletor:
+uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py
+```
+
+- **O cockpit voa o build ARTICULADO por omissão** (pedido do dono, 2026-10-19: «o comando mujoco tem que ter os braços
+  flexíveis»): sem `--build`, o `sim_site.py` (e por ele o `mujoco 09`) arranca com `articulado_15pol_mn5006`
+  (`BUILD_COCKPIT_OMISSAO`); `--build <outro>` voa outro build do catálogo nesta sessão e `--build politica` volta ao
+  rígido em que a política RL foi treinada (é o que os testes antigos do cockpit fixam). O build ativo do catálogo
+  (`hardware.py usar`) não muda. A política RL foi treinada sem braços (observação 48; com os braços 64): o modo RL
+  fica recusado com motivo e voa a cascata clássica (o `auto` já a escolhia na planta real).
+- **B (seguir a bola) + AUTO SHOOT** usam a mira por ARFAGEM (`MiraArticuladaIA`, a do treino TF): a guinada aponta ao
+  azimute e o CORPO (a arma) inclina para a altura da bola, com os motores de nível. **A altura é a do dono**: Q/E
+  sobem/descem e o corpo reajusta-se sozinho; WASD movem o drone enquanto a mira aponta; sem teclas, o drone só se
+  mexe na horizontal para manter a bola a 1,8–3,2 m (a banda de tiro da rede). O pitch pedido é cortado ao envelope
+  validado (±35°) — acima disso a janela diz «fora do alcance» e o portão não dispara. Largar o B volta o corpo a nível.
+- **Janela Braços (tecla 9, só nos builds articulados)**: estado da mira, pitch do corpo (medido → pedido, em «nariz ↑/↓»),
+  inclinação dos motores face ao corpo (τ), elevação da bola; um ESQUEMA LATERAL ao vivo com as duas dobradiças de cada
+  braço (ombro e cotovelo) a rodar; a tabela dos 8 servos (ângulo medido e alvo, °/s, corrente, potência, **curso =
+  quanto já rodou**, energia em mWh) e os totais (W agora, Wh gastos, % da potência total).
+- **Energia**: a corrente dos servos sai da bateria a cada passo da física (`planta.i_total`) — conta para o consumo e a
+  autonomia; a janela Energia mostra «para onde vai a potência» (motores · eletrónica · servos, que somam o total) e
+  o painel de peças mostra os watts dos servos à parte. Em espera cada XH430 puxa 40 mA a 24 V (8 servos ≈ 8,3 W na
+  bateria); a mirar, 15–36 W.
+- **As duas dobradiças no 3D** (modelagem realista, `lab/drone_rpi/detalhes/estrutura.py`): no OMBRO a caixa do
+  sem-fim com janelas (o sem-fim a engrenar a roda de bronze), rolamentos, o servo deitado na placa, o AS5048A e o cubo
+  LARANJA com um ponteiro sobre a escala −40…+40°; no COTOVELO o garfo LARANJA aparafusado ao horn do XH430, com
+  ponteiro sobre −45…+45° — o laranja é o que roda, e os ponteiros mostram o ângulo de cada junta no próprio 3D (só
+  visual: a física é a mesma bit a bit). Em mira estável o ombro faz quase todo o ângulo (q₁ = τ + δ ≈ −29° para o corpo
+  a +25°) e o cotovelo só −δ ≈ +4°: o cotovelo é o atuador RÁPIDO das correções (no esquema da janela vê-se a mexer nos
+  transitórios) — por isso, parado, parecia haver só uma.
+- **Modelagem realista de todo o drone** (2026-10-19, 4 subagentes, um módulo cada): Raspberry Pi 5 com Active Cooler e
+  portas reais, FC H743, ESC AIR 40A, câmara, pack 6S2P de 21700, motores T-Motor com bobinas e sino que roda com a
+  hélice, hélices P15×5 com a forma e a torção reais, placas de carbono, pernas, e a cablagem completa (fases com balas,
+  14/10 AWG, XT90, USB-C, UART, I2C, FPC da câmara, barramento DYNAMIXEL a cruzar as juntas). Ver
+  `models/drone_rpi/README.md` → «Detalhe visual realista» (regras, custo, `DRONE_DETALHES`, prova).
+- Medido no ensaio ponta a ponta pela API (`sim_site --build`, `POST /api/voo` + `/api/bola`): a 1 m 16/16 tiros; Q até
+  2,6 m → corpo +34° (nariz-abaixo) e 19/19; E até 0,6 m → corpo −11° e 34/34; servos 0,21 Wh e 36 W no fim. Prova
+  automática: `teste_bracos.py --cockpit` (§9).
+
 ### Como correr
 
 ```bash
 .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mira          # prova: 31/31 (§1–§7)
+.venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --cockpit       # §9: o runner do cockpit com os braços
 .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mutacao       # 7/7 mutações apanhadas
 .venv/bin/python experiments/09_drone_hover_rl/treinar_mira_articulada.py --fase tudo --episodios 60 --processos 22
 .venv/bin/python experiments/09_drone_hover_rl/benchmark_evolucao.py           # 5 gerações + 6 presets + 3 cenários

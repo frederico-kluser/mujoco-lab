@@ -873,7 +873,7 @@ class Servidor:
     def __init__(self, controlo: Path, telemetria: Path, host: str, porta: int, verboso: bool = False,
                  filho: subprocess.Popen | None = None, modelo: Path | None = None,
                  motivo: str = "", memorizados: dict | None = None, fpv: Path | None = None,
-                 controlador: str = CONTROLADOR_OMISSAO):
+                 controlador: str = CONTROLADOR_OMISSAO, build: str | None = None):
         self.controlo = Path(controlo)
         self.telemetria = Path(telemetria)
         self.host = host
@@ -883,7 +883,8 @@ class Servidor:
         self.modelo = Path(modelo) if modelo is not None else None    # o .zip que o runner carregou
         self.modelo_motivo = motivo or ""                             # porquê este modelo (auditoria)
         self.memorizados = dict(memorizados or {})                    # `loop`/`reiniciar` efetivos (runtime)
-        self.hardware = hardware_do_modelo(self.modelo)               # planta real: peças do modelo em uso
+        self.build = build                                            # `--build`: o build que voa (ou None)
+        self.hardware = hardware_do_modelo(self.modelo, build)        # planta real: peças do modelo em uso
         self.fpv = Path(fpv) if fpv is not None else FPV_OMISSAO      # pasta do stream da câmara FPV
         self.controlador = str(controlador)                           # modo do arranque (`--controlador`, r12)
         self.hud: CanalHud | None = None                              # HUD ao vivo (r13); o `main` liga-o
@@ -2083,7 +2084,15 @@ def validar_bateria(dados, atual: dict) -> dict:
     return {"bateria": {"acao": acao, "seq": seq}}
 
 
-def hardware_do_modelo(modelo: Path | None) -> dict | None:
+def _peca_dict(peca) -> dict | None:
+    """`{fabricante, modelo, id}` de uma peça resolvida do catálogo (o formato do `pecas` do `hardware.json`)."""
+    if peca is None:
+        return None
+    return {"id": getattr(peca, "id", None), "fabricante": getattr(peca, "fabricante", ""),
+            "modelo": getattr(peca, "modelo", getattr(peca, "id", ""))}
+
+
+def hardware_do_modelo(modelo: Path | None, build: str | None = None) -> dict | None:
     """`hardware.json` ao lado do modelo (planta real: peças, derivados e DR com que foi treinado) — ou `None`.
 
     Se o build existir no catálogo atual (`models/drone_rpi/builds.json`), atualiza `derivados` (e `arma` em `pecas`)
@@ -2101,12 +2110,20 @@ def hardware_do_modelo(modelo: Path | None) -> dict | None:
         return None
     try:
         from lab import drone_rpi as dr
+        if build is not None:
+            # `--build`: a sessão voa OUTRO build (as peças do site têm de ser as que voam, não as do treino da política)
+            dados = {**dados, "build": build, "build_da_politica": dados.get("build")}
+            hw = dr.hardware(build)
+            dados["pecas"] = {"motor": _peca_dict(hw.motor), "helice": _peca_dict(hw.helice),
+                              "frame": _peca_dict(hw.frame), "esc": _peca_dict(hw.esc),
+                              "celula": _peca_dict(getattr(hw.bateria, "celula", None))}
         nome = dados.get("build")
         if nome and nome in dr.carregar_builds().get("builds", {}):
             hw = dr.hardware(nome)
             dados["derivados"] = hw.resumo()
             if hw.arma is not None and isinstance(dados.get("pecas"), dict):
                 dados["pecas"]["arma"] = hw.arma.dados
+            dados["bracos_articulados"] = hw.bracos is not None
     except Exception:  # noqa: BLE001
         pass
     return dados
@@ -2535,6 +2552,8 @@ def resumo_hardware(hardware: dict | None) -> dict | None:
             "g_por_w": ph.get("g_por_w"), "autonomia_min": d.get("autonomia_min"),
             "kf": d.get("kf"), "kq": d.get("kq"), "origem_kf_kq": d.get("origem_kf_kq"),
             "dr": hardware.get("domain_randomization") is not None,
+            "bracos_articulados": bool(hardware.get("bracos_articulados")),
+            "build_da_politica": hardware.get("build_da_politica"),
             # a semântica da AÇÃO com que a política voa (o site mostra os setpoints com ESTES valores)
             "taxa_max": _taxa_max_ctbr(), "coletivo_max_peso": 2.0}
 
@@ -2609,6 +2628,8 @@ def comando_do_runner(args, modelo: Path | None = None) -> list[str]:
     alvo = modelo if modelo is not None else args.model
     if alvo is not None:
         comando += ["--model", str(alvo)]
+    if getattr(args, "build", None):
+        comando += ["--build", str(args.build)]          # o runner voa este build (o site já o validou)
     if args.sem_janela:
         comando.append("--sem-janela")
     if str(getattr(args, "controlador", "")) == "classico":
@@ -2755,6 +2776,13 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                         "clássica C++ do firmware — yaw livre, WASDQE relativo ao rumo, seguir a bola) na "
                         "planta REAL em CTBR, `rl` no cf2. `rl`/`classico` explícitos servem para medir e "
                         "testar; o site já não tem seletor")
+    p.add_argument("--build", default=None, metavar="NOME",
+                   help=f"o build do catálogo (models/drone_rpi/builds.json) que voa nesta sessão. POR OMISSÃO o dos "
+                        f"BRAÇOS ARTICULADOS (`{BUILD_COCKPIT_OMISSAO}`: no «seguir a bola»/AUTO SHOOT o corpo arfa "
+                        f"para a altura da bola; janela Braços, tecla 9) — pedido do dono, 2026-10-19. "
+                        f"`--build {BUILD_DA_POLITICA}` voa o build com que a política foi treinada (o rígido); "
+                        "qualquer outro nome do catálogo também serve. A política RL só voa se a observação do build "
+                        "for a dela; senão voa a cascata clássica")
     p.add_argument("--sem-browser", action="store_true", help="não abre o browser (o URL sai na mesma)")
     p.add_argument("--verboso", action="store_true", help="mostra cada pedido HTTP no terminal")
     return p.parse_args(argv)
@@ -2775,6 +2803,20 @@ def pasta_fpv_omissao(porta: int, ambiente=None) -> Path:
     if base and os.path.isdir(base) and os.access(base, os.W_OK):
         return Path(base) / "mujoco-lab-drone" / f"fpv-{int(porta)}"
     return FPV_OMISSAO
+
+
+BUILD_COCKPIT_OMISSAO = "articulado_15pol_mn5006"   # o drone do cockpit: braços articulados (pedido do dono, 2026-10-19)
+BUILD_DA_POLITICA = "politica"                       # `--build politica`: o build do `hardware.json` da política (rígido)
+
+
+def resolver_build(pedido: str | None, hardware_politica: dict | None) -> str | None:
+    """`--build` → o build a voar (None = o da política). Por omissão os BRAÇOS ARTICULADOS — só na planta REAL (com
+    `hardware.json`); com uma política do cf2 não há builds e fica o cf2."""
+    if pedido == BUILD_DA_POLITICA:
+        return None
+    if pedido is not None:
+        return str(pedido)
+    return BUILD_COCKPIT_OMISSAO if hardware_politica else None
 
 
 def resolver_controlador(pedido: str, hardware: dict | None) -> str:
@@ -2844,7 +2886,15 @@ def main(argv=None) -> int:
     modelo, motivo = escolher_modelo(args)
     if not modelo.is_file():
         raise SystemExit(f"[site] modelo inexistente: {modelo}")
-    args.controlador = resolver_controlador(args.controlador, hardware_do_modelo(modelo))
+    build = resolver_build(getattr(args, "build", None), hardware_do_modelo(modelo))
+    args.build = build                                   # o runner recebe-o (ou nada: o build da política)
+    if build is not None:
+        from lab import drone_rpi as dr
+        catalogo = dr.carregar_builds().get("builds", {})
+        if build not in catalogo:
+            raise SystemExit(f"[site] --build {build!r} não existe em models/drone_rpi/builds.json "
+                             f"(há: {', '.join(sorted(catalogo))})")
+    args.controlador = resolver_controlador(args.controlador, hardware_do_modelo(modelo, build))
     if not INDEX.is_file():
         print(f"[site] aviso: {MENSAGEM_SEM_DIST.format(pasta=DIST.parent)}", flush=True)
     # ARRANQUE AUTORITATIVO (pedido do dono, 2026-10-09): o `loop` do arranque é SEM REINÍCIO (default) ou
@@ -2906,7 +2956,8 @@ def main(argv=None) -> int:
     hud = CanalHud()                                   # HUD ao vivo (r13): porta UDP local para o runner
     filho = lancar_runner(args, modelo, token_arranque, token_controlador, porta_hud=hud.porta)
     servidor = Servidor(args.controlo, args.telemetria, args.host, args.port, args.verboso, filho, modelo,
-                        motivo, memorizados, fpv=args.fpv, controlador=controlador_inicial)
+                        motivo, memorizados, fpv=args.fpv, controlador=controlador_inicial,
+                        build=getattr(args, "build", None))
     servidor.hud = hud
     httpd = abrir_servidor(args.host, args.port, servidor)
     url = f"http://{args.host}:{servidor.porta}/"

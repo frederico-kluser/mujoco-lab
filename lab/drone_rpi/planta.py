@@ -246,29 +246,7 @@ class Planta:
         self.sentido_rotacao_helices = [int(g) for g in hw.GIRO]
         self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
         self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
-        self._helices_pas: list[tuple[np.ndarray, list[tuple[int, float, float, float, float]]]] = []
-        r_hel = hw.helice.raio
-        theta_pa = hw.helice.angulo_passo_75_rad
-        n_pas = max(int(hw.helice.pas), 2)
-        for i in range(4):
-            centro_r = model.site_pos[int(self.sites[i])].copy()
-            s_giro = float(self.sentido_rotacao_helices[i])
-            pecas_pa: list[tuple[int, float, float, float, float]] = []
-            gid_cubo = self._geom_id(f"helice{i + 1}_cubo")
-            if gid_cubo is not None:
-                model.geom_sameframe[gid_cubo] = 0
-            for b_idx in range(n_pas):
-                psi_b = 2.0 * math.pi * b_idx / n_pas
-                for sufixo, r_frac, dz_pa, k_pitch in (
-                    ("raiz", 0.29, 0.0005, 1.00),
-                    ("ponta", 0.73, 0.0005, 0.75),
-                    ("faixa", 0.93, 0.0006, 0.65),
-                ):
-                    gid_pa = self._geom_id(f"helice{i + 1}_pa{b_idx + 1}_{sufixo}")
-                    if gid_pa is not None:
-                        model.geom_sameframe[gid_pa] = 0
-                        pecas_pa.append((gid_pa, r_frac * r_hel, dz_pa, psi_b, k_pitch * s_giro * theta_pa))
-            self._helices_pas.append((centro_r, pecas_pa))
+        self._helices_anim = self._preparar_animacao_helices()
 
     def _geom_id(self, nome: str) -> int | None:
         try:
@@ -478,27 +456,57 @@ class Planta:
         if self._gid_ferrolho is not None and self._pos_ferrolho0 is not None:
             m.geom_pos[self._gid_ferrolho] = self._pos_ferrolho0
 
-    def _aplicar_geoms_helices(self) -> None:
-        """Atualiza `geom_pos` e `geom_quat` das pás 3D das 4 hélices segundo `self.angulos_helices`."""
+    # peças que GIRAM com o rotor k, no corpo do site `r{k}`: a hélice inteira (`helice{k}_*`: pás, cubo, parafusos…) e o
+    # topo do sino do motor (`motor{k}_raio_*`); o disco translúcido `helice{k}` (sem «_») fica de fora
+    PREFIXOS_GIRO_ROTOR = ("helice{k}_", "motor{k}_raio_")
+
+    def _preparar_animacao_helices(self) -> tuple | None:
+        """Índices e pose de repouso (ângulo 0) das peças visuais que giram com cada rotor (`PREFIXOS_GIRO_ROTOR`). Cada
+        uma roda RÍGIDA em torno do eixo z do seu corpo que passa pelo site `r{k}` — serve qualquer forma (caixa, malha
+        recentrada pelo MuJoCo…); as de revolução centradas nesse eixo (esfera, cilindro/cápsula de eixo z) ficam paradas
+        (rodá-las não muda nada). Devolve arrays para `_aplicar_geoms_helices` ser vetorial (custo quase fixo)."""
         m = self.model
-        gpos, gquat = m.geom_pos, m.geom_quat
-        for i, (centro_r, pecas_pa) in enumerate(self._helices_pas):
-            if not pecas_pa:
-                continue
-            ang_i = self.angulos_helices[i]
-            cx_r, cy_r, cz_r = float(centro_r[0]), float(centro_r[1]), float(centro_r[2])
-            for gid_pa, r_dist, dz_pa, psi_b, pitch_rad in pecas_pa:
-                psi = ang_i + psi_b
-                c_p, s_p = math.cos(psi), math.sin(psi)
-                gpos[gid_pa, 0] = cx_r + r_dist * c_p
-                gpos[gid_pa, 1] = cy_r + r_dist * s_p
-                gpos[gid_pa, 2] = cz_r + dz_pa
-                cz_h, sz_h = math.cos(0.5 * psi), math.sin(0.5 * psi)
-                cx_h, sx_h = math.cos(0.5 * pitch_rad), math.sin(0.5 * pitch_rad)
-                gquat[gid_pa, 0] = cz_h * cx_h
-                gquat[gid_pa, 1] = cz_h * sx_h
-                gquat[gid_pa, 2] = sz_h * sx_h
-                gquat[gid_pa, 3] = sz_h * cx_h
+        simetricos = (int(mujoco.mjtGeom.mjGEOM_SPHERE), int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+                      int(mujoco.mjtGeom.mjGEOM_CAPSULE))
+        nomes = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(m.ngeom)]
+        gids, rot, cen, rel, q0 = [], [], [], [], []
+        for i in range(4):
+            s = int(self.sites[i])
+            corpo = int(m.site_bodyid[s])
+            cx, cy = float(m.site_pos[s, 0]), float(m.site_pos[s, 1])
+            prefixos = tuple(p.format(k=i + 1) for p in self.PREFIXOS_GIRO_ROTOR)
+            for g, nome in enumerate(nomes):
+                if not nome.startswith(prefixos) or int(m.geom_bodyid[g]) != corpo:
+                    continue
+                dx, dy = float(m.geom_pos[g, 0]) - cx, float(m.geom_pos[g, 1]) - cy
+                qw, qx, qy, qz = (float(v) for v in m.geom_quat[g])
+                if int(m.geom_type[g]) in simetricos and abs(dx) < 1e-9 and abs(dy) < 1e-9 and qx * qx + qy * qy < 1e-12:
+                    continue
+                m.geom_sameframe[g] = 0
+                gids.append(g)
+                rot.append(i)
+                cen.append((cx, cy))
+                rel.append((dx, dy))
+                q0.append((qw, qx, qy, qz))
+        if not gids:
+            return None
+        rel_a, q0_a = np.array(rel), np.array(q0)
+        return (np.array(gids, dtype=np.intp), np.array(rot, dtype=np.intp), np.array(cen), rel_a,
+                np.column_stack([-rel_a[:, 1], rel_a[:, 0]]), q0_a,
+                np.column_stack([-q0_a[:, 3], -q0_a[:, 2], q0_a[:, 1], q0_a[:, 0]]))
+
+    def _aplicar_geoms_helices(self) -> None:
+        """Atualiza `geom_pos` (x, y) e `geom_quat` das peças que giram com as 4 hélices segundo `self.angulos_helices`:
+        rotação rígida em torno do eixo de cada rotor, p = c + R_z(θ)·(p₀ − c) e q = q_z(θ) ⊗ q₀ (vetorial)."""
+        a = self._helices_anim
+        if a is None:
+            return
+        gids, rot, cen, rel, jrel, q0, jq0 = a
+        cos, sin = math.cos, math.sin
+        tab = np.array([(cos(t), sin(t), cos(0.5 * t), sin(0.5 * t)) for t in self.angulos_helices])[rot]
+        m = self.model
+        m.geom_pos[gids, 0:2] = cen + tab[:, 0:1] * rel + tab[:, 1:2] * jrel
+        m.geom_quat[gids] = tab[:, 2:3] * q0 + tab[:, 3:4] * jq0
 
     def _passo_helices_visuais(self, omega_rotores) -> None:
         """Avança o ângulo de cada hélice no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4)
@@ -846,23 +854,29 @@ class Planta:
         cor_m = meta_m.get("cor_rgba", [0.14, 0.15, 0.19, 1.0])
         d_mot = float(novo_hw.motor.dados.get("diametro_mm", 44.35)) / 1000.0
         h_mot = float(novo_hw.motor.dados.get("altura_mm", 19.0)) / 1000.0
+        malha = mujoco.mjtGeom.mjGEOM_MESH
         for i in range(4):
             gid_m = self._geom_id(f"motor{i + 1}")
             if gid_m is not None:
-                m.geom_size[gid_m, 0] = 0.5 * d_mot
+                m.geom_size[gid_m, 0] = 0.5 * d_mot          # a peça FÍSICA (colisão) toma o tamanho do motor novo
                 m.geom_size[gid_m, 1] = 0.5 * h_mot
-                m.geom_rgba[gid_m] = cor_m
+                if m.geom_rgba[gid_m, 3] > 0.0:             # o detalhe realista esconde-a (alfa 0): fica escondida
+                    m.geom_rgba[gid_m] = cor_m
+            # o sino/base: com o detalhe realista são MALHAS (não se redimensionam ao vivo — mantêm o tamanho do motor do
+            # build) e só mudam de cor; as peças antigas (cilindros/caixas) ainda tomam o tamanho do motor novo
             for sufixo, r_f, h_f in (("sino_anel", 0.51, 0.22), ("base_cnc", 0.48, 0.14)):
                 gid_s = self._geom_id(f"motor{i + 1}_{sufixo}")
                 if gid_s is not None:
-                    m.geom_size[gid_s, 0] = r_f * d_mot
-                    m.geom_size[gid_s, 1] = h_f * h_mot
+                    if m.geom_type[gid_s] != malha:
+                        m.geom_size[gid_s, 0] = r_f * d_mot
+                        m.geom_size[gid_s, 1] = h_f * h_mot
                     m.geom_rgba[gid_s] = cor_m
             for k_r in range(3):
                 gid_r = self._geom_id(f"motor{i + 1}_raio_{k_r + 1}")
                 if gid_r is not None:
-                    m.geom_size[gid_r, 0] = 0.49 * d_mot
-                    m.geom_size[gid_r, 1] = 0.065 * d_mot
+                    if m.geom_type[gid_r] != malha:
+                        m.geom_size[gid_r, 0] = 0.49 * d_mot
+                        m.geom_size[gid_r, 1] = 0.065 * d_mot
                     m.geom_rgba[gid_r] = cor_m
 
         meta_b = CATALOGO_BATERIAS_PAINEL.get(novo_hw.bateria.id, {})
@@ -871,12 +885,22 @@ class Planta:
         c_b, l_b, a_b = sorted(dims_b, reverse=True)
         gid_bat = self._geom_id("bateria")
         if gid_bat is not None:
-            m.geom_size[gid_bat] = [0.5 * c_b, 0.5 * l_b, 0.5 * a_b]
-            m.geom_rgba[gid_bat] = cor_b
-        for idx_cb in (1, 2):
-            gid_cb = self._geom_id(f"cinta_bateria_{idx_cb}")
-            if gid_cb is not None:
-                m.geom_size[gid_cb] = [0.008, 0.5 * l_b + 0.002, 0.5 * a_b + 0.002]
+            m.geom_size[gid_bat] = [0.5 * c_b, 0.5 * l_b, 0.5 * a_b]   # a peça FÍSICA toma o tamanho do pack novo
+            if m.geom_rgba[gid_bat, 3] > 0.0:                         # escondida pelo detalhe realista: fica escondida
+                m.geom_rgba[gid_bat] = cor_b
+        # o pack realista (`detalhes.eletronica`) muda de COR pelo material do invólucro; células, fitas e XT90 ficam com
+        # o tamanho do pack do build (malha/peças fixas) — só as fitas antigas (sem o pack realista) ainda se esticam
+        realista = False
+        for nome_mat in ("el_termo_bateria", "el_termo_pouch"):
+            mid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_MATERIAL, nome_mat)
+            if mid >= 0:
+                m.mat_rgba[mid, :3] = cor_b[:3]
+                realista = True
+        if not realista:
+            for idx_cb in (1, 2):
+                gid_cb = self._geom_id(f"cinta_bateria_{idx_cb}")
+                if gid_cb is not None:
+                    m.geom_size[gid_cb] = [0.008, 0.5 * l_b + 0.002, 0.5 * a_b + 0.002]
 
         # Atualiza massa e inércia do corpo no MuJoCo preservando o estado dinâmico
         self._massa_corpo_base = float(novo_hw.massa_total)
@@ -975,13 +999,23 @@ class Planta:
             }
         pw = self.potencias()
         vazao_max = float(self._cache_pecas_base["vazao_max_a"])
+        extra = {}
+        p_eletronica = float(pw["eletronica"])
+        if "servos" in pw:
+            # braços articulados: os 8 servos à parte (espera + carga, na bateria); a eletrónica sem a espera deles —
+            # motores + eletrónica + servos = total (a espera não conta duas vezes)
+            p_esp = self.hw.bracos.potencia_espera() if p_eletronica > 0.0 else 0.0
+            p_eletronica -= p_esp
+            extra = {"watts_servos": round(float(pw["servos"]), 2),
+                     "energia_servos_wh": round(float(self.servos.energias_wh.sum()), 4)}
         return {
             **self._cache_pecas_base,
             "vazao_atual_a": round(float(self.i_total), 2),
             "vazao_pct": round(100.0 * float(self.i_total) / max(vazao_max, 1e-3), 1),
             "watts_total": round(float(pw["total"]), 1),
             "watts_motores": round(float(pw["motores"]), 1),
-            "watts_eletronica": round(float(pw["eletronica"]), 1),
+            "watts_eletronica": round(p_eletronica, 1),
+            **extra,
             "v_bus": round(float(self.v_bus), 2),
             "soc_pct": round(100.0 * float(self.bat.soc), 1),
             "dist_alvo_dinamica_m": round(float(self.dist_alvo_dinamica_m), 2),
@@ -1424,14 +1458,23 @@ class Planta:
         sv = self.servos
         q = sv.medidas
         tau_m, taud_m = self.inclinacao_motores_medida()
+        eta = self.hw.bracos.fonte_eficiencia
+        energias = sv.energias_wh
         return {"juntas_graus": [round(math.degrees(float(v)), 3) for v in q],
                 "alvos_graus": [round(math.degrees(float(v)), 3) for v in sv.alvos],
+                "velocidades_graus_s": [round(math.degrees(float(v)), 2) for v in sv.velocidades],
                 "binarios_nm": [round(float(v), 4) for v in sv.binarios],
                 "correntes_a": [round(float(v), 4) for v in sv.correntes],
-                "potencia_servos_w": round(sv.potencia_24v() / self.hw.bracos.fonte_eficiencia, 2),
+                # por servo, na BATERIA (24 V ÷ rendimento do regulador) — a espera conta
+                "potencias_w": [round(float(s.potencia) / eta, 3) for s in sv.servos],
+                "potencia_servos_w": round(sv.potencia_24v() / eta, 2),
+                "energias_wh": [round(float(v), 5) for v in energias],
+                "energia_servos_wh": round(float(energias.sum()), 5),
+                "curso_graus": [round(math.degrees(float(v)), 2) for v in sv.cursos],
                 "inclinacao_motores_graus": round(math.degrees(tau_m), 3),
                 "taxa_inclinacao_graus_s": round(math.degrees(taud_m), 3),
-                "saturados": [bool(s.saturado) for s in sv.servos]}
+                "saturados": [bool(s.saturado) for s in sv.servos],
+                "ligados": bool(sv.servos[0].ligado)}
 
     # ------------------------------------------------------------------ leituras
     def potencias(self) -> dict:

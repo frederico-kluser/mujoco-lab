@@ -28,6 +28,7 @@ import { Hud } from "@/components/cockpit/hud"
 import { Janela } from "@/components/cockpit/janela"
 import { JanelaAjuda } from "@/components/cockpit/janela-ajuda"
 import { JanelaBola } from "@/components/cockpit/janela-bola"
+import { JanelaBracos } from "@/components/cockpit/janela-bracos"
 import { JanelaEnergia } from "@/components/cockpit/janela-energia"
 import { JanelaVento } from "@/components/cockpit/janela-vento"
 import { JanelaVoo } from "@/components/cockpit/janela-voo"
@@ -399,6 +400,8 @@ export function App() {
         )
       case "ajuda":
         return <JanelaAjuda />
+      case "bracos":
+        return <JanelaBracos temBracos={resumoHud.temBracos} />
     }
   }
 
@@ -446,6 +449,7 @@ export function App() {
         onReiniciar={reiniciar}
         podeReiniciar={apiLigada && !aReiniciar}
         gestoReiniciar={gestoReiniciar}
+        ocultas={resumoHud.temBracos ? [] : ["bracos"]}
       />
 
       {/* As janelas: a ordem no DOM é FIXA (a da doca) e quem está à frente decide-se pelo z-index —

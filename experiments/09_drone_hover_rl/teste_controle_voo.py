@@ -502,7 +502,7 @@ def _arrancar_site(pasta: Path, modelo: Path | None, porta: int, fator_tempo: fl
     controlo, telemetria = pasta / "controlo.json", pasta / "telemetria.jsonl"
     for caminho in (controlo, telemetria):
         caminho.unlink(missing_ok=True)
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
+    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela",
                "--controlador", "rl",
                "--port", str(porta), "--controlo", str(controlo), "--telemetria", str(telemetria),
                "--fator-tempo", f"{fator_tempo:g}"]

@@ -508,7 +508,7 @@ def checa_servidor(c: Checagens) -> None:
     _titulo("§4b servidor: stream MJPEG, quadro, estado, POST /api/fpv e painel RPi 5")
     pasta = Path(tempfile.mkdtemp(prefix="teste_fpv_srv_", dir=os.environ.get("TMPDIR")))
     base = f"http://127.0.0.1:{PORTA_HTTP}"
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
+    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela",
                "--port", str(PORTA_HTTP), "--controlo", str(pasta / "ctl.json"),
                "--telemetria", str(pasta / "tel.jsonl"), "--fpv", str(pasta / "fpv")]
     processo = subprocess.Popen(comando, cwd=str(pasta), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

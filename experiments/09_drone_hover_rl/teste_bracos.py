@@ -24,11 +24,15 @@ mudar x, y, z — só a guinada e a arfagem do corpo. O que se prova (por execu�
      ganha as 8 juntas (encoders no ator, verdade no crítico);
   §7 MIRA (`--mira`) — os 3 cenários de altura: sem erros, ≥ 8 acertos em 10 s e afastamento da estação menor do que o
      deslize de um recuo (1,25·Δv/K_vel ≈ 0,40 m: a mira não translada, é o recuo que empurra);
-  §8 MUTAÇÕES (`--mutacao`) — mutações em CÓPIAS das fontes têm de FALHAR as checagens certas.
+  §8 MUTAÇÕES (`--mutacao`) — mutações em CÓPIAS das fontes têm de FALHAR as checagens certas;
+  §9 COCKPIT (`--cockpit`) — o runner do cockpit com `--build articulado_15pol_mn5006`: RL recusado com motivo, seguir
+     a bola + AUTO SHOOT com a mira por arfagem (0 erros), Q/E do dono a mudar o pitch do corpo, HUD com os 8 servos
+     (curso, energia, potência) e o ledger motores + eletrónica + servos = total; o `sim_site.py --build` passa-o.
 
 Uso:
     .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py              # §1–§6
     .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mira       # + §7
+    .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --cockpit    # + §9 (runner do cockpit)
     .venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mutacao    # §8
     ... --so-estatico                                                            # §1–§4 (sem simular; o §8 usa-o)
 """
@@ -426,6 +430,93 @@ def checa_mira(c: Checagens) -> None:
              f"(Δv {dv:.2f} m/s/tiro, K_vel {k_vel:.2f}/s) · corpo {r['pitch_corpo_medio_graus']:+.1f}°")
 
 
+# ============================================================================================ §9 cockpit
+def checa_cockpit(c: Checagens) -> None:
+    """O runner do cockpit (`sim_view.py`) com `--build articulado_15pol_mn5006`, sem browser e em tempo simulado:
+    RL recusado com motivo, «seguir a bola» + AUTO SHOOT com a mira por ARFAGEM, a altura do dono (Q/E) a mudar o pitch
+    do corpo, e o HUD com os 8 servos (ângulos, curso, potência, energia) e o ledger de potência que fecha."""
+    _titulo("§9 cockpit: seguir a bola + AUTO SHOOT com os braços, a altura do dono e os servos no HUD")
+    import sim_view as sv_mod
+    import sim_site
+    modelo = _EXP / "out" / "real_1950_voo_final" / "final.zip"
+    if not modelo.is_file():
+        c.ok("[§9] política da planta real disponível (out/real_1950_voo_final/final.zip)", False, "sem o ficheiro")
+        return
+    pol = sv_mod.carregar_politica(modelo)
+    env, _gestor = sv_mod.ambiente_para(pol, modelo, com_alvo=True, build=BUILD)
+    piloto = sv_mod.ControladorDeVoo(env, pol, "classico")
+    piloto.trocar()
+    piloto.pedido = "rl"
+    modo = piloto.trocar()
+    c.ok("[§9] a política RL (observação 48) não voa o build com braços (64): o pedido RL é recusado com motivo e fica "
+         "a cascata clássica", modo == "classico" and piloto.estado == "erro" and "observação" in str(piloto.motivo),
+         f"modo {modo} · estado {piloto.estado} · {str(piloto.motivo)[:70]}…")
+    env.reset(seed=3)
+    piloto.pos_reset()
+    piloto.bola_auto_atirar, piloto.bola_vel = True, 0.3
+    dt = env.dt_decisao
+
+    def voar(segundos, segui, teclas=None):
+        energias = []
+        n0, a0, e0 = env.planta.n_tiros, env.planta.n_acertos_bola, env.planta.n_erros_bola
+        for _ in range(int(round(segundos / dt))):
+            piloto.comando_do_passo(sv_mod.Voo(ativo=True, teclas=teclas or {}, segui_alvo=segui), sv_mod._rumo_de(env))
+            env.step(np.zeros(4, dtype=np.float32))
+            energias.append(env.planta.servos.energias_wh.sum())
+        h = sv_mod.hud_bracos(env, piloto, env._derivados())
+        return h, (env.planta.n_tiros - n0, env.planta.n_acertos_bola - a0, env.planta.n_erros_bola - e0), energias
+
+    voar(5.0, False)                                             # descola (a cascata sobe sozinha a ~1 m)
+    h1, t1, _e1 = voar(8.0, True)
+    c.ok("[§9] a 1 m: AUTO SHOOT com a mira por arfagem acerta e não erra (≥ 5 acertos, 0 erros em 8 s)",
+         t1[1] >= 5 and t1[2] == 0 and h1["mira_ativa"], f"{t1[1]} acertos / {t1[2]} erros · corpo {h1['pitch_corpo']:+.1f}°")
+    voar(2.5, True, {"q": True})
+    h2, t2, _e2 = voar(4.0, True)
+    z2 = float(env.data.qpos[2])
+    c.ok("[§9] Q (o dono sobe): o drone fica mais alto do que a bola e o CORPO arfa nariz-abaixo para a mira (> +15°, "
+         "com a elevação negativa)", z2 > 2.0 and h2["pitch_corpo"] > 15.0 and h2["mira"]["elevacao"] < -10.0,
+         f"z {z2:.2f} m · corpo {h2['pitch_corpo']:+.1f}° · elevação {h2['mira']['elevacao']:+.1f}°")
+    voar(3.0, True, {"e": True})
+    h3, t3, _e3 = voar(5.0, True)
+    z3 = float(env.data.qpos[2])
+    c.ok("[§9] E (o dono desce abaixo da bola): o CORPO arfa nariz-acima (< −5°) e continua a acertar sem erros",
+         z3 < 1.0 and h3["pitch_corpo"] < -5.0 and t3[2] == 0, f"z {z3:.2f} m · corpo {h3['pitch_corpo']:+.1f}° · "
+         f"{t3[1]} acertos / {t3[2]} erros")
+    _h4, _t4, e4 = voar(1.5, True)
+    pot = dict(env.planta.potencias())
+    pot["eletronica"] -= env.hw.bracos.potencia_espera()
+    soma = pot["motores"] + pot["eletronica"] + pot["servos"]
+    c.ok("[§9] HUD dos braços: 8 juntas, curso e energia a crescer (a corrente sai da bateria), servos > 0 W e o ledger "
+         "motores + eletrónica + servos = total",
+         len(h3["juntas"]) == 8 and min(h3["curso"]) > 1.0 and all(b >= a for a, b in zip(e4, e4[1:])) and e4[-1] > 0.0
+         and h3["potencia_w"] > 0.0 and abs(soma - pot["total"]) < 1e-6,
+         f"curso mín {min(h3['curso']):.0f}° · energia {e4[-1]:.4f} Wh · servos {h3['potencia_w']:.1f} W · "
+         f"soma {soma:.2f} = total {pot['total']:.2f} W")
+    pecas = env.planta.telemetria_pecas()
+    c.ok("[§9] painel de peças: os watts dos servos à parte e a soma bate com o total",
+         "watts_servos" in pecas and abs(pecas["watts_motores"] + pecas["watts_eletronica"] + pecas["watts_servos"]
+                                         - pecas["watts_total"]) < 0.3, f"{pecas.get('watts_servos')} W de servos")
+    voar(1.0, False)
+    c.ok("[§9] largar o «seguir»: o pitch pedido ao corpo volta a 0 (nivelado)",
+         abs(env.bracos.pitch_corpo_alvo) < 1e-9 and not piloto.mira_art_ativa, f"alvo {env.bracos.pitch_corpo_alvo}")
+
+    class _Args:                                                 # o site manda o `--build` ao runner
+        controlo, telemetria, fpv, controlador, sem_janela = "c.json", "t.jsonl", "fpv", "classico", True
+        fator_tempo, com_loop, model, build = None, False, None, BUILD
+    cmd = sim_site.comando_do_runner(_Args(), modelo)
+    hw_site = sim_site.resumo_hardware(sim_site.hardware_do_modelo(modelo, BUILD))
+    c.ok("[§9] sim_site.py --build: o runner recebe o build e a ficha do site mostra-o (com braços, e de que build é a "
+         "política)", cmd[cmd.index("--build") + 1] == BUILD and hw_site["build"] == BUILD and hw_site["bracos_articulados"]
+         and hw_site["build_da_politica"] == "endurance_15pol_p50b", f"{' '.join(cmd[-6:])} · {hw_site['build']}")
+    hw_pol = sim_site.hardware_do_modelo(modelo)
+    c.ok("[§9] o cockpit voa POR OMISSÃO o drone com braços (pedido do dono): sem --build → articulado; `--build politica` "
+         "→ o build da política (rígido); com uma política do cf2 (sem hardware.json) não há build",
+         sim_site.resolver_build(None, hw_pol) == BUILD and sim_site.resolver_build("politica", hw_pol) is None
+         and sim_site.resolver_build("endurance_15pol_p50b", hw_pol) == "endurance_15pol_p50b"
+         and sim_site.resolver_build(None, None) is None,
+         f"omissão → {sim_site.resolver_build(None, hw_pol)} · politica → {sim_site.resolver_build('politica', hw_pol)}")
+
+
 # ============================================================================================ §8 mutações
 def _mut_eixo_x(t: str) -> str:
     antigo = 'j = b.add_joint(name=f"ombro{k}", type=hinge, axis=[0.0, 1.0, 0.0])'
@@ -515,6 +606,7 @@ def checa_mutacoes(c: Checagens) -> None:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Prova dos braços articulados e da mira por arfagem.")
     p.add_argument("--mira", action="store_true", help="também o §7 (3 cenários de mira)")
+    p.add_argument("--cockpit", action="store_true", help="também o §9 (runner do cockpit com os braços)")
     p.add_argument("--mutacao", action="store_true", help="corre SÓ as mutações (§8)")
     p.add_argument("--so-estatico", action="store_true", help="só §1–§4 (sem simulação; usado pelo §8)")
     p.add_argument("--fontes", type=Path, default=_REPO)
@@ -536,6 +628,8 @@ def main(argv=None) -> int:
                 checa_voo(total)
                 if a.mira:
                     checa_mira(total)
+                if a.cockpit:
+                    checa_cockpit(total)
     print(f"\n[teste] {len(total.linhas) - len(total.falhas)}/{len(total.linhas)} checagens OK", flush=True)
     if total.falhas:
         for nome in total.falhas:

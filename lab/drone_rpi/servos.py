@@ -90,6 +90,9 @@ class ServoJunta:
         self.q_med = float(q0)
         self.qd_med = 0.0
         self.saturado = False
+        self.energia_j = 0.0                 # J tirados do barramento de 24 V desde o reset (espera incluída)
+        self.curso = 0.0                     # rad percorridos pela junta desde o reset (Σ|Δq| da posição REAL)
+        self._q_ant = float(q0)
 
     def definir_alvo(self, q_alvo: float) -> None:
         """Posição-alvo da junta (rad) — a escrita síncrona do barramento; cortada aos batentes da junta."""
@@ -100,6 +103,8 @@ class ServoJunta:
         """O `ctrl` do atuador da junta com a posição `q` e a velocidade `qd` REAIS (atualiza encoder, binário e corrente):
         no servo DIRETO é o binário do PWM (N·m, atuador `motor`); no SEM-FIM é o alvo do engrenamento (rad, atuador de
         posição). O binário que a junta recebe fica em `self.tau`."""
+        self.curso += abs(q - self._q_ant)                    # quanto a junta rodou (contador; não entra na física)
+        self._q_ant = q
         # encoder do braço (quantizado + erro de linearidade) e velocidade lida no barramento
         self.q_med = _quantiza(q + self.vies_enc, self.res_enc)
         self.qd_med = _quantiza(qd, V_QUANTUM_DXL / self.n)
@@ -210,8 +215,12 @@ class ServosBracos:
             s.definir_alvo(float(a))
 
     def passo(self, q, qd, dt: float) -> list:
-        """Os 8 `ctrl` dos atuadores das juntas (ver `ServoJunta.passo`)."""
-        return [s.passo(float(a), float(b), dt) for s, a, b in zip(self.servos, q, qd, strict=True)]
+        """Os 8 `ctrl` dos atuadores das juntas (ver `ServoJunta.passo`); soma a energia de cada servo (V·I·dt)."""
+        ctrl = []
+        for s, a, b in zip(self.servos, q, qd, strict=True):
+            ctrl.append(s.passo(float(a), float(b), dt))
+            s.energia_j += s.v * s.corrente * dt
+        return ctrl
 
     @property
     def medidas(self) -> np.ndarray:
@@ -236,6 +245,16 @@ class ServosBracos:
 
     def potencia_24v(self) -> float:
         return float(sum(s.potencia for s in self.servos))
+
+    @property
+    def energias_wh(self) -> np.ndarray:
+        """Wh que cada servo já tirou da BATERIA desde o reset (24 V ÷ rendimento do regulador)."""
+        return np.array([s.energia_j for s in self.servos]) / (3600.0 * self.mec.fonte_eficiencia)
+
+    @property
+    def cursos(self) -> np.ndarray:
+        """rad que cada junta já percorreu desde o reset (Σ|Δq|)."""
+        return np.array([s.curso for s in self.servos])
 
     def potencia_carga_bateria(self) -> float:
         """W na BATERIA acima da espera (a espera já está na potência da eletrónica do build)."""
