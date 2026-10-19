@@ -28,6 +28,22 @@
 //                     `atraso_fluxo`) — tudo derivado da planta por `ganhos_de_hardware`, como o resto da cascata;
 //   · Saida         — `pert[2]`: a perturbação observada (diagnóstico: o «vento» que o drone sente, em m/s²).
 // Com `w_pert = 0`, `braco_fluxo = 0` e `atraso_fluxo = 0` o núcleo é EXATAMENTE o da interface 2 (fase 1).
+//
+// INTERFACE 4 (2026-10-19 — BRAÇOS ARTICULADOS: 8 juntas, eixos paralelos ao y do corpo): ao FIM das structs:
+//   · Sensores — `incl_motor`/`incl_motor_taxa`: a inclinação MÉDIA dos eixos dos motores face ao corpo (encoders das
+//                juntas, média de q_ombro + q_cotovelo dos 4 braços) e a sua derivada. O ESTIMADOR continua no
+//                referencial do CORPO (é lá que estão o IMU, o ToF e o fluxo); o observador e a ATITUDE da cascata usam
+//                o referencial dos MOTORES, R_m = R_corpo·R_y(τ), e o LAÇO DE TAXA também (ω_m = R_y(τ)ᵀ·ω_corpo);
+//   · Comando  — `pitch_corpo`/`tem_pitch_corpo`: MIRA POR ARFAGEM. Com `tem_pitch_corpo = 1` os papéis no eixo de
+//                arfagem trocam, conforme o atuador que mexe MAIS DEPRESSA em cada variável: o empuxo diferencial
+//                (roda o drone TODO) segura o pitch do CORPO em `pitch_corpo` (a arma), e os SERVOS (mexem só os
+//                mastros, leves) dão ao empuxo a inclinação longitudinal que a cascata pede — `Saida::incl_ref`
+//                = atan2(n̂_frente, n̂_z) − θ̂_corpo. Rolamento e guinada continuam no referencial dos motores;
+//   · Saida    — `roll_motor`/`pitch_motor` (atitude estimada do referencial dos motores) e `incl_ref` (o τ pedido aos
+//                servos dos braços; 0 fora da mira por arfagem).
+//   · Config   — `prioridade_rp`: mistura que corta primeiro a GUINADA quando o diferencial não cabe.
+// Com `incl_motor = 0`, `incl_motor_taxa = 0`, `tem_pitch_corpo = 0` e `prioridade_rp = 0` (braços rígidos) o núcleo é
+// EXATAMENTE o da interface 3.
 #pragma once
 
 #include <stdint.h>
@@ -36,7 +52,7 @@
 
 namespace nucleo {
 
-constexpr uint32_t kVersaoInterface = 3u;
+constexpr uint32_t kVersaoInterface = 4u;
 
 // Tamanho da fila do giroscópio que alinha a rotação com a amostra do fluxo ótico (estimador clássico):
 // ConfigCascata::atraso_fluxo ∈ [0, kAtrasoFluxoMax − 1] passos.
@@ -203,6 +219,10 @@ struct Config {
     float esc_d[16];         // ciclo útil nos nós da curva
     float esc_u[16];         // acelerador nos mesmos nós
     float v_bat_valida_min;  // V — monitor abaixo disto = inválido ⇒ usa o u_pairagem nominal
+    // --- interface 4: mistura com PRIORIDADE de rolamento/arfagem (braços articulados: a guinada deste drone é tão fraca
+    //     que, saturada, escalava o diferencial todo e o rolamento perdia autoridade). 1 = se o diferencial não couber,
+    //     corta-se primeiro a guinada (como o misturador do PX4) e só depois se escala o resto; 0 = a mistura da v1.
+    int32_t prioridade_rp;
 };
 
 // Leituras MEDIDAS (com erro) dos sensores, como o FC as vê.
@@ -218,6 +238,9 @@ struct Sensores {
     float v_bat;             // V — tensão da bateria (monitor); usada pela compensação de tensão do modo cascata
     uint32_t t_us;           // µs — relógio monotónico do MCU neste passo (a MESMA base de camera.t; só diferenças)
     visao::Camera camera;    // última medida do detetor (atividade C): só conta quando camera.n muda
+    // --- interface 4: braços articulados (0 = braços rígidos)
+    float incl_motor;        // rad — inclinação média dos eixos dos motores face ao corpo, em torno do y do corpo
+    float incl_motor_taxa;   // rad/s — a sua derivada (velocidade das juntas, pelo barramento dos servos)
 };
 
 // O que se pede ao núcleo neste passo.
@@ -232,6 +255,9 @@ struct Comando {
     float yaw;               // rad — rumo absoluto desde o armar (YAW_ALVO)
     float z_alvo;            // m — altura (do sensor de baixo) a atingir, p.ex. DESCOLAR; só conta se tem_z_alvo
     int32_t tem_z_alvo;      // 1 = z_alvo válido neste comando
+    // --- interface 4: mira por arfagem (braços articulados)
+    float pitch_corpo;       // rad — pitch pretendido para o CORPO (ZYX: + = nariz para baixo); só conta se tem_pitch_corpo
+    int32_t tem_pitch_corpo; // 1 = o empuxo diferencial segura o pitch do corpo e os servos inclinam o empuxo (incl_ref)
 };
 
 // O que o núcleo devolve: acelerador por motor + estimativas + diagnóstico.
@@ -272,6 +298,10 @@ struct Saida {
     float i_z;               // m/s² — integral vertical
     // --- interface 3: o observador de perturbação da cascata (diagnóstico)
     float pert[2];           // m/s² — perturbação horizontal observada, referencial de arranque (o «vento» que o drone sente)
+    // --- interface 4: atitude estimada do referencial dos MOTORES (= a do corpo com braços rígidos) e o τ dos servos
+    float roll_motor;        // rad
+    float pitch_motor;       // rad
+    float incl_ref;          // rad — inclinação dos motores face ao corpo pedida aos servos (mira por arfagem; senão 0)
 };
 
 // --- utilitários numéricos básicos (sem libm: com -ffreestanding o compilador NÃO inlina fabsf/sqrtf)

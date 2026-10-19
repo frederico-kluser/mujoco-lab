@@ -141,11 +141,16 @@ public:
 
     // Uma decisão: estimativas (`est`: roll pitch psi h vz vx vy x y de uma Saida) + taxas medidas + comando + dt →
     // (empuxo coletivo T/(m·g), (p, q, r) [rad/s]). `cmd.modo` = YAW_ALVO usa `cmd.yaw`; qualquer outro, `cmd.yaw_taxa`.
+    // `incl` (interface 4, braços articulados): inclinação dos eixos dos motores face ao corpo, em torno do y do corpo.
+    // A velocidade medida (etapa 1) continua a usar a atitude do CORPO (o fluxo está no corpo); o observador (1b) e a
+    // atitude (8) usam a dos MOTORES, R_m = R_corpo·R_y(incl) — e as taxas devolvidas são as do referencial dos motores.
+    // Com incl = 0 as contas são exatamente as de sempre.
     // Etapas: 1 velocidade medida no rumo/arranque · 2 yaw (conformador de taxa + referência de rumo) · 3 conformador
     // de velocidade e de altura (+ modelo de seguimento) · 4 referência de posição · 5 laço de posição (raiz
     // quadrada) e de velocidade (PI + FF) → aceleração · 6 laço de altura/velocidade vertical → a_z · 7 inclinação
     // desejada e coletivo (÷ cosφ·cosθ; anti-windup) · 8 atitude com prioridade de inclinação → taxas.
-    Resultado passo(const ConfigCascata& g, const Saida& est, const float giro[3], const Comando& cmd, float dt) {
+    Resultado passo(const ConfigCascata& g, const Saida& est, const float giro[3], const Comando& cmd, float dt,
+                    float incl = 0.0f) {
         using cascata_detalhe::envolve_pi;
         using cascata_detalhe::raiz_quadrada;
         // ---- entradas finitas (o protótipo levanta ValueError; o firmware mantém a última saída boa)
@@ -154,8 +159,10 @@ public:
         for (int i = 0; i < 9; ++i) ok = ok && e_finito(e9[i]);
         for (int i = 0; i < 3; ++i) ok = ok && e_finito(giro[i]);
         ok = ok && e_finito(cmd.vx) && e_finito(cmd.vy) && e_finito(cmd.vz) && e_finito(cmd.yaw_taxa);
+        ok = ok && e_finito(incl);
         if (cmd.modo == YAW_ALVO) ok = ok && e_finito(cmd.yaw);
         if (cmd.tem_z_alvo != 0) ok = ok && e_finito(cmd.z_alvo);
+        if (cmd.tem_pitch_corpo != 0) ok = ok && e_finito(cmd.pitch_corpo);
         if (!ok) {
             Resultado r = ultimo_;
             r.flags = kFlagFalhaCascata;
@@ -209,10 +216,23 @@ public:
         if (g.w_pert > 0.0f) {
             float atx = 0.0f;
             float aty = 0.0f;
-            if (!(den < g.cos_incl_min)) {  // (quase de cabeça para baixo: sem modelo — nunca acontece em voo)
-                const float fz_emp = (g.g + az_ref_) / den;
-                atx = fz_emp * (cs * st * cf + sn * sf);
-                aty = fz_emp * (sn * st * cf - cs * sf);
+            if (incl == 0.0f) {
+                if (!(den < g.cos_incl_min)) {  // (quase de cabeça para baixo: sem modelo — nunca acontece em voo)
+                    const float fz_emp = (g.g + az_ref_) / den;
+                    atx = fz_emp * (cs * st * cf + sn * sf);
+                    aty = fz_emp * (sn * st * cf - cs * sf);
+                }
+            } else {  // interface 4: o empuxo segue o eixo dos MOTORES, z_m = sen(incl)·x_corpo + cos(incl)·z_corpo
+                const float ci = cosf(incl);
+                const float si = sinf(incl);
+                const float zm0 = si * (cs * ct) + ci * (cs * st * cf + sn * sf);
+                const float zm1 = si * (sn * ct) + ci * (sn * st * cf - cs * sf);
+                const float zm2 = si * (-st) + ci * den;
+                if (!(zm2 < g.cos_incl_min)) {
+                    const float fz_emp = (g.g + az_ref_) / zm2;
+                    atx = fz_emp * zm0;
+                    aty = fz_emp * zm1;
+                }
             }
             if (!tem_v_obs_) {
                 v_obs_[0] = vox;
@@ -458,9 +478,19 @@ public:
         // yaw, por enorme que seja, não perturba p, q (é a «prioridade»).
         const float cps = cosf(psi_sp_);  // ĥ_d = (cosψ_d, sinψ_d, 0)
         const float sps = sinf(psi_sp_);
-        const float xb[3] = {cs * ct, sn * ct, -st};  // colunas de R (corpo → mundo): ZYX
+        float xb[3] = {cs * ct, sn * ct, -st};  // colunas de R (corpo → mundo): ZYX
         const float yb[3] = {cs * st * sf - sn * cf, sn * st * sf + cs * cf, ct * sf};
-        const float zb[3] = {cs * st * cf + sn * sf, sn * st * cf - cs * sf, ct * cf};
+        float zb[3] = {cs * st * cf + sn * sf, sn * st * cf - cs * sf, ct * cf};
+        if (incl != 0.0f) {  // interface 4: os eixos dos MOTORES, R_m = R·R_y(incl) (o y não muda: as juntas rodam em y)
+            const float ci = cosf(incl);
+            const float si = sinf(incl);
+            for (int k = 0; k < 3; ++k) {
+                const float xk = xb[k];
+                const float zk = zb[k];
+                xb[k] = ci * xk - si * zk;
+                zb[k] = si * xk + ci * zk;
+            }
+        }
         const float nbx = xb[0] * nx + xb[1] * ny + xb[2] * nz;
         const float nby = yb[0] * nx + yb[1] * ny + yb[2] * nz;
         const float nbz = limita(zb[0] * nx + zb[1] * ny + zb[2] * nz, -1.0f, 1.0f);
@@ -495,7 +525,12 @@ public:
         // taxa de yaw do MUNDO (ψ̇ = r_ref) nos eixos do corpo: ω_b = Rᵀ·(ψ̇·ẑ) = ψ̇·(−sθ, sφ·cθ, cφ·cθ)
         float p_ff = -st * r_ref_;
         float q_ff = sf * ct * r_ref_;
-        const float r_ff = cf * ct * r_ref_;
+        float r_ff = cf * ct * r_ref_;
+        if (incl != 0.0f) {  // a mesma conta nos eixos dos motores: ω_m = R_mᵀ·(ψ̇·ẑ) = ψ̇·(x_m,z, y_m,z, z_m,z)
+            p_ff = xb[2] * r_ref_;
+            q_ff = yb[2] * r_ref_;
+            r_ff = zb[2] * r_ref_;
+        }
         // feed-forward da taxa de inclinação: n̂ roda com ω = n̂ × dn̂/dt (mundo); as componentes x, y do corpo são p, q
         const float n_des[3] = {nx, ny, nz};
         if (g.ff_atitude != 0 && tem_n_ant_) {
@@ -510,7 +545,18 @@ public:
         for (int i = 0; i < 3; ++i) n_ant_[i] = n_des[i];
         tem_n_ant_ = true;
         const float p_bruto = g.k_att * e_x + p_ff;
-        const float q_bruto = g.k_att * e_y + q_ff;
+        float q_bruto = g.k_att * e_y + q_ff;
+        if (cmd.tem_pitch_corpo != 0) {
+            // interface 4 — MIRA POR ARFAGEM: o empuxo diferencial segura o pitch do CORPO (a arma) e os servos dão ao
+            // empuxo a inclinação longitudinal pedida, θ_n = atan2(n̂·ĥ, n̂_z) no referencial do rumo (ĥ = frente do corpo)
+            const float e_corpo = envolve_pi(cmd.pitch_corpo - theta);
+            q_bruto = g.k_att * e_corpo + sf * ct * r_ref_;   // taxa de arfagem do CORPO (+ a parte q da taxa de yaw)
+            incl_ref_ = envolve_pi(atan2f(cs * nx + sn * ny, nz) - theta);
+            pitch_corpo_ativo_ = true;
+        } else {
+            incl_ref_ = 0.0f;
+            pitch_corpo_ativo_ = false;
+        }
         if (absf(p_bruto) > g.taxa_rp_max || absf(q_bruto) > g.taxa_rp_max) flags |= kFlagSatTaxaRP;
         Resultado r;
         r.coletivo = coletivo;
@@ -566,7 +612,11 @@ public:
         o.i_z = i_z_;
         o.pert[0] = d_obs_[0];
         o.pert[1] = d_obs_[1];
+        o.incl_ref = incl_ref_;
     }
+
+    // Interface 4: a última decisão foi em mira por arfagem? (o laço de taxa usa então a taxa de arfagem do CORPO)
+    bool pitch_corpo_ativo() const { return pitch_corpo_ativo_; }
 
 private:
     // Estados do observador de perturbação (fase 2): recomeça na 1.ª medida de velocidade.
@@ -581,6 +631,8 @@ private:
 
     void zerar_estados() {
         zerar_observador();
+        incl_ref_ = 0.0f;
+        pitch_corpo_ativo_ = false;
         az_ref_ = 0.0f;
         for (int i = 0; i < 2; ++i) {
             v_sp_h_[i] = 0.0f;
@@ -643,6 +695,8 @@ private:
     float d_obs_[2] = {};     // m/s² — perturbação horizontal observada
     float a_emp_[2] = {};     // m/s² — aceleração do empuxo (da atitude estimada), atrasada como a medida
     float az_ref_ = 0.0f;     // m/s² — aceleração vertical pretendida na decisão anterior (sem o integral)
+    float incl_ref_ = 0.0f;   // rad — interface 4: τ pedido aos servos (mira por arfagem)
+    bool pitch_corpo_ativo_ = false;
     bool tem_v_obs_ = false;
     Resultado ultimo_ = {};
     float dg_a_des_[3] = {};

@@ -982,7 +982,7 @@ class Servidor:
         self.processo: subprocess.Popen | None = None
 
     def __enter__(self) -> Self:
-        comando = [sys.executable, str((_FONTES or _AQUI) / "sim_site.py"), "--sem-browser", "--sem-janela",
+        comando = [sys.executable, str((_FONTES or _AQUI) / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela",
                    "--port", str(self.porta), "--controlo", str(self.controlo),
                    "--telemetria", str(self.telemetria), "--fator-tempo", f"{FATOR_TEMPO:g}",
                    "--model", str(self.modelo)]

@@ -14,6 +14,20 @@ bool mesma_amostra(const Sensores& a, const Sensores& b) {
     return igual;
 }
 
+// Interface 4: inclinação dos motores lida dos Sensores (não finita ⇒ 0: um encoder corrompido não derruba o laço).
+float incl_de(const Sensores& s) { return e_finito(s.incl_motor) ? s.incl_motor : 0.0f; }
+float incl_taxa_de(const Sensores& s) { return e_finito(s.incl_motor_taxa) ? s.incl_motor_taxa : 0.0f; }
+
+// ω no referencial dos MOTORES: ω_m = R_y(τ)ᵀ·ω_corpo + (0, τ̇, 0). Em mira por arfagem (`pitch_corpo`) o eixo y é o do
+// CORPO (o empuxo diferencial segura a arfagem do corpo; os servos tratam da dos motores): ω_y fica sem o τ̇.
+void giro_para_motores(const float giro[3], float tau, float tau_d, bool pitch_corpo, float out[3]) {
+    const float c = cosf(tau);
+    const float s = sinf(tau);
+    out[0] = c * giro[0] - s * giro[2];
+    out[1] = pitch_corpo ? giro[1] : giro[1] + tau_d;
+    out[2] = s * giro[0] + c * giro[2];
+}
+
 }  // namespace
 
 bool Nucleo::iniciar(const Config& cfg) {
@@ -193,7 +207,7 @@ ReferenciasTaxa Nucleo::resolver_modo(const Sensores& s, const Comando& c, float
         }
         modo_ant_ = c.modo;
         tem_modo_ant_ = true;
-        const Cascata::Resultado res = cascata_.passo(cfg_.cascata, o, s.giro, ef, dt_c);
+        const Cascata::Resultado res = cascata_.passo(cfg_.cascata, o, s.giro, ef, dt_c, incl_de(s));
         if ((res.flags & kFlagFalhaCascata) == 0) cmd_ef_ = ef;  // um comando recusado (não finito) não é «o efetivo»
         coletivo_ = res.coletivo;
         flags_decisao_ = res.flags;
@@ -238,6 +252,7 @@ ReferenciasTaxa Nucleo::planear(const Sensores& s, const Comando& c, float dt, S
         }
     }
     preencher_estimativas(o);
+    motor_de_corpo(incl_de(s), o);
 
     // 2. referências do laço de taxa (os laços externos ligam-se em resolver_modo)
     int32_t flags = 0;
@@ -254,9 +269,17 @@ void Nucleo::atuar(const ReferenciasTaxa& ref, const Sensores& s, float dt, Said
     }
     dt = dt_valido(dt);
 
-    // 3. laço de taxa + mistura + airmode
+    // 3. laço de taxa + mistura + airmode (interface 4: no referencial dos MOTORES quando os braços inclinam)
     int32_t flags = ref.flags;
-    flags |= taxa_.passo(cfg_, ref.acelerador, ref.taxas, s.giro, dt, o.motor, o.u_eixos);
+    const float tau = incl_de(s);
+    const float tau_d = incl_taxa_de(s);
+    if (tau != 0.0f || tau_d != 0.0f) {
+        float giro_m[3];
+        giro_para_motores(s.giro, tau, tau_d, cascata_.pitch_corpo_ativo(), giro_m);
+        flags |= taxa_.passo(cfg_, ref.acelerador, ref.taxas, giro_m, dt, o.motor, o.u_eixos);
+    } else {
+        flags |= taxa_.passo(cfg_, ref.acelerador, ref.taxas, s.giro, dt, o.motor, o.u_eixos);
+    }
 
     // 4. saneamento: nada de NaN para os ESC; um estimador corrompido recalibra-se no passo seguinte
     bool motores_ok = true;
@@ -285,7 +308,29 @@ void Nucleo::atuar(const ReferenciasTaxa& ref, const Sensores& s, float dt, Said
     }
 
     preencher_estimativas(o);
+    motor_de_corpo(tau, o);
     o.flags = flags;
+}
+
+// Atitude do referencial dos MOTORES (interface 4): R_m = R(ψ,θ,φ)·R_y(τ) → (φ_m, θ_m) por ZYX. τ = 0 ⇒ a do corpo.
+void Nucleo::motor_de_corpo(float tau, Saida& o) const {
+    if (tau == 0.0f) {
+        o.roll_motor = o.roll;
+        o.pitch_motor = o.pitch;
+        return;
+    }
+    const float sf = sinf(o.roll);
+    const float cf = cosf(o.roll);
+    const float st = sinf(o.pitch);
+    const float ct = cosf(o.pitch);
+    const float c = cosf(tau);
+    const float s = sinf(tau);
+    // 3.ª linha de R_m: R[2][0] = c·(−sθ) − s·(cθ·cφ);  R[2][1] = cθ·sφ;  R[2][2] = s·(−sθ) + c·(cθ·cφ)
+    const float r20 = c * (-st) - s * (ct * cf);
+    const float r21 = ct * sf;
+    const float r22 = s * (-st) + c * (ct * cf);
+    o.pitch_motor = atan2f(-r20, sqrtf(r21 * r21 + r22 * r22));   // −asin(R[2][0]) só com o libm permitido
+    o.roll_motor = atan2f(r21, r22);
 }
 
 Saida Nucleo::passo(const Sensores& s, const Comando& c, float dt) {

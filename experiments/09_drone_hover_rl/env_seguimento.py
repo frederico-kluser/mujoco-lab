@@ -47,7 +47,7 @@ for _p in (str(_RAIZ), str(_AQUI)):
 
 import gymnasium
 import visao
-from env_real import VOO_SUBIDA, VOO_VEL, DroneRealEnv
+from env_real import ESCALA_JUNTA, N_JUNTAS_OBS, VOO_SUBIDA, VOO_VEL, DroneRealEnv
 from gymnasium import spaces
 
 # ------------------------------------------------------------------------------- constantes do desenho
@@ -106,7 +106,7 @@ class EnvSeguimento(gymnasium.Env):
 
     def __init__(self, piloto_zip: str | Path, episodio_s: float = 10.0, latencia_s: float = LATENCIA_S,
                  trajetoria: str = "aleatorio", vel_ponto: float = 0.5, resolucao: tuple[int, int] = (1920, 1080),
-                 vento: float = 0.0):
+                 vento: float = 0.0, build: str | None = None):
         super().__init__()
         # CONGELADA (nunca treina): ONNX quando existe `policy.onnx` ao lado (65 µs), torch senão
         if (Path(piloto_zip).parent / "policy.onnx").is_file():
@@ -114,8 +114,11 @@ class EnvSeguimento(gymnasium.Env):
         else:
             from stable_baselines3 import PPO
             self.piloto = PPO.load(str(piloto_zip), device="cpu")
-        self.env = DroneRealEnv(build=None, modo_acao="ctbr", comando=True, comandos_aleatorios=False,
+        self.env = DroneRealEnv(build=build, modo_acao="ctbr", comando=True, comandos_aleatorios=False,
                                 com_alvo=True, episodio_s=episodio_s)
+        # braços articulados: +8 canais — as juntas medidas pelos encoders (a câmara está no CORPO, que agora arfa por
+        # cima dos motores: o tracker precisa de saber a pose dos braços para interpretar o que vê e o que pede)
+        self.n_obs = OBS_DIM + (N_JUNTAS_OBS if self.env.articulado else 0)
         self.trajetoria = trajetoria
         self.vel_ponto = float(vel_ponto)
         self.resolucao = (int(resolucao[0]), int(resolucao[1]))
@@ -126,7 +129,7 @@ class EnvSeguimento(gymnasium.Env):
         self._fila_obs: deque = deque(maxlen=self._latencia_passos + 1)
         self._v_ref = np.zeros(3)
         self._passos = 0
-        self.observation_space = spaces.Box(low=-10.0, high=10.0, shape=(OBS_DIM,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-10.0, high=10.0, shape=(self.n_obs,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
     # ------------------------------------------------------------------------------ percepção
@@ -183,6 +186,8 @@ class EnvSeguimento(gymnasium.Env):
         omega = np.asarray(imu.giro.medicao, dtype=float) / OMEGA_ESCALA
         obs = np.concatenate(([u_n, v_n, escala, flag], v_ref, erro_px, v_est, omega,
                               [est.roll / math.pi, est.pitch / math.pi]))
+        if self.env.articulado:                          # [17:25] as 8 juntas (encoders), /ESCALA_JUNTA
+            obs = np.concatenate((obs, self.env.planta.juntas_medidas() / ESCALA_JUNTA))
         return np.clip(obs, -10.0, 10.0).astype(np.float32)
 
     # ------------------------------------------------------------------------------ ciclo

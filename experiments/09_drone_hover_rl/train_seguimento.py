@@ -45,8 +45,8 @@ GATE_CENTRO_PX = (60.0, 80.0, 550.0)   # centragem máxima em px para AVANÇAR d
 
 AVALIACAO_CADA = 25_000   # passos entre avaliações do currículo
 
-def avaliar_rapido(modelo, piloto_zip: Path, traj: str, vel: float, episodios: int = 4) -> dict:
-    env = EnvSeguimento(piloto_zip, episodio_s=6.0, trajetoria=traj, vel_ponto=vel)
+def avaliar_rapido(modelo, piloto_zip: Path, traj: str, vel: float, episodios: int = 4, build: str | None = None) -> dict:
+    env = EnvSeguimento(piloto_zip, episodio_s=6.0, trajetoria=traj, vel_ponto=vel, build=build)
     centros, fofo, passos = [], 0, 0
     for k in range(episodios):
         obs, _info = env.reset(seed=1234 + k)
@@ -67,6 +67,9 @@ def avaliar_rapido(modelo, piloto_zip: Path, traj: str, vel: float, episodios: i
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Treino do tracker visual (IA nº 2) sobre a IA-voo congelada.")
     p.add_argument("--piloto", type=Path, required=True, help="IA-voo CONGELADA (final.zip)")
+    p.add_argument("--build", type=str, default=None,
+                   help="build do drone (por omissão o ativo); um build com braços articulados dá +8 canais (as juntas) "
+                        "à observação do tracker — e o --piloto tem de ter sido treinado nesse build")
     p.add_argument("--semente", type=int, default=0)
     p.add_argument("--passos", type=int, default=1_500_000)
     p.add_argument("--out-dir", type=Path, default=None)
@@ -88,7 +91,7 @@ def main(argv=None) -> int:
 
     def fabrica(rango: int):
         def _faz():
-            return EnvSeguimento(args.piloto, trajetoria=traj, vel_ponto=vel)
+            return EnvSeguimento(args.piloto, trajetoria=traj, vel_ponto=vel, build=args.build)
         return _faz
 
     envs = SubprocVecEnv([fabrica(args.semente + i) for i in range(args.n_envs)], start_method="spawn")
@@ -103,7 +106,7 @@ def main(argv=None) -> int:
         bloco = min(AVALIACAO_CADA, args.passos - feitos)
         modelo.learn(total_timesteps=bloco, reset_num_timesteps=False, progress_bar=False)
         feitos += bloco
-        res = avaliar_rapido(modelo, args.piloto, traj, vel)
+        res = avaliar_rapido(modelo, args.piloto, traj, vel, build=args.build)
         with log.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"t": feitos, "estagio": estagio, "trajetoria": traj, "vel": vel,
                                 "fov": round(res["fov"], 4), "centro_px": round(res["centro_px"], 2),

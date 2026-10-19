@@ -511,3 +511,30 @@ FF, desrotação de roll/pitch, sinal de v_z e da distância, gate de inovação
 - No laço cinemático a câmara é pinhole; na atividade B os frames são RENDERIZADOS (EGL) e passam pelo detetor C++ no laço (`sitl_camera.py`).
 - Não se compensa a translação própria durante o atraso; a procura é só em yaw; um alvo parcialmente fora do campo é recusado, não estimado (tabela de falhas acima).
 - Os ganhos (KF, IBVS) foram afinados com ruído sintético (σ_px 0,3; atitude 0,15° lenta) e leis de círculo/oito — voltar a afinar com o ruído do sensor real: **no laço fechado do simulador o gate recusa 3 medidas seguidas ~1×/s e o filtro reinicia (A_SEGUIR ≈ 95 %)** — ver o «achado de integração» da atividade B.
+
+---
+
+# Interface 4 — braços articulados e mira por ARFAGEM (2026-10-19, `kVersaoInterface = 4`)
+
+Para o build `articulado_15pol_mn5006` (8 juntas com servos, eixos paralelos ao y do corpo; README do experimento →
+«BRAÇOS ARTICULADOS»). Campos acrescentados **ao fim** das structs (`nucleo/config.hpp` documenta cada um):
+
+| struct | campo | o quê |
+|---|---|---|
+| `Sensores` | `incl_motor`, `incl_motor_taxa` | inclinação MÉDIA dos eixos dos motores face ao corpo (encoders: q_ombro + q_cotovelo dos 4 braços) e a derivada |
+| `Comando` | `pitch_corpo`, `tem_pitch_corpo` | MIRA POR ARFAGEM: o empuxo diferencial segura o pitch do CORPO (a arma) e os servos dão ao empuxo a inclinação que a cascata pede |
+| `Saida` | `roll_motor`, `pitch_motor`, `incl_ref` | atitude estimada do referencial dos MOTORES e o τ pedido aos servos: `incl_ref = atan2(n̂·ĥ, n̂_z) − θ̂_corpo` |
+| `Config` | `prioridade_rp` | a mistura corta primeiro a GUINADA (bisseção no fator de yaw) e só escala rolamento/arfagem se, sem guinada, ainda não couber |
+
+- O **estimador fica no referencial do CORPO** (IMU, ToF e fluxo estão no corpo); o observador, a atitude e o laço de taxa
+  correm no referencial dos MOTORES (R_m = R_corpo·R_y(τ), ω_m = R_y(τ)ᵀ·ω_corpo). Sem `asinf` (regra de firmware):
+  `atan2f`/`sqrtf`.
+- **Com os campos novos a zero o núcleo é EXATAMENTE o da interface 3** — `teste_nucleo.py` 97/97 (unitário, golden
+  vectors, sombra de 20 s, malha fechada, mutações) e `bench_treino.py identidade` (13 cenários bit a bit) passam.
+- **Tamanho** (`clang -Os`, `llvm-size`, mesma medida do `teste_nucleo.py`): Cortex-M4 text **30 706 B** (interface 3:
+  29 100 B, +1 606 B) · Cortex-M7 **29 272 B** (27 862 B, +1 410 B) · RAM do estado **4 052 B** (4 028 B, +24 B) · data/bss 0.
+- **Ganhos**: o build articulado declara `fc_margem_fase_min_graus: 45` — o `sitl.config_de_hardware` (e o `fc.py`) tiram
+  K_p/K_i/K_d de um τ de PROJETO de 36,9 ms em vez do τ_motor de 24,5 ms (com o τ_motor a malha de taxa tinha 30° de
+  margem e ressoava a ~3 Hz). Muda só a `Config` gerada, não o código do núcleo.
+- Medido no SITL (MuJoCo, `teste_bracos.py` §6–§7): corpo a ±25° com os motores de nível (≤ 1°), xyz em regime a ≤ 4,3 cm;
+  mira nos 3 cenários de altura com 0 erros.

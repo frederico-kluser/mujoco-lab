@@ -171,6 +171,41 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
   ok(m.lerHud({ ...AMOSTRA, vento_bordo: { vel: -1, direcao: 0 } })?.ventoBordo === null &&
       m.lerHud({ ...AMOSTRA, vento_bordo: "x" })?.ventoBordo === null,
     "vento de bordo: lixo (velocidade negativa, não-objeto) dá null")
+  // braços articulados (runner com `--build articulado_15pol_mn5006`): a amostra medida a 2026-10-19 (corpo a mirar
+  // para baixo a +29,9°, ombros a −35,4°) e o ledger de potência
+  const BRACOS = {
+    nomes: ["ombro1", "ombro2", "ombro3", "ombro4", "cotovelo1", "cotovelo2", "cotovelo3", "cotovelo4"],
+    juntas: [-35.4, -35.4, -35.4, -35.4, 5.6, 5.5, 5.6, 5.6], alvos: [-35.4, -35.4, -35.4, -35.4, 5.4, 5.4, 5.4, 5.4],
+    velocidades: [0, 0, 0, 0, 3.1, -2.2, 0.8, 1.0], correntes: [0.083, 0.083, 0.044, 0.058, 0.054, 0.054, 0.054, 0.054],
+    potencias: [2.17, 2.16, 1.14, 1.51, 1.42, 1.42, 1.42, 1.42], potencia_w: 12.66,
+    energias_wh: [0.03, 0.03, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02], energia_wh: 0.20655,
+    curso: [213.2, 212.68, 210.56, 211.56, 948.07, 947.76, 945.5, 949.96], saturados: [false, false, false, false, true, false, false, false],
+    ligados: true, inclinacao_motores: -29.7, pitch_corpo: 29.9, pitch_alvo: 30.0, modo: "mira", mira_ativa: true,
+    mira: { elevacao: -29.6, pitch_pedido: 29.6, pitch_alvo: 29.6, fora_alcance: false, teclas: true, dist: 2.31 },
+    geometria: { r_s: 0.15, l1: 0.825, l_m: 0.2305, ux: [0.7071, -0.7071, -0.7071, 0.7071] },
+  }
+  const comBracos = m.lerHud({ ...AMOSTRA, bracos: BRACOS, potencia: { motores: 540.2, eletronica: 6.7, servos: 12.66, total: 559.6 } })
+  const br = comBracos?.bracos ?? null
+  ok(hud?.bracos === null && hud.potencia === null && br !== null && br.juntas.length === 8 &&
+      br.juntas[0].nome === "ombro1" && br.juntas[0].angulo === -35.4 && br.juntas[4].curso === 948.07 &&
+      br.juntas[4].saturado === true && br.juntas[0].saturado === false,
+    "lerHud: bloco `bracos` (8 juntas: nome, ângulo, curso, saturado) — ausente dá null")
+  ok(br?.potenciaW === 12.66 && br.energiaWh === 0.20655 && br.juntas[1].potencia === 2.16 && br.juntas[2].energiaWh === 0.02 &&
+      br.pitchCorpo === 29.9 && br.inclinacaoMotores === -29.7 && br.miraAtiva && br.mira?.elevacao === -29.6 &&
+      br.mira.teclas === true && br.geometria?.l1 === 0.825 && br.geometria.ux.length === 4,
+    "lerHud: braços — potência/energia dos servos, pitch do corpo, τ dos motores, mira e geometria")
+  ok(comBracos?.potencia?.servos === 12.66 && comBracos.potencia.total === 559.6 &&
+      m.lerHud({ ...AMOSTRA, potencia: { motores: 1 } })?.potencia === null,
+    "lerHud: ledger de potência (motores · eletrónica · servos · total); sem total dá null")
+  ok(m.lerHud({ ...AMOSTRA, bracos: { nomes: [] } })?.bracos === null && m.lerHud({ ...AMOSTRA, bracos: "x" })?.bracos === null &&
+      m.lerHud({ ...AMOSTRA, bracos: { ...BRACOS, juntas: [1, "x"] } })?.bracos?.juntas[1].angulo === null,
+    "braços: lixo (sem juntas, não-objeto, ângulo não numérico) não rebenta nem inventa")
+  ok(m.textoPitchCorpo(29.9) === "nariz ↓ 29,9°" && m.textoPitchCorpo(-19.5) === "nariz ↑ 19,5°" &&
+      m.textoPitchCorpo(0.2) === "nivelado" && m.textoPitchCorpo(null) === "—",
+    "braços: pitch do corpo em linguagem de piloto (ZYX: + = nariz para BAIXO)")
+  ok(m.resumirHud(comBracos, "ligado").temBracos === true && m.resumirHud(hud, "ligado").temBracos === false &&
+      !m.resumoIgual(m.resumirHud(comBracos, "ligado"), m.resumirHud(hud, "ligado")),
+    "resumo: `temBracos` (a doca mostra a janela Braços só nesse build) e conta para a igualdade")
   ok(m.lerHud(null) === null && m.lerHud("x") === null && m.lerHud([]) === null && m.lerHud({}) === null,
     "lerHud: o que não é amostra dá null (nunca lança)")
   ok(m.lerHud({ ...AMOSTRA, fase: "episodio_terminado" })?.fase === null,
@@ -322,8 +357,9 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
     "teclas: Z/C rodam, X fixa o rumo")
   ok(a("b") === '{"tipo":"bola"}' && a("v") === '{"tipo":"vento"}' && a("f") === '{"tipo":"vista"}' && a("r") === '{"tipo":"reiniciar"}',
     "teclas: B bola · V vento · F vista · R reiniciar")
-  ok(a("1") === '{"tipo":"janela","indice":0}' && a("8") === '{"tipo":"janela","indice":7}' && a("9") === "null" && a("0") === "null",
-    "teclas: 1–8 abrem as janelas (9 e 0 não são do cockpit)")
+  ok(a("1") === '{"tipo":"janela","indice":0}' && a("8") === '{"tipo":"janela","indice":7}' &&
+      a("9") === '{"tipo":"janela","indice":8}' && a("0") === "null",
+    "teclas: 1–9 abrem as janelas (a 9 é a dos Braços; 0 não é do cockpit)")
   ok(a("Escape") === '{"tipo":"fechar"}' && a("?") === '{"tipo":"ajuda"}' && a("Enter") === "null" && a("g") === "null",
     "teclas: Esc fecha, ? abre a ajuda; o resto não é interceptado")
   ok(a(" ") === '{"tipo":"tiro"}' && a("Spacebar") === '{"tipo":"tiro"}' && a(" ", { ctrl: true }) === "null",
@@ -686,8 +722,15 @@ async function verificar(m: Modulo): Promise<Resultado[]> {
 
   // ------------------------------------------------------------------ 13. janelas
   let j = m.JANELAS_FECHADAS
-  ok(m.janelaEmFoco(j) === null && m.JANELAS.length === 8 && m.JANELAS.map((x) => x.tecla).join("") === "12345678",
-    "janelas: 8 janelas com os atalhos 1–8; tudo fechado por omissão")
+  ok(m.janelaEmFoco(j) === null && m.JANELAS.length === 9 && m.JANELAS.map((x) => x.tecla).join("") === "123456789" &&
+      m.JANELAS[8].id === "bracos",
+    "janelas: 9 janelas com os atalhos 1–9 (a 9 = Braços); tudo fechado por omissão")
+  for (const vp of [{ largura: 1920, altura: 1080 }, { largura: 1280, altura: 720 }]) {
+    const pb = m.posicaoInicial("bracos", vp)
+    const mb = m.metaJanela("bracos")
+    ok(pb.x >= 0 && pb.y >= 0 && pb.x + Math.min(mb.largura, vp.largura) <= vp.largura,
+      `janelas: a Braços abre dentro do viewport a ${vp.largura}×${vp.altura}`)
+  }
   ok(m.JANELAS.filter((x) => x.principal).map((x) => x.id).join() === "voo,bola,vento", "janelas: as principais são Voo, Bola e Vento")
   j = m.alternarJanela(j, "voo")
   j = m.alternarJanela(j, "vento")
@@ -801,6 +844,16 @@ for (const f of falhadas) console.error(`✗ ${f.nome}`)
  * se o código mudar e a mutação deixar de se aplicar, o teste falha alto em vez de passar às cegas).
  */
 const MUTACOES: { nome: string; de: string; para: string }[] = [
+  {
+    nome: "pitch do corpo com o sinal trocado (nariz ↑ ↔ ↓)",
+    de: 'return `nariz ${graus < 0 ? "↑" : "↓"} ${Math.abs(graus).toFixed(1).replace(".", ",")}°`',
+    para: 'return `nariz ${graus > 0 ? "↑" : "↓"} ${Math.abs(graus).toFixed(1).replace(".", ",")}°`',
+  },
+  {
+    nome: "o resumo esquece os braços (temBracos sempre false)",
+    de: "    temBracos: hud?.bracos != null,",
+    para: "    temBracos: false,",
+  },
   {
     nome: "cover trocado por contain (Math.max → Math.min)",
     de: "return Math.max(vista[0] / imagem[0], vista[1] / imagem[1])",

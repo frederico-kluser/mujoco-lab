@@ -5,8 +5,9 @@ Executa e verifica o pipeline completo de evolução do drone:
   1. `--pesquisar "<consulta>"`: pesquisa na web via `tavily-agent-skill`;
   2. `--treinar`: corre o treino GPU (JAX CUDA + TensorFlow 2.21 OpenXLA) com bola aleatória;
   3. `--benchmark`: corre `benchmark_evolucao.py` (bola programada + vento fixo) e gera `evolucao_drone.png` na raiz;
-  4. `--check`: verifica a existência e integridade de `evolucao_drone.png` e `evolucao_estabilidade.json` e imprime
-     o resumo explicativo e as tabelas Markdown para `README.md`, `AGENTS.md` e `CLAUDE.md`.
+  4. `--check`: verifica a existência e integridade de `evolucao_drone.png` e `evolucao_estabilidade.json` (5 gerações,
+     6 presets e os 3 cenários de altura dos braços articulados) e imprime as tabelas Markdown para `README.md`,
+     `AGENTS.md` e `CLAUDE.md`.
 """
 from __future__ import annotations
 
@@ -33,7 +34,14 @@ def treinar_gpu() -> int:
     py_gpu = RAIZ / ".venv-gpu" / "bin" / "python"
     py = py_gpu if py_gpu.is_file() else Path(sys.executable)
     print(f"[skill:treino-gpu] A treinar em GPU + TensorFlow OpenXLA ({py})...", flush=True)
-    return subprocess.call([str(py), str(EXP09 / "treinar_mira_gpu.py")], cwd=str(RAIZ))
+    rc = subprocess.call([str(py), str(EXP09 / "treinar_mira_gpu.py")], cwd=str(RAIZ))
+    if rc != 0:
+        return rc
+    # braços articulados (8 juntas, mira por arfagem): dados MuJoCo + TensorFlow + portão na GPU + 3 cenários de altura
+    print("[skill:treino-gpu] Mira por arfagem dos braços articulados (treinar_mira_articulada.py)...", flush=True)
+    py_cpu = RAIZ / ".venv" / "bin" / "python"
+    return subprocess.call([str(py_cpu if py_cpu.is_file() else sys.executable),
+                            str(EXP09 / "treinar_mira_articulada.py"), "--fase", "tudo"], cwd=str(RAIZ))
 
 
 def rodar_benchmark() -> int:
@@ -53,8 +61,10 @@ def verificar_e_imprimir() -> int:
     dados = json.loads(JSON_EVOLUCAO.read_text(encoding="utf-8"))
     geracoes = dados.get("geracoes", [])
     presets = dados.get("presets", [])
-    if len(geracoes) < 4 or len(presets) < 6:
-        print("Erro: JSON de evolução incompleto", file=sys.stderr)
+    cenarios = dados.get("cenarios_altura") or {}
+    if len(geracoes) < 5 or len(presets) < 6 or not cenarios.get("configuracoes"):
+        print("Erro: JSON de evolução incompleto (5 gerações, 6 presets e os 3 cenários de altura) — Solução: corra com "
+              "--benchmark", file=sys.stderr)
         return 1
 
     print(f"[OK] Gráfico na raiz: {PNG_RAIZ} ({PNG_RAIZ.stat().st_size} bytes)")
@@ -68,6 +78,15 @@ def verificar_e_imprimir() -> int:
             f"{g['tempo_recuperacao_tiro_s']:.2f} s | **{g['tiros_por_minuto']:.1f}** ({g['precisao_tiro_pct']:.0f}%) | "
             f"{g['erro_vento_3ms_cm']:.1f} / {g['erro_vento_5ms_cm']:.1f} | **{g['indice_estabilidade']:.1f}** |"
         )
+    k = float(cenarios.get("penalidade", 20.0))
+    print(f"\n3 cenários de altura (bola programada, sementes {cenarios.get('sementes')}; pontuação = acertos − {k:.0f}·erros):\n")
+    print("| Configuração | Cenário | Acertos / erros | Acertos/min | Pontuação/min | Sai da estação (cm) | Pitch do corpo (°) |")
+    print("|---|---|---:|---:|---:|---:|---:|")
+    for conf in cenarios["configuracoes"].values():
+        for c, r in conf["cenarios"].items():
+            pitch = f"{r['pitch_corpo_medio_graus']:+.1f}" if conf.get("articulado") else "—"
+            print(f"| {conf['rotulo']} | {c} | {r['acertos']} / {r['erros']} | {r['acertos_por_min']:.1f} | "
+                  f"**{r['pontuacao_por_min']:+.1f}** | {100 * r['desloc_estacao_max_m']:.0f} | {pitch} |")
     return 0
 
 

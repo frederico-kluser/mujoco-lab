@@ -98,6 +98,12 @@ OBS_ATOR_DIM_COMANDO = OBS_ATOR_DIM + 3
 OBS_CRITICO_DIM_COMANDO = OBS_CRITICO_DIM + 3
 OBS_DIM_COMANDO = OBS_ATOR_DIM_COMANDO + OBS_CRITICO_DIM_COMANDO
 TAXA_MAX = np.array([2.0, 2.0, 1.0])      # rad/s — setpoints de taxa máximos (p, q, r): pairar não pede mais
+# BRAÇOS ARTICULADOS (builds com `bracos`): +8 canais em CADA parte da observação — as 8 juntas (ombro1..4, cotovelo1..4)
+# lidas pelos ENCODERS no ator (o que o firmware sabe) e as verdadeiras no crítico — escaladas por ESCALA_JUNTA
+N_JUNTAS_OBS = 8
+ESCALA_JUNTA = math.pi / 4.0
+PITCH_CORPO_DR_GRAUS = 25.0                # treino com braços: o corpo arfa ao acaso até ±25° (a mira pede isto)
+PITCH_CORPO_DR_PERIODO_S = (1.5, 4.0)      # s entre mudanças do pitch pedido ao corpo
 ESCALA_GIRO = 2.0
 MODOS_ACAO = ("ctbr", "motores")
 JITTER_XY = 0.02
@@ -175,6 +181,16 @@ def recompensa_real_voo(erro_xy: float, erro_z: float, erro_v: float, yaw_err: f
     return float(r)
 
 
+def giro_para_motores(giro, tau: float, tau_d: float) -> np.ndarray:
+    """ω no referencial dos MOTORES (braços articulados): ω_m = R_y(τ)ᵀ·ω_corpo + (0, τ̇, 0) — a mesma conta do núcleo
+    de firmware (interface 4, `giro_para_motores` em nucleo.cpp). τ = τ̇ = 0 devolve o próprio giroscópio."""
+    if tau == 0.0 and tau_d == 0.0:
+        return giro
+    c, s = math.cos(tau), math.sin(tau)
+    g = np.asarray(giro, dtype=float)
+    return np.array([c * g[0] - s * g[2], g[1] + tau_d, s * g[0] + c * g[2]])
+
+
 def build_do_hardware(dados: dict | None) -> tuple[str | dict | None, str]:
     """O build com que uma política treinou, a partir do seu `hardware.json`: o NOME (se ainda existir em
     `builds.json`) → a configuração GRAVADA no `hardware.json` (se as peças ainda existirem no catálogo) → o build
@@ -237,6 +253,9 @@ class DroneRealEnv(HoverEnv):
         self.com_alvo = bool(com_alvo)
         self.ponto_alvo = np.array([2.0, 0.0, 1.0]) if com_alvo else None
         self.ponto_alvo_vel = np.zeros(3)
+        # banda de altura da bola (`aleatorio`/`programado`): None = a de sempre (0,6–1,6 m / 0,82–1,85 m); os cenários
+        # de mira «abaixo/acima do alvo» dos braços articulados põem-na à volta da altura que querem
+        self.ponto_banda_z: tuple[float, float] | None = None
         self.corpo = self.model.body("drone").id
         self.dt = float(self.model.opt.timestep)
         self.dt_decisao = self.dt * self.decimation
@@ -250,7 +269,15 @@ class DroneRealEnv(HoverEnv):
         self.carga_extra_kg = 0.0
 
         self.planta = dr.Planta(self.hw, self.model, self.data, flags_aero=flags_aero, desgaste=desgaste)
-        self.fc = ControladorFC(self.hw, self.model, self.dt)
+        # braços articulados: o controlador dos 8 servos (estabilizador do pitch do corpo + cinemática inversa)
+        self.articulado = bool(self.planta.articulado)
+        if self.articulado:
+            from bracos_controlo import ControladorBracos
+            self.bracos = ControladorBracos(self.hw, self.dt)
+        else:
+            self.bracos = None
+        self._pitch_dr_proximo = 0
+        self.fc = ControladorFC(self.hw, self.model, self.dt, dt_decisao=self.dt_decisao)
         self.estimador = EstimadorBordo(self.dt)
         _ph = self.hw.ponto_pairagem(self.hw.bateria.v_nominal)
         self.u_pairagem = float(_ph["acelerador"])
@@ -299,6 +326,10 @@ class DroneRealEnv(HoverEnv):
         self._contagem_atraso = 0
         self.yaw0 = 0.0
         self.parametros_dr: dict = {}
+        # tiros com atraso de disparo (solenoide + percussor) e gancho por passo de FÍSICA (antes de cada `planta.passo`;
+        # usado para gravar o estado da boca do cano e rotular tiros virtuais) — vazios por omissão: nada muda
+        self._tiros_agendados: list[list[float]] = []
+        self.gancho_fisica = None
         # controle de voo (contrato r11, herança do HoverEnv): `comando=False` muda NADA no contrato v3-real
         if comandos_aleatorios and not comando:
             raise ValueError("`comandos_aleatorios` exige `comando=True`")
@@ -313,6 +344,9 @@ class DroneRealEnv(HoverEnv):
         self._plano_restante = 0
         self.obs_ator_dim = OBS_ATOR_DIM_COMANDO if self.comando else OBS_ATOR_DIM
         self.obs_dim = OBS_DIM_COMANDO if self.comando else OBS_DIM
+        if self.articulado:                                  # +8 juntas no ator (encoders) e +8 no crítico (verdade)
+            self.obs_ator_dim += N_JUNTAS_OBS
+            self.obs_dim += 2 * N_JUNTAS_OBS
         self.action_space = spaces.Box(-1.0, 1.0, (4,), dtype=np.float32)
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.obs_dim,), dtype=np.float32)
 
@@ -426,6 +460,9 @@ class DroneRealEnv(HoverEnv):
         mujoco.mj_forward(self.model, self.data)
         self.planta.reiniciar_sensores()
         self.planta.armar(True)
+        if self.bracos is not None:
+            self.bracos.reiniciar()
+            self._pitch_dr_proximo = 0
         self.fc.reiniciar()
         self.fc.armar(True)
         tof = self.planta.tof
@@ -454,6 +491,7 @@ class DroneRealEnv(HoverEnv):
         self._cmd_ativo = np.zeros(4)
         self._cmd_pendente = np.zeros(4)
         self._contagem_atraso = 0
+        self._tiros_agendados = []
         if self.comando:
             self.p_ref = self.alvo.copy()
             self.v_ref = np.zeros(3)
@@ -584,9 +622,10 @@ class DroneRealEnv(HoverEnv):
         g[2] = float(np.clip(g[2], -vz_max, vz_max))
         # paredes suaves: dentro da margem a velocidade-objetivo ganha uma componente para DENTRO que, na parede, vale o
         # dobro do teto (vence qualquer g) — a bola abranda, encosta e volta, sem teleportes nem cortes de posição
+        z_min, z_max = self.ponto_banda_z if self.ponto_banda_z is not None else (PONTO_Z_MIN, PONTO_Z_MAX)
         for i, (lo, hi, margem, teto) in enumerate(((-PONTO_ARENA_XY, PONTO_ARENA_XY, PONTO_MARGEM_XY, vel),
                                                     (-PONTO_ARENA_XY, PONTO_ARENA_XY, PONTO_MARGEM_XY, vel),
-                                                    (PONTO_Z_MIN, PONTO_Z_MAX, PONTO_MARGEM_Z, vz_max))):
+                                                    (z_min, z_max, PONTO_MARGEM_Z, vz_max))):
             dentro = max(lo + margem - pos[i], 0.0) - max(pos[i] - (hi - margem), 0.0)
             g[i] += 2.0 * teto * dentro / margem
         n = float(math.hypot(g[0], g[1]))
@@ -597,7 +636,7 @@ class DroneRealEnv(HoverEnv):
         novo = pos + self.ponto_alvo_vel * dt
         novo[0] = float(np.clip(novo[0], -PONTO_ARENA_XY, PONTO_ARENA_XY))
         novo[1] = float(np.clip(novo[1], -PONTO_ARENA_XY, PONTO_ARENA_XY))
-        novo[2] = float(np.clip(novo[2], PONTO_Z_MIN, PONTO_Z_MAX))
+        novo[2] = float(np.clip(novo[2], z_min, z_max))
         return novo
 
     def _ponto_passo(self) -> None:
@@ -645,7 +684,8 @@ class DroneRealEnv(HoverEnv):
             vy = 0.85 * a * w * math.cos(w * t) * rampa
             vz = 0.16 * a * (1.2 * w) * math.cos(1.2 * w * t) * rampa
             pos = self.ponto_centro + rampa * np.array([dx, dy, dz])
-            pos[2] = float(np.clip(pos[2], 0.82, 1.85))
+            z_lo, z_hi = self.ponto_banda_z if self.ponto_banda_z is not None else (0.82, 1.85)
+            pos[2] = float(np.clip(pos[2], z_lo, z_hi))
             self.ponto_alvo_vel = np.array([vx, vy, vz])
         self.ponto_alvo = np.asarray(pos, dtype=float)
         from lab import camera_rpi as _cam
@@ -662,16 +702,27 @@ class DroneRealEnv(HoverEnv):
         if self.vento_dinamico is not None and self._din_passo < self.passos + 1:
             self._passo_vento()
         pl, est, fc = self.planta, self.estimador, self.fc
+        if self.bracos is not None and self.aleatorizar and self.passos >= self._pitch_dr_proximo:
+            self._sortear_pitch_corpo()
         for _ in range(self.decimation):
             if self._contagem_atraso <= 0:
                 self._cmd_ativo = self._cmd_pendente
             else:
                 self._contagem_atraso -= 1
             c = self._cmd_ativo
+            if self.bracos is not None:
+                self.bracos.passo(pl.servos, est.pitch)
             if self.modo_acao == "ctbr":
-                u = fc.passo(c[0], c[1:], pl.imu.giro.medicao)
+                giro = pl.imu.giro.medicao
+                if self.articulado:                          # o laço de taxa controla o referencial dos MOTORES
+                    giro = giro_para_motores(giro, *pl.inclinacao_motores_medida())
+                u = fc.passo(c[0], c[1:], giro)
             else:
                 u = c if pl.prop.armado else np.zeros(4)
+            if self._tiros_agendados and float(self.data.time) + 1e-9 >= self._tiros_agendados[0][0]:
+                pl.disparar(int(self._tiros_agendados.pop(0)[1]))
+            if self.gancho_fisica is not None:
+                self.gancho_fisica(self)
             pl.passo(u)
             tof, fl = pl.tof, pl.fluxo
             est.passo(pl.imu.giro.medicao, pl.imu.acc.medicao, tof.distancia, tof.valido, tof.s.n_amostras,
@@ -735,9 +786,46 @@ class DroneRealEnv(HoverEnv):
         self.v_ref = self._v_ref_externo.copy()
         self.comando = True
 
-    def disparar(self, n: int = 1) -> dict | None:
-        """Dispara `n` tiro(s) da arma fixa no topo do drone (`planta.disparar`)."""
+    # ---------------------------------------------------------------- braços articulados
+    def definir_pitch_corpo(self, pitch_rad: float) -> None:
+        """Pitch pretendido para o CORPO (rad, ZYX: + = nariz para baixo) — os servos inclinam os motores para o corpo
+        ficar nesse ângulo enquanto o núcleo segura a posição com o referencial dos motores. Mirar ε rad para CIMA =
+        `definir_pitch_corpo(−ε)`. Exige um build com braços articulados."""
+        if self.bracos is None:
+            raise RuntimeError("este build não tem braços articulados (`bracos` no builds.json)")
+        self.bracos.definir_pitch_corpo(pitch_rad)
+
+    def definir_modo_bracos(self, modo: str) -> None:
+        """`mira` (corpo no pitch pedido), `rigido` (juntas a 0) ou `manual` (τ dos motores direto)."""
+        if self.bracos is None:
+            raise RuntimeError("este build não tem braços articulados (`bracos` no builds.json)")
+        self.bracos.definir_modo(modo)
+
+    def bracos_estado(self) -> dict | None:
+        """Juntas medidas/alvos, binários, correntes, potência dos servos e o estado do controlador (`None` sem braços)."""
+        if self.bracos is None:
+            return None
+        return {**self.planta.telemetria_bracos(), "controlador": self.bracos.estado()}
+
+    def _sortear_pitch_corpo(self) -> None:
+        """Treino com braços (domain randomization): um pitch novo para o corpo, ao acaso, de tempos a tempos."""
+        u = self.np_random.uniform
+        self.bracos.definir_pitch_corpo(math.radians(float(u(-PITCH_CORPO_DR_GRAUS, PITCH_CORPO_DR_GRAUS))))
+        self._pitch_dr_proximo = self.passos + max(1, round(float(u(*PITCH_CORPO_DR_PERIODO_S)) / self.dt_decisao))
+
+    def disparar(self, n: int = 1, atraso_s: float = 0.0) -> dict | None:
+        """Dispara `n` tiro(s) da arma fixa no topo do drone (`planta.disparar`). `atraso_s` > 0 = o tempo entre a ORDEM
+        e a bala sair do cano (solenoide do gatilho + percussor): o tiro sai no passo de física em que o relógio o
+        alcança, com o estado do cano DESSE instante (devolve None; o registo fica em `planta.ultimo_tiro`)."""
+        if atraso_s > 0.0:
+            self._tiros_agendados.append([float(self.data.time) + float(atraso_s), int(n)])
+            return None
         return self.planta.disparar(n)
+
+    @property
+    def tiros_pendentes(self) -> int:
+        """Tiros ordenados que ainda não saíram do cano (atraso de disparo)."""
+        return len(self._tiros_agendados)
 
     def definir_gatilho_tiro(self, gatilho: bool) -> None:
         """Estado da tecla SPACE / botão de tiro (`True` = premido, `False` = solto)."""
@@ -809,6 +897,9 @@ class DroneRealEnv(HoverEnv):
             v_esc = np.array([self.v_ref[0] / VOO_VEL, self.v_ref[1] / VOO_VEL, self.v_ref[2] / VOO_SUBIDA])
             ator = np.concatenate((ator, v_esc))
             critico = np.concatenate((critico, v_esc))
+        if self.articulado:                                  # as 8 juntas: encoders no ator, verdade no crítico
+            ator = np.concatenate((ator, pl.juntas_medidas() / ESCALA_JUNTA))
+            critico = np.concatenate((critico, pl.juntas_verdade() / ESCALA_JUNTA))
         return np.concatenate((ator, critico)).astype(np.float32)
 
     def _info(self, d: dict | None = None) -> dict:
@@ -827,6 +918,8 @@ class DroneRealEnv(HoverEnv):
             info["voo"] = self.comando_estado(d)
         if self.hw.arma is not None:
             info["tiro"] = self.tiro_estado()
+        if self.bracos is not None:
+            info["bracos"] = self.bracos_estado()
         info["carga"] = self.carga_estado()
         return info
 
@@ -834,6 +927,6 @@ class DroneRealEnv(HoverEnv):
         return
 
 
-__all__ = ["DR", "MODOS_ACAO", "OBS_ATOR_DIM", "OBS_ATOR_DIM_COMANDO", "OBS_CRITICO_DIM",
+__all__ = ["DR", "ESCALA_JUNTA", "MODOS_ACAO", "N_JUNTAS_OBS", "OBS_ATOR_DIM", "OBS_ATOR_DIM_COMANDO", "OBS_CRITICO_DIM",
            "OBS_CRITICO_DIM_COMANDO", "OBS_DIM", "OBS_DIM_COMANDO", "TAXA_MAX", "DroneRealEnv",
-           "build_do_hardware", "recompensa_real", "recompensa_real_voo"]
+           "build_do_hardware", "giro_para_motores", "recompensa_real", "recompensa_real_voo"]

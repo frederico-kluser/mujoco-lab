@@ -628,7 +628,7 @@ class Servidor:
     def __enter__(self) -> Self:
         if self.controlo_inicial is not None:            # o que uma sessão anterior deixou no disco
             self.controlo.write_text(json.dumps(self.controlo_inicial) + "\n", encoding="utf-8")
-        comando = [sys.executable, str(_SIM_SITE), "--sem-browser", "--sem-janela",
+        comando = [sys.executable, str(_SIM_SITE), "--sem-browser", "--build", "politica", "--sem-janela",
                    "--port", str(self.porta), "--controlo", str(self.controlo),
                    "--telemetria", str(self.telemetria),
                    "--fator-tempo", f"{self.fator_tempo:g}", "--model", str(self.modelo), *self.flags]

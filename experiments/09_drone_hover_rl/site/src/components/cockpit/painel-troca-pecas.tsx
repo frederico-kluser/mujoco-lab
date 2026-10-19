@@ -107,10 +107,15 @@ export function PainelTrocaPecas() {
     if (rWatts.current !== null) {
       const wTot = p?.wattsTotal ?? hud?.bateria?.p ?? null
       const wMot = p?.wattsMotores ?? null
+      const wServ = p?.wattsServos ?? null
+      const partes = [
+        wMot == null ? null : `mot ${fmtHud(wMot, 0)} W`,
+        wServ == null ? null : `servos ${fmtHud(wServ, 1)} W`,
+      ].filter((x) => x !== null)
       const txtW =
         wTot == null
           ? "—"
-          : `${fmtHud(wTot, 1)} W${wMot == null ? "" : ` (mot ${fmtHud(wMot, 0)} W)`}`
+          : `${fmtHud(wTot, 1)} W${partes.length === 0 ? "" : ` (${partes.join(" · ")})`}`
       if (rWatts.current.textContent !== txtW) rWatts.current.textContent = txtW
     }
     if (rVazao.current !== null) {

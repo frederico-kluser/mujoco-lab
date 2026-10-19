@@ -274,6 +274,9 @@ export interface HudPecas {
   wattsTotal: number | null
   wattsMotores: number | null
   wattsEletronica: number | null
+  /** Braços articulados: os 8 servos (W, na bateria) e a energia gasta desde o reset (Wh); `null` sem braços. */
+  wattsServos: number | null
+  energiaServosWh: number | null
   potenciaMaxBateriaW: number | null
   vBus: number | null
   socPct: number | null
@@ -320,6 +323,147 @@ export interface AmostraHud {
   graficos: HudGraficos | null
   /** Estado em tempo real do motor, da bateria, da vazão (A) e dos Watts gastos; `null` sem planta real. */
   pecas: HudPecas | null
+  /** Braços articulados (8 servos: ângulos, curso, corrente, potência, energia); `null` nos builds rígidos. */
+  bracos: HudBracos | null
+  /** Para onde vai a potência agora (motores · eletrónica · servos); `null` sem planta real ou runner antigo. */
+  potencia: HudPotencia | null
+}
+
+/** Uma junta dos braços articulados (ombro ou cotovelo de um braço), tal como o runner a publica. */
+export interface JuntaHud {
+  nome: string
+  /** Ângulo MEDIDO pelo encoder (°) e o alvo pedido ao servo (°). */
+  angulo: number | null
+  alvo: number | null
+  /** Velocidade lida no barramento (°/s). */
+  velocidade: number | null
+  corrente: number | null
+  /** Potência deste servo na BATERIA (W; a corrente de espera conta). */
+  potencia: number | null
+  /** Energia que este servo já tirou da bateria desde o reset (Wh). */
+  energiaWh: number | null
+  /** Quanto a junta já rodou desde o reset (° — soma dos |Δq|). */
+  curso: number | null
+  saturado: boolean
+}
+
+export interface HudMiraBracos {
+  /** Elevação a que é preciso apontar (°; + = bola acima). */
+  elevacao: number | null
+  /** Pitch do corpo pedido pela mira e o que vai ao núcleo depois do envelope (°; + = nariz para baixo). */
+  pitchPedido: number | null
+  pitchAlvo: number | null
+  foraAlcance: boolean
+  /** O dono está a mexer o drone (WASDQE) enquanto a mira aponta. */
+  teclas: boolean
+  dist: number | null
+}
+
+/** Braços articulados (8 servos): `null` nos builds rígidos. */
+export interface HudBracos {
+  juntas: JuntaHud[]
+  /** Os 8 servos juntos, na bateria (W) e a energia gasta desde o reset (Wh). */
+  potenciaW: number | null
+  energiaWh: number | null
+  ligados: boolean
+  /** Inclinação dos motores face ao corpo, τ (°). */
+  inclinacaoMotores: number | null
+  /** Pitch do corpo medido e pedido (°; ZYX: + = nariz para BAIXO). */
+  pitchCorpo: number | null
+  pitchAlvo: number | null
+  modo: string | null
+  miraAtiva: boolean
+  mira: HudMiraBracos | null
+  /** Geometria (m) para o esquema lateral: raio do ombro, braço, mastro e a componente x de cada braço. */
+  geometria: { rS: number; l1: number; lM: number; ux: number[] } | null
+}
+
+/** Para onde vai a potência AGORA (W, na bateria): motores + eletrónica + servos = total. */
+export interface HudPotencia {
+  motores: number | null
+  eletronica: number | null
+  /** Só com braços articulados (espera + carga dos 8 servos). */
+  servos: number | null
+  total: number | null
+}
+
+function lerJuntasHud(o: Record<string, unknown>): JuntaHud[] {
+  const lista = (chave: string): unknown[] => (Array.isArray(o[chave]) ? (o[chave] as unknown[]) : [])
+  const nomes = lista("nomes")
+  const n = Math.min(16, Math.max(nomes.length, lista("juntas").length))
+  const juntas: JuntaHud[] = []
+  for (let i = 0; i < n; i += 1) {
+    juntas.push({
+      nome: typeof nomes[i] === "string" ? (nomes[i] as string) : `junta${i + 1}`,
+      angulo: finito(lista("juntas")[i]),
+      alvo: finito(lista("alvos")[i]),
+      velocidade: finito(lista("velocidades")[i]),
+      corrente: finito(lista("correntes")[i]),
+      potencia: finito(lista("potencias")[i]),
+      energiaWh: finito(lista("energias_wh")[i]),
+      curso: finito(lista("curso")[i]),
+      saturado: lista("saturados")[i] === true,
+    })
+  }
+  return juntas
+}
+
+function lerMiraBracos(bruto: unknown): HudMiraBracos | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  return {
+    elevacao: finito(o.elevacao),
+    pitchPedido: finito(o.pitch_pedido),
+    pitchAlvo: finito(o.pitch_alvo),
+    foraAlcance: o.fora_alcance === true,
+    teclas: o.teclas === true,
+    dist: finito(o.dist),
+  }
+}
+
+function lerBracosHud(bruto: unknown): HudBracos | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  const juntas = lerJuntasHud(o)
+  if (juntas.length === 0) return null
+  return {
+    juntas,
+    potenciaW: finito(o.potencia_w),
+    energiaWh: finito(o.energia_wh),
+    ligados: o.ligados !== false,
+    inclinacaoMotores: finito(o.inclinacao_motores),
+    pitchCorpo: finito(o.pitch_corpo),
+    pitchAlvo: finito(o.pitch_alvo),
+    modo: typeof o.modo === "string" ? o.modo : null,
+    miraAtiva: o.mira_ativa === true,
+    mira: lerMiraBracos(o.mira),
+    geometria: lerGeometriaBracos(o.geometria),
+  }
+}
+
+function lerGeometriaBracos(bruto: unknown): HudBracos["geometria"] {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  const rS = finito(o.r_s)
+  const l1 = finito(o.l1)
+  const lM = finito(o.l_m)
+  const ux = Array.isArray(o.ux) ? o.ux.map((v) => finito(v) ?? 0) : []
+  return rS === null || l1 === null || lM === null || ux.length < 4 ? null : { rS, l1, lM, ux }
+}
+
+function lerPotenciaHud(bruto: unknown): HudPotencia | null {
+  const o = objetoSimples(bruto)
+  if (o === null) return null
+  const total = finito(o.total)
+  if (total === null) return null
+  return { motores: finito(o.motores), eletronica: finito(o.eletronica), servos: finito(o.servos), total }
+}
+
+/** Pitch do corpo (ZYX, + = nariz para BAIXO) em linguagem de piloto: `nariz ↑ 19,5°`, `nariz ↓ 27,3°`, `nivelado`. */
+export function textoPitchCorpo(graus: number | null): string {
+  if (graus === null) return "—"
+  if (Math.abs(graus) < 0.5) return "nivelado"
+  return `nariz ${graus < 0 ? "↑" : "↓"} ${Math.abs(graus).toFixed(1).replace(".", ",")}°`
 }
 
 export interface HudVentoBordo {
@@ -591,6 +735,8 @@ function lerPecasHud(bruto: unknown): HudPecas | null {
     wattsTotal: finito(o.watts_total),
     wattsMotores: finito(o.watts_motores),
     wattsEletronica: finito(o.watts_eletronica),
+    wattsServos: finito(o.watts_servos),
+    energiaServosWh: finito(o.energia_servos_wh),
     potenciaMaxBateriaW: finito(o.potencia_max_bateria_w),
     vBus: finito(o.v_bus),
     socPct: finito(o.soc_pct),
@@ -640,6 +786,8 @@ export function lerHud(bruto: unknown): AmostraHud | null {
     carga: lerCargaHud(o.carga),
     graficos: lerGraficosHud(o.graficos),
     pecas: lerPecasHud(o.pecas),
+    bracos: lerBracosHud(o.bracos),
+    potencia: lerPotenciaHud(o.potencia),
   }
 }
 
@@ -942,6 +1090,8 @@ export interface ResumoHud {
   controlador: "rl" | "classico" | null
   /** FoV vertical da câmara de bordo que o runner publicou (graus); `null` = ainda não o disse. */
   fovy: number | null
+  /** O build que voa tem braços articulados (a doca mostra a janela Braços, tecla 9). */
+  temBracos: boolean
 }
 
 export const RESUMO_HUD_INICIAL: ResumoHud = {
@@ -956,6 +1106,7 @@ export const RESUMO_HUD_INICIAL: ResumoHud = {
   aceitaComandos: true,
   controlador: null,
   fovy: null,
+  temBracos: false,
 }
 
 export function resumirHud(
@@ -977,6 +1128,7 @@ export function resumirHud(
     aceitaComandos: !vivo || hud.voo !== null,
     controlador: hud?.controlador?.modo ?? null,
     fovy: hud?.fovy ?? hud?.bola?.fovy ?? null,
+    temBracos: hud?.bracos != null,
   }
 }
 
@@ -992,7 +1144,8 @@ export function resumoIgual(a: ResumoHud, b: ResumoHud): boolean {
     a.temEstimador === b.temEstimador &&
     a.aceitaComandos === b.aceitaComandos &&
     a.controlador === b.controlador &&
-    a.fovy === b.fovy
+    a.fovy === b.fovy &&
+    a.temBracos === b.temBracos
   )
 }
 
@@ -1276,7 +1429,7 @@ export function acaoDaTecla(
   if (k === "v") return { tipo: "vento" }
   if (k === "f") return { tipo: "vista" }
   if (k === "r") return { tipo: "reiniciar" }
-  if (k.length === 1 && k >= "1" && k <= "8")
+  if (k.length === 1 && k >= "1" && k <= "9")
     return { tipo: "janela", indice: Number(k) - 1 }
   return null
 }
@@ -1591,13 +1744,14 @@ export const IDS_JANELA = [
   "graficos",
   "sistema",
   "ajuda",
+  "bracos",
 ] as const
 export type IdJanela = (typeof IDS_JANELA)[number]
 
 export interface MetaJanela {
   id: IdJanela
   titulo: string
-  /** Atalho (`1`…`8`). */
+  /** Atalho (`1`…`9`). */
   tecla: string
   /** Largura (px); a janela nunca passa do viewport. */
   largura: number
@@ -1607,7 +1761,7 @@ export interface MetaJanela {
   principal: boolean
 }
 
-/** As janelas da doca, pela ordem dos atalhos 1–8. */
+/** As janelas da doca, pela ordem dos atalhos 1–9 (a 9, Braços, só aparece na doca com braços articulados). */
 export const JANELAS: readonly MetaJanela[] = [
   { id: "voo", titulo: "Voo", tecla: "1", largura: 300, alturaPrevista: 352, principal: true },
   { id: "bola", titulo: "Bola", tecla: "2", largura: 300, alturaPrevista: 440, principal: true },
@@ -1617,6 +1771,7 @@ export const JANELAS: readonly MetaJanela[] = [
   { id: "graficos", titulo: "Gráficos", tecla: "6", largura: 720, alturaPrevista: 520, principal: false },
   { id: "sistema", titulo: "Sistema", tecla: "7", largura: 760, alturaPrevista: 560, principal: false },
   { id: "ajuda", titulo: "Ajuda", tecla: "8", largura: 700, alturaPrevista: 500, principal: false },
+  { id: "bracos", titulo: "Braços", tecla: "9", largura: 420, alturaPrevista: 560, principal: false },
 ]
 
 export function metaJanela(id: IdJanela): MetaJanela {
@@ -1822,6 +1977,13 @@ export function posicaoInicial(id: IdJanela, viewport: Tamanho): Ponto {
           }
       break
     }
+    case "bracos":
+      // Ao lado da coluna do Voo (à esquerda, fora do centro onde está a mira do HUD).
+      ponto = {
+        x: FOLGA_JANELAS + metaJanela("voo").largura + FOLGA_JANELAS,
+        y: TOPO_JANELAS,
+      }
+      break
     case "energia":
       // Ao lado da coluna da Bola (não por cima dela), ainda fora do centro.
       ponto = {
@@ -2346,5 +2508,6 @@ export const ATALHOS: readonly { teclas: string[]; faz: string }[] = [
   { teclas: ["F"], faz: "trocar a vista: 1.ª ↔ 3.ª pessoa" },
   { teclas: ["R"], faz: "manter premido: reiniciar (volta ao chão e descola)" },
   { teclas: ["1", "…", "8"], faz: "abrir · fechar as janelas da doca" },
+  { teclas: ["9"], faz: "braços articulados: os 8 servos (ângulo, curso, corrente, energia) — só nesse build" },
   { teclas: ["Esc"], faz: "fechar a janela da frente" },
 ]

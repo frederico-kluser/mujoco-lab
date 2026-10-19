@@ -533,7 +533,7 @@ def _esperar(condicao, limite: float, passo: float = 0.1) -> bool:
 
 
 def secao_integracao(pasta: Path, porta: int) -> bool:
-    c = Checagens("§4 integração real: `sim_site.py` sem flags → cockpit a voar (planta real)")
+    c = Checagens("§4 integração real: `sim_site.py --build politica` (o rígido; o padrão é o articulado) → cockpit a voar")
     pasta.mkdir(parents=True, exist_ok=True)
     controlo, telemetria = pasta / "controlo.json", pasta / "telemetria.jsonl"
     for caminho in (controlo, telemetria):
@@ -544,7 +544,7 @@ def secao_integracao(pasta: Path, porta: int) -> bool:
         "vento_simples": {"ligado": True, "intensidade": 3.0, "aleatorio": True, "direcao": 0.0, "seq": 5},
         "voo": {"ativo": False, "teclas": {}, "segui_alvo": True, "seq": 2}}), encoding="utf-8")
     ambiente = {**os.environ, "DRONE_PASTA_BATERIA": str(pasta / "bateria"), "MUJOCO_GL": "egl"}
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--port", str(porta),
+    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--port", str(porta),
                "--controlo", str(controlo), "--telemetria", str(telemetria), "--fpv", str(pasta / "fpv")]
     registo = (pasta / "site.log").open("w", encoding="utf-8")
     processo = subprocess.Popen(comando, cwd=str(_AQUI), stdout=registo, stderr=subprocess.STDOUT,

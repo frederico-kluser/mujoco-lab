@@ -15,6 +15,17 @@ VENTO», descrevem a página que o cockpit substituiu.
 > (ep+1). O arranque é **autoritativo** (corrige o `loop` do ficheiro de controlo) e depois só o
 > `POST /api/loop` o muda (*sticky*).
 
+> **2026-10-19 — braços articulados** (`articulado_15pol_mn5006`, mira por arfagem; README → «BRAÇOS ARTICULADOS» →
+> «No COCKPIT»): **é o build do cockpit por omissão** — `sim_site.py` sem `--build` (e o `mujoco 09`) voa
+> `articulado_15pol_mn5006` (`BUILD_COCKPIT_OMISSAO`); `--build <nome>` escolhe outro e `--build politica` volta ao rígido
+> da política (o ativo do catálogo não muda; o build resolvido passa ao runner por `--build`). Aditivos ao contrato: o HUD ganha `bracos` (`nomes`, `juntas`/`alvos` °, `velocidades`
+> °/s, `correntes` A, `potencias` W, `potencia_w`, `energias_wh`/`energia_wh`, `curso` °, `saturados`, `ligados`,
+> `inclinacao_motores`, `pitch_corpo`/`pitch_alvo` ° (ZYX, + = nariz para baixo), `modo`, `mira_ativa`, `mira`
+> {`elevacao`, `pitch_pedido`, `pitch_alvo`, `fora_alcance`, `teclas`, `dist`}, `geometria`) — `null` nos rígidos — e
+> `potencia` {`motores`, `eletronica`, `servos`, `total`}; o `pecas` ganha `watts_servos`/`energia_servos_wh`; o
+> `GET /api/state` → `hardware` ganha `bracos_articulados` e `build_da_politica`. **Tecla 9 = janela Braços** (o botão
+> só aparece na doca com braços). No B/AUTO SHOOT a mira é por arfagem e a altura é a do dono (Q/E).
+
 ---
 
 ## 0. COCKPIT — a interface desde 2026-10-12 (contrato r13)

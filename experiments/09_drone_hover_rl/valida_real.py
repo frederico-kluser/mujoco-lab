@@ -81,9 +81,14 @@ def checa_catalogo(v: Validador) -> None:
         m_mod = float(model.body_mass.sum())
         v.check(f"A1[{nome}] massa do modelo = Σ orçamento das peças", abs(m_mod - hw.massa_total) < 1e-9,
                 f"{m_mod * 1000:.3f} g vs {hw.massa_total * 1000:.3f} g")
-        v.check(f"A2[{nome}] origem do corpo no CM", float(np.abs(model.body_ipos[corpo]).max()) < 1e-9,
-                f"|ipos| = {float(np.abs(model.body_ipos[corpo]).max()):.1e} m")
         mujoco.mj_forward(model, data)
+        if hw.bracos is None:
+            v.check(f"A2[{nome}] origem do corpo no CM", float(np.abs(model.body_ipos[corpo]).max()) < 1e-9,
+                    f"|ipos| = {float(np.abs(model.body_ipos[corpo]).max()):.1e} m")
+        else:   # braços articulados: o drone é a SUBÁRVORE (corpo + braços + mastros) — origem no CM dela, juntas a 0
+            d_cm = float(np.linalg.norm(data.subtree_com[corpo] - data.xpos[corpo]))
+            v.check(f"A2[{nome}] origem do corpo no CM do conjunto (corpo + braços, juntas a 0)", d_cm < 1e-9,
+                    f"|CM − origem| = {d_cm:.1e} m")
         sites = np.array([data.site_xpos[model.site(f"r{i}").id] for i in range(1, 5)])
         # O "centro" é o do QUADRADO DOS ROTORES (a geometria do frame), não o CM: um payload
         # assimétrico (ex. a câmara no nariz) desloca o CM uns décimos de mm e o raio medido do CM
@@ -166,23 +171,38 @@ def checa_catalogo(v: Validador) -> None:
                     max(erros) < 0.12, f"{len(linhas)} pontos, erro máx {100 * max(erros):.1f} % ({hw.origem_kf_kq})")
             if hw.motor.tabela:
                 _checa_tabela_motor(v, nome, hw, linhas)
-    # A6: verificação da modelagem 3D detalhada do build ativo (frame de estabilidade, fios trifásicos, motor MN4004, RPi 5 e hélices 3D)
+    # A6: modelagem 3D REALISTA do build ativo (2026-10-19, `lab/drone_rpi/detalhes`: eletrónica, motores, estrutura,
+    # fios) — as âncoras físicas existem, cada subsistema desenha as suas peças, e o detalhe é SÓ visual: grupo 1–3 e
+    # sem contacto (a física com e sem detalhes é idêntica bit a bit: `python -m lab.drone_rpi.detalhes.ver`)
+    import os as _os
+    from lab.drone_rpi.detalhes import MODULOS, modulos_ativos
     hw_at = dr.hardware()
     m_at, _ = dr.carregar(hw_at)
-    geoms_drone_3d = (
-        "placa", "placa_superior", "espacador_placa_1", "espacador_placa_4",
-        "trelica_estab_1", "trelica_estab_4", "suporte_motor_1", "suporte_motor_4",
-        "fio_motor1_a", "fio_motor1_b", "fio_motor1_c", "fio_motor4_a", "fio_motor4_b", "fio_motor4_c",
-        "abracadeira_braco1_1", "abracadeira_braco4_2",
-        "motor1_estator_cobre", "motor1_sino_anel", "motor1_base_cnc", "motor1_raio_1", "motor1_eixo",
-        "helice1_cubo", "helice1_pa1_raiz", "helice1_pa1_ponta", "helice1_pa1_faixa", "helice1_pa2_ponta",
-        "el_rpi5", "rpi5_soc_bcm2712", "rpi5_dissipador", "rpi5_ventoinha", "rpi5_rp1",
-        "rpi5_rj45", "rpi5_usb3_torre", "rpi5_usb3_azul", "rpi5_usb2_torre", "rpi5_gpio_40p", "rpi5_usbc", "rpi5_micro_hdmi_1",
-        "cinta_bateria_1", "conector_xt90", "cabo_bateria_pos", "cabo_bateria_neg",
-    )
-    v.check("A6 modelagem 3D detalhada: treliças de estabilidade, fios trifásicos A/B/C até aos motores, motor MN4004 com bobinas e sino ventilado, Raspberry Pi 5 fiel e hélices 3D",
-            all(m_at.geom(g).id >= 0 for g in geoms_drone_3d),
-            f"{len(geoms_drone_3d)}/{len(geoms_drone_3d)} geoms estruturais, fios, motor, RPi 5 e hélices presentes")
+    gobj = mujoco.mjtObj.mjOBJ_GEOM
+
+    def _existe(nome: str) -> bool:
+        return mujoco.mj_name2id(m_at, gobj, nome) >= 0
+
+    ancoras = ("placa", "el_rpi5", "esc1", "esc4", "motor1", "motor4", "helice1", "helice4", "bateria", "camera")
+    v.check("A6a âncoras físicas do build ativo presentes (placa, RPi 5, ESC, motores, hélices, bateria, câmara)",
+            all(_existe(n) for n in ancoras), f"{sum(_existe(n) for n in ancoras)}/{len(ancoras)}")
+    if modulos_ativos() == MODULOS:
+        visuais = [i for i in range(m_at.ngeom) if int(m_at.geom_group[i]) in (1, 2, 3)]
+        nomes = [m_at.geom(i).name for i in visuais]
+        contar = {"RPi 5 e eletrónica (el_*, rpi5_*)": sum(n.startswith(("el_", "rpi5_")) for n in nomes),
+                  "motores (motor1_*)": sum(n.startswith("motor1_") for n in nomes),
+                  "hélice 3D (helice1_*)": sum(n.startswith("helice1_") for n in nomes),
+                  "estrutura (est_*, placa_superior, espaçadores)": sum(n.startswith(("est_", "placa_superior", "espacador_"))
+                                                                        for n in nomes),
+                  "fios (fios_*)": sum(n.startswith("fios_") for n in nomes)}
+        v.check("A6b cada subsistema do detalhe realista desenha peças (RPi 5/eletrónica, motores, hélices, estrutura, fios)",
+                all(c > 0 for c in contar.values()), " · ".join(f"{k} {c}" for k, c in contar.items()))
+        sem_contacto = all(m_at.geom_contype[i] == 0 and m_at.geom_conaffinity[i] == 0 for i in visuais)
+        v.check("A6c o detalhe é só visual: nenhuma peça de grupo 1–3 tem contacto",
+                sem_contacto, f"{len(visuais)} peças visuais")
+    else:
+        v.check("A6b detalhe realista desligado (DRONE_DETALHES) — subsistemas não verificados", True,
+                f"DRONE_DETALHES={_os.environ.get('DRONE_DETALHES')}")
 
 
 def _checa_tabela_motor(v: Validador, nome: str, hw, linhas: list) -> None:
@@ -1125,16 +1145,22 @@ def checa_carga_e_vento(v: Validador, hw) -> None:
     env_p.reset(seed=0)
     gid_m1 = env_p.model.geom("motor1").id
     gid_bat = env_p.model.geom("bateria").id
+    # a cor que SE VÊ: com o detalhe realista o cilindro físico está escondido (alfa 0) e quem muda de cor é o sino
+    # (`motor1_sino_anel`); sem detalhes é o próprio cilindro
+    escondido = float(env_p.model.geom_rgba[gid_m1, 3]) == 0.0
+    gid_cor = env_p.model.geom("motor1_sino_anel").id if escondido else gid_m1
     r_m1_antes = float(env_p.model.geom_size[gid_m1, 0])
-    cor_m1_antes = env_p.model.geom_rgba[gid_m1].copy()
+    cor_m1_antes = env_p.model.geom_rgba[gid_cor].copy()
     tam_bat_antes = env_p.model.geom_size[gid_bat].copy()
     p_5006 = env_p.trocar_pecas(motor_id="tmotor_mn5006_kv450", bateria_id="lipo_6s1p_4500_alta_vazao")
     r_m1_5006 = float(env_p.model.geom_size[gid_m1, 0])
-    cor_m1_5006 = env_p.model.geom_rgba[gid_m1].copy()
+    cor_m1_5006 = env_p.model.geom_rgba[gid_cor].copy()
     tam_bat_lipo = env_p.model.geom_size[gid_bat].copy()
+    continua_escondido = (not escondido) or float(env_p.model.geom_rgba[gid_m1, 3]) == 0.0
     p_4s_fraco = env_p.trocar_pecas(motor_id="tmotor_mn4004_kv300", bateria_id="lipo_4s1p_4500_baixa_tensao")
-    v.check("J5 troca dinâmica de motores e bateria (`trocar_pecas`): atualiza tamanho/cor 3D no MuJoCo, KV, massa, vazão (A), Watts e deteta bateria 4S insuficiente",
-            r_m1_5006 > r_m1_antes and not np.allclose(cor_m1_5006, cor_m1_antes)
+    v.check("J5 troca dinâmica de motores e bateria (`trocar_pecas`): atualiza tamanho físico e cor visível no MuJoCo (com "
+            "o detalhe realista a caixa física continua escondida), KV, massa, vazão (A), Watts e deteta bateria 4S insuficiente",
+            r_m1_5006 > r_m1_antes and not np.allclose(cor_m1_5006, cor_m1_antes) and continua_escondido
             and not np.allclose(tam_bat_lipo, tam_bat_antes)
             and p_5006["motor_kv"] == 450.0 and p_5006["vazao_max_a"] == 225.0 and p_5006["pode_alcar_voo"] is True
             and p_4s_fraco["bateria_s"] == 3 and p_4s_fraco["pode_alcar_voo"] is False,

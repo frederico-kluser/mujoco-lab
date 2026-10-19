@@ -712,6 +712,7 @@ class ModuloCamera:
         self._scene_opt = mujoco.MjvOption()
         for g_idx in range(4):
             self._scene_opt.geomgroup[g_idx] = 1
+        self._escondidos = None          # peças com massa escondidas pelo detalhe realista (lidas no 1.º uso)
         self.opcoes_graficos = {
             "sombras": True,
             "reflexos": True,
@@ -888,6 +889,15 @@ class ModuloCamera:
         else:
             self.model.cam_fovy[self.camera_id] = fovy_graus(self.modulo, mo.id)
             self._renderer.update_scene(self._local, camera=self.camera_nome, scene_option=self._scene_opt)
+        if not self.opcoes_graficos["mostrar_fios_detalhes"]:
+            # detalhes desligados (grupo 3 oculto): as peças com massa que o detalhe realista esconde voltam a ser
+            # desenhadas, na CENA desta câmara (o modelo partilhado não muda) — senão o drone ficava sem motores/eletrónica
+            if self._escondidos is None:
+                from lab.drone_rpi.detalhes import escondidos_do_modelo
+                self._escondidos = escondidos_do_modelo(self.model)
+            if self._escondidos:
+                from lab.drone_rpi.detalhes import acrescentar_escondidos
+                acrescentar_escondidos(self._renderer.scene, self.model, self._local, self._escondidos)
         flags_scn = self._renderer.scene.flags
         flags_scn[mujoco.mjtRndFlag.mjRND_SHADOW] = 1 if self.opcoes_graficos["sombras"] else 0
         flags_scn[mujoco.mjtRndFlag.mjRND_REFLECTION] = 1 if self.opcoes_graficos["reflexos"] else 0

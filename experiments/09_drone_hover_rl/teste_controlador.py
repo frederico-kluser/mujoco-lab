@@ -330,7 +330,7 @@ def _arrancar_site(pasta: Path, porta: int, controlador: str = "rl"):
     controlo, telemetria = pasta / "controlo.json", pasta / "telemetria.jsonl"
     for caminho in (controlo, telemetria):
         caminho.unlink(missing_ok=True)
-    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--sem-janela",
+    comando = [sys.executable, str(_AQUI / "sim_site.py"), "--sem-browser", "--build", "politica", "--sem-janela",
                "--port", str(porta), "--controlo", str(controlo), "--telemetria", str(telemetria),
                "--controlador", controlador, "--fator-tempo", "1"]
     processo = subprocess.Popen(comando, cwd=str(_AQUI), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

@@ -182,12 +182,16 @@ class SepCMAES:
 
 
 # ------------------------------------------------------------------------------------------------ custo de um conjunto de ganhos
+BUILD: str | None = None          # `--build`: um só caminho com esse build (latência do pipeline Pi, 116 ms)
+
+
 def episodios(ganhos: dict[str, float], sementes, velocidades, rotulo: str, t_medida: float, camera_modo: str) -> list[dict]:
     """Os episódios (jobs do `avaliar_bola`) de UM candidato: 2 caminhos × velocidades × sementes, com os ganhos sobrepostos."""
     proibidas = set(sementes) & set(ab.SEMENTES_AVALIACAO)
     if proibidas:
         raise ValueError(f"sementes de AVALIAÇÃO não entram na afinação: {sorted(proibidas)}")
-    return ab.jobs_variante(rotulo, sementes, velocidades, seguidor={k: float(ganhos[k]) for k in CAMPOS},
+    caminhos = {f"{BUILD}_116ms": (BUILD, 0.116)} if BUILD else ab.CAMINHOS
+    return ab.jobs_variante(rotulo, sementes, velocidades, caminhos=caminhos, seguidor={k: float(ganhos[k]) for k in CAMPOS},
                             t_medida=t_medida, camera_modo=camera_modo)
 
 
@@ -319,8 +323,13 @@ def main(argv=None) -> int:
     p.add_argument("--json", type=Path, default=SAIDA_JSON)
     p.add_argument("--rapido", action="store_true", help="fumo: 2 gerações × 4 candidatos, 1 semente, janela de 8 s")
     p.add_argument("--promover", action="store_true", help="grava os ganhos do --json no ibvs_ganhos.hpp (versionado)")
+    p.add_argument("--build", type=str, default=None,
+                   help="afina num só caminho com ESTE build (ex.: articulado_15pol_mn5006: o corpo — e a câmara — arfam "
+                        "por cima dos motores; o u/r de guinada passa a ser o da fórmula do hardware)")
     p.add_argument("--forcar", action="store_true", help="promove mesmo que a validação não tenha melhorado")
     args = p.parse_args(argv)
+    global BUILD
+    BUILD = args.build
     if args.promover:
         return promover(args)
     if args.rapido:

@@ -16,6 +16,11 @@ Fase 2 — VALIDAÇÃO NO SIMULADOR MUJOCO 3.15 + C++ SITL (`.venv/bin/python`, 
 
 Uso:
     .venv-gpu/bin/python experiments/09_drone_hover_rl/treinar_mira_gpu.py
+    .venv-gpu/bin/python experiments/09_drone_hover_rl/treinar_mira_gpu.py --articulado   # braços articulados (8 juntas)
+
+BRAÇOS ARTICULADOS (2026-10-19): o drone novo (`articulado_15pol_mn5006`) mira por ARFAGEM do corpo (os servos inclinam
+os motores) e não por translação — o seu treino é o `treinar_mira_articulada.py` (as 8 juntas nas características, tiros
+virtuais rotulados pela balística exata, TensorFlow + GPU); `--articulado` corre-o daqui.
 """
 from __future__ import annotations
 
@@ -599,7 +604,16 @@ def main(argv=None) -> int:
     p.add_argument("--epocas", type=int, default=240)
     p.add_argument("--n-envs", type=int, default=4096)
     p.add_argument("--so-validar", action="store_true")
+    p.add_argument("--articulado", action="store_true",
+                   help="treina a mira por ARFAGEM dos braços articulados (8 juntas): `treinar_mira_articulada.py` — "
+                        "dados MuJoCo com tiros virtuais + TensorFlow (confiança e correção) + portão na GPU (JAX) + "
+                        "validação nos 3 cenários de altura")
     args = p.parse_args(argv)
+    if args.articulado:
+        venv_py = _RAIZ / ".venv" / "bin" / "python"
+        py = venv_py if venv_py.is_file() else Path(sys.executable)
+        return subprocess.run([str(py), str(_AQUI / "treinar_mira_articulada.py"), "--fase", "tudo"],
+                              check=False).returncode
 
     if not args.so_validar:
         dados = treinar_fase_gpu(epocas=args.epocas, n_envs=args.n_envs)

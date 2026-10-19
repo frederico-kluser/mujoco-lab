@@ -2326,7 +2326,7 @@ def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
         import sitl
         n, env = fc_adaptador.nucleo, env_ref
         fc_adaptador._sensores()
-        sitl.definir_comando_dict(n.cmd, fc_adaptador._cmd)
+        sitl.definir_comando_dict(n.cmd, sitl.comando_com_pitch(env, fc_adaptador._cmd))
         ref = n.planear(env.dt)
         # 1) Adaptação exata ao preset de Motor + Bateria ativo (O(1) com cache)
         pl = env.planta
@@ -2339,10 +2339,13 @@ def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
         du_hw = cache_hw["du"]
         if abs(du_hw) > 1e-4:
             ref.acelerador = float(np.clip(float(ref.acelerador) + du_hw, float(pl.hw.esc.idle), 1.0))
-        # 2) Amortecimento ativo de recuo pós-tiro
-        dq_rec = mira_comp.compensar_taxa_500hz(env, float(n.saida.pitch), float(giro_medido[1]))
-        if abs(dq_rec) > 1e-6:
-            ref.taxas[1] = float(ref.taxas[1]) + dq_rec
+        # 2) Amortecimento ativo de recuo pós-tiro — só nos braços RÍGIDOS: foi afinado para esse drone e supõe o corpo de
+        #    nível; nos ARTICULADOS (medido: com ele, um tiro dava |q| 1,7–2,7 rad/s, 10–15° e motores saturados; sem ele,
+        #    0,44 rad/s, 1,4° e recuperação em 0,22 s) quem segura a arma é a malha de arfagem do corpo + os servos
+        if not getattr(env, "articulado", False):
+            dq_rec = mira_comp.compensar_taxa_500hz(env, float(n.saida.pitch), float(giro_medido[1]))
+            if abs(dq_rec) > 1e-6:
+                ref.taxas[1] = float(ref.taxas[1]) + dq_rec
         fc_adaptador._fila.append(n.bib.ReferenciasTaxa.from_buffer_copy(ref))
         atrasada = fc_adaptador._fila.popleft()
         n.atuar(atrasada, env.dt)
@@ -2397,7 +2400,10 @@ class NucleoClassico:
         latencia = LATENCIA_CAMERA_DCMI_S if "arduino" in str(getattr(env.hw, "nome", "")) \
             else LATENCIA_CAMERA_PI_S
         ganhos_kw = {"altura_min": sitl.VOO_Z_MIN_CONTRATO - sitl.deslocamento_sensor_cm(env.model)}
-        u_yaw = u_yaw_identificado()
+        # o u/r de yaw IDENTIFICADO (out/classico/avaliacao.json) é do drone de braços RÍGIDOS; o articulado tem outra
+        # inércia de guinada (×2,6) e outros motores — usa a fórmula do hardware (medido: com o valor do rígido, a guinada
+        # saturava depois de alguns tiros e o rolamento divergia)
+        u_yaw = None if getattr(env, "articulado", False) else u_yaw_identificado()
         if u_yaw is not None:
             ganhos_kw["u_yaw_por_taxa"] = u_yaw
         camera = None
@@ -2408,6 +2414,8 @@ class NucleoClassico:
         cfg = sitl.config_de_hardware(env.hw, env.model, env.dt, env=env, ganhos_kw=ganhos_kw,
                                       estimador_classico=True, camera=camera, bib=bib)
         _afinar_cfg_anti_tremor(cfg)
+        if getattr(env, "articulado", False):             # interface 4: mistura com prioridade de rolamento/arfagem
+            cfg.prioridade_rp = 1
         fc_py, est_py = env.fc, env.estimador            # o `ControladorFC`/`EstimadorBordo` Python
         nucleo = sitl.NucleoCpp(cfg, bib).exigir_iniciado()
         fc = sitl._AdaptadorCascata(weakref.proxy(env), nucleo, None)   # os MESMOS do DroneRealEnvNucleo
@@ -2418,12 +2426,12 @@ class NucleoClassico:
         """Atualiza `u_pairagem` e os ganhos do núcleo C++ quando o motor ou a bateria são trocados ao vivo."""
         import sitl
         from fc import ControladorFC
-        self.fc_py = ControladorFC(self.env.hw, self.env.model, self.env.dt)
+        self.fc_py = ControladorFC(self.env.hw, self.env.model, self.env.dt, dt_decisao=self.env.dt_decisao)
         fc_ant = self.env.fc
         self.env.fc = self.fc_py
         try:
             ganhos_kw = {"altura_min": sitl.VOO_Z_MIN_CONTRATO - sitl.deslocamento_sensor_cm(self.env.model)}
-            u_yaw = u_yaw_identificado()
+            u_yaw = None if getattr(self.env, "articulado", False) else u_yaw_identificado()
             if u_yaw is not None:
                 ganhos_kw["u_yaw_por_taxa"] = u_yaw
             camera = None
@@ -2444,14 +2452,19 @@ class NucleoClassico:
             self.nucleo.cfg.kd[e] = float(cfg.kd[e])
 
     def instalar(self) -> None:
-        """O C++ passa a comandar: `env.fc`/`env.estimador` viram os adaptadores do núcleo."""
+        """O C++ passa a comandar: `env.fc`/`env.estimador` viram os adaptadores do núcleo (e, com braços articulados, o
+        τ dos servos passa a ser o `incl_ref` do núcleo — mira por arfagem, interface 4)."""
+        import sitl
         self.env.fc = self.fc
         self.env.estimador = sitl_estimador(self.fc)
+        sitl.ligar_bracos(self.env, self.nucleo)
 
     def remover(self) -> None:
         """Repõe o FC/estimador Python (o modo RL volta a comandar como sempre) e liberta a closure C++."""
         self.env.fc = self.fc_py
         self.env.estimador = self.est_py
+        if getattr(self.env, "bracos", None) is not None:
+            self.env.bracos.fonte_tau = None
         if hasattr(self.fc, "__dict__") and "passo" in self.fc.__dict__:
             del self.fc.__dict__["passo"]
 
@@ -2466,8 +2479,9 @@ class NucleoClassico:
         self.fc.travar(float(self.env.alvo_z) - deslocamento_sensor_cm(self.env))
 
     def comando(self, cmd: dict) -> None:
-        """Comando de voo do contrato r12 (`modo` = velocidade | yaw_alvo | olhar) para o C++."""
-        self.fc.definir_comando(dict(cmd))
+        """Comando de voo do contrato r12 (`modo` = velocidade | yaw_alvo | olhar) para o C++. Com braços articulados em
+        modo `mira`, o pitch pedido ao corpo (`env.definir_pitch_corpo`) vai no comando (`pitch_corpo`, interface 4)."""
+        self.fc.definir_comando(dict(cmd))              # (o `pitch_corpo` junta-se no passo: `sitl.comando_com_pitch`)
 
     def ativar_olhar(self) -> None:
         """Liga a CÂMARA mono do OLHAR (render EGL + detetor C++) se ainda não estiver ligada.
@@ -2518,6 +2532,15 @@ def sitl_estimador(fc):
 
 T_CALIBRACAO_GIRO_S_NUCLEO = 1.0          # s de calibração do giroscópio no chão (o `sitl.T_CALIBRACAO_GIRO_S`)
 
+# BRAÇOS ARTICULADOS no cockpit (2026-10-19): no «seguir a bola» a mira é por ARFAGEM — o corpo (a arma) inclina para a
+# altura da bola e o drone fica à altura que o dono escolher (Q/E); sem teclas só se mexe na horizontal para manter a
+# bola a uma distância de tiro (a banda em que a rede TF de confiança foi treinada: 1,5–3,5 m)
+PITCH_CORPO_MAX_COCKPIT = math.radians(35.0)   # envelope da arfagem validado no MuJoCo (`teste_bracos.py` §6–§7)
+DIST_BOLA_REF = 2.5                            # m — distância horizontal de tiro preferida
+DIST_BOLA_FOLGA = 0.7                          # m — dentro de [ref − folga, ref + folga] o drone NÃO translada
+GANHO_DIST_BOLA = 0.8                          # 1/s — velocidade de reaproximação por metro fora da banda
+VEL_DIST_BOLA_MAX = 0.5                        # m/s
+
 
 def deslocamento_sensor_cm(env) -> float:
     """Altura do CM acima do sensor de baixo (m) — `sitl.deslocamento_sensor_cm` (import tardio)."""
@@ -2552,6 +2575,9 @@ class ControladorDeVoo:
         self._bola: tuple[bool, float] | None = None   # (a seguir?, velocidade) já aplicados à trajetória
         from mira_balistica import MiraBalisticaIA
         self.mira_ia = MiraBalisticaIA()
+        self.mira_art = None                        # `MiraArticuladaIA` (braços articulados; criada no 1.º uso)
+        self.mira_art_ativa = False                 # o último passo foi da mira por arfagem?
+        self.mira_art_estado: dict | None = None    # o que o HUD mostra da mira por arfagem
 
     # ------------------------------------------------------------------ estado
     def requisitar(self, modo: str) -> bool:
@@ -2581,6 +2607,11 @@ class ControladorDeVoo:
                 return self.modo
             self.modo = "classico"
         else:
+            incompativel = getattr(self.env, "rl_incompativel", None)
+            if incompativel:                         # build com outra observação (ex.: braços articulados): sem RL
+                self._recusado, self.pedido = self.pedido, self.modo
+                self.estado, self.motivo = "erro", str(incompativel)
+                return self.modo
             if self.nucleo is not None:
                 self.nucleo.remover()
             self.modo = "rl"
@@ -2592,6 +2623,9 @@ class ControladorDeVoo:
         """Depois de um `env.reset` com o núcleo instalado (calibração + armar a cascata)."""
         self._bola = None                           # a lei da bola volta a ser aplicada no passo seguinte
         self.mira_ia.reiniciar()
+        if self.mira_art is not None:
+            self.mira_art.reiniciar()
+        self.mira_art_ativa, self.mira_art_estado = False, None
         if self.modo == "classico" and self.nucleo is not None:
             self.nucleo.pos_reset()
 
@@ -2649,10 +2683,17 @@ class ControladorDeVoo:
         cmd = comando_classico(voo, alvo=alvo)
         seguir = cmd.get("modo") == "olhar"
         self._alternar_bola(seguir)
+        com_arma = getattr(self.env, "hw", None) is not None and getattr(self.env.hw, "arma", None) is not None
+        if seguir and com_arma and getattr(self.env, "bracos", None) is not None:
+            if float(self.env.data.qpos[2]) > 0.18:
+                self._mira_articulada(cmd)
+                return cmd
+        elif self.mira_art_ativa:                    # saiu do «seguir»: o corpo volta a nível (pitch 0)
+            self.mira_art_ativa, self.mira_art_estado = False, None
+            self.env.bracos.definir_pitch_corpo(0.0)
         if (
             seguir
-            and getattr(self.env, "hw", None) is not None
-            and getattr(self.env.hw, "arma", None) is not None
+            and com_arma
             and float(self.env.data.qpos[2]) > 0.18
         ):
             cmd_mira = self.mira_ia.passo(self.env, dt=getattr(self.env, "dt_decisao", 0.02))
@@ -2668,6 +2709,66 @@ class ControladorDeVoo:
             return cmd
         self.nucleo.comando(cmd)
         return cmd
+
+    def _mira_articulada(self, cmd_voo: dict) -> dict:
+        """«SEGUIR A BOLA» + AUTO SHOOT com BRAÇOS ARTICULADOS — a mira por ARFAGEM (`MiraArticuladaIA`, a do treino TF):
+        a guinada aponta ao azimute e o CORPO (a arma) inclina para a ELEVAÇÃO da bola, com os motores de nível — o
+        drone fica à altura que o dono escolher. Translação: as teclas do dono passam (WASD na horizontal, Q/E na
+        altura); sem teclas, só se mexe na horizontal para manter a bola a [ref − folga, ref + folga] m (a banda de
+        tiro da rede de confiança). O pitch pedido é cortado ao envelope validado (±35°); acima disso o HUD diz «fora do
+        alcance» e o portão não dispara (o erro previsto fica grande). Dispara com a latência real do gatilho."""
+        from mira_articulada import LATENCIA_CAMERA_DCMI_S, LATENCIA_CAMERA_PI_S, MiraArticuladaIA
+        env = self.env
+        if self.mira_art is None:
+            lat = LATENCIA_CAMERA_DCMI_S if "arduino" in str(env.hw.nome) else LATENCIA_CAMERA_PI_S
+            self.mira_art = MiraArticuladaIA(latencia_camera_s=lat, semente=int(getattr(env, "passos", 0)) + 101)
+        if not self.mira_art_ativa:                  # entrou agora no «seguir»: integradores e rastreador do zero
+            self.mira_art.reiniciar()
+        c = self.mira_art.passo(env, dt=getattr(env, "dt_decisao", 0.02))
+        teclas = any(abs(float(cmd_voo.get(k, 0.0))) > 1e-9 for k in ("vx", "vy", "vz"))
+        if teclas:
+            c["vx"], c["vy"], c["vz"] = (float(cmd_voo.get(k, 0.0)) for k in ("vx", "vy", "vz"))
+        else:
+            c["vx"], c["vy"] = self._manter_distancia_bola()
+            c["vz"] = 0.0                            # a altura é a do dono: a mira NUNCA sobe/desce para mirar
+        pedido = float(c["pitch_corpo"])
+        c["pitch_corpo"] = max(-PITCH_CORPO_MAX_COCKPIT, min(PITCH_CORPO_MAX_COCKPIT, pedido))
+        env.bracos.definir_pitch_corpo(c["pitch_corpo"])   # o alvo fica também no controlador dos braços (HUD/eco)
+        self.nucleo.comando(c)
+        u = self.mira_art.ultimo or {}
+        disparou = False
+        if self.bola_auto_atirar and self.mira_art.deve_atirar(env):
+            self.mira_art.atirar(env)
+            disparou = True
+            print(f"[sim] AUTO SHOOT (braços) -> tiro #{env.planta.n_tiros + 1} · elevação "
+                  f"{math.degrees(float(u.get('eps_req', 0.0))):+.1f}° · corpo {math.degrees(-c['pitch_corpo']):+.1f}° "
+                  f"(acertos={env.planta.n_acertos_bola})", flush=True)
+        self.mira_art_ativa = True
+        self.mira_art_estado = {
+            "elevacao": round(math.degrees(float(u.get("eps_req", 0.0))), 2),
+            "pitch_pedido": round(math.degrees(pedido), 2), "pitch_alvo": round(math.degrees(c["pitch_corpo"]), 2),
+            "fora_alcance": abs(pedido) > PITCH_CORPO_MAX_COCKPIT, "teclas": teclas, "disparou": disparou,
+            "dist": round(float(u.get("dist", 0.0)), 3)}
+        return c
+
+    def _manter_distancia_bola(self) -> tuple[float, float]:
+        """(vx, vy) no referencial do RUMO para pôr a bola a `DIST_BOLA_REF ± DIST_BOLA_FOLGA` m na horizontal
+        (zero dentro da banda; fora dela, proporcional ao excesso, até `VEL_DIST_BOLA_MAX`)."""
+        env = self.env
+        alvo = getattr(env, "ponto_alvo", None)
+        if alvo is None:
+            return 0.0, 0.0
+        rel = np.asarray(alvo[:2], dtype=float) - np.asarray(env.data.qpos[:2], dtype=float)
+        d = float(np.hypot(rel[0], rel[1]))
+        excesso = abs(d - DIST_BOLA_REF) - DIST_BOLA_FOLGA
+        if d < 1e-6 or excesso <= 0.0:
+            return 0.0, 0.0
+        v = math.copysign(min(VEL_DIST_BOLA_MAX, GANHO_DIST_BOLA * excesso), d - DIST_BOLA_REF)
+        m = env.data.xmat[env.planta.corpo]
+        yaw = math.atan2(float(m[3]), float(m[0]))
+        ux, uy = rel / d
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        return v * (cy * ux + sy * uy), v * (-sy * ux + cy * uy)
 
     def _alternar_bola(self, seguir: bool) -> None:
         """«SEGUIR A BOLA» (r13): com o modo ligado a bola move-se ALEATORIAMENTE (ou fica parada se `bola_vel == 0`);
@@ -2899,6 +3000,11 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
                           "autonomia_min": b.get("autonomia_min"), "alerta": b.get("alerta")}
         m = env.planta.prop
         hud["motores"] = [round(float(v), 3) for v in np.asarray(m.duty, dtype=float).reshape(-1)[:4]]
+        pot = dict(env.planta.potencias())
+        if "servos" in pot and pot["eletronica"] > 0.0:      # a espera dos servos sai da eletrónica (soma = total)
+            pot["eletronica"] -= env.hw.bracos.potencia_espera()
+        hud["potencia"] = {k: round(float(pot[k]), 2) for k in ("motores", "eletronica", "servos", "total") if k in pot}
+        hud["bracos"] = hud_bracos(env, piloto, d)
     else:
         hud["real"] = {"z": round(z, 3), "yaw": round(float(info.get("yaw_err", 0.0)), 4)}
     voo = info.get("voo")
@@ -2938,6 +3044,49 @@ def hud_amostra(env: HoverEnv, est: Estado, piloto: ControladorDeVoo | None, con
         if isinstance(hud.get("tiro"), dict):
             hud["tiro"]["auto_atirar"] = bool(piloto.bola_auto_atirar)
     return hud
+
+
+NOMES_JUNTAS_HUD = ("ombro1", "ombro2", "ombro3", "ombro4", "cotovelo1", "cotovelo2", "cotovelo3", "cotovelo4")
+
+
+def hud_bracos(env, piloto, derivados: dict) -> dict | None:
+    """Bloco `bracos` do HUD (braços articulados; `None` nos builds rígidos): as 8 juntas (ombro1..4, cotovelo1..4) —
+    ângulo MEDIDO pelos encoders e alvo (°), velocidade (°/s), corrente (A), potência na bateria (W, a espera conta),
+    energia gasta desde o reset (Wh) e o CURSO (° rodados, Σ|Δq|) — mais a inclinação dos motores face ao corpo (τ),
+    o pitch do corpo (medido e pedido; ZYX: + = nariz para baixo) e o estado da mira por arfagem."""
+    pl = getattr(env, "planta", None)
+    if pl is None or getattr(pl, "servos", None) is None:
+        return None
+    tb = pl.telemetria_bracos()
+    br = getattr(env, "bracos", None)
+    mira = getattr(piloto, "mira_art_estado", None) if piloto is not None else None
+    ativa = bool(getattr(piloto, "mira_art_ativa", False)) if piloto is not None else False
+    return {"nomes": list(NOMES_JUNTAS_HUD),
+            "juntas": tb["juntas_graus"], "alvos": tb["alvos_graus"], "velocidades": tb["velocidades_graus_s"],
+            "correntes": tb["correntes_a"], "potencias": tb["potencias_w"], "potencia_w": tb["potencia_servos_w"],
+            "energias_wh": tb["energias_wh"], "energia_wh": tb["energia_servos_wh"], "curso": tb["curso_graus"],
+            "saturados": tb["saturados"], "ligados": tb["ligados"],
+            "inclinacao_motores": tb["inclinacao_motores_graus"],
+            "pitch_corpo": round(math.degrees(float(derivados["theta"])), 2),
+            "pitch_alvo": round(math.degrees(float(br.pitch_corpo_alvo)), 2) if br is not None else None,
+            "modo": (br.modo if br is not None else None), "mira_ativa": ativa,
+            "mira": mira if ativa else None,
+            "geometria": _geometria_bracos_hud(env)}
+
+
+def _geometria_bracos_hud(env) -> dict:
+    """Geometria dos braços para o esquema lateral do site (m; fixa — calcula-se uma vez por env): raio do ombro
+    r_s, braço l1, mastro l_m e a componente em x da direção de cada braço (o esquema mostra o PERFIL)."""
+    g = getattr(env, "_geometria_bracos_hud", None)
+    if g is None:
+        from bracos_controlo import geometria
+        geo = geometria(env.hw)
+        pos = np.asarray(env.hw.pos_rotores, dtype=float)
+        ux = [round(float(x / max(np.hypot(x, y), 1e-9)), 4) for x, y in pos[:, :2]]
+        g = {"r_s": round(float(geo["r_s"]), 4), "l1": round(float(geo["l1"]), 4), "l_m": round(float(geo["l_m"]), 4),
+             "ux": ux}
+        env._geometria_bracos_hud = g
+    return g
 
 
 def _tamanho(vetor) -> int:
@@ -3468,7 +3617,7 @@ def modelo_real_por_omissao(out: Path) -> tuple[Path, str] | None:
     return melhor, f"planta REAL ({melhor.parent.name}/{melhor.name} + hardware.json)"
 
 
-def ambiente_para(politica, caminho: Path, sem_helices: bool = False, com_alvo: bool = False):
+def ambiente_para(politica, caminho: Path, sem_helices: bool = False, com_alvo: bool = False, build: str | None = None):
     """(env, gestor) certos para a política: planta REAL se for o ator-crítico assimétrico (`_n_ator`),
     com o build/modo de ação do `hardware.json` do modelo; senão o `HoverEnv` histórico do Crazyflie.
 
@@ -3478,15 +3627,28 @@ def ambiente_para(politica, caminho: Path, sem_helices: bool = False, com_alvo: 
     existe mesmo controlo de voo (honesto: sem política `--comandos` não há WASDQE).
     """
     global CAM_CORPO, CAM_PADRAO
+    if build is not None and not hasattr(politica.policy, "_n_ator"):
+        raise SystemExit(f"[sim] --build {build}: só a planta REAL tem builds do catálogo e a política carregada é a do "
+                         "cf2 — passe --model com uma política da planta real (out/real_*/final.zip)")
     if hasattr(politica.policy, "_n_ator"):
         from env_real import build_do_hardware
         hw_json = Path(caminho).parent / "hardware.json"
         dados = json.loads(hw_json.read_text(encoding="utf-8")) if hw_json.is_file() else {}
-        build, motivo = build_do_hardware(dados)
-        print(f"[sim] peças da política: {motivo}", flush=True)
+        build_pol, motivo = build_do_hardware(dados)
+        if build is not None:
+            motivo = f"--build {build} (a política foi treinada com {motivo})"
+        print(f"[sim] peças: {motivo}", flush=True)
         comando = int(getattr(politica.policy, "_n_ator", OBS_ATOR_DIM)) == OBS_ATOR_DIM_COMANDO
-        env = DroneRealEnv(build=build, modo_acao=dados.get("modo_acao", "ctbr"), aleatorizar=False,
-                           comando=comando, com_alvo=com_alvo)   # com_alvo: ponto-alvo da IA-2
+        env = DroneRealEnv(build=build if build is not None else build_pol, modo_acao=dados.get("modo_acao", "ctbr"),
+                           aleatorizar=False, comando=comando, com_alvo=com_alvo)   # com_alvo: ponto-alvo da IA-2
+        obs_pol = tuple(getattr(politica, "observation_space", env.observation_space).shape)
+        if tuple(env.observation_space.shape) != obs_pol:
+            # ex.: braços articulados (+8 juntas no ator e +8 no crítico): a política não lê esta observação — o modo
+            # RL fica indisponível (honesto no site) e voa a cascata clássica
+            env.rl_incompativel = (f"a política RL foi treinada com a observação {obs_pol[0]} e o build "
+                                   f"'{env.hw.nome}' tem {env.observation_space.shape[0]} (braços articulados: "
+                                   "+8 juntas no ator e no crítico) — só a cascata clássica voa este build")
+            print(f"[sim] {env.rl_incompativel}", flush=True)
         CAM_CORPO = "drone"
         CAM_PADRAO = camera_padrao_do_modelo(env.model)
         print(f"[sim] planta real · modo comando (contrato r11): "
@@ -3645,6 +3807,11 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                         "Depois do arranque troca-se ao vivo pelo POST /api/controlador (bloco "
                         "`controlador` do ficheiro de controlo) — a troca reinicia o episódio e o estado "
                         "diz `trocando` + motivo")
+    p.add_argument("--build", default=None, metavar="NOME",
+                   help="voa ESTE build do catálogo (models/drone_rpi/builds.json) em vez do da política — ex.: "
+                        "`articulado_15pol_mn5006` (braços articulados: no «seguir a bola»/AUTO SHOOT o corpo arfa "
+                        "para a altura da bola). Se a observação do build não for a da política, o modo RL fica "
+                        "indisponível e voa a cascata clássica. Não muda o build ATIVO do catálogo")
     p.add_argument("--seed", type=int, default=0,
                    help="semente do reset — o episódio N usa seed + N - 1 (padrão: 0)")
     p.add_argument("--max-segundos", type=float, default=0.0, metavar="S",
@@ -3681,8 +3848,14 @@ def main(argv=None) -> int:
     # também (o «olhar» IBVS segue o alvo mocap — sem ele o alvo não existe no modelo)
     caminho_seg = (None if args.sem_seguimento else
                    (args.seguimento_model or descobrir_seguimento(Path(__file__).resolve().parent / "out")))
+    build = getattr(args, "build", None)
     env, gestor = ambiente_para(politica, caminho, args.sem_helices,
-                               com_alvo=caminho_seg is not None or args.controlador == "classico")
+                               com_alvo=caminho_seg is not None or args.controlador == "classico" or build is not None,
+                               build=build)
+    if getattr(env, "rl_incompativel", None) and args.controlador != "classico":
+        print("[sim] --controlador rl pedido, mas este build não tem política RL compatível: arranca a cascata "
+              "clássica", flush=True)
+        args.controlador = "classico"
     # ARRANQUE AUTORITATIVO (pedido do dono, 2026-10-09): quem decide o `loop` é o CLI — `--com-loop` liga o
     # contínuo, a omissão e o `--sem-loop` arrancam SEM REINÍCIO — e o ficheiro de controlo é corrigido para
     # dizer o mesmo (o site mostra o estado verdadeiro; semântica sticky: depois só o `POST /api/loop` muda).

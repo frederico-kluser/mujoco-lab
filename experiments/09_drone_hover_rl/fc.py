@@ -37,6 +37,53 @@ FILTRO_GIRO_HZ = 90.0
 FILTRO_D_HZ = 60.0
 ZETA = 0.7
 LIMITE_I = 0.25          # fração de acelerador
+DT_DECISAO_PADRAO = 0.02     # s — decisão a 50 Hz (o `decimation = 10` do env a 500 Hz)
+
+
+def atraso_malha_taxa(hw, dt_decisao: float = DT_DECISAO_PADRAO) -> float:
+    """Atraso puro do MODELO de projeto da malha de taxa: comando + meia retenção da decisão + giroscópio — o mesmo de
+    `controlo_classico._malha_taxa_do_env` (que mede o ω_c de que a cascata deriva)."""
+    return (float(hw.atraso_comando) + 0.5 * float(dt_decisao)
+            + float(hw.sensores["imu"]["giro"].get("atraso_s", 0.0)))
+
+
+def tau_de_projeto(tau_motor: float, atraso: float, margem_min_graus: float) -> float:
+    """O τ que entra nas fórmulas K_p = 1/(α·4ζ²·τ), K_i = K_p/(8τ), K_d = 0,15·K_p·τ quando o build exige uma margem de
+    fase mínima: o MENOR τ ≥ τ_motor com que a malha — planta com o τ_motor VERDADEIRO, o atraso e os filtros do FC
+    (`controlo_classico.resposta_malha_taxa`) — tem margem ≥ `margem_min_graus` (bisseção; o α cancela-se na malha).
+    Com margem já suficiente devolve τ_motor: as fórmulas de sempre.
+
+    Porquê: as fórmulas põem o cruzamento em ~1/(2τ_m); com um motor rápido (MN5006 KV450 a 4,5 kg: τ_m = 24,5 ms)
+    ele sobe a ~19 rad/s, onde os atrasos fixos (comando 8 ms + meia decisão 10 ms + giroscópio) comem a fase — margem
+    30°, ressonância a ~3 Hz e 3,1 °/s de tremor em pairagem (medido). Projetar para um τ maior baixa o cruzamento até a
+    margem pedida (Åström & Murray, «Feedback Systems»: margens razoáveis φ_m = 30–60°, g_m = 2–5; 45° é a escolha
+    comum de projeto — a 30° o v5 estava no limite de baixo, a 45° fica com g_m = 4,2)."""
+    import numpy as np
+
+    from controlo_classico import _margens, resposta_malha_taxa
+    w = np.logspace(-2.0, 2.5, 6000)                 # a grelha de `_malha_taxa_do_env`
+
+    def margem(tau: float) -> float:
+        kp = 1.0 / (4.0 * ZETA * ZETA * tau)          # α·K_p (α = 1: cancela-se)
+        _t, ll = resposta_malha_taxa(kp, kp / (8.0 * tau), 0.15 * kp * tau, 1.0, tau_motor, atraso,
+                                     FILTRO_GIRO_HZ, FILTRO_D_HZ, w)
+        return _margens(w, ll)["pm_graus"]
+
+    if margem(tau_motor) >= margem_min_graus:
+        return float(tau_motor)
+    lo, hi = float(tau_motor), float(tau_motor)
+    while margem(hi) < margem_min_graus:
+        lo, hi = hi, hi * 1.5
+        if hi > 20.0 * tau_motor:
+            raise ValueError(f"margem de fase {margem_min_graus}° inalcançável com τ_motor = {tau_motor * 1e3:.1f} ms e "
+                             f"atraso {atraso * 1e3:.1f} ms")
+    for _ in range(40):
+        meio = 0.5 * (lo + hi)
+        if margem(meio) >= margem_min_graus:
+            hi = meio
+        else:
+            lo = meio
+    return float(hi)
 
 
 def _alfa_pt1(fc_hz: float, dt: float) -> float:
@@ -90,18 +137,24 @@ class ControladorFC:
     ki = _Vetor()
     kd = _Vetor()
 
-    def __init__(self, hw, model, dt: float):
+    def __init__(self, hw, model, dt: float, dt_decisao: float = DT_DECISAO_PADRAO):
         self.hw = hw
         self.dt = float(dt)
         corpo = model.body("drone").id
-        # inércia no frame do CORPO (o MuJoCo guarda-a nos eixos principais): I = R·diag·Rᵀ
-        q = model.body_iquat[corpo]
-        r = np.zeros(9)
-        import mujoco
-        mujoco.mju_quat2Mat(r, q)
-        r = r.reshape(3, 3)
-        i_corpo = r @ np.diag(model.body_inertia[corpo]) @ r.T
-        self.inercia = np.diag(i_corpo).copy()
+        from lab.drone_rpi.modelo import inercia_composta, tem_bracos
+        if tem_bracos(model):
+            # braços articulados: a inércia do drone INTEIRO (corpo + braços + mastros, juntas a 0) — o corpo `drone`
+            # sozinho é ~10× mais leve à arfagem e os ganhos saíam fracos demais (medido: a arfagem oscilava e divergia)
+            self.inercia = np.diag(inercia_composta(model)).copy()
+        else:
+            # inércia no frame do CORPO (o MuJoCo guarda-a nos eixos principais): I = R·diag·Rᵀ
+            q = model.body_iquat[corpo]
+            r = np.zeros(9)
+            import mujoco
+            mujoco.mju_quat2Mat(r, q)
+            r = r.reshape(3, 3)
+            i_corpo = r @ np.diag(model.body_inertia[corpo]) @ r.T
+            self.inercia = np.diag(i_corpo).copy()
         # planta linearizada em pairagem nominal
         v = hw.bateria.v_nominal
         ph = hw.ponto_pairagem(v)
@@ -117,7 +170,11 @@ class ControladorFC:
                          4.0 * a * dT_du / self.inercia[1],
                          4.0 * (hw.kq / hw.kf) * dT_du / self.inercia[2]])
         self.alfa = alfa
-        tm = self.tau_motor
+        margem_min = getattr(hw, "fc_margem_fase_min", None)
+        # τ de PROJETO: o τ_motor de sempre, ou maior se o build exige margem de fase (`Hardware.fc_margem_fase_min`)
+        tm = self.tau_motor if margem_min is None else tau_de_projeto(self.tau_motor, atraso_malha_taxa(hw, dt_decisao),
+                                                                      margem_min)
+        self.tau_projeto = tm
         self.kp = 1.0 / (alfa * 4.0 * ZETA * ZETA * tm)
         wc = 1.0 / (2.0 * tm)
         self.ki = self.kp * wc / 4.0

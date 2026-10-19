@@ -25,6 +25,158 @@ treino. Resumo em [Vento e orientação fixa](#vento-e-orientação-fixa-v2b) e
 - `run.py` — validação do ambiente por **fórmulas fechadas**, 146/146 checagens, exit 0/1.
 - `helices_render.py` — prova **visual** (offscreen/EGL) da animação das hélices: 2 imagens em `out/`.
 
+## BRAÇOS ARTICULADOS — mirar por ARFAGEM sem sair do sítio (2026-10-19)
+
+**Pedido do dono** (desenho `~/Imagens/unnamed.png`, mod para um jogo futuro): cada braço **sobe/desce na base** e tem uma
+**2.ª dobradiça a uma distância segura um pouco maior do que a hélice**; as pontas apontam **sempre para o mesmo sítio
+lateralmente**; **motores de precisão** (o dono sugeriu passo a passo — escolher o melhor) com a velocidade de ajuste dentro
+do limite da ficha; **8 dados novos** (as 8 juntas) em **todos os treinos**; atirar de **qualquer altura face ao alvo (o
+«círculo») sem mudar x, y, z** — só a guinada e agora a arfagem; **TensorFlow** + o que for preciso para a precisão nos **3
+cenários** (mesma altura, abaixo, acima), com qualidade = **acertos num tempo curto** e o erro **muito penalizado** (só atira
+quando acha que acerta). Build novo **`articulado_15pol_mn5006`** — o build ATIVO continua o `endurance_15pol_p50b`.
+
+### Mecânica (peças reais, `models/drone_rpi/componentes.json` → `servos`, `mecanismos_braco`)
+
+| decisão | porquê (medido/fórmula) |
+|---|---|
+| **2 dobradiças por braço, os 8 eixos ∥ y do CORPO** (ombro na placa + cotovelo com **mastro** vertical) | as pontas só sobem/descem e inclinam à frente/trás — **|Δy| = 1e-16 m** em 50 poses (`teste_bracos.py` §3); o corpo arfa por cima dos motores |
+| **mastro = raio da hélice + 40 mm = 230,5 mm** (> 190,5 mm) | a hélice nunca chega ao braço: pior folga **5,5 cm** em 9 × 13 poses; condição fechada (braço a 45°): mastro > raio·max\|sen q\|/√(1+cos²q) = raio (§4) |
+| **servo inteligente DYNAMIXEL XH430-V210-R (24 V)** em vez de passo a passo | malha fechada com encoder absoluto (4096/volta), PID interno, corrente medida, barramento RS-485 a 200 Hz; um passo a passo em malha aberta **perde passos** com vibração/carga e gasta a corrente de retenção sempre (calor) — ficha: 2,6 N·m · 0,7 A · 52 rpm · 82 g |
+| **ombro: sem-fim 20:1 AUTOBLOQUEANTE + encoder AS5048A (14 bits) na saída** | λ = 3,81° < φ = atan 0,10 = 5,71° ⇒ o empuxo não faz recuar o braço; η = tan λ/tan(λ+φ) = **0,397** ⇒ 20,65 N·m e 15,6°/s na saída; em pairagem segura **4,39 N·m com a corrente de espera (0,04–0,06 A)** e com os servos DESLIGADOS o braço mexe **0,003°** (§5b) |
+| **cotovelo: acionamento direto** | a linha de empuxo passa pelo eixo do cotovelo (sem carga estática); chega aos 40° a **302°/s ≤ 312°/s** (52 rpm da ficha) (§5) |
+| **macro-mini** (`bracos_controlo.py`) | o ombro segue só a parte LENTA de τ (filtro 0,6 s + zona morta de 1°: parado, o sem-fim segura sem corrente) e o cotovelo corrige JÁ (~100°/s); IK fechada q₁ = τ + δ, q₂ = −δ, δ = asin((r_s/l₁)·sen τ) — os 4 rotores ficam no plano dos motores |
+| **motor MN5006 KV450** | com os braços o drone pesa **4463,6 g** (servos, sem-fins, encoders, mastros, dobradiças, regulador de 24 V incluídos) — com o MN4004 o T/W seria ≈ 1,0; com o MN5006 **T/W 2,58**, pairagem **557 W**, **22,0 min** de autonomia no modelo (o rígido com a Glock: 40,7 min) |
+
+### Firmware (interface 4, `firmware/nucleo/`) e a correção NECESSÁRIA da malha de taxa
+
+- **Quem mexe o quê** (medido: «os servos seguram o pitch do corpo» divergiu em 2 s): o **empuxo diferencial segura o pitch do
+  CORPO** (a arma) e os **servos dão ao empuxo a inclinação** que a cascata pede: `incl_ref = atan2(n̂·ĥ, n̂_z) − θ̂_corpo`; a
+  atitude e a taxa correm no referencial dos MOTORES (R_m = R_b·R_y(τ)); o misturador corta primeiro a GUINADA quando satura
+  (`prioridade_rp`); o compensador de recuo antigo (v3/v4) fica desligado neste build (com ele o drone divergia sob fogo).
+- **Margem de fase mínima por build** (`fc_margem_fase_min_graus: 45` no build; `fc.tau_de_projeto`, `Hardware.fc_margem_fase_min`):
+  o MN5006 a 4,5 kg é RÁPIDO (τ_motor = 24,5 ms) e as fórmulas do FC punham a malha de taxa a 19,3 rad/s com **margem de fase de
+  30°** — ressonância a ~3 Hz e **3,9 °/s** de tremor em pairagem. Com 45° (a escolha comum de projeto; Åström & Murray: margens
+  razoáveis 30–60°) o τ de PROJETO é 36,9 ms, ω_c 13,4 rad/s, margem de ganho 12,5 dB, e o laço aguenta ~59 ms de atraso extra não
+  modelado (a 30°: ~27 ms). Medido em TODOS os builds (pairagem com o núcleo, mesmo protocolo da fase A do benchmark):
+
+  | margem de fase da malha de taxa | 45,4° | 42,8° (build ativo) | 40,5° | 38,5° | 36,5° | 34,0° | 29,8° (articulado sem a correção) | 28,8° |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | tremor ω_RMS em pairagem (°/s) | 0,55 | 0,83 | 1,39 | 1,77 | 2,24 | 2,92 | 3,11 | 5,08 |
+
+  No articulado: sem a correção 3,89 °/s → 40°: 2,28 → **45°: 1,73** → 50°: 1,27 °/s; **sem ruído de sensores, 0,70 °/s** — o que
+  sobra é ruído dos sensores através de um laço mais rápido (o motor é mais rápido), não instabilidade. Só este build mudou
+  (o rígido ativo fica com τ de projeto = τ_motor, bit a bit — `teste_bracos.py` §2 + a mutação `fc-sem-margem-de-fase`).
+  *Recomendação* (não aplicada — «só se necessário»): `x500_13pol_p45b` (36,5°), `independente_mn4006_mf1302` (34,0°),
+  `referencia_5pol` (28,8°), `endurance_17pol_4s` (38,5°) e `pesado_18pol_6s3p` (39,3°) têm a mesma fraqueza e tremem
+  1,6–5,1 °/s; pôr-lhes `fc_margem_fase_min_graus` se forem para voar.
+- **Custo medido da correção** (aceite): a mira por TF passou de 112,5/109,5/93,0 para 109,5/94,5/81,0 acertos/min na
+  validação e o afastamento sob recuo de 21–24 para 28–31 cm (laços de atitude/posição ~30 % mais lentos), sempre com **0 erros**.
+
+### Os 8 dados novos em todos os treinos
+
+- Observação do `DroneRealEnv` com braços: **+8 no ator** (encoders quantizados / `ESCALA_JUNTA`) e **+8 no crítico** (verdade)
+  — 48 → **64**; a do rígido não muda (48) (§6). `train.py`, `train_seguimento.py`, `treinar_bola.py`, `ab_treino.py`,
+  `bench_treino.py escala` e `transferir_politica.py` ganharam `--build`; o PPO no articulado corre a 989 passos/s (8 envs) /
+  1416 (16 envs). `treinar_mira_gpu.py --articulado` delega na mira por arfagem e `evoluir_e_benchmark.py --treinar` corre as duas.
+- **Mira por arfagem** (`mira_articulada.py`, 30 características: as 8 juntas, τ medido, atitude estimada, giroscópio, erros de
+  elevação/azimute vistos pela câmara, erro previsto, tempo de voo, distância, elevação pedida, velocidade/aceleração da bola,
+  tempo desde o tiro, Δh, incerteza do rastreador, velocidade do drone): segura **v = 0**, roda (guinada) para o azimute e
+  arfa o corpo para a elevação; câmara com a latência real (116 ms da Pi), filtro de Kalman de aceleração constante, latência do
+  gatilho (16 ms, *estimado*), atitude ESTIMADA (não a verdade).
+
+### Treino TensorFlow + GPU (`treinar_mira_articulada.py --fase tudo`, ~4 min)
+
+| fase | o quê | resultado (2026-10-19) |
+|---|---|---|
+| A · dados (MuJoCo, 22 processos) | 180 episódios (60/cenário, janela 12 s, bola ALEATÓRIA Ornstein–Uhlenbeck); a cada decisão um **tiro virtual** rotulado pela balística exata da planta | 109 440 amostras em 54 s · rótulo virtual = tiro real em **99,45 %** de 2362 tiros |
+| B · TensorFlow 2.21 (`@tf.function(jit_compile=True)`, CPU) | `RedeConfiancaTiroTF` (P(acerto)) + `RedeCorrecaoMiraTF` (resíduo ±0,5°) | AUC **0,980** na validação (episódios separados) · erro angular RMS (elev, az) 0,72/0,62° → **0,40/0,36°** |
+| C · portão na GPU (JAX vmap + scan, RTX 4070) | 1248 regras × 21 888 estados de validação em **0,89 s**; maximiza a PIOR das 3 pontuações/min; regra base P ≥ K/(1+K) = 0,952 (K = 20) | limiar **0,987**, intervalo ≥ 0,40 s (limite físico de cadência) → 247/2, 144/0, 104/0 (+73/+65/+47 pts/min); o **melhor portão SEM TF fica negativo** (pior −161 pts/min: 95/11, 56/20, 42/20) |
+| D · validação (MuJoCo, bola programada, sementes 90001–90004 nunca vistas) | 4 × 10 s por cenário | TF: **73/0 · 63/0 · 54/0** (109,5 · 94,5 · 81,0 acertos/min) · só-físico: 36/0 · 37/**1** · 29/**1** |
+
+### Resultado — os 3 cenários de altura (`benchmark_evolucao.py`, bola programada, sementes 6200–6203, 4 × 10 s)
+
+| cenário (drone · alvo) | v4 rígido (translada para mirar) | v5 portão só-físico | **v5 portão TensorFlow** | pitch do corpo (v5) |
+|---|---|---|---|---:|
+| **mesma** (1,4 · 1,4 m) | 20 ✓ 0 ✗ · +30,0 pts/min · sai **80 cm** | 39 ✓ 0 ✗ · +58,5 · 23 cm | **73 ✓ 0 ✗ · +109,5 · 30 cm** | +2,5° |
+| **abaixo** (1,0 · 2,0 m) | 19 ✓ 0 ✗ · +28,5 · sai **124 cm** | 44 ✓ 0 ✗ · +66,0 · 17 cm | **63 ✓ 0 ✗ · +94,5 · 31 cm** | −19,5° (nariz ↑) |
+| **acima** (2,2 · 1,0 m) | 21 ✓ 0 ✗ · +31,5 · sai **157 cm** | 32 ✓ **1 ✗** · +18,0 · 22 cm | **59 ✓ 0 ✗ · +88,5 · 28 cm** | +27,3° (nariz ↓) |
+
+- O rígido **sobe/desce e translada** 0,8–1,6 m para mirar; o articulado **fica na estação** (z muda 3–8 cm) e o que o afasta
+  ~0,3 m é o **RECUO**: cada tiro dá Δv = J/m = 1,916 N·s / 4,46 kg = **0,43 m/s** e o laço de velocidade devolve-o em ~1/K_vel
+  (K_vel = 1,34/s ⇒ ~0,32 m por tiro, e volta). `teste_bracos.py` §7 usa esse limite derivado (1,25·Δv/K_vel = 0,40 m).
+- **Geração v5 no benchmark de sempre** (bola programada a 2 m + vento fixo 0 → 3 → 5 m/s): **104 tiros certeiros/min (26/26)**
+  contra 28 do v4, recuperação pós-tiro **0,04 s**, vento 3/5 m/s **10,8/15,0 cm** (igual ao v4), mas tremor 1,82 °/s e
+  *jitter* 1,52 % (v4: 0,77 °/s · 0,68 %) ⇒ estabilidade **79,5/100** (v4 88,4) — o preço de um drone 50 % mais pesado com um
+  laço mais rápido; a arma não sente quase nada do rolamento (é rotação em torno do cano).
+
+### No COCKPIT — ver o mecanismo a funcionar (2026-10-19)
+
+```bash
+mujoco 09                                                     # ou, sem o seletor:
+uv run --group hover-rl python experiments/09_drone_hover_rl/sim_site.py
+```
+
+- **O cockpit voa o build ARTICULADO por omissão** (pedido do dono, 2026-10-19: «o comando mujoco tem que ter os braços
+  flexíveis»): sem `--build`, o `sim_site.py` (e por ele o `mujoco 09`) arranca com `articulado_15pol_mn5006`
+  (`BUILD_COCKPIT_OMISSAO`); `--build <outro>` voa outro build do catálogo nesta sessão e `--build politica` volta ao
+  rígido em que a política RL foi treinada (é o que os testes antigos do cockpit fixam). O build ativo do catálogo
+  (`hardware.py usar`) não muda. A política RL foi treinada sem braços (observação 48; com os braços 64): o modo RL
+  fica recusado com motivo e voa a cascata clássica (o `auto` já a escolhia na planta real).
+- **B (seguir a bola) + AUTO SHOOT** usam a mira por ARFAGEM (`MiraArticuladaIA`, a do treino TF): a guinada aponta ao
+  azimute e o CORPO (a arma) inclina para a altura da bola, com os motores de nível. **A altura é a do dono**: Q/E
+  sobem/descem e o corpo reajusta-se sozinho; WASD movem o drone enquanto a mira aponta; sem teclas, o drone só se
+  mexe na horizontal para manter a bola a 1,8–3,2 m (a banda de tiro da rede). O pitch pedido é cortado ao envelope
+  validado (±35°) — acima disso a janela diz «fora do alcance» e o portão não dispara. Largar o B volta o corpo a nível.
+- **Janela Braços (tecla 9, só nos builds articulados)**: estado da mira, pitch do corpo (medido → pedido, em «nariz ↑/↓»),
+  inclinação dos motores face ao corpo (τ), elevação da bola; um ESQUEMA LATERAL ao vivo com as duas dobradiças de cada
+  braço (ombro e cotovelo) a rodar; a tabela dos 8 servos (ângulo medido e alvo, °/s, corrente, potência, **curso =
+  quanto já rodou**, energia em mWh) e os totais (W agora, Wh gastos, % da potência total).
+- **Energia**: a corrente dos servos sai da bateria a cada passo da física (`planta.i_total`) — conta para o consumo e a
+  autonomia; a janela Energia mostra «para onde vai a potência» (motores · eletrónica · servos, que somam o total) e
+  o painel de peças mostra os watts dos servos à parte. Em espera cada XH430 puxa 40 mA a 24 V (8 servos ≈ 8,3 W na
+  bateria); a mirar, 15–36 W.
+- **As duas dobradiças no 3D** (modelagem realista, `lab/drone_rpi/detalhes/estrutura.py`): no OMBRO a caixa do
+  sem-fim com janelas (o sem-fim a engrenar a roda de bronze), rolamentos, o servo deitado na placa, o AS5048A e o cubo
+  LARANJA com um ponteiro sobre a escala −40…+40°; no COTOVELO o garfo LARANJA aparafusado ao horn do XH430, com
+  ponteiro sobre −45…+45° — o laranja é o que roda, e os ponteiros mostram o ângulo de cada junta no próprio 3D (só
+  visual: a física é a mesma bit a bit). Em mira estável o ombro faz quase todo o ângulo (q₁ = τ + δ ≈ −29° para o corpo
+  a +25°) e o cotovelo só −δ ≈ +4°: o cotovelo é o atuador RÁPIDO das correções (no esquema da janela vê-se a mexer nos
+  transitórios) — por isso, parado, parecia haver só uma.
+- **Modelagem realista de todo o drone** (2026-10-19, 4 subagentes, um módulo cada): Raspberry Pi 5 com Active Cooler e
+  portas reais, FC H743, ESC AIR 40A, câmara, pack 6S2P de 21700, motores T-Motor com bobinas e sino que roda com a
+  hélice, hélices P15×5 com a forma e a torção reais, placas de carbono, pernas, e a cablagem completa (fases com balas,
+  14/10 AWG, XT90, USB-C, UART, I2C, FPC da câmara, barramento DYNAMIXEL a cruzar as juntas). Ver
+  `models/drone_rpi/README.md` → «Detalhe visual realista» (regras, custo, `DRONE_DETALHES`, prova).
+- Medido no ensaio ponta a ponta pela API (`sim_site --build`, `POST /api/voo` + `/api/bola`): a 1 m 16/16 tiros; Q até
+  2,6 m → corpo +34° (nariz-abaixo) e 19/19; E até 0,6 m → corpo −11° e 34/34; servos 0,21 Wh e 36 W no fim. Prova
+  automática: `teste_bracos.py --cockpit` (§9).
+
+### Como correr
+
+```bash
+.venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mira          # prova: 31/31 (§1–§7)
+.venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --cockpit       # §9: o runner do cockpit com os braços
+.venv/bin/python experiments/09_drone_hover_rl/teste_bracos.py --mutacao       # 7/7 mutações apanhadas
+.venv/bin/python experiments/09_drone_hover_rl/treinar_mira_articulada.py --fase tudo --episodios 60 --processos 22
+.venv/bin/python experiments/09_drone_hover_rl/benchmark_evolucao.py           # 5 gerações + 6 presets + 3 cenários
+.venv/bin/python experiments/09_drone_hover_rl/train.py --build articulado_15pol_mn5006 --comandos ...   # PPO com as 8 juntas
+```
+
+### Limites honestos
+
+- O portão **só-físico** erra com a bola aleatória (contrafactual da fase C: pontuação negativa em todas as regras); só a rede
+  TF mantém 0 erros — a rede é NECESSÁRIA, não decorativa.
+- A tabela antiga de evolução tinha 40/44 tiros/min no v3/v4; o código commitado (HEAD 6e8d81a, numa worktree limpa, mesmo
+  protocolo) mede **28/28** — a tabela foi regenerada com o código atual (as alterações dos braços não tocam no caminho rígido).
+- O TensorFlow instalado é de CPU (a GPU entra pelo JAX na fase C); o recuo empurra ~0,3 m a ~1,8 tiros/s; a latência do
+  gatilho (16 ms) é *estimada*.
+- Fontes (conteúdo web = `untrusted`, só citado): ROBOTIS e-Manual XH430-V210-R e XH430-V350/XH540-V270
+  (docs.robotis.com); ams AS5048A datasheet (mouser.com/datasheet/2/588/AS5048_DS000298_4-00-1100510.pdf); autobloqueio do
+  sem-fim λ < φ e η = tan λ/tan(λ+φ) (motioncontroltips.com, firgelliauto.com); Ryll, Bülthoff & Robuffo Giordano, «A Novel
+  Overactuated Quadrotor UAV», IEEE TCST 23(2):540, 2015 (hélices basculantes por servos); Kamel et al., «The Voliro
+  Omniorientational Hexacopter», IEEE RAM 25(4):34, 2018; Åström & Murray, «Feedback Systems» (margens 30–60°, 45° comum).
+  Dossiê: `pesquisas/2026-10-19-bracos-articulados-mira-por-arfagem.md`.
+
 ## COCKPIT (contrato r13, 2026-10-12) — pilotar num ecrã só, vento de 3 botões, seguir a bola
 
 Pedido do dono (2026-10-12): *«está tudo confuso; quero algo que não tenha scroll, eu tenha sempre a visão
@@ -198,7 +350,8 @@ voltava — `VentoNatural.repor()` + duas verificações e uma mutação em `tes
         a bola por rotação suave no eixo com inclinação reduzida, **0 quedas** em todos os 6 presets e **$10\times$ mais tempo `NO ALVO` a $0,8\text{ m/s}$** ($4,2\% \to 40,2\%$).
     - **Acompanhamento de Evolução e Benchmark Determinístico (`benchmark_evolucao.py` + `evolucao_drone.png` na raiz)**:
       - Treino na GPU usa movimento aleatório da bola; captura de dados usa **movimento programado (`modo="programado"`)** e **vento fixo ($0 \to 3 \to 5\text{ m/s}$)**.
-      - Evolução `v1 → v4`: tremor $\omega_{\text{RMS}}$ de **$2,04^\circ/\text{s} \to 0,77^\circ/\text{s}$**, *jitter* de **$4,37\% \to 0,68\%$**, recuperação pós-tiro de **$1,62\text{ s} \to 0,10\text{ s}$**, cadência certeira de **$32,0 \to 44,0\text{–}48,0\text{ tiros/min}$** ($100\%$ acerto) e estabilidade de **$50,6 \to 87,7\text{–}89,4/100$**:
+      - Evolução `v1 → v4` (regenerada a 2026-10-19 com o código atual — o HEAD 6e8d81a dá os mesmos números): tremor $\omega_{\text{RMS}}$ de **$2,04^\circ/\text{s} \to 0,77^\circ/\text{s}$**, *jitter* de **$4,37\% \to 0,68\%$**, recuperação pós-tiro de **$1,62\text{ s} \to 0,10\text{ s}$**, cadência certeira de **$32 \to 28\text{ tiros/min}$** no v4 ($28\text{–}52$ nos 6 presets, $100\%$ acerto) e estabilidade de **$50,2 \to 88,4/100$** ($64,8\text{–}89,7$ nos presets).
+      - **`v5` · braços articulados + mira por arfagem + portão TF** (secção [BRAÇOS ARTICULADOS](#braços-articulados--mirar-por-arfagem-sem-sair-do-sítio-2026-10-19)): **$104\text{ tiros certeiros/min}$** ($26/26$), recuperação pós-tiro $0,04\text{ s}$, vento $10,8/15,0\text{ cm}$, tremor $1,82^\circ/\text{s}$, estabilidade $79,5/100$; e os painéis 5–6 com os **3 cenários de altura** (0 erros com TF: $109,5 / 94,5 / 88,5$ pontos/min contra $30 / 28,5 / 31,5$ do rígido, sem sair da estação):
 
 ![Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo](../../evolucao_drone.png)
 - **Limite de carga, impacto na bateria/voo e impacto do vento** (`lab/drone_rpi/componentes.py` `ponto_maximo`, `limites_carga`, `impacto_vento`; `POST /api/carga`; `valida_real.py` §J):
