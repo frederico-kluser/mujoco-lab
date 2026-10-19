@@ -81,9 +81,14 @@ def checa_catalogo(v: Validador) -> None:
         m_mod = float(model.body_mass.sum())
         v.check(f"A1[{nome}] massa do modelo = Σ orçamento das peças", abs(m_mod - hw.massa_total) < 1e-9,
                 f"{m_mod * 1000:.3f} g vs {hw.massa_total * 1000:.3f} g")
-        v.check(f"A2[{nome}] origem do corpo no CM", float(np.abs(model.body_ipos[corpo]).max()) < 1e-9,
-                f"|ipos| = {float(np.abs(model.body_ipos[corpo]).max()):.1e} m")
         mujoco.mj_forward(model, data)
+        if hw.bracos is None:
+            v.check(f"A2[{nome}] origem do corpo no CM", float(np.abs(model.body_ipos[corpo]).max()) < 1e-9,
+                    f"|ipos| = {float(np.abs(model.body_ipos[corpo]).max()):.1e} m")
+        else:   # braços articulados: o drone é a SUBÁRVORE (corpo + braços + mastros) — origem no CM dela, juntas a 0
+            d_cm = float(np.linalg.norm(data.subtree_com[corpo] - data.xpos[corpo]))
+            v.check(f"A2[{nome}] origem do corpo no CM do conjunto (corpo + braços, juntas a 0)", d_cm < 1e-9,
+                    f"|CM − origem| = {d_cm:.1e} m")
         sites = np.array([data.site_xpos[model.site(f"r{i}").id] for i in range(1, 5)])
         # O "centro" é o do QUADRADO DOS ROTORES (a geometria do frame), não o CM: um payload
         # assimétrico (ex. a câmara no nariz) desloca o CM uns décimos de mm e o raio medido do CM

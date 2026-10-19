@@ -86,6 +86,7 @@ public:
 
 private:
     void preencher_estimativas(Saida& o) const;
+    void motor_de_corpo(float tau, Saida& o) const;
     float dt_valido(float dt) const;
     float acelerador_de_pairagem(float v_bat) const;
     float acelerador_de_coletivo(float coletivo, float v_bat) const;

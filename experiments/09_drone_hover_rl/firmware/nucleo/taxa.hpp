@@ -81,7 +81,45 @@ public:
         const float col = limita(coletivo, 0.0f, 1.0f);
         const float span = dmax - dmin;
         const float faixa = 1.0f - c.idle;
-        if (span > faixa) {  // o diferencial não cabe: escala-o
+        if (span > faixa && c.prioridade_rp != 0) {
+            // interface 4: corta primeiro a GUINADA (bisseção no fator k_y ∈ [0, 1] da parte de yaw) e só escala o
+            // rolamento/arfagem se, sem guinada nenhuma, ainda não couber
+            float rp[4];
+            float yw[4];
+            for (int i = 0; i < 4; ++i) {
+                rp[i] = c.mix[i][0] * u_eixos[0] + c.mix[i][1] * u_eixos[1];
+                yw[i] = c.mix[i][2] * u_eixos[2];
+            }
+            float k_lo = 0.0f;
+            float k_hi = 1.0f;
+            for (int it = 0; it < 14; ++it) {
+                const float k_m = 0.5f * (k_lo + k_hi);
+                float a = rp[0] + k_m * yw[0];
+                float b = a;
+                for (int i = 1; i < 4; ++i) {
+                    const float v = rp[i] + k_m * yw[i];
+                    if (v > a) a = v;
+                    if (v < b) b = v;
+                }
+                if (a - b <= faixa) {
+                    k_lo = k_m;
+                } else {
+                    k_hi = k_m;
+                }
+            }
+            float a = rp[0] + k_lo * yw[0];
+            float b = a;
+            for (int i = 0; i < 4; ++i) {
+                dif[i] = rp[i] + k_lo * yw[i];
+                if (dif[i] > a) a = dif[i];
+                if (dif[i] < b) b = dif[i];
+            }
+            if (a - b > faixa) {  // nem sem guinada cabe: escala o rolamento/arfagem
+                const float k = faixa / (a - b);
+                for (int i = 0; i < 4; ++i) dif[i] *= k;
+            }
+            flags |= kFlagDifEscalado;
+        } else if (span > faixa) {  // o diferencial não cabe: escala-o
             const float k = faixa / span;
             for (int i = 0; i < 4; ++i) dif[i] *= k;
             flags |= kFlagDifEscalado;

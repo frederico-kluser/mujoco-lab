@@ -136,27 +136,41 @@ O projeto `09_drone_hover_rl` contra o critério do dono (pior das 3 seeds, roll
 
 O acompanhamento evolutivo do drone (`endurance_15pol_p50b` + Glock 25 `.380 Auto` no topo) é regido pela skill **[`drone-evolucao-benchmark-agent-skill`](.agents/drone-evolucao-benchmark-agent-skill/SKILL.md)** (`scripts/evoluir_e_benchmark.py` e [`benchmark_evolucao.py`](experiments/09_drone_hover_rl/benchmark_evolucao.py)):
 - **Treino em GPU + TensorFlow OpenXLA (`treinar_mira_gpu.py`)**: usa **movimento aleatório da bola** (Ornstein–Uhlenbeck) e perturbações estocásticas em 4096 ambientes paralelos na RTX 4070 (`CudaDevice(id=0)`), treinando seletivamente apenas 3 módulos residuais (`CompensadorEstabilidadeTF`, `VisaoBalisticaTF` e `RedeDistanciaEstavelTF`).
-- **Captura de Dados / Benchmark Determinístico (`benchmark_evolucao.py`)**: usa **sempre o mesmo movimento programado da bola** (`modo="programado"`, trajetória Lissajous 3D analítica repetível a $0,55\text{ m/s}$, $r=1,35\text{ m}$, $15,0\text{ s}$) e **o mesmo cenário de vento fixo** (Fase A: $0\text{ m/s}$ ar calmo $\to$ Fase B: $3,0\text{ m/s} @ 90^\circ \to$ Fase C: $5,0\text{ m/s} @ 45^\circ$).
+- **Captura de Dados / Benchmark Determinístico (`benchmark_evolucao.py`)**: usa **sempre o mesmo movimento programado da bola** (`modo="programado"`, trajetória Lissajous 3D analítica repetível a $0,55\text{ m/s}$, $r=1,35\text{ m}$, $15,0\text{ s}$) e **o mesmo cenário de vento fixo** (Fase A: $0\text{ m/s}$ ar calmo $\to$ Fase B: $3,0\text{ m/s} @ 90^\circ \to$ Fase C: $5,0\text{ m/s} @ 45^\circ$), e mede ainda os **3 cenários de altura** do drone face ao alvo (mesma, abaixo, acima — 4 sementes × 10 s, pontuação = acertos − 20·erros).
+- **`v5` · Braços articulados (2026-10-19, build `articulado_15pol_mn5006`)**: cada braço sobe/desce na base e tem um cotovelo com mastro a raio da hélice + 40 mm (8 juntas, servos DYNAMIXEL XH430-V210-R, sem-fim 20:1 autobloqueante no ombro); o corpo **arfa para mirar** com os motores de nível e o drone **não sai do sítio**; mira TensorFlow + portão na GPU com **0 erros** nos 3 cenários. Detalhe no [README do experimento](experiments/09_drone_hover_rl/README.md#braços-articulados--mirar-por-arfagem-sem-sair-do-sítio-2026-10-19).
 
-### Evolução Medida por Geração (`v1` → `v4`)
+### Evolução Medida por Geração (`v1` → `v5`)
+
+Regenerada a 2026-10-19 com o código atual — o v3/v4 dão **28** tiros/min (a tabela anterior dizia 40/44; o HEAD 6e8d81a mede os mesmos 28 numa worktree limpa).
 
 | Geração | Tremor $\omega_{\text{RMS}}$ (°/s) | Jitter Motores (%) | Recuperação Pós-Tiro (s) | Tiros Certeiros / min (TPM) | Vento Fixo 3 / 5 m/s (cm) | Índice de Estabilidade (0–100) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **v1 · Bloco Fixo (Sem Filtro/Recuo)** | 2,04 | 4,37 % | 1,62 s | **32,0** (100 %) | 5,1 / 9,4 | **50,6** |
-| **v2 · Anti-Tremor + Mira GPU** | 0,77 | 0,68 % | 0,76 s | **32,0** (100 %) | 10,5 / 14,9 | **80,0** |
-| **v3 · Recuo Ativo 500 Hz + TF XLA** | 0,77 | 0,68 % | **0,10 s** | **40,0** (100 %) | 10,8 / 15,1 | **87,7** |
-| **v4 · Standoff Dinâmico + 6 Presets TF** | **0,77** | **0,68 %** | **0,10 s** | **44,0** (100 %) | 10,8 / 15,1 | **87,7** |
+| **v1 · Bloco Fixo (Sem Filtro/Recuo)** | 2,04 | 4,37 % | 1,62 s | **32,0** (100 %) | 5,1 / 9,4 | **50,2** |
+| **v2 · Anti-Tremor + Mira GPU** | 0,77 | 0,68 % | 0,76 s | **32,0** (100 %) | 10,5 / 14,9 | **78,4** |
+| **v3 · Recuo Ativo 500 Hz + TF XLA** | 0,77 | 0,68 % | 0,10 s | **28,0** (100 %) | 10,8 / 15,1 | **88,5** |
+| **v4 · Standoff Dinâmico + 6 Presets TF** | **0,77** | **0,68 %** | 0,10 s | **28,0** (100 %) | 10,8 / 15,1 | **88,4** |
+| **v5 · Braços Articulados + Mira por Arfagem TF** (4464 g) | 1,82 | 1,52 % | **0,04 s** | **104,0** (100 %) | 10,8 / 15,0 | **79,5** |
+
+### Os 3 cenários de altura — mirar sem sair do sítio (sementes 6200–6203, 4 × 10 s)
+
+| Configuração | Mesma altura (1,4 · 1,4 m) | Drone abaixo (1,0 · 2,0 m) | Drone acima (2,2 · 1,0 m) |
+| --- | --- | --- | --- |
+| v4 rígido (sobe/desce e translada para mirar) | 20 ✓ 0 ✗ · +30,0 pts/min · sai 80 cm | 19 ✓ 0 ✗ · +28,5 · sai 124 cm | 21 ✓ 0 ✗ · +31,5 · sai 157 cm |
+| v5 braços, portão só-físico | 39 ✓ 0 ✗ · +58,5 · 23 cm | 44 ✓ 0 ✗ · +66,0 · 17 cm | 32 ✓ **1 ✗** · +18,0 · 22 cm |
+| **v5 braços, portão TensorFlow** | **73 ✓ 0 ✗ · +109,5** · 30 cm | **63 ✓ 0 ✗ · +94,5** · 31 cm (nariz ↑19,5°) | **59 ✓ 0 ✗ · +88,5** · 28 cm (nariz ↓27,3°) |
+
+O articulado muda z só 3–8 cm; os ~0,3 m de afastamento são o **recuo** (Δv = 0,43 m/s por tiro, a ~1,8 tiros/s), que o laço de velocidade devolve.
 
 ### Desempenho dos 6 Presets Calibrados de Propulsão (`POST /api/pecas`, sem combinação livre)
 
 | Preset Calibrado | Motor + Bateria (Cores 3D) | Massa Total | Potência Média | Vazão Máx | Tiros / min (TPM) | Estabilidade |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `endurance_p50b` | MN4004 KV300 (Preto) + 6S2P P50B (Vermelho) | 2968 g | 325,5 W | 120 A | **44,0 / min** | 87,7 / 100 |
-| `tatico_silicio` | MN4004 KV300 (Preto) + 6S2P Amprius Si (Roxo) | 2529 g | 254,7 W | 80 A | **28,0 / min** | 85,9 / 100 |
-| `interceptor_lipo` | MN4006 KV380 (Vermelho) + 6S1P LiPo 45C (Ouro) | 2912 g | 303,8 W | **225 A** | **44,0 / min** | **89,1 / 100** |
-| `heavy_6s3p` | MN4006 KV380 (Vermelho) + 6S3P P50B (Azul Royal) | 3460 g | 376,5 W | 180 A | **44,0 / min** | **89,4 / 100** |
-| `forca_bruta_5006` | MN5006 KV450 (Azul) + 6S2P P50B (Vermelho) | 3180 g | 358,7 W | 120 A | **48,0 / min** | **89,4 / 100** |
-| `agile_scout` | MN3508 KV380 (Dourado) + 6S1P P45B (Verde) | 2723 g | 293,2 W | 45 A | **36,0 / min** | 64,8 / 100 |
+| `endurance_p50b` | MN4004 KV300 (Preto) + 6S2P P50B (Vermelho) | 2968 g | 322,0 W | 120 A | **28,0 / min** | 88,4 / 100 |
+| `tatico_silicio` | MN4004 KV300 (Preto) + 6S2P Amprius Si (Roxo) | 2529 g | 259,5 W | 80 A | **28,0 / min** | 84,3 / 100 |
+| `interceptor_lipo` | MN4006 KV380 (Vermelho) + 6S1P LiPo 45C (Ouro) | 2912 g | 300,3 W | **225 A** | **44,0 / min** | 88,6 / 100 |
+| `heavy_6s3p` | MN4006 KV380 (Vermelho) + 6S3P P50B (Azul Royal) | 3460 g | 377,4 W | 180 A | **40,0 / min** | **89,7 / 100** |
+| `forca_bruta_5006` | MN5006 KV450 (Azul) + 6S2P P50B (Vermelho) | 3180 g | 361,3 W | 120 A | **52,0 / min** | **89,7 / 100** |
+| `agile_scout` | MN3508 KV380 (Dourado) + 6S1P P45B (Verde) | 2723 g | 295,0 W | 45 A | **40,0 / min** | 64,8 / 100 |
 
 ## Como se cria um projeto novo
 

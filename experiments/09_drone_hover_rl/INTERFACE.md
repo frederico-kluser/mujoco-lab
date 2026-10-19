@@ -15,6 +15,12 @@ VENTO», descrevem a página que o cockpit substituiu.
 > (ep+1). O arranque é **autoritativo** (corrige o `loop` do ficheiro de controlo) e depois só o
 > `POST /api/loop` o muda (*sticky*).
 
+> **2026-10-19 — braços articulados** (`articulado_15pol_mn5006`, mira por arfagem; README → «BRAÇOS ARTICULADOS»): o
+> contrato do cockpit **não muda** — o cockpit voa o build ATIVO (`endurance_15pol_p50b`). O runner (`sim_view.py`) já
+> instala o núcleo da interface 4 quando o build tem braços (servos ligados ao `incl_ref`, misturador com prioridade de
+> rolamento/arfagem, sem o compensador de recuo antigo), mas **o cockpit com o build articulado não foi testado** e o
+> site ainda não tem controlo da arfagem do corpo nem a mira articulada na tecla **B** (próximo passo).
+
 ---
 
 ## 0. COCKPIT — a interface desde 2026-10-12 (contrato r13)

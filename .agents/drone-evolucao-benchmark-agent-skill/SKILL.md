@@ -27,24 +27,28 @@ Documente claramente:
 - **Onde entra o TensorFlow (`@tf.function(jit_compile=True)` OpenXLA)** — **apenas** onde há resíduo não-linear ou acoplamento multi-preset:
   1. `CompensadorEstabilidadeTF` (`mlp_recuo_tf`, `8 → 24 → 24 → 1`): adapta o ganho de amortecimento ativo de recuo a $500\text{ Hz}$ ao KV, $R_{\text{int}}$, $V_{\text{bus}}$ e massa;
   2. `VisaoBalisticaTF` (`mlp_visao_tf`, `8 → 24 → 24 → 3`): prediz o resíduo de aceleração não-estacionária da bola no horizonte $t + \tau_{\text{voo}}$;
-  3. `RedeDistanciaEstavelTF` (`mlp_standoff_tf`, `6 → 24 → 24 → 1`): calcula o recuo automático de distância segura $D^*(v_{\text{bola}}, a_{\text{bola}})$ quando a bola é rápida, permitindo acompanhar por rotação no eixo em vez de translações laterais bruscas.
+  3. `RedeDistanciaEstavelTF` (`mlp_standoff_tf`, `6 → 24 → 24 → 1`): calcula o recuo automático de distância segura $D^*(v_{\text{bola}}, a_{\text{bola}})$ quando a bola é rápida, permitindo acompanhar por rotação no eixo em vez de translações laterais bruscas;
+  4. **Braços articulados (v5, 2026-10-19)** — `RedeConfiancaTiroTF` (P(acerto) a partir de 30 características, incluindo as **8 juntas**) e `RedeCorrecaoMiraTF` (resíduo de elevação/azimute ±0,5°), treinadas com **tiros virtuais** rotulados pela balística exata da planta; o portão de tiro (P ≥ K/(1+K), K = 20, + limiar/intervalo escolhidos na GPU por JAX) é o que mantém 0 erros — o melhor portão só-físico fica com pontuação negativa com a bola aleatória.
 
 ### 3. Treinar em GPU + TensorFlow XLA com Cenário Aleatório
 O treino corre **sem renderização 3D** na RTX 4070 (`CudaDevice(id=0)`) com **movimento aleatório da bola (Ornstein–Uhlenbeck)** e **perturbações estocásticas**:
 ```bash
 .venv-gpu/bin/python experiments/09_drone_hover_rl/treinar_mira_gpu.py
+.venv-gpu/bin/python experiments/09_drone_hover_rl/treinar_mira_gpu.py --articulado   # mira por arfagem (treinar_mira_articulada.py)
 ```
+(`evoluir_e_benchmark.py --treinar` corre os dois.)
 
 ### 4. Capturar os Dados em Cenário Determinístico (Bola Programada + Vento Fixo)
 A avaliação **nunca** usa sorteio livre sem cenário fixo:
 - **Bola Programada (`modo="programado"`)**: trajetória Lissajous 3D analítica determinística ($v = 0,55\text{ m/s}, r = 1,35\text{ m}, 15,0\text{ s}$) com `AUTO SHOOT` ativo → mede **Tiros Certeiros por Minuto (TPM)**, `% Acerto` e `Inclinação Máxima (°)`;
-- **Vento Fixo Determinístico**: Fase A ($0\text{ m/s}$ ar calmo: $\omega_{\text{RMS}}$, *jitter* e recuperação pós-tiro em $\text{s}$) $\to$ Fase B ($3,0\text{ m/s} @ 90^\circ$) $\to$ Fase C ($5,0\text{ m/s} @ 45^\circ$).
+- **Vento Fixo Determinístico**: Fase A ($0\text{ m/s}$ ar calmo: $\omega_{\text{RMS}}$, *jitter* e recuperação pós-tiro em $\text{s}$) $\to$ Fase B ($3,0\text{ m/s} @ 90^\circ$) $\to$ Fase C ($5,0\text{ m/s} @ 45^\circ$);
+- **3 Cenários de Altura** (`cenarios_mira.py`, sementes 6200–6203 × 10 s, bola programada): drone à MESMA altura do alvo, ABAIXO e ACIMA — pontuação/min = (acertos − 20·erros)/min e afastamento da estação, para o `v4` rígido e o `v5` (portão só-físico e portão TF). As gerações `v1`–`v4` voam o build ativo; o `v5` voa `articulado_15pol_mn5006`.
 ```bash
 .venv/bin/python experiments/09_drone_hover_rl/benchmark_evolucao.py
 ```
 
 ### 5. Atualizar `evolucao_drone.png`, `README.md`, `AGENTS.md`, `CLAUDE.md` e CoALA
-- O script grava `/home/ondokai/Projects/MuJoCo/evolucao_drone.png` (gráfico de 4 painéis na raiz) e `experiments/09_drone_hover_rl/out/evolucao/evolucao_estabilidade.json`.
+- O script grava `/home/ondokai/Projects/MuJoCo/evolucao_drone.png` (gráfico de 6 painéis na raiz: 4 da evolução + 2 dos cenários de altura) e `experiments/09_drone_hover_rl/out/evolucao/evolucao_estabilidade.json` (`geracoes`, `presets`, `cenarios_altura`; o `--check` exige os três).
 - Inspecione sempre `evolucao_drone.png` com `read_image`.
 - Atualize as tabelas de evolução em `README.md` (raiz e experimento), `AGENTS.md` e `CLAUDE.md`, e registe na memória CoALA (`coala.py add`).
 

@@ -34,6 +34,18 @@ ROTORES = ("rotor1", "rotor2", "rotor3", "rotor4")
 REACOES = ("reacao1", "reacao2", "reacao3", "reacao4")
 SITES_ROTOR = ("r1", "r2", "r3", "r4")
 SITE_BOCA_CANO = "boca_cano"
+# braços articulados (só nos builds com `bracos`): juntas, atuadores de binário e encoders, por braço 1..4
+JUNTAS_OMBRO = ("ombro1", "ombro2", "ombro3", "ombro4")
+JUNTAS_COTOVELO = ("cotovelo1", "cotovelo2", "cotovelo3", "cotovelo4")
+SERVOS_OMBRO = ("servo_ombro1", "servo_ombro2", "servo_ombro3", "servo_ombro4")
+SERVOS_COTOVELO = ("servo_cotovelo1", "servo_cotovelo2", "servo_cotovelo3", "servo_cotovelo4")
+ENC_OMBRO = ("enc_ombro1", "enc_ombro2", "enc_ombro3", "enc_ombro4")
+ENC_COTOVELO = ("enc_cotovelo1", "enc_cotovelo2", "enc_cotovelo3", "enc_cotovelo4")
+VEL_OMBRO = ("vel_ombro1", "vel_ombro2", "vel_ombro3", "vel_ombro4")
+VEL_COTOVELO = ("vel_cotovelo1", "vel_cotovelo2", "vel_cotovelo3", "vel_cotovelo4")
+CORPOS_BRACO = ("braco1", "braco2", "braco3", "braco4")
+CORPOS_MASTRO = ("mastro1", "mastro2", "mastro3", "mastro4")
+N_JUNTAS = 8
 N_SLOTS_TIRO = 8
 ALCANCE_PROJETIL_M = 50.0
 DURACAO_CAMINHO_TIRO_S = 1.0
@@ -64,6 +76,10 @@ _COR_ARMA = {
     "glock_preto": [0.08, 0.08, 0.09, 1.0],
     "glock_mira": [0.95, 0.96, 0.98, 1.0],
 }
+_COR_BRACOS = {
+    "servo": [0.07, 0.07, 0.08, 1.0],          # caixa preta dos DYNAMIXEL
+    "sem_fim": [0.62, 0.64, 0.68, 1.0],        # caixa de alumínio do sem-fim
+}
 _COR_EFEITOS_ARMA = {
     "fogo_nucleo": ([1.0, 0.97, 0.70, 1.0], 1.0),
     "fogo_labareda": ([1.0, 0.48, 0.08, 1.0], 0.95),
@@ -86,76 +102,9 @@ def _quat_pa(psi_rad: float, pitch_rad: float) -> list[float]:
     return [cz * cx, cz * sx, sz * sx, sz * cx]
 
 
-def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.3,
-             com_alvo: bool = False) -> mujoco.MjSpec:
-    """Constrói o spec; `deslocamento` é subtraído a todas as posições do corpo (põe a origem no CM)."""
-    spec = mujoco.MjSpec()
-    spec.modelname = f"drone_rpi_{hw.nome}"
-    spec.compiler.degree = False
-    spec.option.timestep = TIMESTEP
-    spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    spec.option.density = 1.225
-    spec.option.viscosity = 1.8e-5
-    # framebuffer offscreen: comporta o MODO maior do módulo de câmara (4608×2592 = 11,9 MP) —
-    # o MuJoCo nunca renderiza acima de `<visual><global offwidth/offheight>` (regra do lab)
-    spec.visual.global_.offwidth = 4608
-    spec.visual.global_.offheight = 2592
-    spec.visual.map.zfar = 80.0
-    spec.stat.extent = max(1.0, 2.0 * hw.frame.wheelbase)
-
-    tex = spec.add_texture(name="chao", type=mujoco.mjtTexture.mjTEXTURE_2D,
-                           builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER, rgb1=[0.25, 0.25, 0.25],
-                           rgb2=[0.33, 0.33, 0.33], width=256, height=256)
-    mat = spec.add_material(name="chao", texrepeat=[10, 10], reflectance=0.1)
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
-    for nome, rgba in _COR.items():
-        spec.add_material(name=nome, rgba=rgba)
-    if hw.arma is not None:
-        for nome, rgba in _COR_ARMA.items():
-            spec.add_material(name=nome, rgba=rgba)
-        for nome, (rgba, emissao) in _COR_EFEITOS_ARMA.items():
-            m_ef = spec.add_material(name=nome, rgba=rgba, emission=emissao, specular=0.0, shininess=0.0)
-            _ = m_ef
-
-    wb = spec.worldbody
-    wb.add_geom(name="chao", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[50, 50, 0.1], material="chao",
-                friction=[0.9, 0.005, 0.0001])
-    wb.add_light(name="sol", pos=[0, 0, 6], dir=[0, 0, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
-                 diffuse=[0.7, 0.7, 0.7])
-
-    corpo = wb.add_body(name="drone", pos=[0, 0, z0])
-    corpo.add_freejoint(name="livre")
-    off = np.zeros(3) if deslocamento is None else np.asarray(deslocamento, dtype=float)
-
-    def p(x, y, z):
-        return list(np.array([x, y, z], dtype=float) - off)
-
-    sem_contacto = {"contype": 0, "conaffinity": 0}
-    massas = hw.massas
-    braco = hw.braco
-    rot = hw.pos_rotores
-
-    # ---- frame de alta estabilidade: dupla placa em sanduíche + 4 braços + treliças anti-torção
-    # PLACA CENTRAL: `placa_mm` do catálogo quando existe (é o caso do frame 1950: a placa NÃO cresce
-    # com o wheelbase — são os braços que esticam, e o orçamento de massa do catálogo trata as placas
-    # como constantes); sem o campo, a fórmula histórica 0,16·wheelbase (os frames antigos, para os quais
-    # ela foi calibrada).
-    lado = (0.5 * float(hw.frame.dados["placa_mm"]) / 1000.0 if hw.frame.dados.get("placa_mm")
-            else max(0.045, 0.16 * hw.frame.wheelbase))
-    esp = 0.0015
-    corpo.add_geom(name="placa", type=mujoco.mjtGeom.mjGEOM_BOX, size=[lado, lado, esp], pos=p(0, 0, 0),
-                   mass=0.4 * massas["frame"] + massas["extra"], material="frame")
-    # Placa superior do sanduíche estrutural + 4 espaçadores CNC vermelhos nos cantos (group=3, mass=0)
-    z_deck_sup = esp + 0.014
-    corpo.add_geom(name="placa_superior", type=mujoco.mjtGeom.mjGEOM_BOX,
-                   size=[0.88 * lado, 0.88 * lado, 0.0012], pos=p(0, 0, z_deck_sup),
-                   group=3, mass=0.0, material="frame", **sem_contacto)
-    for idx_sp, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1)), start=1):
-        corpo.add_geom(name=f"espacador_placa_{idx_sp}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-                       size=[0.003, 0.5 * z_deck_sup, 0],
-                       pos=p(0.78 * sx * lado, 0.78 * sy * lado, 0.5 * z_deck_sup),
-                       group=3, mass=0.0, material="aluminio_vermelho", **sem_contacto)
-
+def _bracos_rigidos(corpo, hw: Hardware, p, sem_contacto: dict, massas: dict, braco: float, rot, lado: float) -> None:
+    """Braços RÍGIDOS (o drone de sempre): tubos, treliças, motores e hélices no próprio corpo `drone` — a MESMA
+    sequência de geoms de antes desta função existir (o MJCF dos builds rígidos fica idêntico bit a bit)."""
     for i, (x, y) in enumerate(rot):
         ang = math.atan2(y, x)
         corpo.add_geom(name=f"braco{i + 1}", type=mujoco.mjtGeom.mjGEOM_BOX,
@@ -268,6 +217,249 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                            quat=_quat_pa(psi_b, 0.65 * s_giro * theta_pa),
                            group=1, mass=0.0, material=cor_ponta, **sem_contacto)
         corpo.add_site(name=SITES_ROTOR[i], pos=p(x, y, z_rotor), size=[0.01, 0, 0])
+
+
+def geometria_bracos(hw: Hardware) -> dict:
+    """Geometria dos braços ARTICULADOS (m), igual para os 4 braços: raio do ombro `r_s`, comprimento do braço do
+    ombro ao cotovelo `l1` (o cotovelo fica no raio dos rotores) e mastro `l_m` = eixo do cotovelo → plano da hélice
+    = raio da hélice + folga (o desenho do dono: a hélice nunca chega ao braço)."""
+    mec = hw.bracos
+    r_s = mec.raio_ombro
+    return {"r_s": r_s, "l1": hw.braco - r_s, "l_m": hw.helice.raio + mec.folga_helice, "r_hel": hw.helice.raio}
+
+
+def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contacto: dict, massas: dict, braco: float,
+                        rot, lado: float) -> list:
+    """Braços ARTICULADOS (`hw.bracos`): por braço, um corpo `braco{i}` preso à placa pela junta `ombro{i}` e um
+    corpo `mastro{i}` preso à ponta do braço pela junta `cotovelo{i}` — os 8 eixos PARALELOS ao y do corpo (arfagem):
+    as pontas nunca se movem para os lados. O mastro é vertical (juntas a 0) e leva o motor no topo; o empuxo
+    (site `r{i}` no topo do mastro) passa pelo eixo do cotovelo.
+
+    Massas (a soma continua a ser `hw.massa_total`): no corpo `drone` ficam o troço do tubo dentro da placa, o servo
+    do ombro + sem-fim + encoder e meia dobradiça do ombro; no `braco{i}` o tubo, o servo do cotovelo, meia dobradiça
+    de cada junta e a perna (acrescentada em `_pernas_articuladas`); no `mastro{i}` o tubo do mastro, meia dobradiça
+    do cotovelo e o motor+hélice. Devolve os 4 corpos `braco{i}` (as pernas vão para lá).
+    """
+    mec = hw.bracos
+    g = geometria_bracos(hw)
+    r_s, l1, l_m = g["r_s"], g["l1"], g["l_m"]
+    m_tubo = 0.15 * massas["frame"]                     # o tubo de um braço (o mesmo do modelo rígido)
+    so, sc = mec.ombro, mec.cotovelo
+    d_mot = float(hw.motor.dados.get("diametro_mm", 28.0)) / 1000.0
+    h_mot = float(hw.motor.dados.get("altura_mm", 0.6 * d_mot * 1000.0)) / 1000.0
+    z_mot = l_m - 0.008 - 0.5 * h_mot                   # no referencial do mastro (origem no eixo do cotovelo)
+    z_suporte = l_m - 0.008 - h_mot - 0.0025
+    m_rotor = hw.motor.massa + hw.helice.massa
+    r_hel = hw.helice.raio
+    c_med = hw.helice.corda_media
+    taper = hw.helice.afunilamento
+    theta_pa = hw.helice.angulo_passo_75_rad
+    n_pas = max(int(hw.helice.pas), 2)
+    q_nao_id = [math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
+    w_so, h_so, d_so = so.servo.dims                    # 28,5 × 46,5 × 34 mm (largura, altura, profundidade)
+    w_sc, h_sc, d_sc = sc.servo.dims
+    hinge = mujoco.mjtJoint.mjJNT_HINGE
+    corpos = []
+    for i, (x, y) in enumerate(rot):
+        k = i + 1
+        ang = math.atan2(y, x)
+        ux, uy = math.cos(ang), math.sin(ang)
+        q_ang = [math.cos(ang / 2), 0, 0, math.sin(ang / 2)]
+        # (1) na PLACA: troço do tubo até ao ombro + servo do ombro (eixo em y) + caixa do sem-fim + encoder
+        corpo.add_geom(name=f"braco{k}_raiz", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.5 * r_s, 0.012, 0.005],
+                       pos=p(0.5 * r_s * ux, 0.5 * r_s * uy, 0.0), quat=q_ang, mass=m_tubo * r_s / braco,
+                       material="frame", **sem_contacto)
+        xs, ys = (r_s - 0.5 * d_so - 0.008) * ux, (r_s - 0.5 * d_so - 0.008) * uy
+        corpo.add_geom(name=f"servo_ombro{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.5 * d_so, 0.5 * w_so, 0.5 * h_so], pos=p(xs, ys, 0.006 + 0.5 * h_so),
+                       mass=so.servo.massa + so.encoder_massa + 0.5 * mec.massa_dobradica, material="servo",
+                       **sem_contacto)
+        corpo.add_geom(name=f"sem_fim{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.020, 0.018, 0.022],
+                       pos=p(r_s * ux, r_s * uy, 0.0), mass=so.massa_redutor, material="sem_fim", **sem_contacto)
+        corpo.add_geom(name=f"sem_fim{k}_eixo", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.004, 0.024, 0],
+                       pos=p(r_s * ux, r_s * uy, 0.0), quat=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0],
+                       group=3, mass=0.0, material="aco_inox", **sem_contacto)
+        # (2) BRAÇO: junta do ombro (eixo y, no fim da placa)
+        b = corpo.add_body(name=f"braco{k}", pos=p(r_s * ux, r_s * uy, 0.0))
+        j = b.add_joint(name=f"ombro{k}", type=hinge, axis=[0.0, 1.0, 0.0])
+        j.limited = mujoco.mjtLimited.mjLIMITED_TRUE
+        j.range = [float(so.limites[0]), float(so.limites[1])]
+        j.damping = [0.02, 0.0, 0.0]          # 3.15: polinómio a·v + b·v|v| + c·v³
+        b.add_geom(name=f"braco{k}_tubo", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.5 * l1, 0.012, 0.005],
+                   pos=[0.5 * l1 * ux, 0.5 * l1 * uy, 0.0], quat=q_ang, mass=m_tubo * l1 / braco,
+                   material="frame", **sem_contacto)
+        nx_, ny_ = -uy, ux
+        for offset_lat, cor_fio, sufixo in ((-0.0045, "fio_vermelho", "a"), (0.0, "fio_preto", "b"),
+                                            (0.0045, "fio_azul", "c")):
+            a0 = [0.03 * ux + offset_lat * nx_, 0.03 * uy + offset_lat * ny_, 0.0062]
+            a1 = [(l1 - 0.03) * ux + offset_lat * nx_, (l1 - 0.03) * uy + offset_lat * ny_, 0.0062]
+            b.add_geom(name=f"fio_motor{k}_{sufixo}", type=mujoco.mjtGeom.mjGEOM_CAPSULE, size=[0.0016, 0, 0],
+                       fromto=a0 + a1, group=3, mass=0.0, material=cor_fio, **sem_contacto)
+        for k_ab, frac_ab in enumerate((0.30, 0.65), start=1):
+            b.add_geom(name=f"abracadeira_braco{k}_{k_ab}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.003, 0.0135, 0.0062], pos=[frac_ab * l1 * ux, frac_ab * l1 * uy, 0.001], quat=q_ang,
+                       group=3, mass=0.0, material="fio_preto", **sem_contacto)
+        b.add_geom(name=f"servo_cotovelo{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                   size=[0.5 * h_sc, 0.5 * d_sc, 0.5 * w_sc], pos=[(l1 - 0.5 * h_sc - 0.004) * ux,
+                                                                 (l1 - 0.5 * h_sc - 0.004) * uy, 0.0],
+                   mass=sc.servo.massa + sc.encoder_massa + sc.massa_redutor + mec.massa_dobradica,
+                   material="servo", **sem_contacto)
+        # (3) MASTRO: junta do cotovelo (eixo y) na ponta do braço; o motor fica no topo, a l_m − … do eixo
+        m = b.add_body(name=f"mastro{k}", pos=[l1 * ux, l1 * uy, 0.0])
+        jc = m.add_joint(name=f"cotovelo{k}", type=hinge, axis=[0.0, 1.0, 0.0])
+        jc.limited = mujoco.mjtLimited.mjLIMITED_TRUE
+        jc.range = [float(sc.limites[0]), float(sc.limites[1])]
+        jc.armature = float(sc.servo.inercia_rotor * sc.servo.reducao_interna ** 2)   # rotor refletido (× N²)
+        jc.frictionloss = float(sc.servo.atrito_saida)
+        jc.damping = [0.002 + sc.servo.binario_bloqueio / sc.servo.omega_vazio, 0.0, 0.0]   # mecânico + contra-eletromotriz
+        z0_m, z1_m = 0.012, z_suporte - 0.0025
+        m.add_geom(name=f"mastro{k}_tubo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                   size=[0.008, 0.5 * (z1_m - z0_m), 0], pos=[0.0, 0.0, 0.5 * (z0_m + z1_m)],
+                   mass=mec.massa_mastro + 0.5 * mec.massa_dobradica, material="frame", **sem_contacto)
+        m.add_geom(name=f"garfo_cotovelo{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.012, 0.022, 0.012],
+                   pos=[0.0, 0.0, 0.0], group=3, mass=0.0, material="aluminio_anodizado", **sem_contacto)
+        m.add_geom(name=f"suporte_motor_{k}", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.024, 0.0025, 0],
+                   pos=[0.0, 0.0, z_suporte], group=3, mass=0.0, material="aluminio_vermelho", **sem_contacto)
+        m.add_geom(name=f"motor{k}", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.5 * d_mot, 0.5 * h_mot, 0],
+                   pos=[0.0, 0.0, z_mot], mass=m_rotor, material="motor")
+        m.add_geom(name=f"motor{k}_estator_cobre", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                   size=[0.44 * d_mot, 0.36 * h_mot, 0], pos=[0.0, 0.0, z_mot + 0.001],
+                   group=3, mass=0.0, material="cobre_bobina", **sem_contacto)
+        m.add_geom(name=f"motor{k}_sino_anel", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                   size=[0.51 * d_mot, 0.22 * h_mot, 0], pos=[0.0, 0.0, z_mot + 0.22 * h_mot],
+                   group=3, mass=0.0, material="motor_sino", **sem_contacto)
+        m.add_geom(name=f"motor{k}_base_cnc", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                   size=[0.48 * d_mot, 0.14 * h_mot, 0], pos=[0.0, 0.0, z_mot - 0.38 * h_mot],
+                   group=3, mass=0.0, material="motor_sino", **sem_contacto)
+        for k_r in range(3):
+            ang_r = k_r * math.pi / 3.0
+            m.add_geom(name=f"motor{k}_raio_{k_r + 1}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                       size=[0.49 * d_mot, 0.065 * d_mot, 0.0012], pos=[0.0, 0.0, z_mot + 0.48 * h_mot],
+                       quat=[math.cos(0.5 * ang_r), 0.0, 0.0, math.sin(0.5 * ang_r)],
+                       group=3, mass=0.0, material="motor_sino", **sem_contacto)
+        m.add_geom(name=f"motor{k}_eixo", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.11 * d_mot, 0.0055, 0],
+                   pos=[0.0, 0.0, z_mot + 0.5 * h_mot + 0.004], group=3, mass=0.0, material="aco_inox",
+                   **sem_contacto)
+        cor = "helice_cw" if hw.GIRO[i] < 0 else "helice_ccw"
+        cor_ponta = "helice_ponta_cw" if hw.GIRO[i] < 0 else "helice_ponta_ccw"
+        m.add_geom(name=f"helice{k}", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[r_hel, 0.0012, 0],
+                   pos=[0.0, 0.0, l_m], mass=0.0, material=cor, group=2, **sem_contacto)
+        m.add_geom(name=f"helice{k}_cubo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                   size=[max(0.013, 0.075 * r_hel), 0.0038, 0], pos=[0.0, 0.0, l_m],
+                   quat=q_nao_id, group=1, mass=0.0, material="motor_sino", **sem_contacto)
+        s_giro = float(hw.GIRO[i])
+        for b_idx in range(n_pas):
+            psi_b = 2.0 * math.pi * b_idx / n_pas
+            cb, sb = math.cos(psi_b), math.sin(psi_b)
+            for sufixo, r_frac, meia_l, meia_c, esp_pa, dz_pa, k_pitch, mat_pa in (
+                    ("raiz", 0.29, 0.23 * r_hel, 0.58 * c_med, 0.0016, 0.0005, 1.00, "helice_cf"),
+                    ("ponta", 0.73, 0.23 * r_hel, max(0.004, 0.58 * c_med * taper), 0.0011, 0.0005, 0.75, "helice_cf"),
+                    ("faixa", 0.93, 0.045 * r_hel, max(0.0038, 0.52 * c_med * taper), 0.0013, 0.0006, 0.65, cor_ponta)):
+                m.add_geom(name=f"helice{k}_pa{b_idx + 1}_{sufixo}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[meia_l, meia_c, esp_pa],
+                           pos=[r_frac * r_hel * cb, r_frac * r_hel * sb, l_m + dz_pa],
+                           quat=_quat_pa(psi_b, k_pitch * s_giro * theta_pa),
+                           group=1, mass=0.0, material=mat_pa, **sem_contacto)
+        m.add_site(name=SITES_ROTOR[i], pos=[0.0, 0.0, l_m], size=[0.01, 0, 0])
+        corpos.append(b)
+    # regulador DC-DC 24 V dos servos, na placa (atrás da pilha de eletrónica)
+    corpo.add_geom(name="fonte_servos", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.022, 0.016, 0.006],
+                   pos=p(-0.70 * lado, 0.0, 0.0015 + 0.007), mass=mec.massa_fonte, material="servo", **sem_contacto)
+    return corpos
+
+
+def _pernas_articuladas(corpos_braco: list, hw: Hardware, massas: dict, h_pernas: float) -> None:
+    """As 4 pernas no MESMO sítio do modelo rígido (a 0,55 do raio dos rotores, debaixo do braço), mas presas ao
+    corpo `braco{i}`: sobem/descem com o braço e nunca são atingidas por ele nem pela hélice (no chão as juntas
+    estão a 0 e o drone assenta como sempre; segurar o peso no chão é trabalho do sem-fim autobloqueante)."""
+    r_s = hw.bracos.raio_ombro
+    for i, (x, y) in enumerate(hw.pos_rotores):
+        ang = math.atan2(y, x)
+        r = 0.55 * hw.braco - r_s
+        xp, yp = r * math.cos(ang), r * math.sin(ang)
+        corpos_braco[i].add_geom(name=f"perna{i + 1}", type=mujoco.mjtGeom.mjGEOM_CAPSULE, size=[0.006, 0, 0],
+                                 fromto=[xp, yp, -0.004, xp, yp, -h_pernas], mass=0.25 * massas["pernas"],
+                                 material="perna", friction=[0.9, 0.005, 0.0001])
+
+
+def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.3,
+             com_alvo: bool = False) -> mujoco.MjSpec:
+    """Constrói o spec; `deslocamento` é subtraído a todas as posições do corpo (põe a origem no CM)."""
+    spec = mujoco.MjSpec()
+    spec.modelname = f"drone_rpi_{hw.nome}"
+    spec.compiler.degree = False
+    spec.option.timestep = TIMESTEP
+    spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    spec.option.density = 1.225
+    spec.option.viscosity = 1.8e-5
+    # framebuffer offscreen: comporta o MODO maior do módulo de câmara (4608×2592 = 11,9 MP) —
+    # o MuJoCo nunca renderiza acima de `<visual><global offwidth/offheight>` (regra do lab)
+    spec.visual.global_.offwidth = 4608
+    spec.visual.global_.offheight = 2592
+    spec.visual.map.zfar = 80.0
+    spec.stat.extent = max(1.0, 2.0 * hw.frame.wheelbase)
+
+    tex = spec.add_texture(name="chao", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                           builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER, rgb1=[0.25, 0.25, 0.25],
+                           rgb2=[0.33, 0.33, 0.33], width=256, height=256)
+    mat = spec.add_material(name="chao", texrepeat=[10, 10], reflectance=0.1)
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
+    for nome, rgba in _COR.items():
+        spec.add_material(name=nome, rgba=rgba)
+    if hw.arma is not None:
+        for nome, rgba in _COR_ARMA.items():
+            spec.add_material(name=nome, rgba=rgba)
+        for nome, (rgba, emissao) in _COR_EFEITOS_ARMA.items():
+            m_ef = spec.add_material(name=nome, rgba=rgba, emission=emissao, specular=0.0, shininess=0.0)
+            _ = m_ef
+    if hw.bracos is not None:
+        for nome, rgba in _COR_BRACOS.items():
+            spec.add_material(name=nome, rgba=rgba)
+
+    wb = spec.worldbody
+    wb.add_geom(name="chao", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[50, 50, 0.1], material="chao",
+                friction=[0.9, 0.005, 0.0001])
+    wb.add_light(name="sol", pos=[0, 0, 6], dir=[0, 0, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
+                 diffuse=[0.7, 0.7, 0.7])
+
+    corpo = wb.add_body(name="drone", pos=[0, 0, z0])
+    corpo.add_freejoint(name="livre")
+    off = np.zeros(3) if deslocamento is None else np.asarray(deslocamento, dtype=float)
+
+    def p(x, y, z):
+        return list(np.array([x, y, z], dtype=float) - off)
+
+    sem_contacto = {"contype": 0, "conaffinity": 0}
+    massas = hw.massas
+    braco = hw.braco
+    rot = hw.pos_rotores
+
+    # ---- frame de alta estabilidade: dupla placa em sanduíche + 4 braços + treliças anti-torção
+    # PLACA CENTRAL: `placa_mm` do catálogo quando existe (é o caso do frame 1950: a placa NÃO cresce
+    # com o wheelbase — são os braços que esticam, e o orçamento de massa do catálogo trata as placas
+    # como constantes); sem o campo, a fórmula histórica 0,16·wheelbase (os frames antigos, para os quais
+    # ela foi calibrada).
+    lado = (0.5 * float(hw.frame.dados["placa_mm"]) / 1000.0 if hw.frame.dados.get("placa_mm")
+            else max(0.045, 0.16 * hw.frame.wheelbase))
+    esp = 0.0015
+    corpo.add_geom(name="placa", type=mujoco.mjtGeom.mjGEOM_BOX, size=[lado, lado, esp], pos=p(0, 0, 0),
+                   mass=0.4 * massas["frame"] + massas["extra"], material="frame")
+    # Placa superior do sanduíche estrutural + 4 espaçadores CNC vermelhos nos cantos (group=3, mass=0)
+    z_deck_sup = esp + 0.014
+    corpo.add_geom(name="placa_superior", type=mujoco.mjtGeom.mjGEOM_BOX,
+                   size=[0.88 * lado, 0.88 * lado, 0.0012], pos=p(0, 0, z_deck_sup),
+                   group=3, mass=0.0, material="frame", **sem_contacto)
+    for idx_sp, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1)), start=1):
+        corpo.add_geom(name=f"espacador_placa_{idx_sp}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                       size=[0.003, 0.5 * z_deck_sup, 0],
+                       pos=p(0.78 * sx * lado, 0.78 * sy * lado, 0.5 * z_deck_sup),
+                       group=3, mass=0.0, material="aluminio_vermelho", **sem_contacto)
+
+    if hw.bracos is None:
+        _bracos_rigidos(corpo, hw, p, sem_contacto, massas, braco, rot, lado)
+        corpos_braco = None
+    else:
+        corpos_braco = _bracos_articulados(spec, corpo, hw, p, sem_contacto, massas, braco, rot, lado)
 
     # ---- ESC (4-em-1 no centro, ou 1 por braço)
     if hw.esc.dados.get("formato", "4em1") == "4em1":
@@ -532,11 +724,14 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
 
     # ---- trem de pouso (colisão): 4 pernas sob os braços, mais baixas do que o pack
     h_pernas = max(hw.frame.altura_pernas, -z_baixo + 0.03)
-    for i, (x, y) in enumerate(rot):
-        xp, yp = 0.55 * x, 0.55 * y
-        corpo.add_geom(name=f"perna{i + 1}", type=mujoco.mjtGeom.mjGEOM_CAPSULE, size=[0.006, 0, 0],
-                       fromto=p(xp, yp, -0.004) + p(xp, yp, -h_pernas), mass=0.25 * massas["pernas"],
-                       material="perna", friction=[0.9, 0.005, 0.0001])
+    if corpos_braco is None:
+        for i, (x, y) in enumerate(rot):
+            xp, yp = 0.55 * x, 0.55 * y
+            corpo.add_geom(name=f"perna{i + 1}", type=mujoco.mjtGeom.mjGEOM_CAPSULE, size=[0.006, 0, 0],
+                           fromto=p(xp, yp, -0.004) + p(xp, yp, -h_pernas), mass=0.25 * massas["pernas"],
+                           material="perna", friction=[0.9, 0.005, 0.0001])
+    else:
+        _pernas_articuladas(corpos_braco, hw, massas, h_pernas)
     corpo.add_site(name="cm", pos=[0, 0, 0], size=[0.004, 0, 0])
 
     # ---- atuadores: empuxo e reação por rotor (valores físicos escritos pela Planta)
@@ -552,6 +747,22 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                               ctrllimited=mujoco.mjtLimited.mjLIMITED_FALSE)
         a.set_to_motor()
         a.gear = [0, 0, 0, 0, 0, 1]
+    # braços articulados: 8 atuadores de BINÁRIO nas juntas (a Planta escreve o binário de cada servo — modelo DC +
+    # sem-fim + PID interno em `servos.py`) e 16 sensores de junta (os encoders: posição e velocidade)
+    # (OMBRO: o engrenamento do sem-fim é uma mola-amortecedor rígida → atuador de POSIÇÃO do MuJoCo com kp = rigidez e
+    # kv = amortecimento, cujo alvo a Planta escreve já com a folga; assim o amortecimento entra IMPLÍCITO no
+    # `implicitfast` — explícito, a 500 Hz e com as pernas no chão, oscilava à frequência de Nyquist. COTOVELO: binário
+    # τ_b·d do PWM; a força contra-eletromotriz −τ_b·q̇/ω₀ está no amortecimento da junta, também implícito.)
+    if corpos_braco is not None:
+        so = hw.bracos.ombro
+        for nome_j, nome_a in zip(JUNTAS_OMBRO, SERVOS_OMBRO, strict=True):
+            a = spec.add_actuator(name=nome_a, trntype=mujoco.mjtTrn.mjTRN_JOINT, target=nome_j,
+                                  ctrllimited=mujoco.mjtLimited.mjLIMITED_FALSE)
+            a.set_to_position(kp=float(so.rigidez), kv=float(so.amortecimento))
+        for nome_j, nome_a in zip(JUNTAS_COTOVELO, SERVOS_COTOVELO, strict=True):
+            a = spec.add_actuator(name=nome_a, trntype=mujoco.mjtTrn.mjTRN_JOINT, target=nome_j,
+                                  ctrllimited=mujoco.mjtLimited.mjLIMITED_FALSE)
+            a.set_to_motor()
 
     # ---- sensores
     S, O = mujoco.mjtSensor, mujoco.mjtObj
@@ -563,22 +774,77 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
     spec.add_sensor(name="pos", type=S.mjSENS_FRAMEPOS, objtype=O.mjOBJ_SITE, objname="cm")
     spec.add_sensor(name="quat", type=S.mjSENS_FRAMEQUAT, objtype=O.mjOBJ_BODY, objname="drone")
     spec.add_sensor(name="vel", type=S.mjSENS_FRAMELINVEL, objtype=O.mjOBJ_SITE, objname="cm")
+    if corpos_braco is not None:
+        for nome_j, nome_e in zip(JUNTAS_OMBRO + JUNTAS_COTOVELO, ENC_OMBRO + ENC_COTOVELO, strict=True):
+            spec.add_sensor(name=nome_e, type=S.mjSENS_JOINTPOS, objtype=O.mjOBJ_JOINT, objname=nome_j)
+        for nome_j, nome_v in zip(JUNTAS_OMBRO + JUNTAS_COTOVELO, VEL_OMBRO + VEL_COTOVELO, strict=True):
+            spec.add_sensor(name=nome_v, type=S.mjSENS_JOINTVEL, objtype=O.mjOBJ_JOINT, objname=nome_j)
 
     # ---- PONTO-ALVO VISUAL opcional (IA de seguimento visual: «ver o ponto e seguir») — esfera brilhante no
     # mundo, SEM massa e SEM colisão: o que a câmara vê, nunca a física (regra do simulador físico)
     if com_alvo:
         cam_rpi.adicionar_ponto(spec)
 
-    spec.add_key(name="pousado", qpos=[0, 0, z0, 1, 0, 0, 0])
+    spec.add_key(name="pousado", qpos=[0, 0, z0, 1, 0, 0, 0] + ([0.0] * N_JUNTAS if corpos_braco is not None else []))
     return spec
 
 
 def construir_spec(hw: Hardware, com_alvo: bool = False) -> mujoco.MjSpec:
-    """Spec final com a origem do corpo no CM (duas passagens)."""
+    """Spec final com a origem do corpo no CM (duas passagens).
+
+    Braços articulados: a origem vai para o CM do CONJUNTO (corpo + braços + mastros) com as juntas a 0 — o que
+    o `subtree_com` do MuJoCo dá na pose de construção (corpo na origem, sem rotação); nos rígidos é o CM do corpo
+    (o `body_ipos`, como sempre: a mesma conta, o mesmo MJCF)."""
     m1 = _montar(hw, com_alvo=com_alvo).compile()
-    cm = np.array(m1.body_ipos[m1.body("drone").id])
+    bid = m1.body("drone").id
+    if hw.bracos is None:
+        cm = np.array(m1.body_ipos[bid])
+    else:
+        d1 = mujoco.MjData(m1)
+        mujoco.mj_forward(m1, d1)
+        cm = np.array(d1.subtree_com[bid]) - np.array(d1.xpos[bid])
     spec = _montar(hw, deslocamento=cm, com_alvo=com_alvo)
     return spec
+
+
+def tem_bracos(model: mujoco.MjModel) -> bool:
+    """O modelo tem os braços ARTICULADOS (as juntas `ombro1`…)?"""
+    try:
+        model.joint(JUNTAS_OMBRO[0])
+    except KeyError:
+        return False
+    return True
+
+
+def inercia_composta(model: mujoco.MjModel, qpos: np.ndarray | None = None) -> np.ndarray:
+    """Tensor de inércia (3×3, kg·m²) do drone INTEIRO no referencial do corpo `drone`, em torno do CM do conjunto.
+
+    Sem braços articulados é a inércia do próprio corpo (`body_inertia` rodada por `body_iquat`: R·diag·Rᵀ — a conta de
+    sempre). Com braços soma-se a de cada corpo da árvore (Steiner: I_cm,b + m_b·(|r|²·E − r·rᵀ)) na pose `qpos` (por
+    omissão a de construção, juntas a 0)."""
+    bid = model.body("drone").id
+    if not tem_bracos(model):
+        r = np.zeros(9)
+        mujoco.mju_quat2Mat(r, model.body_iquat[bid])
+        r = r.reshape(3, 3)
+        return r @ np.diag(model.body_inertia[bid]) @ r.T
+    data = mujoco.MjData(model)
+    data.qpos[:] = model.qpos0 if qpos is None else qpos
+    mujoco.mj_forward(model, data)
+    r_corpo = data.xmat[bid].reshape(3, 3)
+    com = data.subtree_com[bid]
+    tot = np.zeros((3, 3))
+    for b in range(model.nbody):
+        a = b
+        while a not in (0, bid):
+            a = int(model.body_parentid[a])
+        if a != bid or model.body_mass[b] <= 0.0:
+            continue
+        rb = data.ximat[b].reshape(3, 3)
+        i_b = rb @ np.diag(model.body_inertia[b]) @ rb.T
+        d = data.xipos[b] - com
+        tot += i_b + model.body_mass[b] * (float(d @ d) * np.eye(3) - np.outer(d, d))
+    return r_corpo.T @ tot @ r_corpo
 
 
 def carregar(hw: Hardware, com_alvo: bool = False) -> tuple[mujoco.MjModel, mujoco.MjData]:

@@ -428,6 +428,9 @@ def sensores_da_planta(pl, s) -> None:
     tof, fl = pl.tof, pl.fluxo
     preencher_sensores(s, pl.imu.giro.medicao, pl.imu.acc.medicao, tof.distancia, tof.valido, tof.s.n_amostras,
                        fl.fluxo, fl.valido, fl.s.n_amostras, pl.monitor.tensao)
+    # interface 4: inclinação dos motores pelos encoders das juntas (braços articulados; 0, 0 nos rígidos)
+    if getattr(pl, "servos", None) is not None:
+        s.incl_motor, s.incl_motor_taxa = pl.inclinacao_motores_medida()
 
 
 def definir_comando_ctbr(c, coletivo: float, taxas) -> None:
@@ -438,9 +441,27 @@ def definir_comando_ctbr(c, coletivo: float, taxas) -> None:
     c.vx = c.vy = c.vz = c.yaw_taxa = 0.0
 
 
+def comando_com_pitch(env, d: dict | None) -> dict:
+    """O comando de voo com o pitch pedido ao CORPO pelos braços articulados (interface 4, mira por arfagem): com o
+    controlador dos braços em modo `mira`, `pitch_corpo` = `env.bracos.pitch_corpo_alvo` — a não ser que o comando já o
+    traga ou seja CTBR. Sem braços devolve o comando tal como está."""
+    d = dict(d or {})
+    br = getattr(env, "bracos", None)
+    if br is not None and br.modo == "mira" and "pitch_corpo" not in d and d.get("modo", "velocidade") != "ctbr":
+        d["pitch_corpo"] = float(br.pitch_corpo_alvo)
+    return d
+
+
+def ligar_bracos(env, nucleo) -> None:
+    """Braços articulados: o τ dos servos passa a ser o `incl_ref` do núcleo (mira por arfagem). Sem braços, nada."""
+    if getattr(env, "bracos", None) is not None:
+        env.bracos.fonte_tau = lambda: float(nucleo.saida.incl_ref)
+
+
 def definir_comando_dict(c, d: dict | None) -> None:
     """Escreve num `Comando` o dict do protótipo Python (`CascataClassica.passo`): `vx vy vz yaw_taxa` (referencial do
-    RUMO), `modo` ∈ {velocidade, yaw_alvo, olhar, ctbr}, `yaw` (rumo absoluto), `z_alvo` (descolar). `None`/{} = pairar."""
+    RUMO), `modo` ∈ {velocidade, yaw_alvo, olhar, ctbr}, `yaw` (rumo absoluto), `z_alvo` (descolar), `pitch_corpo` (rad,
+    mira por arfagem dos braços articulados — interface 4). `None`/{} = pairar."""
     d = d or {}
     c.modo = MODOS_COMANDO[d.get("modo", "velocidade")]
     c.coletivo = float(d.get("coletivo", 0.0))
@@ -451,12 +472,19 @@ def definir_comando_dict(c, d: dict | None) -> None:
     c.yaw = float(d["yaw"]) if d.get("yaw") is not None else 0.0
     z = d.get("z_alvo")
     c.tem_z_alvo, c.z_alvo = (0, 0.0) if z is None else (1, float(z))
+    pc = d.get("pitch_corpo")                    # interface 4: mira por arfagem (braços articulados)
+    c.tem_pitch_corpo, c.pitch_corpo = (0, 0.0) if pc is None else (1, float(pc))
 
 
 # =========================================================================================== Config da planta
 def inercia_do_corpo(model) -> np.ndarray:
-    """Diagonal da inércia no frame do CORPO (o MuJoCo guarda-a nos eixos principais): I = R·diag·Rᵀ."""
+    """Diagonal da inércia no frame do CORPO (o MuJoCo guarda-a nos eixos principais): I = R·diag·Rᵀ. Com braços
+    articulados é a do drone INTEIRO (`modelo.inercia_composta`: corpo + braços + mastros, juntas a 0)."""
     import mujoco
+
+    from lab.drone_rpi.modelo import inercia_composta, tem_bracos
+    if tem_bracos(model):
+        return np.diag(inercia_composta(model)).copy()
     corpo = model.body("drone").id
     r = np.zeros(9)
     mujoco.mju_quat2Mat(r, model.body_iquat[corpo])
@@ -557,6 +585,10 @@ def config_de_hardware(hw, model, dt: float, estruturas: dict[str, type] | None 
     a = hw.braco / math.sqrt(2.0)
     alfa = np.array([4.0 * a * dt_du / inercia[0], 4.0 * a * dt_du / inercia[1],
                      4.0 * (hw.kq / hw.kf) * dt_du / inercia[2]])
+    margem_min = getattr(hw, "fc_margem_fase_min", None)       # τ de projeto (como o `fc.py`): build com margem mínima
+    if margem_min is not None:
+        dt_dec = float(env.dt_decisao) if env is not None else _fc.DT_DECISAO_PADRAO
+        tau_motor = _fc.tau_de_projeto(tau_motor, _fc.atraso_malha_taxa(hw, dt_dec), margem_min)
     kp = 1.0 / (alfa * 4.0 * _fc.ZETA * _fc.ZETA * tau_motor)
     wc = 1.0 / (2.0 * tau_motor)
     ki = kp * wc / 4.0
@@ -784,7 +816,7 @@ class _AdaptadorCascata(_AdaptadorFC):
     def passo(self, acelerador, taxas_sp, giro_medido) -> np.ndarray:
         n, env = self.nucleo, self.env
         self._sensores()
-        definir_comando_dict(n.cmd, self._cmd)
+        definir_comando_dict(n.cmd, comando_com_pitch(env, self._cmd))
         ref = n.planear(env.dt)
         self._fila.append(n.bib.ReferenciasTaxa.from_buffer_copy(ref))
         atrasada = self._fila.popleft()
@@ -851,6 +883,7 @@ class DroneRealEnvNucleo(DroneRealEnv):
         elif modo_nucleo == "cascata":
             self.fc = _AdaptadorCascata(ref, self.nucleo, self.cascata_opcoes.get("atraso_passos"))
             self.estimador = _AdaptadorEstimador(self.fc)
+            ligar_bracos(self, self.nucleo)
         else:
             self.fc = _AdaptadorFC(ref, self.nucleo)
             self.estimador = _AdaptadorEstimador(self.fc)
@@ -864,10 +897,12 @@ class DroneRealEnvNucleo(DroneRealEnv):
             self.fc.camera = self.camera_sitl
 
     def _config_cascata(self, biblioteca):
-        """A Config do modo cascata: estimador clássico + cascata (ganhos da PLANTA) [+ olhar]."""
+        """A Config do modo cascata: estimador clássico + cascata (ganhos da PLANTA) [+ olhar]. Braços articulados: o u/r
+        de guinada é o da fórmula do hardware (o identificado é do drone rígido) e a mistura dá prioridade ao
+        rolamento/arfagem (interface 4)."""
         op = self.cascata_opcoes
         kw = {"altura_min": VOO_Z_MIN_CONTRATO - deslocamento_sensor_cm(self.model)}
-        if op.get("u_yaw_por_taxa") is not None:
+        if op.get("u_yaw_por_taxa") is not None and not getattr(self, "articulado", False):
             kw["u_yaw_por_taxa"] = float(op["u_yaw_por_taxa"])
         kw.update(op.get("ganhos_kw") or {})
         camera = None
@@ -875,8 +910,11 @@ class DroneRealEnvNucleo(DroneRealEnv):
             camera = {"largura": 320, "altura": 240, "latencia_s": 0.116, **op["camera"]}
             camera["fovy_graus"] = float(self.model.cam_fovy[self.model.camera("fpv").id])
             camera["atraso_s"] = float(camera["latencia_s"])
-        return config_de_hardware(self.hw, self.model, self.dt, env=self, ganhos_kw=kw, estimador_classico=True,
-                                  opcoes_estimador=op.get("estimador"), camera=camera, bib=biblioteca)
+        cfg = config_de_hardware(self.hw, self.model, self.dt, env=self, ganhos_kw=kw, estimador_classico=True,
+                                 opcoes_estimador=op.get("estimador"), camera=camera, bib=biblioteca)
+        if getattr(self, "articulado", False):
+            cfg.prioridade_rp = 1
+        return cfg
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         obs, info = super().reset(seed=seed, options=options)

@@ -581,14 +581,14 @@ def comando_passo(args, original: Path) -> bool:
 
 
 # =========================================================================================== escala com n_envs
-def _mede_vec(n_envs: int, raiz: Path, rollouts: int, semente: int = 0) -> dict:
+def _mede_vec(n_envs: int, raiz: Path, rollouts: int, semente: int = 0, build: str = BUILD_TREINO) -> dict:
     """Débito do PPO de verdade com `n_envs` ambientes desta árvore: rollouts (`collect_rollouts`) e UM update."""
     import torch
     import train
     torch.set_num_threads(1)
     args = train.ler_args(["--comandos", "--vento-dinamico", "rajadas", "--vento-dinamico-params",
                            '{"p": 0.02, "duracao": 10}', "--curriculo-vento", "3", "--sem-painel", "--n-envs",
-                           str(n_envs), "--seed", str(semente), "--build", BUILD_TREINO])
+                           str(n_envs), "--seed", str(semente), "--build", build])
     din = train.config_dinamica(args.vento_dinamico_cfg, 3.0)
     fabricas = [train._fabrica_env(semente + i, str(raiz / PASTA_EXP), str(raiz), 3.0, din, planta="real",
                                    build=args.build, modo_acao=args.modo_acao, aleatorizar=True, comando=True,
@@ -642,15 +642,19 @@ def comando_escala(args, original: Path | None) -> bool:
         arvores = [("atual", _RAIZ)] + ([("original", original)] if original is not None else [])
         for rep in range(args.repeticoes):
             for nome, raiz in (arvores if rep % 2 == 0 else arvores[::-1]):
-                m = _mede_vec(n, Path(raiz), args.rollouts)
+                if nome == "original" and args.build != BUILD_TREINO:
+                    continue                                    # o código original não conhece os braços articulados
+                m = _mede_vec(n, Path(raiz), args.rollouts, build=args.build if nome == "atual" else BUILD_TREINO)
                 linha.setdefault(nome, []).append(m)
+        if "atual" not in linha:
+            continue
         at = max(linha["atual"], key=lambda m: m["passos_s_rollout"])
         th = at["s_update_por_threads_torch"]
         texto = (f"   n_envs={n:2d} · n_steps={at['n_steps']:4d} · rollout {at['passos_por_rollout']} · "
                  f"{at['passos_s_rollout']:7.0f} passos/s só rollout · update {at['s_update']:.2f} s "
                  f"({100 * at['fracao_update']:.0f} % do ciclo; 2 threads {th[2]:.2f} s, 4 threads {th[4]:.2f} s) · "
                  f"{at['passos_s_treino']:7.0f} passos/s de treino")
-        if "original" in linha:
+        if linha.get("original"):
             og = max(linha["original"], key=lambda m: m["passos_s_rollout"])
             linha["razao_rollout"] = at["passos_s_rollout"] / og["passos_s_rollout"]
             texto += f" · original {og['passos_s_rollout']:6.0f} passos/s → {linha['razao_rollout']:.2f}×"
@@ -695,6 +699,8 @@ def ler_args(argv=None) -> argparse.Namespace:
     p.add_argument("--rollouts", type=int, default=3, help="escala: rollouts cronometrados por medição")
     p.add_argument("--repeticoes", type=int, default=1, help="escala: repetições (alternando original/atual)")
     p.add_argument("--com-original", action="store_true", help="escala: mede também o código original (A/B)")
+    p.add_argument("--build", default=BUILD_TREINO,
+                   help="escala: build a medir (ex.: articulado_15pol_mn5006 — braços articulados; só no código atual)")
     args = p.parse_args(argv)
     if args.rapido:
         args.sementes, args.sementes_vetorial = 2, 1

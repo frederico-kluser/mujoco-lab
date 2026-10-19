@@ -45,16 +45,24 @@ from .componentes import (
 )
 from .modelo import (
     ALCANCE_PROJETIL_M,
+    CORPOS_MASTRO,
     DURACAO_CAMINHO_TIRO_S,
     DURACAO_FOGO_CANO_S,
+    JUNTAS_COTOVELO,
+    JUNTAS_OMBRO,
     N_SLOTS_TIRO,
     REACOES,
     ROTORES,
+    SERVOS_COTOVELO,
+    SERVOS_OMBRO,
     SITE_BOCA_CANO,
     SITES_ROTOR,
+    inercia_composta,
+    tem_bracos,
 )
 from .propulsao import Propulsao
 from .sensores import IMU, Barometro, FluxoOptico, MonitorBateria, Telemetro, _sortear
+from .servos import ServosBracos
 
 ALTURA_SEM_SOLO = 50.0      # m — altura usada quando o raio não encontra chão
 
@@ -77,6 +85,15 @@ def _cruz_soma(r: np.ndarray, f: np.ndarray) -> np.ndarray:
     return np.array([np.dot(r[:, 1], f[:, 2]) - np.dot(r[:, 2], f[:, 1]),
                      np.dot(r[:, 2], f[:, 0]) - np.dot(r[:, 0], f[:, 2]),
                      np.dot(r[:, 0], f[:, 1]) - np.dot(r[:, 1], f[:, 0])])
+
+
+def _cruz_4(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """a × b linha a linha para (n, 3) × (n, 3) — explícito (o `np.cross` genérico é ~10× mais lento em vetores de 3)."""
+    out = np.empty_like(b, dtype=float)
+    out[:, 0] = a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1]
+    out[:, 1] = a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2]
+    out[:, 2] = a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+    return out
 
 
 def _lista4(acelerador) -> list:
@@ -135,6 +152,24 @@ class Planta:
         self._v_ctrl, self._v_xfrc, self._v_sd = data.ctrl, data.xfrc_applied[c], data.sensordata
         self._i_t = [int(i) for i in self.slot_t]
         self._i_q = [int(i) for i in self.slot_q]
+        # BRAÇOS ARTICULADOS (`hw.bracos`): 8 juntas com servos; os rotores estão nos MASTROS (eixo de cada um = o z do
+        # seu site, que já não é o do corpo) — por isso este build usa o passo `_passo_articulado` (vetorial)
+        self.articulado = hw.bracos is not None and tem_bracos(model)
+        self._p_servos = 0.0                              # W na bateria acima da espera (passo anterior)
+        if self.articulado:
+            self._escalar = False
+            nomes_j = JUNTAS_OMBRO + JUNTAS_COTOVELO
+            self.j_qadr = np.array([model.jnt_qposadr[model.joint(n).id] for n in nomes_j])
+            self.j_dadr = np.array([model.jnt_dofadr[model.joint(n).id] for n in nomes_j])
+            self.slot_servo = np.array([model.actuator_ctrladr[model.actuator(n).id]
+                                        for n in SERVOS_OMBRO + SERVOS_COTOVELO])
+            self.corpos_mastro = np.array([model.body(n).id for n in CORPOS_MASTRO])
+            self.servos: ServosBracos | None = ServosBracos(hw.bracos)
+            gid = model.geom("chao").id
+            self._chao = (model.geom_pos[gid].copy(), model.geom_size[gid].copy(), int(gid))
+            self._vel6 = np.zeros(6)
+        else:
+            self.servos = None
         # arma fixa no topo (Glock 25 .380 Auto): site `boca_cano`, geoms de fogo/ferrolho/projéteis e estado de tiro
         try:
             self.site_boca: int | None = int(model.site(SITE_BOCA_CANO).id)
@@ -198,11 +233,14 @@ class Planta:
         self.braco_z_arma = (
             float(model.site_pos[self.site_boca, 2]) if self.site_boca is not None else 0.0
         )
-        q_inercia = np.zeros(9)
-        mujoco.mju_quat2Mat(q_inercia, model.body_iquat[c])
-        r_inercia = q_inercia.reshape(3, 3)
-        i_corpo = r_inercia @ np.diag(model.body_inertia[c]) @ r_inercia.T
-        self.inercia_corpo = np.diag(i_corpo).copy()
+        if self.articulado:
+            self.inercia_corpo = np.diag(inercia_composta(model)).copy()
+        else:
+            q_inercia = np.zeros(9)
+            mujoco.mju_quat2Mat(q_inercia, model.body_iquat[c])
+            r_inercia = q_inercia.reshape(3, 3)
+            i_corpo = r_inercia @ np.diag(model.body_inertia[c]) @ r_inercia.T
+            self.inercia_corpo = np.diag(i_corpo).copy()
         # Hélices 3D rotativas (rotores 1..4): sentido correto (CW = -1 nos rotores 1,2; CCW = +1 nos rotores 3,4)
         # e velocidade angular visual proporcional à fração % de ω_max de cada motor.
         self.sentido_rotacao_helices = [int(g) for g in hw.GIRO]
@@ -291,6 +329,12 @@ class Planta:
         self.data.ctrl[self.slot_t] = self.prop.empuxos()
         self.data.ctrl[self.slot_q] = 0.0
         self.data.xfrc_applied[self.corpo] = 0.0
+        if self.articulado:
+            self.servos.reiniciar(self.data.qpos[self.j_qadr])
+            self.servos.ligar(True)
+            self.data.ctrl[self.slot_servo] = 0.0
+            self.data.xfrc_applied[self.corpos_mastro] = 0.0
+            self._p_servos = 0.0
         self._tiros_ativos.clear()
         self._limpar_visuais_tiro()
         self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
@@ -764,6 +808,8 @@ class Planta:
         self.data.ctrl[:] = ctrl_atual
         self.data.time = t_atual
         mujoco.mj_forward(self.model, self.data)
+        if self.articulado:                       # o corpo `drone` não é o drone todo: braços e mastros têm massa própria
+            m_nova = float(self.model.body_mass.sum())
         ph = self.hw.ponto_pairagem(self.hw.bateria.v_nominal, massa=m_nova)
         self.aero.omega_h = ph["omega"]
         self.omega_h = ph["omega"]
@@ -780,6 +826,7 @@ class Planta:
              `Propulsao` e `ModeloBateria` (preservando SoC e ω atuais) e devolve `telemetria_pecas()`.
         """
         novo_hw = criar_hardware_com_pecas(self.hw, motor_id=motor_id, bateria_id=bateria_id, preset_id=preset_id)
+        motor_ant_massa, helice_ant_massa = self.hw.motor.massa, self.hw.helice.massa
         omega_ant = self.prop.omega.copy()
         armado_ant = bool(self.prop.armado)
         soc_ant = float(self.bat.soc)
@@ -834,6 +881,15 @@ class Planta:
         # Atualiza massa e inércia do corpo no MuJoCo preservando o estado dinâmico
         self._massa_corpo_base = float(novo_hw.massa_total)
         c = self.corpo
+        if self.articulado:
+            # o motor+hélice vive no MASTRO: a diferença de massa vai para lá; o corpo fica com o resto do orçamento
+            d_rotor = (novo_hw.motor.massa + novo_hw.helice.massa) - (motor_ant_massa + helice_ant_massa)
+            for b in self.corpos_mastro:
+                fator_b = (float(m.body_mass[b]) + d_rotor) / max(float(m.body_mass[b]), 1e-9)
+                m.body_mass[b] = float(m.body_mass[b]) + d_rotor
+                m.body_inertia[b] = m.body_inertia[b] * fator_b
+            outros = float(m.body_mass.sum()) - float(m.body_mass[c])
+            self._massa_corpo_base = float(novo_hw.massa_total) - outros
         m_nova = self._massa_corpo_base + self.carga_extra_kg
         fator_m = m_nova / max(float(m.body_mass[c]), 1e-6)
         qpos_atual = self.data.qpos.copy()
@@ -849,6 +905,8 @@ class Planta:
         self.data.ctrl[:] = ctrl_atual
         self.data.time = t_atual
         mujoco.mj_forward(m, self.data)
+        if self.articulado:
+            m_nova = float(m.body_mass.sum())
 
         ph = novo_hw.ponto_pairagem(novo_hw.bateria.v_nominal, massa=m_nova)
         self.aero.hw = novo_hw
@@ -954,6 +1012,8 @@ class Planta:
         e = self.bat.tensao_aberta()
         r0 = self.bat.r0()
         p_e = 0.0 if self.brownout else self.p_eletronica
+        if self._p_servos and not self.brownout:
+            p_e += self._p_servos
         v = max(self.v_bus, 0.5 * e, 1e-3)
         for _ in range(8):
             i_m, di_m = corrente_bus(v)
@@ -970,7 +1030,9 @@ class Planta:
     # ------------------------------------------------------------------ passo de física
     def passo(self, acelerador=None) -> None:
         """Um passo de física com o acelerador por motor [0, 1] (None = mantém o último)."""
-        if self._escalar:
+        if self.articulado:
+            self._passo_articulado(acelerador)
+        elif self._escalar:
             self._passo_escalar(acelerador)
         else:
             self._passo_vetorial(acelerador)
@@ -1208,6 +1270,169 @@ class Planta:
         self.monitor.passo(tt, self.rng, self.v_bus, self.i_total)
         self.n_passos += 1
 
+    def _altura_ao_chao(self, pos: np.ndarray) -> float:
+        """Distância vertical do ponto `pos` ao plano do chão (m) — o raio do `mj_ray` bateria no próprio motor/mastro
+        (o `bodyexclude` só exclui UM corpo e o rotor está num mastro, filho do braço, filho do corpo)."""
+        p_chao, tam, _gid = self._chao
+        h = float(pos[2] - p_chao[2])
+        return h if h >= 0.0 else ALTURA_SEM_SOLO
+
+    def _passo_articulado(self, acelerador=None) -> None:
+        """O passo dos BRAÇOS ARTICULADOS — as contas de `_passo_vetorial` com o eixo de CADA rotor (o do seu site, no
+        topo do mastro) em vez do eixo do corpo, mais os 8 servos:
+
+            v_rotor, Ω_mastro   ← mj_objectVelocity do site (inclui o movimento das juntas)
+            v_axial_i           = (v_rotor − vento)·ẑ_i           (inflow/VRS por rotor)
+            arrasto_i           = −c_d·ω_i·(v_ar projetada nos eixos x_i, y_i do ROTOR), aplicado no mastro
+            giroscópico_i       = −Ω_mastro × (h_i·ẑ_i), no mastro (inclinar o mastro com o rotor a girar custa binário)
+            servos              → binário de cada junta (`servos.py`) e corrente no regulador de 24 V → bateria
+        O empuxo e a reação continuam nos atuadores de site (`rotor_i`/`reacao_i`): seguem o eixo do mastro sozinhos.
+        Motores/ESC/bateria pelas MESMAS funções escalares do caminho rígido (`Propulsao._passo_l`…, provadas idênticas às
+        vetoriais em `bench_treino.py identidade`); os produtos vetoriais dos 4 rotores de uma vez (o `np.cross` genérico
+        custava 1/4 do passo).
+        """
+        m, d = self.model, self.data
+        prop = self.prop
+        if acelerador is not None:
+            prop._definir_acelerador_l(_lista4(acelerador))
+        mujoco.mj_step1(m, d)
+
+        pos_r = d.site_xpos[self.sites]
+        mats = d.site_xmat[self.sites].reshape(4, 3, 3)
+        ex_r, ey_r, ez_r = mats[:, :, 0], mats[:, :, 1], mats[:, :, 2]
+        vel6 = self._vel6
+        v_r = np.empty((4, 3))
+        w_m = np.empty((4, 3))
+        sid_tipo = mujoco.mjtObj.mjOBJ_SITE
+        for i in range(4):
+            mujoco.mj_objectVelocity(m, d, sid_tipo, int(self.sites[i]), vel6, 0)
+            w_m[i] = vel6[:3]
+            v_r[i] = vel6[3:]
+        v_ar = v_r - m.opt.wind
+        v_axial = np.einsum("ij,ij->i", v_ar, ez_r)
+
+        alt = self._alt
+        if self.aero.flags.solo:
+            for i in range(4):
+                alt[i] = self._altura_ao_chao(pos_r[i])
+        kt, kq, g_solo, k_inflow, k_vrs = self.aero._fatores_l(alt, v_axial.tolist(), prop._omega, self.dt, self.rng)
+        self._kappa_t = kt
+        self._detalhe = (g_solo, k_inflow, k_vrs)
+
+        v = self._resolver_tensao(prop._corrente_bus_l)
+        if v < self.hw.v_brownout and not self.brownout:
+            self.brownout = True                             # BEC/ESC e o regulador dos servos desligam — o drone cai
+            prop.armar(False)
+            self.servos.ligar(False)
+            v = self._resolver_tensao(prop._corrente_bus_l)
+        empuxo, reacao = prop._passo_l(self.dt, v, kq, kt)
+        ctrl, ff = d.ctrl, self._fator_frame
+        for i, t in zip(self._i_t, empuxo):
+            ctrl[i] = t * ff
+        for i, q in zip(self._i_q, reacao):
+            ctrl[i] = q
+
+        # servos das 8 juntas (posição/velocidade REAIS → binário; o encoder quantizado fica no servo)
+        ctrl[self.slot_servo] = self.servos.passo(d.qpos[self.j_qadr], d.qvel[self.j_dadr], self.dt)
+        self._p_servos = 0.0 if self.brownout else self.servos.potencia_carga_bateria()
+
+        # arrasto de rotor e giroscópico, os 4 rotores de uma vez, no MASTRO que segura cada um
+        omega = np.array(prop._omega)
+        fl = self.aero.flags
+        if fl.arrasto_rotor:
+            vx = np.einsum("ij,ij->i", v_ar, ex_r)
+            vy = np.einsum("ij,ij->i", v_ar, ey_r)
+            f = (-self.aero.cd[0] * omega * vx)[:, None] * ex_r + (-self.aero.cd[1] * omega * vy)[:, None] * ey_r
+        else:
+            f = np.zeros((4, 3))
+        b = self.corpos_mastro
+        tau = _cruz_4(pos_r - d.xipos[b], f)
+        if fl.giroscopico:
+            h = np.asarray(prop.giro) * np.asarray(prop.j) * omega
+            tau = tau - _cruz_4(w_m, h[:, None] * ez_r)
+        xfrc = d.xfrc_applied
+        xfrc[self.corpo] = 0.0
+        xfrc[b, :3] = f
+        xfrc[b, 3:] = tau
+        if self._tiros_ativos:
+            rmat = d.xmat[self.corpo].reshape(3, 3)
+            ex = rmat[:, 0]
+            com = d.xipos[self.corpo]
+            f_tiro = self._forca_tiro_passo()
+            f_recuo = -f_tiro * ex
+            braco_arma = (self._v_boca - com) if self._v_boca is not None \
+                else 0.0965 * ex + self.braco_z_arma * rmat[:, 2]
+            xfrc[self.corpo, :3] += f_recuo
+            xfrc[self.corpo, 3:] += _cruz_4(braco_arma[None, :], f_recuo[None, :])[0]
+        else:
+            self.forca_tiro_atual = 0.0
+
+        mujoco.mj_step2(m, d)
+        self._passo_visuais_tiro()
+        self._passo_helices_visuais(omega)
+
+        p_e = 0.0 if self.brownout else self.p_eletronica + self._p_servos
+        b0, b1, b2, b3 = prop._i_bus
+        self.i_total = ((((0.0 + b0) + b1) + b2) + b3) + p_e / v
+        self.bat.passo(self.i_total, self.dt)
+        self.v_bus = self.bat.v
+
+        tt = float(d.time)
+        carga = float(np.mean(omega)) / self.omega_h
+        self.imu.passo(tt, self.rng, carga)
+        if self.tof is not None:
+            self.tof.passo(tt, self.rng)
+        if self.fluxo is not None:
+            self.fluxo.passo(tt, self.rng)
+        if self.baro is not None:
+            self.baro.passo(tt, self.rng)
+        self.monitor.passo(tt, self.rng, self.v_bus, self.i_total)
+        self.n_passos += 1
+
+    # ------------------------------------------------------------------ braços articulados (leituras/alvos)
+    def definir_alvos_juntas(self, alvos) -> None:
+        """Alvos de posição das 8 juntas (rad, ordem `ombro1..4, cotovelo1..4`) — a escrita do barramento dos servos."""
+        if self.servos is None:
+            raise RuntimeError("este build não tem braços articulados (`bracos` no builds.json)")
+        self.servos.definir_alvos(alvos)
+
+    def juntas_medidas(self) -> np.ndarray:
+        """As 8 posições MEDIDAS (rad) pelos encoders (o que o firmware sabe); zeros sem braços articulados."""
+        return self.servos.medidas if self.servos is not None else np.zeros(8)
+
+    def velocidades_juntas_medidas(self) -> np.ndarray:
+        return self.servos.velocidades if self.servos is not None else np.zeros(8)
+
+    def juntas_verdade(self) -> np.ndarray:
+        """As 8 posições EXATAS (rad, privilegiado) — só recompensa/crítico/telemetria."""
+        return np.array(self.data.qpos[self.j_qadr]) if self.articulado else np.zeros(8)
+
+    def inclinacao_motores_medida(self) -> tuple[float, float]:
+        """(τ, τ̇): inclinação MÉDIA dos eixos dos motores face ao corpo (rad, rad/s) — média de q_ombro + q_cotovelo dos 4
+        braços, pelos encoders. É a entrada `incl_motor` do núcleo de firmware (o laço de taxa e a atitude passam a
+        controlar o referencial dos MOTORES; o estimador continua no do corpo, onde estão os sensores). 0 sem braços."""
+        if self.servos is None:
+            return 0.0, 0.0
+        q = self.servos.medidas
+        qd = self.servos.velocidades
+        return float(np.mean(q[:4] + q[4:])), float(np.mean(qd[:4] + qd[4:]))
+
+    def telemetria_bracos(self) -> dict | None:
+        """Estado dos braços: posições medidas/alvos (graus), binários, correntes e potência dos servos (`None` sem braços)."""
+        if self.servos is None:
+            return None
+        sv = self.servos
+        q = sv.medidas
+        tau_m, taud_m = self.inclinacao_motores_medida()
+        return {"juntas_graus": [round(math.degrees(float(v)), 3) for v in q],
+                "alvos_graus": [round(math.degrees(float(v)), 3) for v in sv.alvos],
+                "binarios_nm": [round(float(v), 4) for v in sv.binarios],
+                "correntes_a": [round(float(v), 4) for v in sv.correntes],
+                "potencia_servos_w": round(sv.potencia_24v() / self.hw.bracos.fonte_eficiencia, 2),
+                "inclinacao_motores_graus": round(math.degrees(tau_m), 3),
+                "taxa_inclinacao_graus_s": round(math.degrees(taud_m), 3),
+                "saturados": [bool(s.saturado) for s in sv.servos]}
+
     # ------------------------------------------------------------------ leituras
     def potencias(self) -> dict:
         """Ledger de potência (W) do passo atual."""
@@ -1217,8 +1442,15 @@ class Planta:
         for papel, s in self.hw.sensores.items():
             consumidores[f"sensor_{papel}"] = float(s.get("potencia_w", 0.0))
         p5 = sum(consumidores.values())
-        return {"motores": p_mot, "eletronica": p_e, "bec_perdas": p_e - p5 if p_e > 0 else 0.0,
-                "consumidores_5v": consumidores, "total": p_mot + p_e}
+        if self.servos is None:
+            return {"motores": p_mot, "eletronica": p_e, "bec_perdas": p_e - p5 if p_e > 0 else 0.0,
+                    "consumidores_5v": consumidores, "total": p_mot + p_e}
+        # braços articulados: a eletrónica inclui a espera dos 8 servos; a carga deles conta à parte
+        p_esp = self.hw.bracos.potencia_espera()
+        p_carga = 0.0 if self.brownout else self._p_servos
+        return {"motores": p_mot, "eletronica": p_e, "servos": (p_esp if p_e > 0 else 0.0) + p_carga,
+                "bec_perdas": (p_e - p_esp - p5) if p_e > 0 else 0.0, "consumidores_5v": consumidores,
+                "total": p_mot + p_e + p_carga}
 
     def omega_max_atual(self) -> float:
         """Teto de rotação com a tensão ATUAL do barramento (rad/s) — decai com a descarga."""

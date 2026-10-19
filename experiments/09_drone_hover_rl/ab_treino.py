@@ -70,7 +70,8 @@ def ler_bracos(pares: list[str]) -> dict[str, list[str]]:
 
 def comando(braco: str, flags: list[str], semente: int, args: argparse.Namespace) -> tuple[list[str], Path]:
     pasta = args.saida / braco / f"seed{semente}"
-    cmd = [sys.executable, str(_AQUI / "train.py"), "--planta", args.planta, "--timesteps", str(args.timesteps),
+    extra_build = ["--build", args.build] if getattr(args, "build", None) else []
+    cmd = [sys.executable, str(_AQUI / "train.py"), "--planta", args.planta, "--timesteps", str(args.timesteps), *extra_build,
            "--n-envs", str(args.n_envs), "--seed", str(semente), "--sem-painel", "--out-dir", str(pasta),
            "--sucesso", f"{SEM_LIMIAR:g}", "--eval-envs", str(args.eval_envs), *args.comuns, *flags]
     return cmd, pasta
@@ -155,6 +156,8 @@ def main(argv=None) -> int:
     p.add_argument("--paralelo", type=int, default=2, help="runs em simultâneo (cada um usa n_envs + eval_envs processos)")
     p.add_argument("--comuns", type=shlex.split, default=[],
                    help="flags do train.py comuns a TODOS os braços (caminhos ABSOLUTOS: cada run corre na sua pasta)")
+    p.add_argument("--build", type=str, default=None,
+                   help="build de TODOS os braços (ex.: articulado_15pol_mn5006 — a observação ganha as 8 juntas)")
     p.add_argument("--saida", type=Path, default=SAIDA)
     p.add_argument("--refazer", action="store_true", help="volta a treinar mesmo os runs que já acabaram")
     args = p.parse_args(argv)

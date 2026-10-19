@@ -875,6 +875,14 @@ def criar_envs_avaliacao(args: argparse.Namespace):
                                                  comando, perfis) for i in range(n)])
 
 
+def n_ator_real(args: argparse.Namespace) -> int:
+    """Entradas REAIS do ator na planta real: 21 (+3 do `v_ref` no modo comando) (+8 juntas nos braços articulados)."""
+    from lab import drone_rpi as _dr
+    from env_real import N_JUNTAS_OBS
+    base = OBS_ATOR_DIM_COMANDO if getattr(args, "comandos", False) else OBS_ATOR_DIM
+    return base + (N_JUNTAS_OBS if _dr.hardware(getattr(args, "build", None)).bracos is not None else 0)
+
+
 def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
     """`hardware.json` ao lado do modelo: o build (peças + config), os derivados e a DR — os dados das peças
     REAIS com que a política foi treinada (o deploy e o site leem-no; trocar de peças = treinar de novo)."""
@@ -891,7 +899,8 @@ def gravar_hardware(args: argparse.Namespace, out_dir: Path) -> dict | None:
                   "frame": hw.frame.dados, "esc": hw.esc.dados,
                   "eletronica": [c.dados for c in hw.consumidores], "sensores": hw.sensores},
         "derivados": resumo, "modo_acao": args.modo_acao,
-        "obs_ator_dim": OBS_ATOR_DIM_COMANDO if getattr(args, "comandos", False) else OBS_ATOR_DIM,
+        "obs_ator_dim": n_ator_real(args),
+        "bracos_articulados": hw.bracos is not None,
         "comando": bool(getattr(args, "comandos", False)),
         "domain_randomization": None if args.sem_dr else FAIXAS_DR,
     }
@@ -1400,8 +1409,7 @@ def criar_modelo(args: argparse.Namespace, venv: SubprocVecEnv,
     if args.retomar is None:
         real = getattr(args, "planta", "cf2") == "real"
         camadas = list(getattr(args, "camadas", [64, 64]))
-        extra_politica = {"n_ator": (OBS_ATOR_DIM_COMANDO if getattr(args, "comandos", False)
-                                     else OBS_ATOR_DIM)} if real else {}
+        extra_politica = {"n_ator": n_ator_real(args)} if real else {}
         modelo = PPO(
             PoliticaAssimetrica if real else "MlpPolicy",
             venv,
@@ -1493,7 +1501,7 @@ def treinar(args: argparse.Namespace) -> int:
             f"pairagem {d['pairagem_v_nominal']['p_total']:.0f} W ({d['pairagem_v_nominal']['g_por_w']:.1f} g/W) · "
             f"autonomia estimada {d['autonomia_min']:.0f} min · ação {args.modo_acao} · "
             f"DR {'DESLIGADA' if args.sem_dr else 'ligada'} · ator vê "
-            f"{OBS_ATOR_DIM_COMANDO if getattr(args, 'comandos', False) else OBS_ATOR_DIM} entradas reais "
+            f"{n_ator_real(args)} entradas reais "
             f"(crítico assimétrico) · {out_dir / 'hardware.json'}")
     else:
         painel.escrever("planta cf2 · HoverEnv histórico do Crazyflie (observação privilegiada, "

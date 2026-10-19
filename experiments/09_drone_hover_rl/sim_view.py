@@ -2326,7 +2326,7 @@ def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
         import sitl
         n, env = fc_adaptador.nucleo, env_ref
         fc_adaptador._sensores()
-        sitl.definir_comando_dict(n.cmd, fc_adaptador._cmd)
+        sitl.definir_comando_dict(n.cmd, sitl.comando_com_pitch(env, fc_adaptador._cmd))
         ref = n.planear(env.dt)
         # 1) Adaptação exata ao preset de Motor + Bateria ativo (O(1) com cache)
         pl = env.planta
@@ -2339,10 +2339,13 @@ def _instalar_compensador_500hz(fc_adaptador, env_ref) -> None:
         du_hw = cache_hw["du"]
         if abs(du_hw) > 1e-4:
             ref.acelerador = float(np.clip(float(ref.acelerador) + du_hw, float(pl.hw.esc.idle), 1.0))
-        # 2) Amortecimento ativo de recuo pós-tiro
-        dq_rec = mira_comp.compensar_taxa_500hz(env, float(n.saida.pitch), float(giro_medido[1]))
-        if abs(dq_rec) > 1e-6:
-            ref.taxas[1] = float(ref.taxas[1]) + dq_rec
+        # 2) Amortecimento ativo de recuo pós-tiro — só nos braços RÍGIDOS: foi afinado para esse drone e supõe o corpo de
+        #    nível; nos ARTICULADOS (medido: com ele, um tiro dava |q| 1,7–2,7 rad/s, 10–15° e motores saturados; sem ele,
+        #    0,44 rad/s, 1,4° e recuperação em 0,22 s) quem segura a arma é a malha de arfagem do corpo + os servos
+        if not getattr(env, "articulado", False):
+            dq_rec = mira_comp.compensar_taxa_500hz(env, float(n.saida.pitch), float(giro_medido[1]))
+            if abs(dq_rec) > 1e-6:
+                ref.taxas[1] = float(ref.taxas[1]) + dq_rec
         fc_adaptador._fila.append(n.bib.ReferenciasTaxa.from_buffer_copy(ref))
         atrasada = fc_adaptador._fila.popleft()
         n.atuar(atrasada, env.dt)
@@ -2397,7 +2400,10 @@ class NucleoClassico:
         latencia = LATENCIA_CAMERA_DCMI_S if "arduino" in str(getattr(env.hw, "nome", "")) \
             else LATENCIA_CAMERA_PI_S
         ganhos_kw = {"altura_min": sitl.VOO_Z_MIN_CONTRATO - sitl.deslocamento_sensor_cm(env.model)}
-        u_yaw = u_yaw_identificado()
+        # o u/r de yaw IDENTIFICADO (out/classico/avaliacao.json) é do drone de braços RÍGIDOS; o articulado tem outra
+        # inércia de guinada (×2,6) e outros motores — usa a fórmula do hardware (medido: com o valor do rígido, a guinada
+        # saturava depois de alguns tiros e o rolamento divergia)
+        u_yaw = None if getattr(env, "articulado", False) else u_yaw_identificado()
         if u_yaw is not None:
             ganhos_kw["u_yaw_por_taxa"] = u_yaw
         camera = None
@@ -2408,6 +2414,8 @@ class NucleoClassico:
         cfg = sitl.config_de_hardware(env.hw, env.model, env.dt, env=env, ganhos_kw=ganhos_kw,
                                       estimador_classico=True, camera=camera, bib=bib)
         _afinar_cfg_anti_tremor(cfg)
+        if getattr(env, "articulado", False):             # interface 4: mistura com prioridade de rolamento/arfagem
+            cfg.prioridade_rp = 1
         fc_py, est_py = env.fc, env.estimador            # o `ControladorFC`/`EstimadorBordo` Python
         nucleo = sitl.NucleoCpp(cfg, bib).exigir_iniciado()
         fc = sitl._AdaptadorCascata(weakref.proxy(env), nucleo, None)   # os MESMOS do DroneRealEnvNucleo
@@ -2418,12 +2426,12 @@ class NucleoClassico:
         """Atualiza `u_pairagem` e os ganhos do núcleo C++ quando o motor ou a bateria são trocados ao vivo."""
         import sitl
         from fc import ControladorFC
-        self.fc_py = ControladorFC(self.env.hw, self.env.model, self.env.dt)
+        self.fc_py = ControladorFC(self.env.hw, self.env.model, self.env.dt, dt_decisao=self.env.dt_decisao)
         fc_ant = self.env.fc
         self.env.fc = self.fc_py
         try:
             ganhos_kw = {"altura_min": sitl.VOO_Z_MIN_CONTRATO - sitl.deslocamento_sensor_cm(self.env.model)}
-            u_yaw = u_yaw_identificado()
+            u_yaw = None if getattr(self.env, "articulado", False) else u_yaw_identificado()
             if u_yaw is not None:
                 ganhos_kw["u_yaw_por_taxa"] = u_yaw
             camera = None
@@ -2444,14 +2452,19 @@ class NucleoClassico:
             self.nucleo.cfg.kd[e] = float(cfg.kd[e])
 
     def instalar(self) -> None:
-        """O C++ passa a comandar: `env.fc`/`env.estimador` viram os adaptadores do núcleo."""
+        """O C++ passa a comandar: `env.fc`/`env.estimador` viram os adaptadores do núcleo (e, com braços articulados, o
+        τ dos servos passa a ser o `incl_ref` do núcleo — mira por arfagem, interface 4)."""
+        import sitl
         self.env.fc = self.fc
         self.env.estimador = sitl_estimador(self.fc)
+        sitl.ligar_bracos(self.env, self.nucleo)
 
     def remover(self) -> None:
         """Repõe o FC/estimador Python (o modo RL volta a comandar como sempre) e liberta a closure C++."""
         self.env.fc = self.fc_py
         self.env.estimador = self.est_py
+        if getattr(self.env, "bracos", None) is not None:
+            self.env.bracos.fonte_tau = None
         if hasattr(self.fc, "__dict__") and "passo" in self.fc.__dict__:
             del self.fc.__dict__["passo"]
 
@@ -2466,8 +2479,9 @@ class NucleoClassico:
         self.fc.travar(float(self.env.alvo_z) - deslocamento_sensor_cm(self.env))
 
     def comando(self, cmd: dict) -> None:
-        """Comando de voo do contrato r12 (`modo` = velocidade | yaw_alvo | olhar) para o C++."""
-        self.fc.definir_comando(dict(cmd))
+        """Comando de voo do contrato r12 (`modo` = velocidade | yaw_alvo | olhar) para o C++. Com braços articulados em
+        modo `mira`, o pitch pedido ao corpo (`env.definir_pitch_corpo`) vai no comando (`pitch_corpo`, interface 4)."""
+        self.fc.definir_comando(dict(cmd))              # (o `pitch_corpo` junta-se no passo: `sitl.comando_com_pitch`)
 
     def ativar_olhar(self) -> None:
         """Liga a CÂMARA mono do OLHAR (render EGL + detetor C++) se ainda não estiver ligada.

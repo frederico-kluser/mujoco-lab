@@ -16,6 +16,9 @@ O QUE FAZ: cria um PPO NOVO sobre o env de comando e COPIA os pesos do antigo, a
            [ator | crítico]: o mapa antigo→novo é [0:21]→[0:21] e [21:42]→[24:45] (o `v_ref` do crítico
            entra em [45:48], a zero).
 
+  · braços articulados (`--build articulado_…`): +8 juntas no fim do ator e do crítico, também a zero — a política
+           rígida que já voa passa a ver os encoders e o fine-tune ensina-a a usá-los.
+
 VALIDAÇÃO (obrigatória, sai no fim): para estados SEM comando (`v_ref = 0`) a política nova tem de dar
 EXATAMENTE as mesmas ações que a antiga (as linhas novas são zero, logo a função é a mesma) — o teste
 compara N estados e falha se max|Δ| > 0. O resultado é um `final.zip` de PPO pronto para
@@ -43,24 +46,35 @@ import torch  # noqa: E402
 from stable_baselines3 import PPO  # noqa: E402
 
 
-def _mapa_entradas(planta: str) -> tuple[int, int, list[tuple[int, int]]]:
-    """(dim_antiga, dim_nova, segmentos) do alinhamento da entrada — segmentos [(antigo_ini, novo_ini), …].
+def _mapa_entradas(planta: str, dim_antiga: int, dim_nova: int, n_ator_antigo: int = 0,
+                   n_ator_novo: int = 0) -> list[tuple[int, int, int]]:
+    """Segmentos [(antigo_ini, novo_ini, n), …] do alinhamento da entrada: cada um copia as colunas [a : a+n] → [b : b+n];
+    o resto (os canais NOVOS) fica a zero.
 
-    Cada segmento (a, b) copia as linhas [a : a+n] → [b : b+n] onde n = tamanho do segmento; o resto fica 0.
+      · cf2:  [0:16] → [0:16] (os 3 canais de `v_ref` em [16:19] a zero);
+      · real: a obs é [ATOR | CRÍTICO] — o bloco do ator antigo vai para o INÍCIO do ator novo e o do crítico antigo para
+        o INÍCIO do crítico novo; o que o ator/crítico novo tem a mais (o `v_ref` do modo comando, 3; as 8 juntas dos
+        braços articulados) fica a zero. Ex.: rígido 42 → comando 48: (0,0,21), (21,24,21); rígido de comando 48 →
+        articulado de comando 64: (0,0,24), (24,32,24).
     """
     if planta == "cf2":
-        return 16, 19, [(0, 0)]                      # [0:16] → [0:16]; [16:19] a zero
-    return 42, 48, [(0, 0), (21, 24)]                # ator [0:21] → [0:21]; crítico [21:42] → [24:45]
+        return [(0, 0, dim_antiga)]
+    n_crit_antigo, n_crit_novo = dim_antiga - n_ator_antigo, dim_nova - n_ator_novo
+    if n_ator_antigo > n_ator_novo or n_crit_antigo > n_crit_novo:
+        raise SystemExit(f"[transferir] a observação nova ({n_ator_novo}+{n_crit_novo}) é menor do que a antiga "
+                         f"({n_ator_antigo}+{n_crit_antigo}): só se acrescentam canais")
+    return [(0, 0, n_ator_antigo), (n_ator_antigo, n_ator_novo, n_crit_antigo)]
 
 
 def _copia_entrada(camada_antiga: torch.nn.Linear, camada_nova: torch.nn.Linear,
-                   segmentos: list[tuple[int, int]], n_antigo: int) -> None:
-    """Copia o peso/bias de uma `Linear` alinhando as ENTRADAS pelos segmentos (saídas idênticas)."""
+                   segmentos: list[tuple[int, int, int]]) -> None:
+    """Copia o peso/bias de uma `Linear` alinhando as ENTRADAS pelos segmentos (saídas idênticas). Os segmentos têm o
+    comprimento EXATO (antes desta versão, o 1.º segmento copiava a obs inteira e as colunas do crítico iam parar às
+    entradas `v_ref` do ator — invisível na validação, que só usa `v_ref = 0`)."""
     with torch.no_grad():
         camada_nova.weight.zero_()
         camada_nova.bias.copy_(camada_antiga.bias)
-        for a, b in segmentos:
-            n = min(n_antigo - a, camada_antiga.weight.shape[1] - a, camada_nova.weight.shape[1] - b)
+        for a, b, n in segmentos:
             camada_nova.weight[:, b:b + n].copy_(camada_antiga.weight[:, a:a + n])
 
 
@@ -72,7 +86,11 @@ def main(argv=None) -> int:
     p.add_argument("--para", type=Path, required=True, metavar="DIR", help="pasta de saída (final.zip)")
     p.add_argument("--planta", choices=("cf2", "real"), default="cf2",
                    help="planta da política de origem (define o mapa de entradas)")
-    p.add_argument("--build", type=str, default=None, help="planta real: build do catálogo (default: ativo)")
+    p.add_argument("--build", type=str, default=None,
+                   help="planta real: build do env NOVO (por omissão o da política de origem). Um build com braços "
+                        "articulados acrescenta as 8 juntas à observação (entradas novas a zero)")
+    p.add_argument("--sem-comando", action="store_true",
+                   help="planta real: o env novo SEM o modo comando (só acrescentar as juntas a uma política rígida)")
     p.add_argument("--modo-acao", choices=("ctbr", "motores"), default="ctbr",
                    help="planta real: modo de ação do env de saída")
     p.add_argument("--n-estados", type=int, default=64, help="estados da validação de igualdade")
@@ -94,24 +112,26 @@ def main(argv=None) -> int:
         dados = json.loads(hw.read_text(encoding="utf-8")) if hw.is_file() else {}
         from env_real import build_do_hardware
         build, motivo = build_do_hardware(dados)
-        print(f"[transferir] peças da política: {motivo}")
+        if args.build is not None:
+            build, motivo = args.build, f"build '{args.build}' pedido (--build)"
+        print(f"[transferir] peças do env novo: {motivo}")
         ambiente = DroneRealEnv(build=build, modo_acao=dados.get("modo_acao", args.modo_acao),
-                                aleatorizar=False, comando=True)
+                                aleatorizar=False, comando=not args.sem_comando)
+        n_ator_antigo, n_ator_novo = int(antigo.policy._n_ator), int(ambiente.obs_ator_dim)
     else:
         from env import HoverEnv
         ambiente = HoverEnv(comando=True)
-    obs_dim = int(ambiente.observation_space.shape[0])
-    dim_esperada, dim_nova, segmentos = _mapa_entradas(args.planta)
-    if dim_antiga != dim_esperada:
-        raise SystemExit(f"[transferir] a origem tem {dim_antiga} dims; o mapa espera {dim_esperada} "
-                         f"(--planta {args.planta})")
-    if obs_dim != dim_nova:
-        raise SystemExit(f"[transferir] o env de comando dá {obs_dim} dims; o mapa espera {dim_nova}")
+        n_ator_antigo = n_ator_novo = 0
+    dim_nova = int(ambiente.observation_space.shape[0])
+    if not planta_real and (dim_antiga, dim_nova) != (16, 19):
+        raise SystemExit(f"[transferir] cf2: o mapa espera 16 → 19 dims (recebido {dim_antiga} → {dim_nova})")
+    segmentos = _mapa_entradas(args.planta, dim_antiga, dim_nova, n_ator_antigo, n_ator_novo)
+    print(f"[transferir] entradas {dim_antiga} → {dim_nova} · segmentos (antigo, novo, n) = {segmentos}")
 
     novos = {}
     if planta_real:
         from politica import PoliticaAssimetrica
-        novos = {"n_ator": int(antigo.policy._n_ator) + 3}
+        novos = {"n_ator": n_ator_novo}
         politica_cls = PoliticaAssimetrica
     else:
         politica_cls = "MlpPolicy"
@@ -132,7 +152,7 @@ def main(argv=None) -> int:
         assert len(lineares_a) == len(lineares_b), "arquitetura de camadas diferente do esperado"
         for i, (la, lb) in enumerate(zip(lineares_a, lineares_b)):
             if i == 0:
-                _copia_entrada(la, lb, segmentos, dim_antiga)      # entrada realinhada
+                _copia_entrada(la, lb, segmentos)                  # entrada realinhada
             else:
                 with torch.no_grad():
                     lb.weight.copy_(la.weight)
@@ -141,8 +161,6 @@ def main(argv=None) -> int:
         modelo.policy.action_net.weight.copy_(antigo.policy.action_net.weight)
         modelo.policy.action_net.bias.copy_(antigo.policy.action_net.bias)
         modelo.policy.log_std.copy_(antigo.policy.log_std)
-    if planta_real:                                    # o extrator do ATOR tem a MÁSCARA nova (n_ator + 3)
-        pass
 
     # ---- VALIDAÇÃO: em estados sem comando (v_ref = 0) as ações têm de ser IDÊNTICAS
     rng = np.random.default_rng(0)
@@ -150,8 +168,7 @@ def main(argv=None) -> int:
     for _ in range(int(args.n_estados)):
         obs_antiga = rng.normal(0.0, 0.5, size=(dim_antiga,)).astype(np.float32)
         obs_nova = np.zeros(dim_nova, dtype=np.float32)
-        for a, b in segmentos:
-            n = min(dim_antiga - a, dim_nova - b)
+        for a, b, n in segmentos:
             obs_nova[b:b + n] = obs_antiga[a:a + n]
         with torch.no_grad():
             a_antiga, _ = antigo.policy.predict(obs_antiga, deterministic=True)

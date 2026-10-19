@@ -102,10 +102,16 @@ def _confere_ganho_do_build(dr, nome: str) -> None:
     fluxo π·R²·v_i e a sua imagem (a √(ℓ²+4z²) do rotor) induz, na vertical, ½·R²·z/√((ℓ²+4z²)³)·v_i — somados os 3
     dão os termos dos vizinhos (coeficiente 1 = 2 × ½) e do oposto (½); o corpo (K_b = 2, empírico) acrescenta-se.
     """
+    import mujoco
     hw = dr.hardware(nome)
     r = hw.helice.raio
-    model, _ = dr.carregar(hw)
-    sites = np.array([model.site(f"r{i}").pos[:2] for i in range(1, 5)])
+    model, data = dr.carregar(hw)
+    mujoco.mj_forward(model, data)
+    # rotores no referencial do CORPO (com braços articulados os sites vivem nos mastros — juntas a 0 — e o `.pos` do
+    # site é relativo ao mastro; num build rígido isto é o próprio `.pos`)
+    bid = model.body("drone").id
+    rot = data.xmat[bid].reshape(3, 3)
+    sites = np.array([(rot.T @ (data.site_xpos[model.site(f"r{i}").id] - data.xpos[bid]))[:2] for i in range(1, 5)])
     dist = np.sort(np.linalg.norm(sites[1:] - sites[0], axis=1))     # de r1 aos outros 3: [d, d, b] num X
     d, b = float(dist[0]), float(dist[-1])
     assert dist[1] == pytest.approx(d, rel=1e-9), nome

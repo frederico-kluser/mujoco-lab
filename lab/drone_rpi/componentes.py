@@ -495,6 +495,145 @@ class Arma:
         return fator * c * a
 
 
+@dataclass(frozen=True)
+class Servo:
+    """Servo inteligente (`models/drone_rpi/componentes.json` → `servos`): motor DC + redução interna + encoder
+    absoluto + PID de posição interno, alimentado a `tensao` V.
+
+    Modelo DC linear na SAÍDA do servo (o que a ficha publica): τ = τ_b·(d − ω/ω₀), com d ∈ [−1, 1] o PWM, τ_b o
+    binário de bloqueio e ω₀ a velocidade em vazio — a reta binário-velocidade de qualquer motor DC com redução; a
+    corrente é ∝ binário (I = I_b·|τ|/τ_b) mais a de espera.
+    """
+
+    id: str
+    fabricante: str
+    modelo: str
+    tensao: float                 # V — tensão nominal de alimentação (a das especificações)
+    binario_bloqueio: float       # N·m — na saída, à `tensao`
+    corrente_bloqueio: float      # A — à `tensao`
+    omega_vazio: float            # rad/s — na saída, à `tensao`
+    reducao_interna: float        # relação da caixa interna
+    resolucao: float              # rad por pulso do encoder interno (2π/4096)
+    folga: float                  # rad — folga da caixa interna
+    massa: float                  # kg
+    corrente_espera: float        # A
+    fracao_continuo: float        # binário contínuo / binário de bloqueio (regra térmica do fabricante)
+    inercia_rotor: float          # kg·m² — rotor do motor (refletida na saída × redução²)
+    atrito_saida: float           # N·m — atrito seco na saída
+    dados: dict = field(default_factory=dict, compare=False)
+
+    @property
+    def binario_continuo(self) -> float:
+        return self.fracao_continuo * self.binario_bloqueio
+
+    @property
+    def dims(self) -> tuple[float, float, float]:
+        return tuple(float(v) / 1000.0 for v in self.dados.get("dims_mm", (28.5, 46.5, 34.0)))
+
+
+@dataclass(frozen=True)
+class Junta:
+    """Um tipo de junta do braço articulado (OMBRO ou COTOVELO): o servo + a redução externa (sem-fim ou direta).
+
+    Na SAÍDA da junta (o eixo do braço):
+      · direta (`reducao` = 1): τ_b,j = τ_b,servo, ω₀,j = ω₀,servo;
+      · sem-fim de avanço λ e atrito μ (φ = atan μ): a SUBIR (a carga opõe-se) η = tan λ / tan(λ + φ), logo
+        τ_b,j = τ_b,servo·N·η e ω₀,j = ω₀,servo/N; a DESCER (a carga ajuda) o servo ainda tem de EMPURRAR
+        tan(φ − λ)/tan λ da carga refletida (autobloqueio, λ < φ): a coroa nunca roda o sem-fim — segurar não gasta
+        corrente. Fórmulas fechadas do parafuso sem-fim (ver `componentes.json` → `mecanismos_braco` → `estimado`).
+    """
+
+    servo: Servo
+    reducao: float                    # relação externa (1 = direta)
+    autobloqueante: bool
+    angulo_avanco: float              # rad (λ) — só para o sem-fim
+    coef_atrito: float                # μ do engrenamento — só para o sem-fim
+    folga: float                      # rad — folga externa (sem-fim); a interna do servo soma-se no modelo
+    rigidez: float                    # N·m/rad — engrenamento+veios (sem-fim); 0 = a do próprio servo (direta)
+    amortecimento: float              # N·m·s/rad — do engrenamento (sem-fim)
+    encoder_resolucao: float          # rad por pulso do encoder que mede a SAÍDA (o do servo, ou um externo)
+    encoder_precisao: float           # rad — erro máximo do encoder da saída
+    encoder_potencia: float           # W (5 V) — 0 quando é o encoder interno do servo (já na corrente de espera)
+    encoder_massa: float              # kg — 0 quando é o encoder interno do servo
+    massa_redutor: float              # kg
+    limites: tuple[float, float]      # rad (mín, máx) do batente
+    fracao_velocidade_perfil: float   # perfil de velocidade do servo (fração de ω₀) — o «Profile Velocity»
+
+    @property
+    def eficiencia_subir(self) -> float:
+        if self.reducao <= 1.0:
+            return 1.0
+        lam, phi = self.angulo_avanco, math.atan(self.coef_atrito)
+        return math.tan(lam) / math.tan(lam + phi)
+
+    @property
+    def fator_descer(self) -> float:
+        """Binário que o servo ainda tem de dar a DESCER, por unidade de binário de carga refletido (0 se reversível)."""
+        if self.reducao <= 1.0 or not self.autobloqueante:
+            return 0.0
+        lam, phi = self.angulo_avanco, math.atan(self.coef_atrito)
+        return max(0.0, math.tan(phi - lam) / math.tan(lam))
+
+    @property
+    def e_autobloqueante(self) -> bool:
+        """λ < φ (o critério do sem-fim) — o que a ficha declara tem de bater com a geometria."""
+        return self.reducao > 1.0 and self.angulo_avanco < math.atan(self.coef_atrito)
+
+    @property
+    def binario_bloqueio_saida(self) -> float:
+        return self.servo.binario_bloqueio * self.reducao * self.eficiencia_subir
+
+    @property
+    def omega_vazio_saida(self) -> float:
+        return self.servo.omega_vazio / self.reducao
+
+    @property
+    def binario_continuo_saida(self) -> float:
+        return self.servo.binario_continuo * self.reducao * self.eficiencia_subir
+
+    @property
+    def massa(self) -> float:
+        return self.servo.massa + self.massa_redutor
+
+
+@dataclass(frozen=True)
+class MecanismoBracos:
+    """Braços articulados: 4 braços × (OMBRO + COTOVELO) = 8 juntas de eixo paralelo ao y do corpo (arfagem).
+
+    Geometria (do catálogo + do frame): ombro a `raio_ombro` do centro na diagonal do braço; cotovelo na ponta do braço
+    (o raio dos rotores, `Hardware.braco`); MASTRO vertical no cotovelo com o motor no topo — a distância do eixo do
+    cotovelo ao plano da hélice é `raio_hélice + folga_helice` (o desenho do dono: a hélice nunca bate no braço).
+    """
+
+    id: str
+    nome: str
+    ombro: Junta
+    cotovelo: Junta
+    raio_ombro: float             # m
+    folga_helice: float           # m — mastro = raio da hélice + folga
+    massa_mastro: float           # kg (cada)
+    massa_dobradica: float        # kg (cada uma das 8)
+    fonte_tensao: float           # V — saída do regulador dos servos
+    fonte_eficiencia: float
+    massa_fonte: float            # kg
+    barramento_hz: float          # Hz — leitura/escrita síncrona dos 8 servos
+    kp_duty: float                # PWM por rad de erro (ganho P de posição do servo)
+    kd_duty: float                # PWM por rad/s
+    dados: dict = field(default_factory=dict, compare=False)
+
+    def potencia_espera(self) -> float:
+        """W na BATERIA com os 8 servos parados e sem carga (corrente de espera ÷ eficiência do regulador)."""
+        p = 4.0 * (self.ombro.servo.corrente_espera + self.cotovelo.servo.corrente_espera) * self.fonte_tensao
+        return p / self.fonte_eficiencia
+
+    def massas(self) -> dict:
+        return {"servos_ombro": 4.0 * self.ombro.servo.massa, "redutores_ombro": 4.0 * self.ombro.massa_redutor,
+                "servos_cotovelo": 4.0 * self.cotovelo.servo.massa, "redutores_cotovelo": 4.0 * self.cotovelo.massa_redutor,
+                "encoders_bracos": 4.0 * (self.ombro.encoder_massa + self.cotovelo.encoder_massa),
+                "mastros": 4.0 * self.massa_mastro, "dobradicas": 8.0 * self.massa_dobradica,
+                "fonte_servos": self.massa_fonte}
+
+
 # =========================================================================================== build resolvido
 @dataclass
 class Hardware:
@@ -518,6 +657,7 @@ class Hardware:
     temperatura_ambiente: float  # °C
     camera: Camera | None = None  # módulo de câmara CSI (opcional; entra no orçamento de massa)
     arma: Arma | None = None      # arma montada fixa no topo do drone (opcional; entra no orçamento, inércia e aero)
+    bracos: MecanismoBracos | None = None  # braços articulados (8 juntas com servos); None = braços rígidos
     massa_extra: float = 0.0  # kg — parafusos, abraçadeiras, fita (lastro do orçamento)
     dados: dict = field(default_factory=dict)
     # derivados (preenchidos em __post_init__)
@@ -535,6 +675,16 @@ class Hardware:
         self.j_rotor = inercia_rotor(self.motor, self.helice)
         self.r_motor = self.motor.r_int + self.esc.r_on
         self.curva_esc = _curva_esc(self)
+
+    @property
+    def fc_margem_fase_min(self) -> float | None:
+        """Margem de fase MÍNIMA (°) que o build exige à malha de taxa do FC (`fc_margem_fase_min_graus` no build): com
+        ela os K_p/K_i/K_d saem de um τ de PROJETO ≥ τ_motor (`fc.tau_de_projeto`); None = as fórmulas de sempre (τ_motor).
+        Um motor rápido (τ_motor pequeno) leva as fórmulas a um cruzamento onde os atrasos fixos (comando, giroscópio,
+        filtros) já comem a fase — medido em todos os builds: margem 45° → tremor em pairagem 0,55 °/s, 43° → 0,8 °/s,
+        30° → 3,1 °/s."""
+        v = (self.dados or {}).get("fc_margem_fase_min_graus")
+        return None if v is None else float(v)
 
     # ---------------------------------------------------------------- massa e geometria
     @property
@@ -557,6 +707,8 @@ class Hardware:
             m["camera"] = self.camera.massa
         if self.arma is not None:
             m["arma"] = self.arma.massa
+        if self.bracos is not None:
+            m.update(self.bracos.massas())
         return m
 
     def arrasto_arma_xy(self, v_ref: float | None = None) -> tuple[float, float]:
@@ -721,7 +873,12 @@ class Hardware:
         """W consumidos NA BATERIA pela eletrónica de 5 V (consumidores ÷ eficiência do BEC) + sensores."""
         p5 = sum(c.p(perfil) for c in self.consumidores)
         p5 += sum(float(s.get("potencia_w", 0.0)) for s in self.sensores.values())
-        return p5 / self.bec_eficiencia
+        if self.bracos is None:
+            return p5 / self.bec_eficiencia
+        # braços articulados: encoders externos de saída (5 V) + os 8 servos em espera (24 V, regulador próprio); a
+        # corrente de CARGA dos servos é dinâmica e entra na planta, passo a passo (`Planta` → `servos`)
+        p5 += 4.0 * (self.bracos.ombro.encoder_potencia + self.bracos.cotovelo.encoder_potencia)
+        return p5 / self.bec_eficiencia + self.bracos.potencia_espera()
 
     def ponto_pairagem(self, v_bus: float, massa: float | None = None) -> dict:
         """Regime de pairagem em ar parado (fora do efeito de solo) com o barramento a `v_bus`.
@@ -1233,6 +1390,57 @@ def _celula(d: dict) -> Celula:
                   dims_mm=tuple(d.get("dims_mm", ())), dados=d)
 
 
+def _servo(d: dict) -> Servo:
+    return Servo(id=d["id"], fabricante=d["fabricante"], modelo=d["modelo"], tensao=float(d["tensao_v"]),
+                 binario_bloqueio=float(d["binario_bloqueio_nm"]), corrente_bloqueio=float(d["corrente_bloqueio_a"]),
+                 omega_vazio=float(d["velocidade_vazio_rpm"]) * RPM_PARA_RAD,
+                 reducao_interna=float(d.get("reducao_interna", 1.0)),
+                 resolucao=2.0 * math.pi / float(d.get("resolucao_pulsos_volta", 4096)),
+                 folga=math.radians(float(d.get("folga_graus", 0.25))), massa=float(d["massa_g"]) / 1000.0,
+                 corrente_espera=float(d.get("corrente_espera_a", 0.04)),
+                 fracao_continuo=float(d.get("fracao_binario_continuo", 0.2)),
+                 inercia_rotor=float(d.get("inercia_rotor_kgm2", 0.0)),
+                 atrito_saida=float(d.get("atrito_saida_nm", 0.0)), dados=d)
+
+
+def _junta(cat: dict, d: dict) -> Junta:
+    servo = _servo(_peca(cat, "servos", d["servo"]))
+    if d.get("encoder"):
+        e = _peca(cat, "sensores", d["encoder"])
+        enc_res = math.radians(float(e.get("resolucao_graus", 360.0 / 2 ** int(e.get("bits", 14)))))
+        enc_prec = math.radians(float(e.get("precisao_graus", 0.05)))
+        enc_p, enc_m = float(e.get("potencia_w", 0.0)), float(e.get("massa_g", 0.0)) / 1000.0
+    else:                                    # o encoder interno do servo mede a saída (junta direta)
+        enc_res, enc_prec, enc_p, enc_m = servo.resolucao, servo.resolucao, 0.0, 0.0
+    lim = tuple(math.radians(float(v)) for v in d.get("limites_graus", (-45.0, 45.0)))
+    return Junta(servo=servo, reducao=float(d.get("reducao", 1.0)), autobloqueante=bool(d.get("autobloqueante", False)),
+                 angulo_avanco=math.radians(float(d.get("angulo_avanco_graus", 0.0))),
+                 coef_atrito=float(d.get("coef_atrito", 0.0)), folga=math.radians(float(d.get("folga_graus", 0.0))),
+                 rigidez=float(d.get("rigidez_nm_rad", 0.0)), amortecimento=float(d.get("amortecimento_nms_rad", 0.0)),
+                 encoder_resolucao=enc_res, encoder_precisao=enc_prec, encoder_potencia=enc_p, encoder_massa=enc_m,
+                 massa_redutor=float(d.get("massa_redutor_g", 0.0)) / 1000.0, limites=(lim[0], lim[1]),
+                 fracao_velocidade_perfil=float(d.get("fracao_velocidade_perfil", 0.9)))
+
+
+def _mecanismo_bracos(cat: dict, chave: str) -> MecanismoBracos:
+    d = _peca(cat, "mecanismos_braco", chave)
+    f = d.get("fonte_servos") or {}
+    g = d.get("ganhos_servo") or {}
+    ombro, cotovelo = _junta(cat, d["ombro"]), _junta(cat, d["cotovelo"])
+    if ombro.autobloqueante and not ombro.e_autobloqueante:
+        raise ValueError(f"mecanismo '{chave}': o ombro declara-se autobloqueante mas λ ≥ φ (avanço "
+                         f"{math.degrees(ombro.angulo_avanco):.2f}° ≥ atrito {math.degrees(math.atan(ombro.coef_atrito)):.2f}°)")
+    return MecanismoBracos(id=chave, nome=d.get("nome", chave), ombro=ombro, cotovelo=cotovelo,
+                           raio_ombro=float(d["raio_ombro_mm"]) / 1000.0, folga_helice=float(d["folga_helice_mm"]) / 1000.0,
+                           massa_mastro=float((d.get("mastro") or {}).get("massa_g", 0.0)) / 1000.0,
+                           massa_dobradica=float(d.get("massa_dobradica_g", 0.0)) / 1000.0,
+                           fonte_tensao=float(f.get("tensao_v", 24.0)), fonte_eficiencia=float(f.get("eficiencia", 0.92)),
+                           massa_fonte=float(f.get("massa_g", 0.0)) / 1000.0,
+                           barramento_hz=float(d.get("barramento_hz", 200.0)),
+                           kp_duty=float(g.get("kp_duty_por_rad", 19.0)), kd_duty=float(g.get("kd_duty_por_rad_s", 0.0)),
+                           dados=d)
+
+
 def resolver(build: str | dict | None = None, catalogo: dict | None = None,
              builds: dict | None = None) -> Hardware:
     """Resolve um build (nome, dict de build ou None = o ATIVO) num `Hardware` com tudo derivado."""
@@ -1302,10 +1510,12 @@ def resolver(build: str | dict | None = None, catalogo: dict | None = None,
             duracao_impulso=float(a.get("duracao_impulso_s", 0.020)),
             dados=a,
         )
+    bracos = _mecanismo_bracos(cat, cfg["bracos"]) if cfg.get("bracos") else None
     return Hardware(
         nome=nome, descricao=cfg.get("descricao", ""), frame=frame,
         motor=_motor(_peca(cat, "motores", cfg["motor"])), helice=_helice(_peca(cat, "helices", cfg["helice"])),
         bateria=bateria, esc=esc, consumidores=consumidores, sensores=sensores, camera=camera, arma=arma,
+        bracos=bracos,
         arquitetura=cfg.get("arquitetura", "fc"), bec_eficiencia=float(cfg.get("bec_eficiencia", 0.88)),
         r_ligacoes=float(cfg.get("r_ligacoes_mohm", 3.0)) / 1000.0,
         atraso_comando=float(cfg.get("atraso_comando_ms", 8.0)) / 1000.0,

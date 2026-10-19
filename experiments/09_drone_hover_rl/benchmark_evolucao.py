@@ -1,6 +1,6 @@
 """experiments/09_drone_hover_rl/benchmark_evolucao.py — Benchmark Determinístico de Evolução (Estabilidade, Tiros/min e Vento Fixo).
 
-Compara de forma 100 % determinística e reprodutível a evolução das 4 gerações do sistema (`v1` → `v2` → `v3` → `v4`)
+Compara de forma 100 % determinística e reprodutível a evolução das 5 gerações do sistema (`v1` → … → `v4` → `v5`)
 e dos 6 Presets Calibrados de Propulsão:
 
   · TREINO EM GPU (`treinar_mira_gpu.py`): usa movimento ALEATÓRIO da bola (Ornstein–Uhlenbeck) e rajadas aleatórias
@@ -14,8 +14,14 @@ e dos 6 Presets Calibrados de Propulsão:
          Motores (%)**, **Tempo de Recuperação Pós-Tiro (s)**, **Desvio sob Vento Fixo (cm)** e **Índice de
          Estabilidade (0–100)**.
 
+  · `v5` = BRAÇOS ARTICULADOS (build `articulado_15pol_mn5006`: 8 juntas, servos DYNAMIXEL XH430 + sem-fim 20:1 no
+    ombro) — mira por ARFAGEM do corpo sem sair da estação e portão de tiro TensorFlow (P(acerto) ≥ K/(1+K), K = 20);
+  · CENÁRIO 3 — OS 3 CENÁRIOS DE ALTURA (`cenarios_mira.py`, bola programada, 4 sementes × janela de 10 s): drone à
+    MESMA altura do alvo, ABAIXO dele e ACIMA dele — pontuação/min = (acertos − 20·erros)/min e quanto o drone sai da
+    estação para mirar, para o `v4` rígido (sobe/desce/translada para mirar) e o `v5` (portão só-físico e portão TF).
+
 Gera:
-  · `/home/ondokai/Projects/MuJoCo/evolucao_drone.png` (gráfico de 4 painéis na raiz do projeto, referenciado no README.md,
+  · `/home/ondokai/Projects/MuJoCo/evolucao_drone.png` (gráfico de 6 painéis na raiz do projeto, referenciado no README.md,
     AGENTS.md e CLAUDE.md);
   · `experiments/09_drone_hover_rl/out/evolucao/evolucao_estabilidade.json` (dados estruturados de cada geração e preset).
 """
@@ -24,6 +30,8 @@ from __future__ import annotations
 import gc
 import json
 import math
+import multiprocessing as mp
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,8 +49,10 @@ if str(_AQUI) not in sys.path:
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
+from cenarios_mira import BUILD_ARTICULADO, CENARIOS, PENALIDADE, OpcoesEpisodio, correr_episodio  # noqa: E402
 from env_real import DroneRealEnv  # noqa: E402
 from lab.drone_rpi.componentes import PRESETS_PROPULSAO_PAINEL  # noqa: E402
+from mira_articulada import LATENCIA_CAMERA_PI_S, MiraArticuladaIA  # noqa: E402
 from mira_balistica import MiraBalisticaIA  # noqa: E402
 import sim_view as sv  # noqa: E402
 import sitl  # noqa: E402
@@ -50,11 +60,31 @@ import sitl  # noqa: E402
 CAMINHO_IMAGEM_RAIZ = _RAIZ / "evolucao_drone.png"
 PASTA_EVOLUCAO = _AQUI / "out" / "evolucao"
 CAMINHO_JSON_EVOLUCAO = PASTA_EVOLUCAO / "evolucao_estabilidade.json"
+GERACAO_ARTICULADA = "v5_bracos_arfagem_tf"
+SEMENTES_CENARIOS = (6200, 6201, 6202, 6203)
+CONFIGS_CENARIOS = (                       # (id, rótulo, articulado, usar_tf)
+    ("v4_rigido", "v4 · rígido (translada para mirar)", False, True),
+    ("v5_fisico", "v5 · braços, portão só-físico", True, False),
+    ("v5_tf", "v5 · braços, portão TensorFlow", True, True),
+)
+
+
+def _criar_env(geracao: str) -> DroneRealEnv:
+    """O `v5` voa o build dos braços articulados; as gerações `v1`..`v4` o build ativo (rígido) de sempre."""
+    build = BUILD_ARTICULADO if geracao == GERACAO_ARTICULADA else None
+    return DroneRealEnv(build=build, modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=20.0)
 
 
 def _configurar_geracao(env: DroneRealEnv, geracao: str):
-    """Configura `NucleoClassico` e `MiraBalisticaIA` para reproduzir fielmente cada geração evolutiva (`v1`..`v4`)."""
+    """Configura `NucleoClassico` e a mira para reproduzir fielmente cada geração evolutiva (`v1`..`v5`)."""
     nuc = sv.NucleoClassico.criar(env)
+    if geracao == GERACAO_ARTICULADA:
+        # Geração 5: braços articulados — o núcleo segura o pitch do CORPO (a arma) e os servos inclinam os motores
+        # (interface 4); a mira só roda (guinada) e arfa, sem transladar; dispara com a latência real do gatilho e só
+        # quando a rede TF dá P(acerto) ≥ K/(1+K) (K = 20) e o portão físico passa
+        mira = MiraArticuladaIA(latencia_camera_s=LATENCIA_CAMERA_PI_S, semente=6301)
+        mira.usar_tf = True
+        return nuc, mira
     mira = MiraBalisticaIA()
 
     if geracao == "v1_bloco_inicial":
@@ -101,7 +131,8 @@ def _configurar_geracao(env: DroneRealEnv, geracao: str):
 def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b") -> dict:
     """Executa os 2 cenários determinísticos (1: Bola Programada + Auto-Shoot; 2: Vento Fixo 0→3→5 m/s + Tiro)."""
     # --- CENÁRIO 2: Vento Fixo Determinístico (0 m/s →recuperação pós-tiro → 3 m/s @ 90° → 5 m/s @ 45°)
-    env_v = DroneRealEnv(modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=20.0)
+    articulada = geracao == GERACAO_ARTICULADA
+    env_v = _criar_env(geracao)
     nuc_v, mira_v = _configurar_geracao(env_v, geracao)
     nuc_v.instalar()
     env_v.reset(seed=6200)
@@ -126,6 +157,8 @@ def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b"
 
     # Recuperação pós-tiro em mira (ar calmo, bola parada — mesmo protocolo de J6)
     env_v.definir_trajetoria_ponto("parado")
+    if articulada:
+        mira_v.reiniciar()
     for _ in range(90):
         nuc_v.comando(mira_v.passo(env_v, dt=env_v.dt_decisao))
         env_v.step(np.zeros(4, dtype=np.float32))
@@ -169,7 +202,7 @@ def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b"
     gc.collect()
 
     # --- CENÁRIO 1: Bola com Movimento Programado Determinístico (`modo="programado"`, vel=0,55 m/s, 15 s = 750 passos)
-    env_b = DroneRealEnv(modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=20.0)
+    env_b = _criar_env(geracao)
     nuc_b, mira_b = _configurar_geracao(env_b, geracao)
     nuc_b.instalar()
     env_b.reset(seed=6200)
@@ -184,6 +217,8 @@ def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b"
         env_b.step(np.zeros(4, dtype=np.float32))
 
     env_b.definir_trajetoria_ponto("programado", vel=0.55, raio=1.35)
+    if articulada:
+        mira_b.reiniciar()
     passos_prog = 750  # 15,0 s exatos
     duracao_min = (passos_prog * env_b.dt_decisao) / 60.0
     no_alvo_passos = 0
@@ -201,7 +236,10 @@ def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b"
             cmd_b["yaw_taxa"] *= 0.82
         nuc_b.comando(cmd_b)
         if mira_b.deve_atirar(env_b):
-            env_b.disparar(1)
+            if articulada:
+                mira_b.atirar(env_b)          # a bala sai com a latência real do gatilho (16 ms)
+            else:
+                env_b.disparar(1)
         env_b.step(np.zeros(4, dtype=np.float32))
         prev_b = env_b.planta.prever_tiro_bola(pos_bola=env_b.ponto_alvo, vel_bola=env_b.ponto_alvo_vel)
         if prev_b["no_alvo"]:
@@ -257,8 +295,54 @@ def avaliar_geracao(geracao: str, rotulo: str, preset_id: str = "endurance_p50b"
     }
 
 
-def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], caminho_png: Path = CAMINHO_IMAGEM_RAIZ) -> Path:
-    """Renderiza o gráfico de 4 painéis `evolucao_drone.png` na raiz do projeto."""
+def _episodio_cenario(args: tuple) -> dict:
+    os.environ.setdefault("MUJOCO_GL", "egl")
+    cenario, semente, articulado, usar_tf = args
+    opc = OpcoesEpisodio(cenario=cenario, semente=semente, modo_bola="programado", vel_bola=0.55,
+                         articulado=articulado, usar_tf=usar_tf)
+    return correr_episodio(opc)
+
+
+def avaliar_cenarios_altura(processos: int | None = None, sementes=SEMENTES_CENARIOS) -> dict:
+    """CENÁRIO 3: os 3 cenários de altura (mesma / abaixo / acima do alvo) com a bola PROGRAMADA (Lissajous, 0,55 m/s),
+    `len(sementes)` episódios × janela de 10 s por cenário e configuração — determinístico (sementes fixas)."""
+    tarefas = [(c, s, art, tf_) for _, _, art, tf_ in CONFIGS_CENARIOS for c in CENARIOS for s in sementes]
+    processos = processos or max(2, min(len(tarefas), (os.cpu_count() or 4) - 4))
+    with mp.get_context("spawn").Pool(processos) as pool:
+        res = pool.map(_episodio_cenario, tarefas, chunksize=1)
+    configs = {}
+    for cid, rotulo, art, tf_ in CONFIGS_CENARIOS:
+        por_cen = {}
+        for c in CENARIOS:
+            rs = [r for r in res if r["cenario"] == c and r["articulado"] == art and (not art or r["usar_tf"] == tf_)]
+            seg = sum(r["janela_s"] for r in rs)
+            ac, er, ti = (sum(r[k] for r in rs) for k in ("acertos", "erros", "tiros"))
+            por_cen[c] = {
+                "acertos": ac, "erros": er, "tiros": ti,
+                "acertos_por_min": round(60.0 * ac / seg, 1),
+                "pontuacao_por_min": round(60.0 * (ac - PENALIDADE * er) / seg, 1),
+                "precisao_pct": round(100.0 * ac / max(ti, 1), 1),
+                "desloc_estacao_max_m": round(max(r["desloc_estacao_max_m"] for r in rs), 3),
+                "desloc_z_max_m": round(max(r["desloc_z_max_m"] for r in rs), 3),
+                "pitch_corpo_medio_graus": round(float(np.mean([r["pitch_corpo_medio_graus"] for r in rs])), 1),
+            }
+            print(f"[cenarios] {cid:9s} {c:6s} -> {ac:3d} acertos / {er:2d} erros em {seg:.0f} s · "
+                  f"{por_cen[c]['pontuacao_por_min']:+7.1f} pontos/min · sai da estação até "
+                  f"{100 * por_cen[c]['desloc_estacao_max_m']:.0f} cm", flush=True)
+        configs[cid] = {"rotulo": rotulo, "articulado": art, "usar_tf": tf_, "cenarios": por_cen}
+    return {
+        "protocolo": "cenarios_mira.correr_episodio: descolagem 4 s, aquisição 3 s, janela de 10 s; bola programada "
+                     "(Lissajous, 0,55 m/s, raio 1,0 m) a 2,5 m à frente; pontuação = acertos − K·erros",
+        "penalidade": PENALIDADE,
+        "sementes": list(sementes),
+        "alturas": {c: {"z_drone": v["z_drone"], "z_alvo": v["z_alvo"]} for c, v in CENARIOS.items()},
+        "configuracoes": configs,
+    }
+
+
+def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], caminho_png: Path = CAMINHO_IMAGEM_RAIZ,
+                                cenarios: dict | None = None) -> Path:
+    """Renderiza o gráfico de 6 painéis `evolucao_drone.png` na raiz do projeto (4 sem os cenários de altura)."""
     plt.rcParams.update({
         "figure.facecolor": "#0b0f17",
         "axes.facecolor": "#111827",
@@ -271,16 +355,22 @@ def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], camin
         "font.size": 10,
     })
 
-    fig, axs = plt.subplots(2, 2, figsize=(15, 9.5), dpi=140)
+    linhas = 3 if cenarios else 2
+    fig, axs = plt.subplots(linhas, 2, figsize=(15, 4.75 * linhas), dpi=140)
     fig.suptitle(
-        "MuJoCo Lab · Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo",
+        "MuJoCo Lab · Evolução de Estabilidade, Cadência de Tiros/min (Bola Programada) e Benchmark de Vento Fixo"
+        + ("\n+ Braços Articulados: mira por arfagem nos 3 cenários de altura (pontuação = acertos − 20·erros)" if cenarios else ""),
         fontsize=14,
         fontweight="bold",
         color="#f8fafc",
-        y=0.97,
+        y=0.985 if cenarios else 0.97,
     )
 
-    nomes_g = [g["rotulo"] for g in geracoes]
+    if len(geracoes) > 4:                     # 5+ gerações: rótulos em 3 linhas curtas (não se sobrepõem)
+        import textwrap
+        nomes_g = [textwrap.fill(g["rotulo"].replace("\n", " "), 19) for g in geracoes]
+    else:
+        nomes_g = [g["rotulo"] for g in geracoes]
     x_g = np.arange(len(geracoes))
 
     # --- Painel 1: Estabilidade Angular (ω_RMS °/s), Jitter dos Motores (%) e Recuperação Pós-Tiro (s)
@@ -297,7 +387,7 @@ def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], camin
             h = b.get_height()
             ax1.text(b.get_x() + b.get_width() / 2, h + 0.12, f"{h:.2f}", ha="center", va="bottom", fontsize=8.5, color="#e2e8f0")
     ax1.set_xticks(x_g)
-    ax1.set_xticklabels(nomes_g, fontsize=9)
+    ax1.set_xticklabels(nomes_g, fontsize=8 if len(geracoes) > 4 else 9)
     ax1.set_ylabel("Valor medido (menor = mais estável)")
     ax1.set_title("1. Evolução da Estabilidade em Ar Calmo e Pós-Disparo", fontweight="bold", color="#38bdf8")
     ax1.set_ylim(0, max(max(jitter), max(w_rms)) * 1.22)
@@ -314,9 +404,9 @@ def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], camin
         ax2.annotate(f"{v_t:.0f} tpm", (x_g[i], v_t), textcoords="offset points", xytext=(0, 9), ha="center", color="#10b981", fontweight="bold", fontsize=9)
         ax2.annotate(f"{v_e:.1f}%", (x_g[i], v_e), textcoords="offset points", xytext=(0, -14), ha="center", color="#d8b4fe", fontsize=8.5)
     ax2.set_xticks(x_g)
-    ax2.set_xticklabels(nomes_g, fontsize=9)
+    ax2.set_xticklabels(nomes_g, fontsize=8 if len(geracoes) > 4 else 9)
     ax2.set_ylabel("Tiros / min (TPM) · Estabilidade (0–100)")
-    ax2.set_title("2. Tiros Certeiros/min (100% Acerto) vs Estabilidade (Bola Programada)", fontweight="bold", color="#10b981")
+    ax2.set_title("2. Tiros Certeiros/min vs Estabilidade (Bola Programada)", fontweight="bold", color="#10b981")
     ax2.set_ylim(0, max(max(tpms), max(estab)) * 1.22)
     ax2.grid(True, linestyle="--", alpha=0.6)
     ax2.legend(loc="lower right", framealpha=0.25)
@@ -334,7 +424,7 @@ def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], camin
             h = b.get_height()
             ax3.text(b.get_x() + b.get_width() / 2, h + 0.3, f"{h:.1f}", ha="center", va="bottom", fontsize=8.5, color="#e2e8f0")
     ax3.set_xticks(x_g)
-    ax3.set_xticklabels(nomes_g, fontsize=9)
+    ax3.set_xticklabels(nomes_g, fontsize=8 if len(geracoes) > 4 else 9)
     ax3.set_ylabel("Centímetros (cm) / Graus (°)")
     ax3.set_title("3. Benchmark Determinístico de Vento Fixo (3 e 5 m/s) e Inclinação", fontweight="bold", color="#22d3ee")
     ax3.set_ylim(0, max(max(ev5), max(inc)) * 1.25)
@@ -368,21 +458,77 @@ def renderizar_grafico_evolucao(geracoes: list[dict], presets: list[dict], camin
     ax4.grid(True, axis="y", linestyle="--", alpha=0.6)
     ax4.legend(loc="upper right", framealpha=0.25)
 
-    plt.tight_layout(rect=[0, 0.01, 1, 0.94])
+    if cenarios:
+        _paineis_cenarios(axs[2, 0], axs[2, 1], cenarios)
+
+    plt.tight_layout(rect=[0, 0.01, 1, 0.95 if cenarios else 0.94])
     caminho_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(caminho_png, dpi=140)
     plt.close(fig)
     return caminho_png
 
 
+def _paineis_cenarios(ax5, ax6, cenarios: dict) -> None:
+    """Painéis 5–6: os 3 cenários de altura — pontuação/min (com a penalidade) e o quanto o drone sai da estação."""
+    nomes_c = {"mesma": "MESMA altura\n(drone 1,4 · alvo 1,4 m)", "abaixo": "drone ABAIXO\n(1,0 · alvo 2,0 m)",
+               "acima": "drone ACIMA\n(2,2 · alvo 1,0 m)"}
+    cens = list(nomes_c)
+    x_c = np.arange(len(cens))
+    cores = {"v4_rigido": "#94a3b8", "v5_fisico": "#f59e0b", "v5_tf": "#10b981"}
+    larg = 0.26
+    confs = cenarios["configuracoes"]
+    pmin, pmax = 0.0, 1.0
+    for j, (cid, conf) in enumerate(confs.items()):
+        vals = [conf["cenarios"][c]["pontuacao_por_min"] for c in cens]
+        pmin, pmax = min(pmin, *vals), max(pmax, *vals)
+        barras = ax5.bar(x_c + (j - 1) * larg, vals, width=larg, color=cores.get(cid, "#38bdf8"), label=conf["rotulo"])
+        for b, c in zip(barras, cens):
+            r = conf["cenarios"][c]
+            h = b.get_height()
+            ax5.text(b.get_x() + b.get_width() / 2, h + (2.0 if h >= 0 else -2.0), f"{r['acertos']}✓ {r['erros']}✗",
+                     ha="center", va="bottom" if h >= 0 else "top", fontsize=7.5, color="#e2e8f0")
+    ax5.axhline(0.0, color="#64748b", linewidth=1.0)
+    ax5.set_xticks(x_c)
+    ax5.set_xticklabels([nomes_c[c] for c in cens], fontsize=8.5)
+    ax5.set_ylabel(f"Pontuação / min = (acertos − {cenarios['penalidade']:.0f}·erros) / min")
+    ax5.set_title("5. Três Alturas face ao Alvo: Pontuação/min (erro vale −20 acertos)", fontweight="bold", color="#10b981")
+    ax5.set_ylim(min(0.0, pmin * 1.25) - 5.0, pmax * 1.28)
+    ax5.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax5.legend(loc="upper right", framealpha=0.25, fontsize=8)
+
+    dmax = 0.0
+    for j, (cid, conf) in enumerate(confs.items()):
+        vals = [conf["cenarios"][c]["desloc_estacao_max_m"] for c in cens]
+        dmax = max(dmax, *vals)
+        barras = ax6.bar(x_c + (j - 1) * larg, vals, width=larg, color=cores.get(cid, "#38bdf8"), label=conf["rotulo"])
+        for b, c in zip(barras, cens):
+            r = conf["cenarios"][c]
+            rot = f"{100 * r['desloc_estacao_max_m']:.0f} cm"
+            if conf["articulado"] and conf["usar_tf"]:         # pitch do corpo (ZYX: + = nariz para BAIXO)
+                p = r["pitch_corpo_medio_graus"]
+                rot += "\nnariz " + (f"↑{-p:.0f}°" if p < -1.0 else f"↓{p:.0f}°" if p > 1.0 else "≈0°")
+            ax6.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.02, rot, ha="center", va="bottom", fontsize=7.5,
+                     color="#e2e8f0")
+    ax6.set_xticks(x_c)
+    ax6.set_xticklabels([nomes_c[c] for c in cens], fontsize=8.5)
+    ax6.set_ylabel("Afastamento máx. da estação ao mirar (m)")
+    ax6.set_title("6. Mirar sem Sair do Sítio: afastamento (m; o recuo empurra) e arfagem", fontweight="bold",
+                  color="#f59e0b")
+    ax6.set_ylim(0, dmax * 1.35 + 0.05)
+    ax6.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax6.legend(loc="upper left", framealpha=0.25, fontsize=8)
+
+
 def executar_benchmark_completo() -> dict:
-    """Corre o benchmark determinístico completo (4 gerações + 6 presets), grava o JSON e gera `evolucao_drone.png`."""
+    """Corre o benchmark determinístico completo (5 gerações + 6 presets + 3 cenários de altura), grava o JSON e gera
+    `evolucao_drone.png`."""
     t0 = time.perf_counter()
     definicoes_geracoes = [
         ("v1_bloco_inicial", "v1 · Bloco Fixo\n(Sem Filtro/Recuo)"),
         ("v2_antitremor_gpu", "v2 · Anti-Tremor\n+ Mira GPU"),
         ("v3_recuo_ativo_tf", "v3 · Recuo Ativo\n500Hz + TF XLA"),
         ("v4_standoff_presets_tf", "v4 · Standoff Dinâmico\n+ 6 Presets TF"),
+        (GERACAO_ARTICULADA, "v5 · Braços Articulados\n+ Mira Arfagem TF"),
     ]
     geracoes_res = []
     for gid, rot in definicoes_geracoes:
@@ -406,8 +552,10 @@ def executar_benchmark_completo() -> dict:
             flush=True,
         )
 
+    cenarios_res = avaliar_cenarios_altura()
+
     PASTA_EVOLUCAO.mkdir(parents=True, exist_ok=True)
-    img_path = renderizar_grafico_evolucao(geracoes_res, presets_res, CAMINHO_IMAGEM_RAIZ)
+    img_path = renderizar_grafico_evolucao(geracoes_res, presets_res, CAMINHO_IMAGEM_RAIZ, cenarios=cenarios_res)
     dados = {
         "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "duracao_benchmark_s": round(time.perf_counter() - t0, 2),
@@ -416,6 +564,7 @@ def executar_benchmark_completo() -> dict:
         "grafico_raiz": str(img_path.relative_to(_RAIZ)),
         "geracoes": geracoes_res,
         "presets": presets_res,
+        "cenarios_altura": cenarios_res,
     }
     CAMINHO_JSON_EVOLUCAO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"[evolucao] gráfico gravado em {img_path} e JSON em {CAMINHO_JSON_EVOLUCAO}", flush=True)
