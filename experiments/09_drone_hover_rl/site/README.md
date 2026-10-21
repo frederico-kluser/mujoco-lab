@@ -184,6 +184,11 @@ src/
                                   curvas, quem-faz-o-que, hardware, rede, observacoes, rpi5, avisos
   components/motion-ui/           animated-number, hold-to-confirm, multi-state-button, progress-bar,
                                   sparkline, toast-stack, ui-theme
+  paginas/pecas/                  a PÁGINA DAS PEÇAS 3D (`/pecas`, carregada à parte — o three.js 0.186 não entra no
+                                  cockpit): dados.ts (o JSON de `/api/pecas3d`, `urlStl`), visor.ts (three.js: a árvore de
+                                  corpos e as juntas do MuJoCo, rotores, sem-fim e BIELAS do ombro de fuso, ferragens em
+                                  InstancedMesh, escolha com o rato, vista explodida), pagina-pecas.tsx (Peças com o
+                                  «porque» · Montagem · Ferragens · Imprimir e custos com os STL e o ZIP)
 ```
 
 **Tema**: escuro fixo. Tipos **B612** (algarismos de largura fixa e vírgula estreita — os números) e

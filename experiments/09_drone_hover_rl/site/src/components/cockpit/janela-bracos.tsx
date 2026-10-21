@@ -1,6 +1,6 @@
 /**
  * Janela BRAÇOS (tecla 9) — os braços articulados ao vivo (HUD 50 Hz, escrito por refs: o React não
- * re-renderiza a cada amostra). O cockpit voa POR OMISSÃO o build com braços (`articulado_15pol_mn5006`); num build
+ * re-renderiza a cada amostra). O cockpit voa POR OMISSÃO o build com braços (`articulado_15pol_abs`); num build
  * rígido (`--build politica`/outro) diz isso e não inventa nada.
  *
  *  · ESTADO DA MIRA: com «seguir a bola» (B) a mira inclina o CORPO (a arma) para a altura da bola e os
@@ -29,7 +29,15 @@ const BRACOS = [
 ] as const
 
 /** Colunas da tabela dos servos (o desenhador escreve cada célula pela chave). */
-const COLUNAS = ["angulo", "alvo", "velocidade", "corrente", "potencia", "curso", "energia"] as const
+const COLUNAS = [
+  "angulo",
+  "alvo",
+  "velocidade",
+  "corrente",
+  "potencia",
+  "curso",
+  "energia",
+] as const
 type Coluna = (typeof COLUNAS)[number]
 const CABECALHO: Record<Coluna, string> = {
   angulo: "ângulo",
@@ -87,6 +95,8 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
   const rMastro = useRef<(SVGGElement | null)[]>([])
   const rMostrador = useRef<(SVGLineElement | null)[]>([])
   const rCelulas = useRef<Record<string, HTMLSpanElement | null>>({})
+  const rLegenda = useRef<HTMLSpanElement>(null)
+  const rNota = useRef<HTMLSpanElement>(null)
 
   useDesenhoHud(({ hud, texto }) => {
     const b = hud?.bracos ?? null
@@ -95,7 +105,10 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
     const geo = b.geometria
     const theta = b.pitchCorpo ?? 0
     if (rCorpoSvg.current !== null)
-      rCorpoSvg.current.setAttribute("transform", `rotate(${theta.toFixed(2)} ${CX} ${CY})`)
+      rCorpoSvg.current.setAttribute(
+        "transform",
+        `rotate(${theta.toFixed(2)} ${CX} ${CY})`
+      )
     if (geo !== null) {
       for (const k of [3, 1]) {
         const ux = geo.ux[k] ?? (k === 3 ? 0.707 : -0.707)
@@ -106,19 +119,40 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
         const xs = CX + ESCALA * geo.rS * ux * Math.cos(t)
         const ys = CY + ESCALA * geo.rS * ux * Math.sin(t)
         const braco = rBraco.current[k]
-        if (braco != null) braco.setAttribute("transform", `translate(${xs.toFixed(1)} ${ys.toFixed(1)}) rotate(${(theta + q1).toFixed(2)})`)
+        if (braco != null)
+          braco.setAttribute(
+            "transform",
+            `translate(${xs.toFixed(1)} ${ys.toFixed(1)}) rotate(${(theta + q1).toFixed(2)})`
+          )
         const mastro = rMastro.current[k]
-        if (mastro != null) mastro.setAttribute("transform", `translate(${(ESCALA * geo.l1 * ux).toFixed(1)} 0) rotate(${q2.toFixed(2)})`)
+        if (mastro != null)
+          mastro.setAttribute(
+            "transform",
+            `translate(${(ESCALA * geo.l1 * ux).toFixed(1)} 0) rotate(${q2.toFixed(2)})`
+          )
       }
     }
     for (let i = 0; i < 8; i += 1) {
       const linha = rMostrador.current[i]
       const a = b.juntas[i]?.angulo
-      if (linha != null && a != null) linha.setAttribute("transform", `rotate(${a.toFixed(1)} 11 11)`)
+      if (linha != null && a != null)
+        linha.setAttribute("transform", `rotate(${a.toFixed(1)} 11 11)`)
     }
     if (!texto) return
     const escrever = (el: HTMLElement | null | undefined, t: string) => {
       if (el != null && el.textContent !== t) el.textContent = t
+    }
+    // os atuadores DO BUILD (fixos: o texto só muda se o build mudar)
+    const at = b.atuadores
+    if (at !== null) {
+      escrever(
+        rLegenda.current,
+        `os 8 atuadores · ombro: ${at.ombro} · cotovelo: ${at.cotovelo}`
+      )
+      escrever(
+        rNota.current,
+        `Em espera cada ombro puxa ${fmtHud((at.esperaA ?? 0) * 1000, 0)} mA a ${fmtHud(at.tensaoV, 0)} V: o ${at.segura} do ombro segura o empuxo sem corrente.`
+      )
     }
     const m = b.mira
     escrever(
@@ -134,30 +168,59 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
           : "em espera (B = seguir a bola)"
     )
     if (rEstado.current?.parentElement != null)
-      rEstado.current.parentElement.dataset.tom = !b.ligados ? "perigo" : b.miraAtiva ? (m?.foraAlcance ? "atencao" : "ativo") : "normal"
-    escrever(rCorpo.current, `${textoPitchCorpo(b.pitchCorpo)} → ${textoPitchCorpo(b.pitchAlvo)}`)
-    escrever(rTau.current, b.inclinacaoMotores === null ? "—" : `${fmtHud(b.inclinacaoMotores, 1)}°`)
-    escrever(rElevacao.current, m?.elevacao == null ? "—" : `${fmtHud(m.elevacao, 1)}°`)
-    escrever(rPotencia.current, b.potenciaW === null ? "—" : `${fmtHud(b.potenciaW, 1)} W`)
-    escrever(rEnergia.current, b.energiaWh === null ? "—" : `${fmtHud(b.energiaWh, 3)} Wh`)
+      rEstado.current.parentElement.dataset.tom = !b.ligados
+        ? "perigo"
+        : b.miraAtiva
+          ? m?.foraAlcance
+            ? "atencao"
+            : "ativo"
+          : "normal"
+    escrever(
+      rCorpo.current,
+      `${textoPitchCorpo(b.pitchCorpo)} → ${textoPitchCorpo(b.pitchAlvo)}`
+    )
+    escrever(
+      rTau.current,
+      b.inclinacaoMotores === null ? "—" : `${fmtHud(b.inclinacaoMotores, 1)}°`
+    )
+    escrever(
+      rElevacao.current,
+      m?.elevacao == null ? "—" : `${fmtHud(m.elevacao, 1)}°`
+    )
+    escrever(
+      rPotencia.current,
+      b.potenciaW === null ? "—" : `${fmtHud(b.potenciaW, 1)} W`
+    )
+    escrever(
+      rEnergia.current,
+      b.energiaWh === null ? "—" : `${fmtHud(b.energiaWh, 3)} Wh`
+    )
     const total = hud?.potencia?.total ?? null
     escrever(
       rFracao.current,
-      total === null || total <= 0 || b.potenciaW === null ? "—" : `${fmtHud((100 * b.potenciaW) / total, 1)} %`
+      total === null || total <= 0 || b.potenciaW === null
+        ? "—"
+        : `${fmtHud((100 * b.potenciaW) / total, 1)} %`
     )
     const curso = b.juntas.reduce((acc, j) => acc + (j.curso ?? 0), 0)
     escrever(rCurso.current, `${fmtHud(curso, 0)}°`)
     for (let i = 0; i < 8; i += 1)
-      for (const col of COLUNAS) escrever(rCelulas.current[`${i}:${col}`], celula(b, i, col))
+      for (const col of COLUNAS)
+        escrever(rCelulas.current[`${i}:${col}`], celula(b, i, col))
   })
 
   if (!temBracos) {
     return (
-      <p className="text-sm text-muted-foreground" data-testid="bracos-sem-bracos">
-        Este cockpit foi arrancado com um build de braços RÍGIDOS (<code className="font-mono text-hud">--build</code>).
-        O drone com os braços articulados (8 servos, mira por arfagem) é o padrão: arranque com{" "}
-        <code className="font-mono text-hud">mujoco 09</code> ou o <code className="font-mono text-hud">sim_site.py</code>{" "}
-        sem <code className="font-mono text-hud">--build</code>.
+      <p
+        className="text-sm text-muted-foreground"
+        data-testid="bracos-sem-bracos"
+      >
+        Este cockpit foi arrancado com um build de braços RÍGIDOS (
+        <code className="font-mono text-hud">--build</code>). O drone com os
+        braços articulados (8 servos, mira por arfagem) é o padrão: arranque com{" "}
+        <code className="font-mono text-hud">mujoco 09</code> ou o{" "}
+        <code className="font-mono text-hud">sim_site.py</code> sem{" "}
+        <code className="font-mono text-hud">--build</code>.
       </p>
     )
   }
@@ -166,8 +229,20 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
     <tr key={indice} className="border-t border-white/8">
       <td className="py-0.5 pr-1">
         <span className="flex items-center gap-1">
-          <svg viewBox="0 0 22 22" className="size-4 shrink-0" aria-hidden="true">
-            <circle cx="11" cy="11" r="9" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2" />
+          <svg
+            viewBox="0 0 22 22"
+            className="size-4 shrink-0"
+            aria-hidden="true"
+          >
+            <circle
+              cx="11"
+              cy="11"
+              r="9"
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.35"
+              strokeWidth="2"
+            />
             <line
               ref={(el) => {
                 rMostrador.current[indice] = el
@@ -207,17 +282,62 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
         rBraco.current[k] = el
       }}
     >
-      <line x1="0" y1="0" x2={comprimento} y2="0" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-      <circle cx="0" cy="0" r="5" fill="rgb(255 133 10)" stroke="black" strokeWidth="1" />
+      <line
+        x1="0"
+        y1="0"
+        x2={comprimento}
+        y2="0"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="round"
+      />
+      <circle
+        cx="0"
+        cy="0"
+        r="5"
+        fill="rgb(255 133 10)"
+        stroke="black"
+        strokeWidth="1"
+      />
       <g
         ref={(el) => {
           rMastro.current[k] = el
         }}
       >
-        <line x1="0" y1="0" x2="0" y2={-mastro} stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-        <rect x="-7" y={-mastro - 6} width="14" height="7" rx="2" fill="currentColor" />
-        <line x1="-38" y1={-mastro - 7} x2="38" y2={-mastro - 7} stroke="rgb(56 189 248)" strokeWidth="2" strokeOpacity="0.8" />
-        <circle cx="0" cy="0" r="5" fill="rgb(255 133 10)" stroke="black" strokeWidth="1" />
+        <line
+          x1="0"
+          y1="0"
+          x2="0"
+          y2={-mastro}
+          stroke="currentColor"
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+        <rect
+          x="-7"
+          y={-mastro - 6}
+          width="14"
+          height="7"
+          rx="2"
+          fill="currentColor"
+        />
+        <line
+          x1="-38"
+          y1={-mastro - 7}
+          x2="38"
+          y2={-mastro - 7}
+          stroke="rgb(56 189 248)"
+          strokeWidth="2"
+          strokeOpacity="0.8"
+        />
+        <circle
+          cx="0"
+          cy="0"
+          r="5"
+          fill="rgb(255 133 10)"
+          stroke="black"
+          strokeWidth="1"
+        />
       </g>
     </g>
   )
@@ -231,36 +351,100 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <Leitura rotulo="corpo (arma)" refValor={rCorpo} testid="bracos-pitch-corpo" className="col-span-3" />
-        <Leitura rotulo="motores vs corpo" refValor={rTau} testid="bracos-tau" />
-        <Leitura rotulo="elevação da bola" refValor={rElevacao} testid="bracos-elevacao" />
-        <Leitura rotulo="servos agora" refValor={rPotencia} testid="bracos-potencia" />
+        <Leitura
+          rotulo="corpo (arma)"
+          refValor={rCorpo}
+          testid="bracos-pitch-corpo"
+          className="col-span-3"
+        />
+        <Leitura
+          rotulo="motores vs corpo"
+          refValor={rTau}
+          testid="bracos-tau"
+        />
+        <Leitura
+          rotulo="elevação da bola"
+          refValor={rElevacao}
+          testid="bracos-elevacao"
+        />
+        <Leitura
+          rotulo="servos agora"
+          refValor={rPotencia}
+          testid="bracos-potencia"
+        />
       </div>
 
       <div className="rounded-lg bg-black/35 p-1" data-testid="bracos-esquema">
-        <svg viewBox="0 0 380 120" className="w-full text-hud" role="img" aria-label="perfil dos braços: ombro e cotovelo">
-          <line x1="0" y1="114" x2="380" y2="114" stroke="currentColor" strokeOpacity="0.2" strokeDasharray="4 4" />
+        <svg
+          viewBox="0 0 380 120"
+          className="w-full text-hud"
+          role="img"
+          aria-label="perfil dos braços: ombro e cotovelo"
+        >
+          <line
+            x1="0"
+            y1="114"
+            x2="380"
+            y2="114"
+            stroke="currentColor"
+            strokeOpacity="0.2"
+            strokeDasharray="4 4"
+          />
           {desenhoBraco(3, ESCALA * 0.825 * 0.707, ESCALA * 0.2305)}
           {desenhoBraco(1, ESCALA * 0.825 * -0.707, ESCALA * 0.2305)}
           <g ref={rCorpoSvg}>
-            <rect x={CX - 32} y={CY - 7} width="64" height="14" rx="3" fill="currentColor" fillOpacity="0.85" />
-            <rect x={CX - 6} y={CY - 19} width="40" height="10" rx="2" fill="rgb(148 163 184)" />
-            <line x1={CX + 34} y1={CY - 14} x2={CX + 120} y2={CY - 14} stroke="rgb(250 204 21)" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.8" />
+            <rect
+              x={CX - 32}
+              y={CY - 7}
+              width="64"
+              height="14"
+              rx="3"
+              fill="currentColor"
+              fillOpacity="0.85"
+            />
+            <rect
+              x={CX - 6}
+              y={CY - 19}
+              width="40"
+              height="10"
+              rx="2"
+              fill="rgb(148 163 184)"
+            />
+            <line
+              x1={CX + 34}
+              y1={CY - 14}
+              x2={CX + 120}
+              y2={CY - 14}
+              stroke="rgb(250 204 21)"
+              strokeWidth="1"
+              strokeDasharray="3 3"
+              strokeOpacity="0.8"
+            />
           </g>
           <text x="6" y="12" fontSize="9" fill="currentColor" fillOpacity="0.7">
-            perfil do lado direito (nariz →) · ● laranja = dobradiça (ombro, cotovelo)
+            perfil do lado direito (nariz →) · ● laranja = dobradiça (ombro,
+            cotovelo)
           </text>
         </svg>
       </div>
 
       <div className="flex flex-col gap-1">
-        <Legenda>os 8 servos · DYNAMIXEL XH430-V210-R (ombro com sem-fim 20:1)</Legenda>
+        <Legenda>
+          <span ref={rLegenda} data-testid="bracos-atuadores">
+            os 8 servos · DYNAMIXEL XH430-V210-R (ombro com sem-fim 20:1)
+          </span>
+        </Legenda>
         <table className="w-full border-collapse" data-testid="bracos-tabela">
           <thead>
             <tr>
-              <th className="text-left text-[0.6rem] font-bold text-muted-foreground">junta</th>
+              <th className="text-left text-[0.6rem] font-bold text-muted-foreground">
+                junta
+              </th>
               {COLUNAS.map((col) => (
-                <th key={col} className="text-right text-[0.6rem] font-bold text-muted-foreground">
+                <th
+                  key={col}
+                  className="text-right text-[0.6rem] font-bold text-muted-foreground"
+                >
                   {CABECALHO[col]}
                 </th>
               ))}
@@ -276,13 +460,29 @@ export function JanelaBracos({ temBracos }: JanelaBracosProps) {
       </div>
 
       <div className="grid grid-cols-3 gap-2 border-t border-white/10 pt-2">
-        <Leitura rotulo="energia gasta" refValor={rEnergia} testid="bracos-energia" />
-        <Leitura rotulo="da potência total" refValor={rFracao} testid="bracos-fracao" />
-        <Leitura rotulo="rodaram (8 juntas)" refValor={rCurso} testid="bracos-curso" />
+        <Leitura
+          rotulo="energia gasta"
+          refValor={rEnergia}
+          testid="bracos-energia"
+        />
+        <Leitura
+          rotulo="da potência total"
+          refValor={rFracao}
+          testid="bracos-fracao"
+        />
+        <Leitura
+          rotulo="rodaram (8 juntas)"
+          refValor={rCurso}
+          testid="bracos-curso"
+        />
       </div>
       <p className="text-[0.66rem] leading-snug text-muted-foreground">
-        A energia sai da bateria a cada passo da física (a corrente dos servos entra no consumo total e na
-        autonomia). Em espera cada servo puxa 40 mA a 24 V; o sem-fim do ombro segura o empuxo sem corrente.
+        A energia sai da bateria a cada passo da física (a corrente dos
+        atuadores entra no consumo total e na autonomia).{" "}
+        <span ref={rNota}>
+          Em espera cada servo puxa 40 mA a 24 V; o sem-fim do ombro segura o
+          empuxo sem corrente.
+        </span>
       </p>
     </div>
   )

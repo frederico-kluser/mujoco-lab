@@ -13,7 +13,9 @@ SERVO DIRETO (cotovelo) — motor DC + caixa, reta binário-velocidade na saída
     corrente: I = I_b·|τ|/τ_b + I_espera                              (τ = K_t·I; potência = V·I no regulador de 24 V)
 
 SERVO + SEM-FIM (ombro) — o servo roda o sem-fim (ângulo θ, na saída do servo); o braço segue θ/N pelo engrenamento
-(mola k com folga b e amortecimento c):
+(mola k com folga b e amortecimento c) — ou, no ATUADOR DE FUSO (`Junta.fuso`, a biela do ombro acessível), segue o
+ângulo q(θ) que põe a porca na posição do fuso (forma fechada em `componentes.Fuso`) e a redução é a LOCAL,
+N(q) = 2π·L'(q)/p (cai no fim do curso, onde o braço de alavanca encurta):
     τ_braço = −k·zm(q − θ/N, b/2) − c·(q̇ − θ̇/N)                       (zm = zona morta: a folga)
     a carga que chega ao servo depende do SENTIDO (autobloqueio, λ < φ — `componentes.Junta`):
         o braço opõe-se ao movimento:  τ_s = |τ_braço|/(N·η),  η = tan λ / tan(λ + φ)
@@ -54,15 +56,21 @@ def _zona_morta(e: float, meia: float) -> float:
 class ServoJunta:
     """Um servo de junta (direto ou com sem-fim) — ver o docstring do módulo."""
 
-    def __init__(self, junta: Junta, mecanismo: MecanismoBracos, nome: str, rng: np.random.Generator | None = None):
+    def __init__(self, junta: Junta, mecanismo: MecanismoBracos, nome: str, rng: np.random.Generator | None = None,
+                 quadrante: tuple[float, float] = (1.0, 1.0)):
         self.junta, self.nome = junta, nome
         s = junta.servo
-        self.n = float(junta.reducao)
+        self.n = float(junta.reducao)                         # |N| com a junta a 0
         self.sem_fim = self.n > 1.0
+        self.fuso = junta.fuso                                # biela do ombro (None = redução fixa)
+        self.sx, self.sy = float(quadrante[0]), float(quadrante[1])
+        # sinal que põe o ângulo do SERVO a crescer com o do braço (no fuso, L pode encurtar quando q cresce)
+        self._s = 1.0 if self.fuso is None or self.fuso.n_em(0.0, self.sx, self.sy) > 0.0 else -1.0
         self.tau_b = s.binario_bloqueio                       # na saída do SERVO
         self.w0 = s.omega_vazio                               # idem
         self.i_b, self.i_espera, self.v = s.corrente_bloqueio, s.corrente_espera, s.tensao
-        self.kp, self.kd = mecanismo.kp_duty, mecanismo.kd_duty
+        self.kp = junta.kp_duty if junta.kp_duty is not None else mecanismo.kp_duty
+        self.kd = junta.kd_duty if junta.kd_duty is not None else mecanismo.kd_duty
         self.eta = junta.eficiencia_subir
         self.f_desc = junta.fator_descer
         self.res_enc = junta.encoder_resolucao                # encoder que mede o BRAÇO (externo no ombro)
@@ -81,7 +89,7 @@ class ServoJunta:
         self.alvo = float(q0)
         self.sp = float(q0)                  # setpoint do perfil (braço)
         self.vp = 0.0                        # velocidade do perfil
-        self.theta = self.n * float(q0)      # ângulo da saída do servo (sem-fim) — braço = θ/N
+        self.theta = self._theta_de_q(float(q0))   # ângulo da saída do servo (sem-fim/fuso) — braço = q(θ)
         self.theta_d = 0.0
         self.corr = 0.0                      # correção da folga (laço duplo, rad no braço)
         self.duty = 0.0
@@ -93,6 +101,22 @@ class ServoJunta:
         self.energia_j = 0.0                 # J tirados do barramento de 24 V desde o reset (espera incluída)
         self.curso = 0.0                     # rad percorridos pela junta desde o reset (Σ|Δq| da posição REAL)
         self._q_ant = float(q0)
+        self._t_bloqueio = 0.0               # s a empurrar sem andar (proteção de bloqueio)
+        self._pausa = 0.0                    # s que faltam com o driver desligado pela proteção
+        self._travado = 0.0                  # s que faltam com o motor travado pelo FC (tiro a sair)
+        self.cortes_bloqueio = 0             # quantas vezes a proteção cortou o driver desde o reset
+
+    # ------------------------------------------------------------------ transmissão (fixa ou biela)
+    def _theta_de_q(self, q: float) -> float:
+        """Ângulo do servo que põe o braço em q (sem-fim: N·q; fuso: a rotação do fuso desde q = 0)."""
+        return self.n * q if self.fuso is None else self._s * self.fuso.theta_de_q(q, self.sx, self.sy)
+
+    def _q_de_theta(self, theta: float) -> float:
+        return theta / self.n if self.fuso is None else self.fuso.q_de_theta(self._s * theta, self.sx, self.sy)
+
+    def _n_em(self, q: float) -> float:
+        """|N| local (rad do servo por rad do braço)."""
+        return self.n if self.fuso is None else abs(self.fuso.n_em(q, self.sx, self.sy))
 
     def definir_alvo(self, q_alvo: float) -> None:
         """Posição-alvo da junta (rad) — a escrita síncrona do barramento; cortada aos batentes da junta."""
@@ -112,14 +136,16 @@ class ServoJunta:
             self.duty, self.corrente, self.saturado = 0.0, 0.0, False
             if self.sem_fim:                                  # o sem-fim segura (o servo não roda)
                 self.theta_d = 0.0
-                self.tau = -self.junta.rigidez * _zona_morta(q - self.theta / self.n, 0.5 * self.junta.folga) \
+                self.tau = -self.junta.rigidez * _zona_morta(q - self._q_de_theta(self.theta), 0.5 * self.junta.folga) \
                     - self.junta.amortecimento * qd
                 return self._alvo_engrenamento(q)
             self.tau = 0.0                                    # binário desligado: só o atrito da caixa e a c.e.m.
             return 0.0
         # perfil de velocidade/aceleração do servo (no referencial do braço)
         erro_p = self.alvo - self.sp
-        v_des = math.copysign(min(abs(erro_p) / max(dt, 1e-9), self.v_perfil,
+        v_perfil = self.v_perfil if self.fuso is None else \
+            self.junta.fracao_velocidade_perfil * self.w0 / self._n_em(self.sp)   # no fuso depende do braço de alavanca
+        v_des = math.copysign(min(abs(erro_p) / max(dt, 1e-9), v_perfil,
                                   math.sqrt(2.0 * self.a_perfil * abs(erro_p))), erro_p)
         dv = max(-self.a_perfil * dt, min(self.a_perfil * dt, v_des - self.vp))
         self.vp += dv
@@ -143,18 +169,31 @@ class ServoJunta:
 
     def _passo_sem_fim(self, q: float, qd: float, dt: float) -> float:
         j = self.junta
-        n = self.n
+        q_ref = self._q_de_theta(self.theta)                   # onde o sem-fim/fuso põe o braço
+        n = self._n_em(q_ref)                                  # redução local (constante no sem-fim)
         # laço duplo: o encoder EXTERNO corrige devagar a folga/deformação (o servo só vê o seu encoder interno)
         e_braco = self.sp - self.q_med
-        self.corr = max(-0.02, min(0.02, self.corr + KI_CORRECAO_SEM_FIM * e_braco * dt))
-        theta_alvo = n * (self.sp + self.corr)
+        if abs(e_braco) > j.zona_morta:                        # dentro da banda morta a correção não acumula
+            self.corr = max(-0.02, min(0.02, self.corr + KI_CORRECAO_SEM_FIM * e_braco * dt))
+        theta_alvo = self._theta_de_q(self.sp + self.corr)
         theta_med = _quantiza(self.theta, self.res_servo)
-        d = self.kp * (theta_alvo - theta_med) - self.kd * self.theta_d     # o PID do servo vê o SEU ângulo (N× o do braço)
+        erro_s = theta_alvo - theta_med
+        if abs(erro_s) < n * j.zona_morta:                     # banda morta: o driver desliga e o redutor segura
+            erro_s = 0.0
+        d = self.kp * erro_s - self.kd * self.theta_d          # o PID do servo vê o SEU ângulo (N× o do braço)
+        if j.duty_minimo > 0.0 and erro_s != 0.0 and abs(d) < j.duty_minimo:
+            d = math.copysign(j.duty_minimo, erro_s)          # fora da banda: pelo menos o PWM que vence o arranque
         self.saturado = abs(d) >= 1.0
         d = max(-1.0, min(1.0, d))
+        if self._pausa > 0.0:                                  # proteção de bloqueio: o driver está desligado
+            self._pausa -= dt
+            d = 0.0
+        if self._travado > 0.0:                                # o FC travou o motor (um tiro a sair: o fuso segura)
+            self._travado -= dt
+            d = 0.0
         self.duty = d
         # engrenamento: binário no braço (com folga) e a carga refletida no servo, conforme o sentido
-        tau_braco = -j.rigidez * _zona_morta(q - self.theta / n, 0.5 * j.folga) - j.amortecimento * qd
+        tau_braco = -j.rigidez * _zona_morta(q - q_ref, 0.5 * j.folga) - j.amortecimento * qd
         carga = -tau_braco                                     # o que o braço faz no sem-fim (sentido do braço)
         if abs(d) < 1e-9:
             self.theta_d = 0.0
@@ -169,15 +208,25 @@ class ServoJunta:
             if w * sentido <= 0.0:                             # a carga vence o servo: o sem-fim segura
                 w, tau_s = 0.0, self.tau_b * abs(d)
             self.theta_d = w
+            # proteção de BLOQUEIO do firmware (motorredutor + DRV8871 a ~2,6 W com o motor parado): a empurrar sem
+            # andar mais de `corte_bloqueio` s, o FC corta o driver `pausa_bloqueio` s — o redutor autobloqueante
+            # segura o braço — e depois tenta outra vez
+            if j.corte_bloqueio is not None and w == 0.0 and abs(d) >= 0.3:
+                self._t_bloqueio += dt
+                if self._t_bloqueio >= j.corte_bloqueio:
+                    self._pausa, self._t_bloqueio = j.pausa_bloqueio, 0.0
+                    self.cortes_bloqueio += 1
+            else:
+                self._t_bloqueio = 0.0
         self.theta += self.theta_d * dt
         self.tau = tau_braco
         self.corrente = self.i_b * min(1.0, tau_s / self.tau_b) + self.i_espera
         return self._alvo_engrenamento(q)
 
     def _alvo_engrenamento(self, q: float) -> float:
-        """Alvo do atuador de POSIÇÃO que faz de engrenamento (kp = rigidez, kv = amortecimento): θ/N deslocado pela
-        folga — dentro da folga o alvo é o próprio q (só fica o amortecimento), fora dela a mola vê θ/N ± b/2."""
-        ref = self.theta / self.n
+        """Alvo do atuador de POSIÇÃO que faz de engrenamento (kp = rigidez, kv = amortecimento): q(θ) deslocado pela
+        folga — dentro da folga o alvo é o próprio q (só fica o amortecimento), fora dela a mola vê q(θ) ± b/2."""
+        ref = self._q_de_theta(self.theta)
         meia = 0.5 * self.junta.folga
         e = q - ref
         if e > meia:
@@ -195,10 +244,12 @@ class ServoJunta:
 class ServosBracos:
     """Os 8 servos (4 ombros + 4 cotovelos), na ordem `ombro1..4, cotovelo1..4` (a dos nomes do modelo)."""
 
-    def __init__(self, mecanismo: MecanismoBracos, rng: np.random.Generator | None = None):
+    def __init__(self, mecanismo: MecanismoBracos, rng: np.random.Generator | None = None, quadrantes=None):
+        """`quadrantes`: (sinal x, sinal y) do ombro de cada braço 1..4 — a biela do fuso espelha-se por quadrante."""
         self.mec = mecanismo
         rng = rng if rng is not None else np.random.default_rng(0x5E40)
-        self.servos = ([ServoJunta(mecanismo.ombro, mecanismo, f"ombro{i + 1}", rng) for i in range(4)]
+        quad = list(quadrantes) if quadrantes is not None else [(1.0, 1.0)] * 4
+        self.servos = ([ServoJunta(mecanismo.ombro, mecanismo, f"ombro{i + 1}", rng, quad[i]) for i in range(4)]
                        + [ServoJunta(mecanismo.cotovelo, mecanismo, f"cotovelo{i + 1}", rng) for i in range(4)])
 
     def reiniciar(self, q0=None) -> None:
@@ -209,6 +260,14 @@ class ServosBracos:
     def ligar(self, ligado: bool) -> None:
         for s in self.servos:
             s.ligado = bool(ligado)
+
+    def travar_ombros(self, duracao_s: float) -> None:
+        """Trava os motores dos OMBROS `duracao_s` (só com redutor autobloqueante: o redutor segura o braço sem
+        corrente): o FC fá-lo do instante da ordem de tiro até a bala sair, para nenhum impulso do motor mexer o corpo
+        enquanto o cano aponta. Os cotovelos (diretos) não param."""
+        for s in self.servos[:4]:
+            if s.sem_fim and s.junta.autobloqueante:
+                s._travado = max(s._travado, float(duracao_s))
 
     def definir_alvos(self, alvos) -> None:
         for s, a in zip(self.servos, np.asarray(alvos, dtype=float).reshape(8), strict=True):

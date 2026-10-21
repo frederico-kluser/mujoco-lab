@@ -39,10 +39,10 @@ from .componentes import (
     PRESETS_PROPULSAO_PAINEL,
     Hardware,
     autonomia_estimada,
-    catalogo_pecas_painel,
     criar_hardware_com_pecas,
     preset_id_de_pecas,
 )
+from .detalhes import RGBA_OMISSAO, animacoes_do_modelo, variantes_do_modelo
 from .modelo import (
     ALCANCE_PROJETIL_M,
     CORPOS_MASTRO,
@@ -164,7 +164,9 @@ class Planta:
             self.slot_servo = np.array([model.actuator_ctrladr[model.actuator(n).id]
                                         for n in SERVOS_OMBRO + SERVOS_COTOVELO])
             self.corpos_mastro = np.array([model.body(n).id for n in CORPOS_MASTRO])
-            self.servos: ServosBracos | None = ServosBracos(hw.bracos)
+            quadrantes = [(math.copysign(1.0, float(model.body(f"braco{k}").pos[0])),
+                           math.copysign(1.0, float(model.body(f"braco{k}").pos[1]))) for k in range(1, 5)]
+            self.servos: ServosBracos | None = ServosBracos(hw.bracos, quadrantes=quadrantes)
             gid = model.geom("chao").id
             self._chao = (model.geom_pos[gid].copy(), model.geom_size[gid].copy(), int(gid))
             self._vel6 = np.zeros(6)
@@ -247,6 +249,15 @@ class Planta:
         self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
         self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
         self._helices_anim = self._preparar_animacao_helices()
+        # EIXOS ANIMADOS dos detalhes (o sem-fim de cada ombro roda 20× o braço) e as BIELAS dos ombros de fuso (o atuador
+        # roda em torno do seu pivô, o fuso gira, a porca acompanha a alavanca): só visual, como as hélices
+        self._eixos_anim = self._preparar_animacao_eixos()
+        self._bielas_anim = self._preparar_bielas()
+        # VARIANTES da troca ao vivo: os motores/packs reais do painel já estão no modelo (alfa 0 nas inativas)
+        self._variantes = variantes_do_modelo(model)
+        self._dz_helices = 0.0
+        self._z0_helices = self._cotas_helices() if self._variantes else None
+        self._aplicar_animacao_eixos()
 
     def _geom_id(self, nome: str) -> int | None:
         try:
@@ -318,6 +329,7 @@ class Planta:
         self.angulos_helices = [0.0, 0.0, 0.0, 0.0]
         self.pct_rotacao_helices = [0.0, 0.0, 0.0, 0.0]
         self._aplicar_geoms_helices()
+        self._aplicar_animacao_eixos()
         self.n_tiros = 0
         self.n_acertos_bola = 0
         self.n_erros_bola = 0
@@ -507,6 +519,161 @@ class Planta:
         m = self.model
         m.geom_pos[gids, 0:2] = cen + tab[:, 0:1] * rel + tab[:, 1:2] * jrel
         m.geom_quat[gids] = tab[:, 2:3] * q0 + tab[:, 3:4] * jq0
+
+    def _preparar_animacao_eixos(self) -> list:
+        """Eixos animados dos detalhes (`detalhes_animacoes`: o sem-fim e o acoplamento de cada ombro): por eixo, o
+        endereço da junta no qpos, o fator razão·sentido, o ponto e a direção no corpo e a pose de repouso dos geoms
+        `<nome>_rotor*` (que rodam rígidos em torno desse eixo, a fator·q da junta)."""
+        m = self.model
+        out = []
+        for a in animacoes_do_modelo(m):
+            if not a["gids"]:
+                continue
+            try:
+                qadr = int(m.jnt_qposadr[m.joint(a["junta"]).id])
+            except KeyError:
+                continue
+            gids = np.array(a["gids"], dtype=np.intp)
+            m.geom_sameframe[gids] = 0
+            u = a["direcao"] / max(float(np.linalg.norm(a["direcao"])), 1e-12)
+            out.append((qadr, a["razao"] * a["sentido"], a["ponto"].copy(), u, gids,
+                        m.geom_pos[gids].copy() - a["ponto"], m.geom_quat[gids].copy()))
+        return out
+
+    def _preparar_bielas(self) -> list:
+        """As BIELAS dos ombros de fuso (`Junta.fuso`, geometria do catálogo — a mesma da física): por braço, os geoms
+        `ombro{k}_fuso_base*` (corpo do drone: rodam com o atuador em torno do pivô B), `ombro{k}_fuso_veio*` (idem e
+        giram sobre a reta B→A, 2π·ΔL/p — o fuso, o acoplamento, o veio do motor) e `ombro{k}_fuso_porca*` (corpo do
+        braço: rodam em torno do pivô A para ficarem alinhados com o atuador). Vazio sem fuso ou sem esses geoms."""
+        mec = getattr(self.hw, "bracos", None)
+        if mec is None or mec.ombro.fuso is None:
+            return []
+        f = mec.ombro.fuso
+        m = self.model
+        nomes = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(m.ngeom)]
+        out = []
+        for k in range(1, 5):
+            try:
+                bb, jid = m.body(f"braco{k}"), m.joint(f"ombro{k}").id
+            except KeyError:
+                continue
+            h = np.array(bb.pos, dtype=float)
+            a, b = (np.array(v, dtype=float) for v in f.vetores(math.copysign(1.0, h[0]), math.copysign(1.0, h[1])))
+            grupos = {}
+            for papel in ("base", "veio", "porca"):
+                gids = np.array([g for g, nm in enumerate(nomes) if nm.startswith(f"ombro{k}_fuso_{papel}")], dtype=np.intp)
+                if len(gids):
+                    m.geom_sameframe[gids] = 0
+                    grupos[papel] = (gids, m.geom_pos[gids].copy(), m.geom_quat[gids].copy())
+            if not grupos:
+                continue
+            d0 = a - b
+            l0 = float(np.linalg.norm(d0))
+            out.append((int(m.jnt_qposadr[jid]), h, a, b, l0, d0 / l0, f.passo, grupos))
+        return out
+
+    @staticmethod
+    def _rot_min(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """A rotação mínima que leva o versor u para v (Rodrigues)."""
+        w = np.cross(u, v)
+        c = float(np.dot(u, v))
+        if float(np.dot(w, w)) < 1e-24:
+            return np.eye(3)
+        k = np.array([[0.0, -w[2], w[1]], [w[2], 0.0, -w[0]], [-w[1], w[0], 0.0]])
+        return np.eye(3) + k + (k @ k) / (1.0 + c)
+
+    @staticmethod
+    def _rodar_geoms(m, gids, pivo, rot, pos0, quat0) -> None:
+        """Põe os geoms `gids` na pose de repouso (pos0, quat0) rodada por `rot` em torno de `pivo` (referencial do corpo)."""
+        m.geom_pos[gids] = pivo + (pos0 - pivo) @ rot.T
+        qr = np.zeros(4)
+        mujoco.mju_mat2Quat(qr, rot.reshape(9))
+        a_w, a_x, a_y, a_z = qr
+        w0, x0, y0, z0 = quat0[:, 0], quat0[:, 1], quat0[:, 2], quat0[:, 3]
+        m.geom_quat[gids] = np.column_stack([a_w * w0 - a_x * x0 - a_y * y0 - a_z * z0,
+                                             a_w * x0 + a_x * w0 + a_y * z0 - a_z * y0,
+                                             a_w * y0 - a_x * z0 + a_y * w0 + a_z * x0,
+                                             a_w * z0 + a_x * y0 - a_y * x0 + a_z * w0])
+
+    def _aplicar_bielas(self) -> None:
+        """A pose de cada biela com o ombro em q: A(q) = R_y(q)·a, d = (A − b)/|A − b|, R_b = rotação mínima d₀ → d;
+        o fuso gira 2π·(L − L₀)/p sobre d; a porca (no braço) roda R_y(q)ᵀ·R_b em torno de a."""
+        m, qpos = self.model, self.data.qpos
+        for qadr, h, a, b, l0, d0, passo, grupos in self._bielas_anim:
+            q = float(qpos[qadr])
+            c, s_ = math.cos(q), math.sin(q)
+            ry = np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]])
+            dv = ry @ a - b
+            comp = float(np.linalg.norm(dv))
+            d = dv / comp
+            rb = self._rot_min(d0, d)
+            pivo_b = h + b
+            if "base" in grupos:
+                self._rodar_geoms(m, grupos["base"][0], pivo_b, rb, grupos["base"][1], grupos["base"][2])
+            if "veio" in grupos:
+                ang = 2.0 * math.pi * (comp - l0) / passo
+                kx = np.array([[0.0, -d[2], d[1]], [d[2], 0.0, -d[0]], [-d[1], d[0], 0.0]])
+                rs = np.eye(3) + math.sin(ang) * kx + (1.0 - math.cos(ang)) * (kx @ kx)
+                self._rodar_geoms(m, grupos["veio"][0], pivo_b, rs @ rb, grupos["veio"][1], grupos["veio"][2])
+            if "porca" in grupos:
+                self._rodar_geoms(m, grupos["porca"][0], a, ry.T @ rb, grupos["porca"][1], grupos["porca"][2])
+
+    def _aplicar_animacao_eixos(self) -> None:
+        """Roda os geoms de cada eixo animado a θ = razão·sentido·q (Rodrigues; q = q_eixo(θ) ⊗ q₀, vetorial) e põe as
+        bielas dos ombros de fuso na pose do ombro."""
+        if self._bielas_anim:
+            self._aplicar_bielas()
+        if not self._eixos_anim:
+            return
+        m, q = self.model, self.data.qpos
+        for qadr, fator, ponto, u, gids, rel, q0 in self._eixos_anim:
+            th = fator * float(q[qadr])
+            c, s_ = math.cos(th), math.sin(th)
+            ux, uy, uz = u
+            K = np.array([[0.0, -uz, uy], [uz, 0.0, -ux], [-uy, ux, 0.0]])
+            R = np.eye(3) + s_ * K + (1.0 - c) * (K @ K)
+            m.geom_pos[gids] = ponto + rel @ R.T
+            hw, hs = math.cos(0.5 * th), math.sin(0.5 * th)
+            a_w, a_x, a_y, a_z = hw, hs * ux, hs * uy, hs * uz
+            w0, x0, y0, z0 = q0[:, 0], q0[:, 1], q0[:, 2], q0[:, 3]
+            m.geom_quat[gids] = np.column_stack([a_w * w0 - a_x * x0 - a_y * y0 - a_z * z0,
+                                                 a_w * x0 + a_x * w0 + a_y * z0 - a_z * y0,
+                                                 a_w * y0 - a_x * z0 + a_y * w0 + a_z * x0,
+                                                 a_w * z0 + a_x * y0 - a_y * x0 + a_z * w0])
+
+    def _cotas_helices(self) -> dict:
+        """z de repouso de todas as peças da hélice de cada rotor (`helice{k}` e `helice{k}_*`): a troca ao vivo de um
+        motor mais alto/baixo levanta/baixa a hélice visual pelo `dz` da variante."""
+        m = self.model
+        out = {}
+        for g in range(m.ngeom):
+            nome = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
+            if nome.startswith("helice") and nome[6:7].isdigit():
+                out[g] = float(m.geom_pos[g, 2])
+        return out
+
+    def _mostrar_variante(self, tipo: str, ident: str | None) -> bool:
+        """Liga a variante `tipo:ident` (rgba por omissão → a cor real do material) e esconde as outras do mesmo tipo
+        (alfa 0: o MuJoCo não as desenha). Devolve True se o modelo tem variantes deste tipo."""
+        entradas = [v for v in self._variantes if v["tipo"] == tipo]
+        if not entradas:
+            return False
+        m = self.model
+        escolhida = next((v for v in entradas if v["id"] == ident), None)
+        if escolhida is None:                     # peça fora do painel: fica a do build (a ativa de origem)
+            escolhida = next((v for v in entradas if v["ativa"]), None)
+        visiveis = set(escolhida["gids"]) if escolhida is not None else set()
+        for v in entradas:
+            for g in v["gids"]:
+                if g not in visiveis:
+                    m.geom_rgba[g] = [0.0, 0.0, 0.0, 0.0]
+        for g in visiveis:
+            m.geom_rgba[g] = RGBA_OMISSAO
+        if tipo == "motor" and self._z0_helices is not None and escolhida is not None:
+            self._dz_helices = float(escolhida["dz"])
+            for g, z0 in self._z0_helices.items():
+                m.geom_pos[g, 2] = z0 + self._dz_helices
+        return True
 
     def _passo_helices_visuais(self, omega_rotores) -> None:
         """Avança o ângulo de cada hélice no sentido físico correto (CW nos rotores 1,2; CCW nos rotores 3,4)
@@ -855,6 +1022,9 @@ class Planta:
         d_mot = float(novo_hw.motor.dados.get("diametro_mm", 44.35)) / 1000.0
         h_mot = float(novo_hw.motor.dados.get("altura_mm", 19.0)) / 1000.0
         malha = mujoco.mjtGeom.mjGEOM_MESH
+        # o detalhe realista traz os motores do painel JÁ MODELADOS com a forma, o tamanho e a cor reais (variantes com
+        # alfa 0): liga-se a do motor novo e não se pinta nada; sem variantes (modelo antigo) pinta-se como dantes
+        variantes_motor = self._mostrar_variante("motor", novo_hw.motor.id)
         for i in range(4):
             gid_m = self._geom_id(f"motor{i + 1}")
             if gid_m is not None:
@@ -862,6 +1032,8 @@ class Planta:
                 m.geom_size[gid_m, 1] = 0.5 * h_mot
                 if m.geom_rgba[gid_m, 3] > 0.0:             # o detalhe realista esconde-a (alfa 0): fica escondida
                     m.geom_rgba[gid_m] = cor_m
+            if variantes_motor:
+                continue
             # o sino/base: com o detalhe realista são MALHAS (não se redimensionam ao vivo — mantêm o tamanho do motor do
             # build) e só mudam de cor; as peças antigas (cilindros/caixas) ainda tomam o tamanho do motor novo
             for sufixo, r_f, h_f in (("sino_anel", 0.51, 0.22), ("base_cnc", 0.48, 0.14)):
@@ -890,8 +1062,8 @@ class Planta:
                 m.geom_rgba[gid_bat] = cor_b
         # o pack realista (`detalhes.eletronica`) muda de COR pelo material do invólucro; células, fitas e XT90 ficam com
         # o tamanho do pack do build (malha/peças fixas) — só as fitas antigas (sem o pack realista) ainda se esticam
-        realista = False
-        for nome_mat in ("el_termo_bateria", "el_termo_pouch"):
+        realista = self._mostrar_variante("bateria", novo_hw.bateria.id)
+        for nome_mat in (() if realista else ("el_termo_bateria", "el_termo_pouch")):
             mid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_MATERIAL, nome_mat)
             if mid >= 0:
                 m.mat_rgba[mid, :3] = cor_b[:3]
@@ -1404,6 +1576,8 @@ class Planta:
         mujoco.mj_step2(m, d)
         self._passo_visuais_tiro()
         self._passo_helices_visuais(omega)
+        if self._eixos_anim and (self.n_passos & 1) == 0:
+            self._aplicar_animacao_eixos()
 
         p_e = 0.0 if self.brownout else self.p_eletronica + self._p_servos
         b0, b1, b2, b3 = prop._i_bus

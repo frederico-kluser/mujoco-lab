@@ -39,6 +39,16 @@ import numpy as np
 _AQUI = Path(__file__).resolve().parent
 CAMINHO_MODELO = _AQUI / "out" / "mira_articulada" / "modelo_mira_articulada.json"
 
+
+def caminho_modelo(build: str | None = None) -> Path:
+    """O modelo da mira TREINADO PARA ESTE BUILD (`out/mira_articulada/<build>/…`, `treinar_mira_articulada.py --build`)
+    se existir; senão o de sempre (treinado no `articulado_15pol_mn5006`)."""
+    if build:
+        proprio = _AQUI / "out" / "mira_articulada" / str(build) / "modelo_mira_articulada.json"
+        if proprio.is_file():
+            return proprio
+    return CAMINHO_MODELO
+
 V0_PADRAO = 296.0
 K_AR_PROJETIL = 0.00180          # 1/m — o MESMO coeficiente balístico da planta (`Planta._passo_visuais_tiro`)
 LATENCIA_CAMERA_PI_S, LATENCIA_CAMERA_DCMI_S = 0.116, 0.021
@@ -480,6 +490,6 @@ class MiraArticuladaIA:
         env.disparar(1, atraso_s=lat)
 
 
-__all__ = ["CAMINHO_MODELO", "LATENCIA_CAMERA_DCMI_S", "LATENCIA_CAMERA_PI_S", "MiraArticuladaIA", "N_CARACTERISTICAS",
+__all__ = ["CAMINHO_MODELO", "caminho_modelo", "LATENCIA_CAMERA_DCMI_S", "LATENCIA_CAMERA_PI_S", "MiraArticuladaIA", "N_CARACTERISTICAS",
            "NOMES_CARACTERISTICAS", "PARAMETROS_PADRAO", "RastreadorAlvo", "atitude_zyx", "direcao_cano", "estado_boca",
            "mlp_inferir", "simular_bala"]

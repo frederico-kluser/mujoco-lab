@@ -87,6 +87,7 @@ política, porque uma política só vale para as peças com que treinou.
 | **`endurance_15pol_p50b`** (ATIVO, wheelbase ×3) | 2183 g | 871 g | 216 | 198,1 W | 11,0 | 63,0 % | 2,62 | **65,8 min** |
 | `endurance_15pol_arduino` (o p50b com **Portenta H7 + Vision Shield** em vez de RPi 5 + FC + Pi Camera; NÃO é o ativo) | 2137 g | 871 g | 216 | 186,7 W | 11,4 | 62,1 % | 2,67 | 70,0 min |
 | `articulado_15pol_mn5006` (**braços articulados**, 2026-10-19: 8 juntas com servos + Glock 25 de 785 g; MN5006 KV450; NÃO é o ativo) | 4464 g | 871 g | 216 | 557,0 W | 8,0 | 61,5 % | 2,58 | 22,0 min |
+| `articulado_15pol_abs` (**braços articulados ACESSÍVEIS**, 2026-10-20: peças impressas em ABS, ombro de fuso Tr8×2 + JGB37-520, cotovelo DS3218MG; MASSAS MEDIDAS na geometria; o que o cockpit voa; NÃO é o ativo) | 6601 g | 871 g | 216 | 981,0 W | 6,7 | 75,9 % | 2,31 | 11,3 min |
 | `endurance_15pol_semisolido` | 1597 g | 800 g | 266 | 125,5 W | 12,7 | 50,7 % | 3,58 | 127,2 min |
 | `endurance_15pol_tarot` (frame comercial 750 g) | 2133 g | 871 g | 216 | 197,6 W | 10,8 | 62,9 % | 2,68 | 66,0 min |
 | `endurance_16pol_m50lt` | 1664 g | 855 g | 218 | 132,0 W | 12,6 | 48,0 % | 3,66 | 97,6 min |
@@ -118,6 +119,26 @@ o MN5006 a 4,5 kg é rápido (τ_motor 24,5 ms) e as fórmulas do FC punham a ma
 ganhos saem de um τ de projeto de 36,9 ms (`fc.tau_de_projeto`). Nenhum outro build tem a chave (ficam bit a bit iguais).
 Detalhe, números medidos e prova: secção «BRAÇOS ARTICULADOS» de `experiments/09_drone_hover_rl/README.md`,
 `teste_bracos.py`.
+
+**Build ACESSÍVEL `articulado_15pol_abs` (2026-10-20)**: frame `diy_tubo_carbono_1950_abs` (as placas, colunas,
+abraçadeiras, suportes dos motores, pés e os suportes da eletrónica IMPRESSOS em ABS — o plástico das peças LEGO; os tubos
+de carbono 25×23 ficam comprados) e mecanismo `ombro_fuso_impresso_cotovelo_servo`: o OMBRO é uma dobradiça (veio Ø8 em 2 ×
+608ZZ numa forquilha impressa) movida por um **atuador linear de fuso** — motorredutor `motorredutor_jgb37_520_12v_1_18_8_enc`
+(JGB37-520 12 V, enrolamento rápido, 1:18,8, encoder Hall) + fuso Tr8×2 + porca de latão numa ALAVANCA do cubo impresso
+(`ombro.fuso`: a geometria da biela — alavanca, base, passo, d₂, flanco, μ, massas e CM — é a mesma na física, na animação e
+na página; o parser deriva dela a redução local N(q), o λ e o φ' da rosca trapezoidal e recusa um fuso declarado
+autobloqueante que não o seja); o COTOVELO é um servo DS3218MG a 6,0 V num berço impresso com 608ZZ do outro lado
+(`servo_ds3218mg_270`); a energia dos atuadores é 2 × buck 12 V + 4 × DRV8871 + UBEC 6S a 6,0 V (`fonte_servos`, com o
+`cm_mm` medido), e os sensores e atuadores de cada lado ligam a um **Raspberry Pi Pico 2** (`eletronica.pico2_bracos`: o H743
+não tem entradas para 4 Hall + 4 AS5048A + 4 AS5600 nem PWM para 4 DRV8871 + 4 servos; os Picos falam com o FC por UART). Porque o sem-fim saiu: a pairar o ombro segura ~6,8 N·m e um par sem-fim m1 (ou o m0,8 de 19/10) partiria os
+dentes (~470–550 N no dente). As MASSAS do frame, das pernas, das dobradiças, do fuso, do cotovelo, dos mastros, dos
+suportes e o «extra» (cabos, abraçadeiras, ferragens soltas e as que prendem as peças com ficha) foram MEDIDAS na geometria
+(`python -m lab.drone_rpi.detalhes.massas --build articulado_15pol_abs --atualizar-catalogo`): ABS 1,04 g/cm³ com casca de
+1,2 mm + 40 % de enchimento, metais e carbono pela densidade, ferragens pelas malhas das normas, cabos por volume —
+6601 g no total (o build de 19/10, 4464 g, não contava cabos, ferragens nem o mecanismo real). Custo de referência
+R$ 8.536 (US$ 1.690) e 26 STL para imprimir (1103 g de ABS, ~88 h) — página `/pecas` do cockpit. Pesquisa (medidas e
+preços, web = `untrusted`): `pesquisas/2026-10-20-materiais-acessiveis-precos.md`. Provas: `teste_ombro_fuso.py`,
+`teste_pecas3d.py`.
 
 **Realismo — o que o modelo já desconta e o que não.** A pesquisa profunda (2026-10-10, 104 agentes,
 verificação adversarial com 3 votos) confirmou: (1) os ensaios INDEPENDENTES ficam **6–9 % abaixo** das tabelas
@@ -198,8 +219,10 @@ invisíveis (`esconder`: só a cor muda) quando um detalhe as representa — nen
 câmara do detetor (medido por segmentação da câmara `fpv`).
 
 - `DRONE_DETALHES=nenhum` desliga (ou uma lista: `eletronica,fios`); por omissão todos. A física é a mesma com e sem.
-- **Custo**: construir o modelo passa de ~8 ms a ~0,5 s por env (uma vez — os detalhes não entram na passagem do CM);
-  render 1080p ~300 fps (antes ~400; o cockpit precisa de 50). Para corridas sem render, `DRONE_DETALHES=nenhum`.
+- **Custo** (medido 2026-10-20, máquina livre): construir o modelo leva 0,37–0,52 s por env com a cache dos fios
+  (`~/.cache/mujoco-lab/fios`, só do utilizador; a 1.ª montagem depois de mudar código recalcula: 2,0–3,3 s;
+  `DRONE_DETALHES_CACHE=0` desliga) — os detalhes não entram na passagem do CM; render 1080p 425–435 fps (abs 893 geoms /
+  635 mil faces; o cockpit precisa de 50). Para corridas sem render, `DRONE_DETALHES=nenhum`.
 - **Cockpit**: com «fios e detalhes» desligado, a câmara volta a desenhar as caixas escondidas (`detalhes.acrescentar_escondidos`,
   na cena — o modelo não muda), para o drone não ficar sem motores nem eletrónica. Na **troca ao vivo** de motor/bateria
   (`trocar_pecas`) a caixa física muda de tamanho mas continua escondida; o sino do motor e o invólucro do pack mudam de
@@ -212,6 +235,28 @@ câmara do detetor (medido por segmentação da câmara `fpv`).
   cotovelo, mira…).
 - Estimado (sem número oficial): posições dos chips do RPi 5, base em L do cooler, círculo de furação da base dos
   motores, alturas internas, forma do horn do XH430 (só em .dwg), caixa do XT90, disposição do regulador.
+
+### 2026-10-20 — «100 % realista» (fase 1) e a versão ACESSÍVEL (fase 2)
+
+Pedido do dono: baterias fiéis, o Raspberry Pi 5 ligado à bateria por cabo, motores com a forma e o tamanho reais,
+dobradiças verídicas, abraçadeiras presas, parafusos e porcas modelados, uma página com cada peça em 3D e a montagem;
+depois o ombro real e fácil de fazer, as peças impressas em ABS, as massas realistas, os STL e os custos. O que mudou no
+pacote `lab/drone_rpi/detalhes/`:
+
+| ficheiro | o quê |
+|---|---|
+| `__init__.py` | o **REGISTO** por peça real (`registo_do_spec`: geoms e faixas de faces das malhas fundidas por peça × instância — o MuJoCo 3.15 preserva a ordem das faces —, ferragens, ligações dos cabos, eixos, variantes, notas), `ctx.peca(...)`, `ctx.ligacao(...)`, `ctx.eixo(...)` e as VARIANTES da troca ao vivo (os motores e packs reais do painel já no modelo, alfa 0 nas inativas — o `mjv_updateScene` não as desenha) |
+| `ferragens.py` | parafusos ISO 4762/7380, porcas ISO 4032/10511, anilhas ISO 7089, anéis DIN 6799, pernos DIN 916, pilares, amortecedores e **insertos de latão** com a geometria das normas e a rosca ISO 68-1 helicoidal; comprimentos da série normal e binários de aperto; cada parafuso atravessa um furo real e a cabeça assenta |
+| `bateria3d.py` | os packs célula a célula (21700/18650, fita de níquel, papel de peixe, balanceamento, XT90, termo-retráctil), com as variantes do painel; o XT90 de pé nos packs compridos |
+| `eletronica.py` | RPi 5 + Active Cooler, FC H7 nos amortecedores, placa de energia com o BEC 5 V/5 A e o INA226, 4 ESC, câmara, sensores; no acessível os suportes IMPRESSOS (ponte do FC, suporte da câmara, bandeja dos sensores, bases dos bucks, berço do UBEC, suportes dos drivers) e a energia dos atuadores (2 × XL4016, 4 × DRV8871, UBEC Hobbywing 10A V2) |
+| `motores.py` | cada T-Motor com a forma e as medidas da sua ficha (base, estator, bobinas, sino, veio, furação), as hélices com a planta e a torção reais; variantes do painel |
+| `estrutura.py` | dobradiças com eixos = juntas do MuJoCo; no acessível o OMBRO DE FUSO (forquilha, cubo com alavanca, torre do pivô B, corpo do atuador com o JGB37-520, fuso Tr8×2 que gira, porca no carro), o cotovelo (berço, garfo, 608ZZ, M8), placas e colunas impressas, tubos 25×23 |
+| `fios.py` | o Pi 5 alimentado pelo **cabo USB-C** do BEC da placa de energia (a cadeia bateria → XT90 → PDB → BEC → USB-C é auditada), 10/14/16 AWG, sinais, FPC da câmara num percurso medido, abraçadeiras PRESAS (folga ≤ 0,25 mm), mangas que cruzam as juntas; no acessível o cabo de cada servo do cotovelo e a energia dos atuadores |
+| `auditoria.py` | `python -m lab.drone_rpi.detalhes.auditoria --build B`: F1–F4 (ferragens normalizadas, assentes, em furos, porcas com rosca de fora), C1 (cabos nas âncoras), C2 (cadeia de energia até ao computador de bordo: USB-C do Pi 5 ou ficha 5 V do Portenta H7), A1 (abraçadeiras presas), E1 (eixos = juntas), P1 (todos os geoms numa peça) — **14/14 builds `TUDO OK`** |
+| `exportar.py` · `pecas.py` · `massas.py` · `impressao.py` · `precos.py` | a página `/pecas`: o JSON do MESMO modelo (corpos e juntas, malhas, ferragens, cabos, eixos, bielas), as fichas com o **porque** de cada peça e os passos de montagem, as **massas medidas** (`--atualizar-catalogo`), os **STL** das peças impressas (orientados na mesa, cópias iguais num só, conferidos fechados e a caber em 220 × 220 × 250 mm) e os **custos** de referência. A carga útil do topo não entra na página |
+
+Prova: `ver.py --so todos` (14 builds, física idêntica bit a bit com e sem detalhes, 0 avisos), `auditoria` (14/14 builds TUDO OK), `teste_pecas3d.py` e
+`teste_ombro_fuso.py`.
 
 ## Como as peças viram física (o que o catálogo alimenta)
 

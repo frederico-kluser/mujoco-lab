@@ -46,10 +46,14 @@ import numpy as np
 _AQUI = Path(__file__).resolve().parent
 _RAIZ = next(p for p in _AQUI.parents if (p / "pyproject.toml").exists())
 sys.path[:0] = [p for p in (str(_RAIZ), str(_AQUI)) if p not in sys.path]
-PASTA = _AQUI / "out" / "mira_articulada"
-DADOS = PASTA / "dados.npz"
-MODELO = PASTA / "modelo_mira_articulada.json"
-VALIDACAO = PASTA / "validacao.json"
+def _pastas(build: str | None):
+    """A pasta do treino: a de sempre para o build de 19/10, `out/mira_articulada/<build>/` para os outros."""
+    base = _AQUI / "out" / "mira_articulada"
+    pasta = base if not build or build == "articulado_15pol_mn5006" else base / build
+    return pasta, pasta / "dados.npz", pasta / "modelo_mira_articulada.json", pasta / "validacao.json"
+
+
+PASTA, DADOS, MODELO, VALIDACAO = _pastas(os.environ.get("MIRA_BUILD"))
 PY_CPU = _RAIZ / ".venv" / "bin" / "python"
 PY_GPU = _RAIZ / ".venv-gpu" / "bin" / "python"
 CENARIO_ID = {"mesma": 0, "abaixo": 1, "acima": 2}
@@ -439,7 +443,8 @@ def _episodio_validar(args: tuple) -> dict:
     os.environ.setdefault("MUJOCO_GL", "egl")
     cenario, semente, usar_tf = args
     import cenarios_mira as cm
-    opc = cm.OpcoesEpisodio(cenario=cenario, semente=semente, modo_bola="programado", vel_bola=0.55, usar_tf=usar_tf)
+    opc = cm.OpcoesEpisodio(cenario=cenario, semente=semente, modo_bola="programado", vel_bola=0.55, usar_tf=usar_tf,
+                            build=os.environ.get("MIRA_BUILD") or None)
     return cm.correr_episodio(opc)
 
 
@@ -473,13 +478,23 @@ def main(argv=None) -> int:
     ap.add_argument("--janela", type=float, default=12.0)
     ap.add_argument("--processos", type=int, default=max(2, min(24, (os.cpu_count() or 4) - 4)))
     ap.add_argument("--epocas", type=int, default=300)
+    ap.add_argument("--build", default=None,
+                    help="treina para ESTE build articulado (ex. articulado_15pol_abs → out/mira_articulada/<build>/); o "
+                         "cockpit e os cenários carregam o modelo do build que voam (`mira_articulada.caminho_modelo`)")
     a = ap.parse_args(argv)
+    global PASTA, DADOS, MODELO, VALIDACAO
+    if a.build:
+        os.environ["MIRA_BUILD"] = a.build                # os processos filhos (spawn) e as fases TF/GPU herdam-no
+        import cenarios_mira as cm
+        cm.BUILD_ARTICULADO = a.build
+    PASTA, DADOS, MODELO, VALIDACAO = _pastas(os.environ.get("MIRA_BUILD"))
+    PASTA.mkdir(parents=True, exist_ok=True)
     if a.fase in ("tudo", "dados"):
         fase_dados(a.episodios, a.janela, a.processos)
     if a.fase == "tudo":                      # TF e JAX vivem no ambiente da GPU
         for f in ("tf", "gpu"):
             r = subprocess.run([str(PY_GPU if PY_GPU.is_file() else sys.executable), __file__, "--fase", f,
-                                "--epocas", str(a.epocas)], check=False)
+                                "--epocas", str(a.epocas), *(["--build", a.build] if a.build else [])], check=False)
             if r.returncode != 0:
                 return r.returncode
         fase_validar(a.processos)

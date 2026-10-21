@@ -295,13 +295,39 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
         corpo.add_geom(name=f"braco{k}_raiz", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.5 * r_s, 0.012, 0.005],
                        pos=p(0.5 * r_s * ux, 0.5 * r_s * uy, 0.0), quat=q_ang, mass=m_tubo * r_s / braco,
                        material="frame", **sem_contacto)
-        xs, ys = (r_s - 0.5 * d_so - 0.008) * ux, (r_s - 0.5 * d_so - 0.008) * uy
-        corpo.add_geom(name=f"servo_ombro{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
-                       size=[0.5 * d_so, 0.5 * w_so, 0.5 * h_so], pos=p(xs, ys, 0.006 + 0.5 * h_so),
-                       mass=so.servo.massa + so.encoder_massa + 0.5 * mec.massa_dobradica, material="servo",
-                       **sem_contacto)
-        corpo.add_geom(name=f"sem_fim{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.020, 0.018, 0.022],
-                       pos=p(r_s * ux, r_s * uy, 0.0), mass=so.massa_redutor, material="sem_fim", **sem_contacto)
+        if so.fuso is not None:
+            # ATUADOR DE FUSO (ombro acessível): o corpo do atuador (motorredutor + acoplamento + bloco + fuso) com o
+            # CM a `cm_atuador` de B ao longo de B→A (a biela roda ±~20° em torno de B: a massa fica no sítio da junta
+            # a 0 — erro de mm no CM, documentado); a forquilha + rolamentos + veio no eixo; o carro da porca vai com
+            # o braço (abaixo, em A)
+            a_v, b_v = so.fuso.vetores(math.copysign(1.0, ux), math.copysign(1.0, uy))
+            d_v = np.subtract(a_v, b_v)
+            u_d = d_v / max(float(np.linalg.norm(d_v)), 1e-9)
+            cm = np.add(b_v, so.fuso.cm_atuador * u_d)
+            q_d = np.zeros(4)
+            mujoco.mju_quatZ2Vec(q_d, u_d)
+            corpo.add_geom(name=f"servo_ombro{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[0.5 * w_so, 0.5 * h_so, 0.5 * d_so],
+                           pos=p(r_s * ux + cm[0], r_s * uy + cm[1], cm[2]), quat=list(q_d),
+                           mass=so.servo.massa + so.encoder_massa + so.fuso.massa_atuador + 0.5 * mec.massa_dobradica,
+                           material="servo", **sem_contacto)
+            # a forquilha + os anéis dos 608 no CM medido no desenho (catálogo `massas_cm`, braço do quadrante +x+y,
+            # espelhado por quadrante); sem o dado, no eixo
+            mc = ((mec.dados or {}).get("massas_cm") or {})
+            sgn = np.array([math.copysign(1.0, ux), math.copysign(1.0, uy), 1.0])
+            c_f = np.asarray(mc.get("forquilha_cm_mm", (0.0, 0.0, 0.0)), float) / 1000.0 * sgn
+            h_f = np.asarray(mc.get("forquilha_meias_mm", (16.0, 22.0, 16.0)), float) / 1000.0
+            corpo.add_geom(name=f"sem_fim{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=list(h_f),
+                           pos=p(r_s * ux + c_f[0], r_s * uy + c_f[1], c_f[2]), mass=so.massa_redutor,
+                           material="sem_fim", **sem_contacto)
+        else:
+            xs, ys = (r_s - 0.5 * d_so - 0.008) * ux, (r_s - 0.5 * d_so - 0.008) * uy
+            corpo.add_geom(name=f"servo_ombro{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[0.5 * d_so, 0.5 * w_so, 0.5 * h_so], pos=p(xs, ys, 0.006 + 0.5 * h_so),
+                           mass=so.servo.massa + so.encoder_massa + 0.5 * mec.massa_dobradica, material="servo",
+                           **sem_contacto)
+            corpo.add_geom(name=f"sem_fim{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.020, 0.018, 0.022],
+                           pos=p(r_s * ux, r_s * uy, 0.0), mass=so.massa_redutor, material="sem_fim", **sem_contacto)
         corpo.add_geom(name=f"sem_fim{k}_eixo", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.004, 0.024, 0],
                        pos=p(r_s * ux, r_s * uy, 0.0), quat=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0],
                        group=3, mass=0.0, material="aco_inox", **sem_contacto)
@@ -312,6 +338,10 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
         j.range = [float(so.limites[0]), float(so.limites[1])]
         j.damping = [0.02, 0.0, 0.0]          # 3.15: polinómio a·v + b·v|v| + c·v³
         _charneira(b, f"ombro{k}", y_disco=0.0215, sx=math.copysign(1.0, ux), sz=0.0, sem_contacto=sem_contacto)
+        if so.fuso is not None:                         # o carro da porca do fuso (pivô A) roda com o braço
+            a_v, _b = so.fuso.vetores(math.copysign(1.0, ux), math.copysign(1.0, uy))
+            b.add_geom(name=f"ombro{k}_carro", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.011, 0.011, 0.011],
+                       pos=list(a_v), mass=so.fuso.massa_carro, material="servo", **sem_contacto)
         b.add_geom(name=f"braco{k}_tubo", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.5 * l1, 0.012, 0.005],
                    pos=[0.5 * l1 * ux, 0.5 * l1 * uy, 0.0], quat=q_ang, mass=m_tubo * l1 / braco,
                    material="frame", **sem_contacto)
@@ -326,9 +356,16 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
             b.add_geom(name=f"abracadeira_braco{k}_{k_ab}", type=mujoco.mjtGeom.mjGEOM_BOX,
                        size=[0.003, 0.0135, 0.0062], pos=[frac_ab * l1 * ux, frac_ab * l1 * uy, 0.001], quat=q_ang,
                        group=3, mass=0.0, material="fio_preto", **sem_contacto)
-        b.add_geom(name=f"servo_cotovelo{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
-                   size=[0.5 * h_sc, 0.5 * d_sc, 0.5 * w_sc], pos=[(l1 - 0.5 * h_sc - 0.004) * ux,
-                                                                 (l1 - 0.5 * h_sc - 0.004) * uy, 0.0],
+        mc = ((mec.dados or {}).get("massas_cm") or {})
+        if mc.get("servo_cotovelo_cm_mm") is not None:   # o servo + berço + garfo no CM medido (relativo ao cotovelo)
+            sgn = np.array([math.copysign(1.0, ux), math.copysign(1.0, uy), 1.0])
+            c_c = np.asarray(mc["servo_cotovelo_cm_mm"], float) / 1000.0 * sgn
+            h_c = list(np.asarray(mc.get("servo_cotovelo_meias_mm", (20.0, 18.25, 10.0)), float) / 1000.0)
+            pos_c = [l1 * ux + c_c[0], l1 * uy + c_c[1], c_c[2]]
+        else:
+            h_c = [0.5 * h_sc, 0.5 * d_sc, 0.5 * w_sc]
+            pos_c = [(l1 - 0.5 * h_sc - 0.004) * ux, (l1 - 0.5 * h_sc - 0.004) * uy, 0.0]
+        b.add_geom(name=f"servo_cotovelo{k}", type=mujoco.mjtGeom.mjGEOM_BOX, size=h_c, pos=pos_c,
                    mass=sc.servo.massa + sc.encoder_massa + sc.massa_redutor + mec.massa_dobradica,
                    material="servo", **sem_contacto)
         # (3) MASTRO: junta do cotovelo (eixo y) na ponta do braço; o motor fica no topo, a l_m − … do eixo
@@ -390,9 +427,12 @@ def _bracos_articulados(spec: mujoco.MjSpec, corpo, hw: Hardware, p, sem_contact
                            group=1, mass=0.0, material=mat_pa, **sem_contacto)
         m.add_site(name=SITES_ROTOR[i], pos=[0.0, 0.0, l_m], size=[0.01, 0, 0])
         corpos.append(b)
-    # regulador DC-DC 24 V dos servos, na placa (atrás da pilha de eletrónica)
+    # reguladores/drivers dos atuadores (24 V dos DYNAMIXEL na placa, atrás da pilha; no build acessível 2 bucks + 4
+    # drivers + UBEC espalhados — a caixa vai para o CM declarado no catálogo, `fonte_servos.cm_mm`)
+    cm_f = ((mec.dados or {}).get("fonte_servos") or {}).get("cm_mm")
+    pos_f = p(*(np.asarray(cm_f, float) / 1000.0)) if cm_f else p(-0.70 * lado, 0.0, 0.0015 + 0.007)
     corpo.add_geom(name="fonte_servos", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.022, 0.016, 0.006],
-                   pos=p(-0.70 * lado, 0.0, 0.0015 + 0.007), mass=mec.massa_fonte, material="servo", **sem_contacto)
+                   pos=pos_f, mass=mec.massa_fonte, material="servo", **sem_contacto)
     return corpos
 
 
@@ -495,9 +535,17 @@ def _montar(hw: Hardware, deslocamento: np.ndarray | None = None, z0: float = 0.
                        pos=p(0, 0, esp + 0.004), mass=massas["esc"], material="esc", **sem_contacto)
         z_pilha = esp + 0.008
     else:
+        # 1 por braço, em cima do tubo: a `esc_no_braco_mm` do centro quando o frame a tem (frames pequenos, onde
+        # 0,45 do braço cai no canto da placa, por cima das abraçadeiras); sem o campo, 0,45 do braço (os mesmos floats)
+        r_esc = hw.frame.esc_no_braco
         for i, (x, y) in enumerate(rot):
+            if r_esc is None:
+                x_e, y_e = 0.45 * x, 0.45 * y
+            else:
+                f_e = r_esc / math.hypot(x, y)
+                x_e, y_e = f_e * x, f_e * y
             corpo.add_geom(name=f"esc{i + 1}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.016, 0.011, 0.003],
-                           pos=p(0.45 * x, 0.45 * y, esp + 0.004), mass=0.25 * massas["esc"],
+                           pos=p(x_e, y_e, esp + 0.004), mass=0.25 * massas["esc"],
                            material="esc", **sem_contacto)
         z_pilha = esp
 

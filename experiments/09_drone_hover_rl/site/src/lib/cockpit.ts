@@ -376,6 +376,14 @@ export interface HudBracos {
   mira: HudMiraBracos | null
   /** Geometria (m) para o esquema lateral: raio do ombro, braço, mastro e a componente x de cada braço. */
   geometria: { rS: number; l1: number; lM: number; ux: number[] } | null
+  /** Que atuadores o build tem (o do ombro com a transmissão, o do cotovelo e quem segura o braço sem corrente). */
+  atuadores: {
+    ombro: string
+    cotovelo: string
+    segura: string
+    esperaA: number | null
+    tensaoV: number | null
+  } | null
 }
 
 /** Para onde vai a potência AGORA (W, na bateria): motores + eletrónica + servos = total. */
@@ -388,13 +396,15 @@ export interface HudPotencia {
 }
 
 function lerJuntasHud(o: Record<string, unknown>): JuntaHud[] {
-  const lista = (chave: string): unknown[] => (Array.isArray(o[chave]) ? (o[chave] as unknown[]) : [])
+  const lista = (chave: string): unknown[] =>
+    Array.isArray(o[chave]) ? (o[chave] as unknown[]) : []
   const nomes = lista("nomes")
   const n = Math.min(16, Math.max(nomes.length, lista("juntas").length))
   const juntas: JuntaHud[] = []
   for (let i = 0; i < n; i += 1) {
     juntas.push({
-      nome: typeof nomes[i] === "string" ? (nomes[i] as string) : `junta${i + 1}`,
+      nome:
+        typeof nomes[i] === "string" ? (nomes[i] as string) : `junta${i + 1}`,
       angulo: finito(lista("juntas")[i]),
       alvo: finito(lista("alvos")[i]),
       velocidade: finito(lista("velocidades")[i]),
@@ -438,6 +448,24 @@ function lerBracosHud(bruto: unknown): HudBracos | null {
     miraAtiva: o.mira_ativa === true,
     mira: lerMiraBracos(o.mira),
     geometria: lerGeometriaBracos(o.geometria),
+    atuadores: lerAtuadoresBracos(o.atuadores),
+  }
+}
+
+function lerAtuadoresBracos(bruto: unknown): HudBracos["atuadores"] {
+  const o = objetoSimples(bruto)
+  if (
+    o === null ||
+    typeof o.ombro !== "string" ||
+    typeof o.cotovelo !== "string"
+  )
+    return null
+  return {
+    ombro: o.ombro,
+    cotovelo: o.cotovelo,
+    segura: typeof o.segura === "string" ? o.segura : "redutor",
+    esperaA: finito(o.espera_a),
+    tensaoV: finito(o.tensao_v),
   }
 }
 
@@ -448,7 +476,9 @@ function lerGeometriaBracos(bruto: unknown): HudBracos["geometria"] {
   const l1 = finito(o.l1)
   const lM = finito(o.l_m)
   const ux = Array.isArray(o.ux) ? o.ux.map((v) => finito(v) ?? 0) : []
-  return rS === null || l1 === null || lM === null || ux.length < 4 ? null : { rS, l1, lM, ux }
+  return rS === null || l1 === null || lM === null || ux.length < 4
+    ? null
+    : { rS, l1, lM, ux }
 }
 
 function lerPotenciaHud(bruto: unknown): HudPotencia | null {
@@ -456,7 +486,12 @@ function lerPotenciaHud(bruto: unknown): HudPotencia | null {
   if (o === null) return null
   const total = finito(o.total)
   if (total === null) return null
-  return { motores: finito(o.motores), eletronica: finito(o.eletronica), servos: finito(o.servos), total }
+  return {
+    motores: finito(o.motores),
+    eletronica: finito(o.eletronica),
+    servos: finito(o.servos),
+    total,
+  }
 }
 
 /** Pitch do corpo (ZYX, + = nariz para BAIXO) em linguagem de piloto: `nariz ↑ 19,5°`, `nariz ↓ 27,3°`, `nivelado`. */
@@ -571,7 +606,8 @@ function lerControladorHud(bruto: unknown): HudControlador | null {
   return {
     modo: o.modo === "rl" || o.modo === "classico" ? o.modo : null,
     estado: typeof o.estado === "string" ? o.estado : null,
-    motivo: typeof o.motivo === "string" && o.motivo.length > 0 ? o.motivo : null,
+    motivo:
+      typeof o.motivo === "string" && o.motivo.length > 0 ? o.motivo : null,
     seguiAlvo: o.segui_alvo === true,
     rumo: finito(o.rumo),
     yawTaxa: finito(o.yaw_taxa) ?? 0,
@@ -716,19 +752,24 @@ function lerPecasHud(bruto: unknown): HudPecas | null {
     motorIMaxA: finito(o.motor_i_max_a),
     motorDiametroMm: finito(o.motor_diametro_mm),
     motorAlturaMm: finito(o.motor_altura_mm),
-    motorCorNome: typeof o.motor_cor_nome === "string" ? o.motor_cor_nome : null,
+    motorCorNome:
+      typeof o.motor_cor_nome === "string" ? o.motor_cor_nome : null,
     motorCorHex: typeof o.motor_cor_hex === "string" ? o.motor_cor_hex : null,
     bateriaId: typeof o.bateria_id === "string" ? o.bateria_id : null,
-    bateriaRotulo: typeof o.bateria_rotulo === "string" ? o.bateria_rotulo : null,
-    bateriaQuimica: typeof o.bateria_quimica === "string" ? o.bateria_quimica : null,
+    bateriaRotulo:
+      typeof o.bateria_rotulo === "string" ? o.bateria_rotulo : null,
+    bateriaQuimica:
+      typeof o.bateria_quimica === "string" ? o.bateria_quimica : null,
     bateriaS: finito(o.bateria_s),
     bateriaP: finito(o.bateria_p),
     bateriaAh: finito(o.bateria_ah),
     bateriaWh: finito(o.bateria_wh),
     bateriaMassaG: finito(o.bateria_massa_g),
     bateriaR0Mohm: finito(o.bateria_r0_mohm),
-    bateriaCorNome: typeof o.bateria_cor_nome === "string" ? o.bateria_cor_nome : null,
-    bateriaCorHex: typeof o.bateria_cor_hex === "string" ? o.bateria_cor_hex : null,
+    bateriaCorNome:
+      typeof o.bateria_cor_nome === "string" ? o.bateria_cor_nome : null,
+    bateriaCorHex:
+      typeof o.bateria_cor_hex === "string" ? o.bateria_cor_hex : null,
     vazaoAtualA: finito(o.vazao_atual_a),
     vazaoMaxA: finito(o.vazao_max_a),
     vazaoPct: finito(o.vazao_pct),
@@ -948,7 +989,10 @@ export interface EstadoDeVoo {
 }
 
 /** Texto e tom de cada estado (a pílula do HUD lê-os daqui a partir do resumo lento). */
-export const ESTADOS_VOO: Record<IdEstadoVoo, { texto: string; tom: TomEstado }> = {
+export const ESTADOS_VOO: Record<
+  IdEstadoVoo,
+  { texto: string; tom: TomEstado }
+> = {
   a_voar: { texto: "A VOAR", tom: "ativo" },
   no_chao: { texto: "NO CHÃO", tom: "normal" },
   caiu: { texto: "CAIU", tom: "perigo" },
@@ -1022,7 +1066,8 @@ export function erroCentragem(
   if (bola === null || !bola.valido || bola.erroTan === null) return null
   return {
     graus: Math.atan(Math.hypot(bola.erroTan[0], bola.erroTan[1])) * GRAUS,
-    px: bola.erroPx === null ? null : Math.hypot(bola.erroPx[0], bola.erroPx[1]),
+    px:
+      bola.erroPx === null ? null : Math.hypot(bola.erroPx[0], bola.erroPx[1]),
   }
 }
 
@@ -1042,7 +1087,11 @@ export function lerBolaConfig(bruto: unknown): BolaConfig | null {
   const max = finito(o.max)
   if (velocidade === null || min === null || max === null || !(max > min))
     return null
-  const base: BolaConfig = { velocidade: limitar(velocidade, min, max), min, max }
+  const base: BolaConfig = {
+    velocidade: limitar(velocidade, min, max),
+    min,
+    max,
+  }
   if (typeof o.auto_atirar === "boolean") base.autoAtirar = o.auto_atirar
   return base
 }
@@ -1172,7 +1221,11 @@ export function escalaCover(imagem: Par, vista: Par): number {
  * Distância focal NA VISTA (px do ecrã por unidade de tangente): a focal do stream
  * (`(H/2)/tan(fovy/2)`, contrato §0.6) vezes a escala do `cover`.
  */
-export function focalNaVista(fovyGraus: number, imagem: Par, vista: Par): number {
+export function focalNaVista(
+  fovyGraus: number,
+  imagem: Par,
+  vista: Par
+): number {
   const meio = (limitar(fovyGraus, 1, 179) / 2) * (Math.PI / 180)
   return (imagem[1] / 2 / Math.tan(meio)) * escalaCover(imagem, vista)
 }
@@ -1208,7 +1261,9 @@ export function atrasoDaImagem(
   fpsMedido: number | null | undefined
 ): number {
   const latencia =
-    typeof latenciaMs === "number" && Number.isFinite(latenciaMs) && latenciaMs > 0
+    typeof latenciaMs === "number" &&
+    Number.isFinite(latenciaMs) &&
+    latenciaMs > 0
       ? latenciaMs
       : 0
   // Abaixo de 5 fps o «meio período» deixava de ser uma média útil: trava-se em 100 ms.
@@ -1367,7 +1422,10 @@ export interface VentoNoNariz {
 }
 
 /** O vento do mundo visto do NARIZ (roda-se o vetor por −yaw). */
-export function ventoNoNariz(vento: Trio | null, yaw: number | null): VentoNoNariz {
+export function ventoNoNariz(
+  vento: Trio | null,
+  yaw: number | null
+): VentoNoNariz {
   if (vento === null) return { vel: 0, angulo: null, de: null }
   const vel = Math.hypot(vento[0], vento[1], vento[2])
   const horizontal = Math.hypot(vento[0], vento[1])
@@ -1521,7 +1579,10 @@ export function largarTecla(
 }
 
 /** X: fixa o rumo dado (o atual). Sem rumo conhecido não se inventa nenhum: o estado não muda. */
-export function fixarRumo(piloto: EstadoPiloto, rumo: number | null): EstadoPiloto {
+export function fixarRumo(
+  piloto: EstadoPiloto,
+  rumo: number | null
+): EstadoPiloto {
   if (rumo === null || !Number.isFinite(rumo)) return piloto
   return { ...piloto, yaw_alvo: rumo }
 }
@@ -1536,7 +1597,9 @@ export function definirSeguirBola(
   piloto: EstadoPiloto,
   seguir: boolean
 ): EstadoPiloto {
-  return piloto.segui_alvo === seguir ? piloto : { ...piloto, segui_alvo: seguir }
+  return piloto.segui_alvo === seguir
+    ? piloto
+    : { ...piloto, segui_alvo: seguir }
 }
 
 /**
@@ -1578,7 +1641,9 @@ export function corpoVooDoPiloto(piloto: EstadoPiloto): CorpoVoo {
 }
 
 /** Velocidade que as teclas pedem, vista do NARIZ: `[frente, esquerda, cima]` em m/s. */
-export function velocidadeNoNariz(piloto: EstadoPiloto): [number, number, number] {
+export function velocidadeNoNariz(
+  piloto: EstadoPiloto
+): [number, number, number] {
   return vRefDeTeclas(piloto.teclas)
 }
 
@@ -1763,15 +1828,78 @@ export interface MetaJanela {
 
 /** As janelas da doca, pela ordem dos atalhos 1–9 (a 9, Braços, só aparece na doca com braços articulados). */
 export const JANELAS: readonly MetaJanela[] = [
-  { id: "voo", titulo: "Voo", tecla: "1", largura: 300, alturaPrevista: 352, principal: true },
-  { id: "bola", titulo: "Bola", tecla: "2", largura: 300, alturaPrevista: 440, principal: true },
-  { id: "vento", titulo: "Vento", tecla: "3", largura: 300, alturaPrevista: 440, principal: true },
-  { id: "instrumentos", titulo: "Sensores", tecla: "4", largura: 820, alturaPrevista: 640, principal: false },
-  { id: "energia", titulo: "Energia", tecla: "5", largura: 340, alturaPrevista: 330, principal: false },
-  { id: "graficos", titulo: "Gráficos", tecla: "6", largura: 720, alturaPrevista: 520, principal: false },
-  { id: "sistema", titulo: "Sistema", tecla: "7", largura: 760, alturaPrevista: 560, principal: false },
-  { id: "ajuda", titulo: "Ajuda", tecla: "8", largura: 700, alturaPrevista: 500, principal: false },
-  { id: "bracos", titulo: "Braços", tecla: "9", largura: 420, alturaPrevista: 560, principal: false },
+  {
+    id: "voo",
+    titulo: "Voo",
+    tecla: "1",
+    largura: 300,
+    alturaPrevista: 352,
+    principal: true,
+  },
+  {
+    id: "bola",
+    titulo: "Bola",
+    tecla: "2",
+    largura: 300,
+    alturaPrevista: 440,
+    principal: true,
+  },
+  {
+    id: "vento",
+    titulo: "Vento",
+    tecla: "3",
+    largura: 300,
+    alturaPrevista: 440,
+    principal: true,
+  },
+  {
+    id: "instrumentos",
+    titulo: "Sensores",
+    tecla: "4",
+    largura: 820,
+    alturaPrevista: 640,
+    principal: false,
+  },
+  {
+    id: "energia",
+    titulo: "Energia",
+    tecla: "5",
+    largura: 340,
+    alturaPrevista: 330,
+    principal: false,
+  },
+  {
+    id: "graficos",
+    titulo: "Gráficos",
+    tecla: "6",
+    largura: 720,
+    alturaPrevista: 520,
+    principal: false,
+  },
+  {
+    id: "sistema",
+    titulo: "Sistema",
+    tecla: "7",
+    largura: 760,
+    alturaPrevista: 560,
+    principal: false,
+  },
+  {
+    id: "ajuda",
+    titulo: "Ajuda",
+    tecla: "8",
+    largura: 700,
+    alturaPrevista: 500,
+    principal: false,
+  },
+  {
+    id: "bracos",
+    titulo: "Braços",
+    tecla: "9",
+    largura: 420,
+    alturaPrevista: 560,
+    principal: false,
+  },
 ]
 
 export function metaJanela(id: IdJanela): MetaJanela {
@@ -1811,7 +1939,10 @@ export function janelaEmFoco(estado: EstadoJanelas): IdJanela | null {
 }
 
 /** Traz a janela para a frente (abre-a se estiver fechada). */
-export function focarJanela(estado: EstadoJanelas, id: IdJanela): EstadoJanelas {
+export function focarJanela(
+  estado: EstadoJanelas,
+  id: IdJanela
+): EstadoJanelas {
   if (janelaEmFoco(estado) === id) return estado
   return {
     ...estado,
@@ -1819,7 +1950,10 @@ export function focarJanela(estado: EstadoJanelas, id: IdJanela): EstadoJanelas 
   }
 }
 
-export function fecharJanela(estado: EstadoJanelas, id: IdJanela): EstadoJanelas {
+export function fecharJanela(
+  estado: EstadoJanelas,
+  id: IdJanela
+): EstadoJanelas {
   if (!janelaAberta(estado, id)) return estado
   return { ...estado, abertas: estado.abertas.filter((j) => j !== id) }
 }
@@ -1923,7 +2057,13 @@ export function zonasInstrumentos(viewport: Tamanho): ZonaHud[] {
   const cx = viewport.largura / 2
   const meiaAltura = 36
   return [
-    { id: "velocidade", x0: flanco, y0: cy - meiaAltura, x1: flanco + LARGURA_FLANCO_HUD, y1: cy + meiaAltura },
+    {
+      id: "velocidade",
+      x0: flanco,
+      y0: cy - meiaAltura,
+      x1: flanco + LARGURA_FLANCO_HUD,
+      y1: cy + meiaAltura,
+    },
     {
       id: "altitude",
       x0: viewport.largura - flanco - LARGURA_FLANCO_HUD,
@@ -1931,7 +2071,13 @@ export function zonasInstrumentos(viewport: Tamanho): ZonaHud[] {
       x1: viewport.largura - flanco,
       y1: cy + meiaAltura,
     },
-    { id: "mira", x0: cx - 64, y0: cy - meiaAltura, x1: cx + 64, y1: cy + meiaAltura },
+    {
+      id: "mira",
+      x0: cx - 64,
+      y0: cy - meiaAltura,
+      x1: cx + 64,
+      y1: cy + meiaAltura,
+    },
   ]
 }
 
@@ -2111,7 +2257,8 @@ export function distanciaPorRoda(
 
 /** Número para o HUD: vírgula decimal, casas fixas (não dança de largura) e «—» sem valor. */
 export function fmtHud(valor: number | null | undefined, casas = 1): string {
-  if (valor === null || valor === undefined || !Number.isFinite(valor)) return "—"
+  if (valor === null || valor === undefined || !Number.isFinite(valor))
+    return "—"
   const texto = valor.toFixed(casas).replace(".", ",")
   // «−0,0» é ruído num instrumento: zero não tem sinal.
   return /^-0(,0+)?$/.test(texto) ? texto.slice(1) : texto.replace("-", "−")
@@ -2119,7 +2266,8 @@ export function fmtHud(valor: number | null | undefined, casas = 1): string {
 
 /** Rumo com três algarismos (`007`, `352`), como numa fita de rumo. */
 export function fmtRumo(graus: number | null | undefined): string {
-  if (graus === null || graus === undefined || !Number.isFinite(graus)) return "—"
+  if (graus === null || graus === undefined || !Number.isFinite(graus))
+    return "—"
   return String(Math.round(reduzirGraus(graus)) % 360).padStart(3, "0")
 }
 
@@ -2128,7 +2276,9 @@ export function fmtAutonomia(minutos: number | null | undefined): string {
   if (minutos === null || minutos === undefined || !Number.isFinite(minutos))
     return "—"
   const m = Math.max(0, Math.round(minutos))
-  return m < 100 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`
+  return m < 100
+    ? `${m} min`
+    : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`
 }
 
 // --------------------------------------------------------------------------------- controlos (estado otimista)
@@ -2319,7 +2469,10 @@ export class ControloVento extends Observavel<EstadoVento> {
   }
 
   /** Uma alteração do painel. `final` = fim do gesto (largar o slider, um interruptor, a tecla V). */
-  ajustar(alteracao: Partial<Record<keyof VentoSimples, unknown>>, final: boolean): void {
+  ajustar(
+    alteracao: Partial<Record<keyof VentoSimples, unknown>>,
+    final: boolean
+  ): void {
     const corpo = corpoVentoSimples(alteracao)
     if (corpo === null) return
     this.ultimaMudanca = this.relogio()
@@ -2502,12 +2655,18 @@ export const ATALHOS: readonly { teclas: string[]; faz: string }[] = [
   { teclas: ["Q", "E"], faz: "subir · descer (0,7 m/s)" },
   { teclas: ["Z", "C"], faz: "rodar para a esquerda · direita (manter)" },
   { teclas: ["X"], faz: "fixar o rumo atual" },
-  { teclas: ["Espaço"], faz: "TIRO: dispara a Glock 25 .380 fixa no topo (soco para trás)" },
+  {
+    teclas: ["Espaço"],
+    faz: "TIRO: dispara a Glock 25 .380 fixa no topo (soco para trás)",
+  },
   { teclas: ["B"], faz: "seguir a bola: liga · desliga" },
   { teclas: ["V"], faz: "vento: liga · desliga" },
   { teclas: ["F"], faz: "trocar a vista: 1.ª ↔ 3.ª pessoa" },
   { teclas: ["R"], faz: "manter premido: reiniciar (volta ao chão e descola)" },
   { teclas: ["1", "…", "8"], faz: "abrir · fechar as janelas da doca" },
-  { teclas: ["9"], faz: "braços articulados: os 8 servos (ângulo, curso, corrente, energia) — só nesse build" },
+  {
+    teclas: ["9"],
+    faz: "braços articulados: os 8 servos (ângulo, curso, corrente, energia) — só nesse build",
+  },
   { teclas: ["Esc"], faz: "fechar a janela da frente" },
 ]

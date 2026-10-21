@@ -342,6 +342,15 @@ class Frame:
     perda_download: float = 0.05  # fração do empuxo perdida no rasto que bate na estrutura (NASA: 5–15 %)
     dados: dict = field(default_factory=dict, compare=False)
 
+    @property
+    def esc_no_braco(self) -> float | None:
+        """Distância (m) do centro do drone ao centro de cada ESC INDIVIDUAL, ao longo do braço: o campo
+        `esc_no_braco_mm` do frame (frames pequenos — o primeiro troço livre de tubo depois da placa, das
+        abraçadeiras e da perna, com o ESC preso ao braço). None (campo ausente): o `modelo` põe o ESC a 0,45 do
+        braço, como sempre (os builds sem o campo ficam bit a bit iguais)."""
+        v = self.dados.get("esc_no_braco_mm")
+        return None if v is None else float(v) / 1000.0
+
 
 @dataclass(frozen=True)
 class ESC:
@@ -532,6 +541,106 @@ class Servo:
 
 
 @dataclass(frozen=True)
+class Fuso:
+    """ATUADOR LINEAR DE FUSO do ombro (uma biela): o motorredutor roda um fuso trapezoidal cuja PORCA está presa à
+    ALAVANCA do cubo do braço (pivô A); o corpo do atuador (motor + acoplamento + bloco dos rolamentos) gira num pivô B
+    preso ao drone, e o eixo do fuso passa por B. Os dois pivôs são paralelos ao eixo do ombro (y): a biela trabalha
+    num plano ⟂ y. Geometria para o braço do quadrante (+x, +y), relativa ao eixo do ombro H e com a junta a 0; os
+    outros braços espelham-se (x → sx·x, y → sy·y — o espelho em x troca o sinal de q, e as contas fazem-no sozinhas):
+
+        A(q) = H + R_y(q)·a,  B = H + b,  L(q) = |R_y(q)·a − b|               (comprimento pivô-a-pivô)
+        θ(q) = 2π·(L(q) − L(0))/p                                            (rotação do fuso desde q = 0)
+        N(q) = dθ/dq = 2π·L'(q)/p   e   |L'(q)| = braço de alavanca efetivo  (a «redução» local, com sinal)
+
+    Rosca trapezoidal de passo p, diâmetro médio d₂ e meio ângulo de flanco β (Tr: 15°): λ = atan(p/(π·d₂)) e
+    φ' = atan(μ/cos β); autobloqueante se λ < φ' (o Tr8×2 com latão/aço: λ = 5,2° < φ' = 8,8° com μ = 0,15) —
+    o empuxo do braço não consegue rodar o fuso, e segurar não gasta corrente."""
+
+    alavanca: tuple[float, float, float]     # m — a = A − H (pivô da porca, no cubo do braço)
+    base: tuple[float, float, float]         # m — b = B − H (pivô do corpo do atuador, no drone)
+    passo: float                             # m — avanço por volta do fuso
+    d_medio: float                           # m — diâmetro médio (primitivo) da rosca
+    meio_angulo_flanco: float                # rad — β (rosca trapezoidal: 15°)
+    coef_atrito: float                       # μ da porca no fuso
+    comprimento: float                       # m — fuso
+    cm_atuador: float                        # m — de B ao CM do corpo do atuador (motorredutor incluído), ao longo de B→A
+    massa_atuador: float                     # kg — corpo do atuador SEM o motorredutor (acoplamento, bloco, fuso…)
+    massa_carro: float                       # kg — porca + carro + pivô A (vai com o braço)
+    alavanca_tras: tuple[float, float, float] | None = None   # m — se os braços de trás (x < 0) não forem o espelho
+    base_tras: tuple[float, float, float] | None = None
+    dados: dict = field(default_factory=dict, compare=False)
+
+    @property
+    def angulo_avanco(self) -> float:
+        return math.atan(self.passo / (math.pi * self.d_medio))
+
+    @property
+    def atrito_efetivo(self) -> float:
+        """μ' = μ/cos β — o atrito da rosca trapezoidal visto como o de uma rosca quadrada (o «φ'» do autobloqueio)."""
+        return self.coef_atrito / math.cos(self.meio_angulo_flanco)
+
+    def vetores(self, sx: float = 1.0, sy: float = 1.0) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """(a, b) do braço do quadrante (sx, sy), no referencial do corpo, relativos ao eixo do ombro (m)."""
+        if sx < 0.0 and self.alavanca_tras is not None:
+            a, b, ex = self.alavanca_tras, (self.base_tras or self.base), 1.0
+        else:
+            a, b, ex = self.alavanca, self.base, sx
+        return (ex * a[0], sy * a[1], a[2]), (ex * b[0], sy * b[1], b[2])
+
+    def _coef(self, sx: float, sy: float) -> tuple[float, float, float]:
+        """(C, P, Q) de L(q)² = C − 2·(P·cos q + Q·sin q) — a forma fechada da biela (contas escalares: corre a 500 Hz)."""
+        (ax, ay, az), (bx, by, bz) = self.vetores(sx, sy)
+        c = ax * ax + ay * ay + az * az + bx * bx + by * by + bz * bz - 2.0 * ay * by
+        return c, bx * ax + bz * az, bx * az - bz * ax
+
+    def pontos(self, q: float, sx: float = 1.0, sy: float = 1.0) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """(A − H, B − H) com a junta em q (R_y(q)·a e b)."""
+        (ax, ay, az), b = self.vetores(sx, sy)
+        c, s = math.cos(q), math.sin(q)
+        return (ax * c + az * s, ay, -ax * s + az * c), b
+
+    def comprimento_em(self, q: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        cc, p, qq = self._coef(sx, sy)
+        return math.sqrt(max(cc - 2.0 * (p * math.cos(q) + qq * math.sin(q)), 0.0))
+
+    def derivada(self, q: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        """dL/dq (m/rad) — com sinal; |dL/dq| é o braço de alavanca efetivo do fuso em torno do ombro."""
+        cc, p, qq = self._coef(sx, sy)
+        l2 = max(cc - 2.0 * (p * math.cos(q) + qq * math.sin(q)), 1e-18)
+        return (p * math.sin(q) - qq * math.cos(q)) / math.sqrt(l2)
+
+    def theta_de_q(self, q: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        return 2.0 * math.pi * (self.comprimento_em(q, sx, sy) - self.comprimento_em(0.0, sx, sy)) / self.passo
+
+    def n_em(self, q: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        """N(q) = dθ/dq — a «redução» local (com sinal: θ pode descer quando q sobe)."""
+        return 2.0 * math.pi * self.derivada(q, sx, sy) / self.passo
+
+    def q_de_comprimento(self, comp: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        """O ângulo do braço com a biela de comprimento `comp` — forma fechada: P·cos q + Q·sin q = (C − L²)/2 ⇒
+        q = φ₀ + σ·acos((C − L²)/(2R₀)), R₀ = √(P² + Q²), φ₀ = atan2(Q, P), no ramo que passa por q = 0 (σ = −sinal φ₀)."""
+        cc, p, qq = self._coef(sx, sy)
+        r0 = math.hypot(p, qq)
+        phi0 = math.atan2(qq, p)
+        x = max(-1.0, min(1.0, (cc - comp * comp) / (2.0 * r0)))
+        sigma = -1.0 if phi0 > 0.0 else 1.0
+        return phi0 + sigma * math.acos(x)
+
+    def q_de_theta(self, theta: float, sx: float = 1.0, sy: float = 1.0) -> float:
+        """O ângulo do braço que põe a porca na posição do fuso θ (inverso exato de `theta_de_q`)."""
+        return self.q_de_comprimento(self.comprimento_em(0.0, sx, sy) + theta * self.passo / (2.0 * math.pi), sx, sy)
+
+    def braco_minimo(self, lim: tuple[float, float], sx: float = 1.0, sy: float = 1.0, n: int = 81) -> float:
+        """O menor braço de alavanca |dL/dq| (m) no curso `lim` — o binário que o fuso dá cai com ele."""
+        return min(abs(self.derivada(lim[0] + (lim[1] - lim[0]) * i / (n - 1), sx, sy)) for i in range(n))
+
+    def monotono(self, lim: tuple[float, float], sx: float = 1.0, sy: float = 1.0, n: int = 161) -> bool:
+        """L(q) é monótono no curso (dL/dq nunca muda de sinal)? — senão o fuso não comanda a junta em todo o curso."""
+        d = [self.derivada(lim[0] + (lim[1] - lim[0]) * i / (n - 1), sx, sy) for i in range(n)]
+        return all(x < 0.0 for x in d) or all(x > 0.0 for x in d)
+
+
+@dataclass(frozen=True)
 class Junta:
     """Um tipo de junta do braço articulado (OMBRO ou COTOVELO): o servo + a redução externa (sem-fim ou direta).
 
@@ -541,6 +650,9 @@ class Junta:
         τ_b,j = τ_b,servo·N·η e ω₀,j = ω₀,servo/N; a DESCER (a carga ajuda) o servo ainda tem de EMPURRAR
         tan(φ − λ)/tan λ da carga refletida (autobloqueio, λ < φ): a coroa nunca roda o sem-fim — segurar não gasta
         corrente. Fórmulas fechadas do parafuso sem-fim (ver `componentes.json` → `mecanismos_braco` → `estimado`).
+      · FUSO (`fuso` ≠ None — atuador linear numa alavanca): as MESMAS fórmulas com a rosca trapezoidal (λ do fuso,
+        μ' = μ/cos β) e a redução LOCAL N(q) = 2π·L'(q)/p da biela (`Fuso`); `reducao` guarda |N(0)| (os números «de
+        ficha» a junta a 0: binário de bloqueio, velocidade em vazio).
     """
 
     servo: Servo
@@ -558,6 +670,15 @@ class Junta:
     massa_redutor: float              # kg
     limites: tuple[float, float]      # rad (mín, máx) do batente
     fracao_velocidade_perfil: float   # perfil de velocidade do servo (fração de ω₀) — o «Profile Velocity»
+    fuso: Fuso | None = None          # atuador linear de fuso (biela) em vez de redução fixa
+    kp_duty: float | None = None      # PWM por rad do ângulo do SERVO (None = o do mecanismo)
+    kd_duty: float | None = None
+    zona_morta: float = 0.0           # rad NO BRAÇO — banda morta da malha de posição (o FC desliga o driver lá dentro:
+    #                                   com um redutor autobloqueante o braço fica preso e o motor não gasta corrente)
+    duty_minimo: float = 0.0          # PWM mínimo fora da banda morta (vence o arranque com a carga: o FC não fica
+    #                                   a empurrar sem andar com erros pequenos — move-se aos impulsos até à banda)
+    corte_bloqueio: float | None = None   # s — proteção de BLOQUEIO do firmware: a empurrar sem andar este tempo, o
+    pausa_bloqueio: float = 2.0           # driver desliga `pausa_bloqueio` s (o redutor segura) e tenta outra vez
 
     @property
     def eficiencia_subir(self) -> float:
@@ -627,7 +748,9 @@ class MecanismoBracos:
         return p / self.fonte_eficiencia
 
     def massas(self) -> dict:
-        return {"servos_ombro": 4.0 * self.ombro.servo.massa, "redutores_ombro": 4.0 * self.ombro.massa_redutor,
+        fuso = self.ombro.fuso
+        redutor_ombro = self.ombro.massa_redutor + (0.0 if fuso is None else fuso.massa_atuador + fuso.massa_carro)
+        return {"servos_ombro": 4.0 * self.ombro.servo.massa, "redutores_ombro": 4.0 * redutor_ombro,
                 "servos_cotovelo": 4.0 * self.cotovelo.servo.massa, "redutores_cotovelo": 4.0 * self.cotovelo.massa_redutor,
                 "encoders_bracos": 4.0 * (self.ombro.encoder_massa + self.cotovelo.encoder_massa),
                 "mastros": 4.0 * self.massa_mastro, "dobradicas": 8.0 * self.massa_dobradica,
@@ -1413,13 +1536,40 @@ def _junta(cat: dict, d: dict) -> Junta:
     else:                                    # o encoder interno do servo mede a saída (junta direta)
         enc_res, enc_prec, enc_p, enc_m = servo.resolucao, servo.resolucao, 0.0, 0.0
     lim = tuple(math.radians(float(v)) for v in d.get("limites_graus", (-45.0, 45.0)))
-    return Junta(servo=servo, reducao=float(d.get("reducao", 1.0)), autobloqueante=bool(d.get("autobloqueante", False)),
-                 angulo_avanco=math.radians(float(d.get("angulo_avanco_graus", 0.0))),
-                 coef_atrito=float(d.get("coef_atrito", 0.0)), folga=math.radians(float(d.get("folga_graus", 0.0))),
+    g = d.get("ganhos_servo") or {}
+    fuso = _fuso(d["fuso"]) if d.get("fuso") else None
+    if fuso is not None:                     # a redução e a rosca saem da geometria da biela (a junta a 0)
+        reducao, avanco, atrito = abs(fuso.n_em(0.0)), fuso.angulo_avanco, fuso.atrito_efetivo
+    else:
+        reducao = float(d.get("reducao", 1.0))
+        avanco = math.radians(float(d.get("angulo_avanco_graus", 0.0)))
+        atrito = float(d.get("coef_atrito", 0.0))
+    return Junta(servo=servo, reducao=reducao, autobloqueante=bool(d.get("autobloqueante", False)),
+                 angulo_avanco=avanco, coef_atrito=atrito, folga=math.radians(float(d.get("folga_graus", 0.0))),
                  rigidez=float(d.get("rigidez_nm_rad", 0.0)), amortecimento=float(d.get("amortecimento_nms_rad", 0.0)),
                  encoder_resolucao=enc_res, encoder_precisao=enc_prec, encoder_potencia=enc_p, encoder_massa=enc_m,
                  massa_redutor=float(d.get("massa_redutor_g", 0.0)) / 1000.0, limites=(lim[0], lim[1]),
-                 fracao_velocidade_perfil=float(d.get("fracao_velocidade_perfil", 0.9)))
+                 fracao_velocidade_perfil=float(d.get("fracao_velocidade_perfil", 0.9)), fuso=fuso,
+                 kp_duty=float(g["kp_duty_por_rad"]) if "kp_duty_por_rad" in g else None,
+                 kd_duty=float(g["kd_duty_por_rad_s"]) if "kd_duty_por_rad_s" in g else None,
+                 zona_morta=math.radians(float(g.get("zona_morta_graus", 0.0))),
+                 duty_minimo=float(g.get("duty_minimo", 0.0)),
+                 corte_bloqueio=float(g["corte_bloqueio_s"]) if "corte_bloqueio_s" in g else None,
+                 pausa_bloqueio=float(g.get("pausa_bloqueio_s", 2.0)))
+
+
+def _fuso(d: dict) -> Fuso:
+    def v(chave):
+        x = d.get(chave)
+        return None if x is None else tuple(float(c) / 1000.0 for c in x)
+    return Fuso(alavanca=v("alavanca_mm"), base=v("base_mm"), passo=float(d.get("passo_mm", 2.0)) / 1000.0,
+                d_medio=float(d.get("d_medio_mm", 7.0)) / 1000.0,
+                meio_angulo_flanco=math.radians(float(d.get("meio_angulo_flanco_graus", 15.0))),
+                coef_atrito=float(d.get("coef_atrito", 0.15)), comprimento=float(d.get("comprimento_fuso_mm", 150.0)) / 1000.0,
+                cm_atuador=float(d.get("cm_atuador_mm", 0.0)) / 1000.0,
+                massa_atuador=float(d.get("massa_atuador_g", 0.0)) / 1000.0,
+                massa_carro=float(d.get("massa_carro_g", 0.0)) / 1000.0,
+                alavanca_tras=v("alavanca_tras_mm"), base_tras=v("base_tras_mm"), dados=d)
 
 
 def _mecanismo_bracos(cat: dict, chave: str) -> MecanismoBracos:
@@ -1529,60 +1679,63 @@ def resolver(build: str | dict | None = None, catalogo: dict | None = None,
 CATALOGO_MOTORES_PAINEL: dict[str, dict] = {
     "tmotor_mn4004_kv300": {
         "id": "tmotor_mn4004_kv300",
-        "rotulo": "T-Motor MN4004 KV300 (Endurance · Preto/Cobre)",
-        "cor_nome": "Preto Anodizado",
-        "cor_hex": "#242730",
-        "cor_rgba": [0.14, 0.15, 0.19, 1.0],
+        "rotulo": "T-Motor MN4004 KV300 (Endurance · preto anodizado)",
+        "cor_nome": "Preto anodizado",
+        "cor_hex": "#16171b",
+        "cor_rgba": [0.075, 0.078, 0.088, 1.0],
         "escala_raio": 1.00,
         "escala_altura": 1.00,
     },
     "tmotor_mn4004_kv400": {
         "id": "tmotor_mn4004_kv400",
-        "rotulo": "T-Motor MN4004 KV400 (Alta Rotação · Prata Titânio)",
-        "cor_nome": "Prata Titânio",
-        "cor_hex": "#b8c2d4",
-        "cor_rgba": [0.72, 0.76, 0.83, 1.0],
+        "rotulo": "T-Motor MN4004 KV400 (Alta Rotação · preto anodizado)",
+        "cor_nome": "Preto anodizado",
+        "cor_hex": "#16171b",
+        "cor_rgba": [0.075, 0.078, 0.088, 1.0],
         "escala_raio": 1.00,
         "escala_altura": 1.00,
     },
     "tmotor_mn4006_kv380": {
         "id": "tmotor_mn4006_kv380",
-        "rotulo": "T-Motor MN4006 KV380 (Alto Binário 380W · Vermelho)",
-        "cor_nome": "Vermelho Competição",
-        "cor_hex": "#d9262e",
-        "cor_rgba": [0.85, 0.15, 0.18, 1.0],
+        "rotulo": "T-Motor MN4006 KV380 (Alto Binário 380W · preto anodizado)",
+        "cor_nome": "Preto anodizado",
+        "cor_hex": "#16171b",
+        "cor_rgba": [0.075, 0.078, 0.088, 1.0],
         "escala_raio": 1.05,
         "escala_altura": 1.15,
     },
     "tmotor_mn5006_kv450": {
         "id": "tmotor_mn5006_kv450",
-        "rotulo": "T-Motor MN5006 KV450 (Pesado 650W · Azul Cobalto)",
-        "cor_nome": "Azul Cobalto",
-        "cor_hex": "#2470eb",
-        "cor_rgba": [0.14, 0.44, 0.92, 1.0],
+        "rotulo": "T-Motor MN5006 KV450 (Pesado 650W · preto anodizado)",
+        "cor_nome": "Preto anodizado",
+        "cor_hex": "#16171b",
+        "cor_rgba": [0.075, 0.078, 0.088, 1.0],
         "escala_raio": 1.28,
         "escala_altura": 1.25,
     },
     "tmotor_mn3508_kv380": {
         "id": "tmotor_mn3508_kv380",
-        "rotulo": "T-Motor Navigator MN3508 KV380 (Robusto · Dourado)",
-        "cor_nome": "Dourado Bronze",
-        "cor_hex": "#e0a324",
-        "cor_rgba": [0.88, 0.64, 0.14, 1.0],
+        "rotulo": "T-Motor Navigator MN3508 KV380 (Robusto · alumínio prateado)",
+        "cor_nome": "Prata (alumínio anodizado)",
+        "cor_hex": "#a9abb2",
+        "cor_rgba": [0.66, 0.67, 0.70, 1.0],
         "escala_raio": 0.96,
         "escala_altura": 1.38,
     },
     "tmotor_mn2806_kv400": {
         "id": "tmotor_mn2806_kv400",
-        "rotulo": "T-Motor MN2806 KV400 (Compacto Leve 260W · Verde)",
-        "cor_nome": "Verde Esmeralda",
-        "cor_hex": "#1eb86b",
-        "cor_rgba": [0.12, 0.72, 0.42, 1.0],
+        "rotulo": "T-Motor MN2806 KV400 (Compacto Leve 260W · preto anodizado)",
+        "cor_nome": "Preto anodizado",
+        "cor_hex": "#16171b",
+        "cor_rgba": [0.075, 0.078, 0.088, 1.0],
         "escala_raio": 0.80,
         "escala_altura": 0.92,
     },
 }
 
+# Envelope REAL de cada pack (mm, comprido × largo × alto) e a cor que SE VÊ do invólucro (2026-10-20): medidos do pack
+# desenhado em `detalhes/bateria3d.py` (células nominais da ficha, fitas, isolamento, termorretrátil; sem os cabos) — o
+# PVC transparente deixa ver as células. As fontes estão no docstring desse módulo.
 CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
     "molicel_p50b_6s2p": {
         "id": "molicel_p50b_6s2p",
@@ -1592,10 +1745,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "p": 2,
         "vazao_max_a": 120.0,
         "massa_extra_g": 45.0,
-        "dims_mm": [142.0, 70.0, 44.0],
-        "cor_nome": "Vermelho Rubi",
-        "cor_hex": "#8c1f1a",
-        "cor_rgba": [0.55, 0.12, 0.10, 1.0],
+        "dims_mm": [131.7, 74.3, 43.5],
+        "cor_nome": "Transparente (PVC) · células cinzentas",
+        "cor_hex": "#9ea3a8",
+        "cor_rgba": [0.62, 0.64, 0.66, 1.0],
     },
     "molicel_p50b_6s3p": {
         "id": "molicel_p50b_6s3p",
@@ -1605,10 +1758,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "p": 3,
         "vazao_max_a": 180.0,
         "massa_extra_g": 65.0,
-        "dims_mm": [146.0, 105.0, 46.0],
-        "cor_nome": "Azul Royal",
-        "cor_hex": "#1f52c7",
-        "cor_rgba": [0.12, 0.32, 0.78, 1.0],
+        "dims_mm": [131.7, 74.3, 65.1],
+        "cor_nome": "Transparente (PVC) · células cinzentas",
+        "cor_hex": "#9ea3a8",
+        "cor_rgba": [0.62, 0.64, 0.66, 1.0],
     },
     "lipo_6s1p_4500_alta_vazao": {
         "id": "lipo_6s1p_4500_alta_vazao",
@@ -1618,10 +1771,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "p": 1,
         "vazao_max_a": 225.0,
         "massa_extra_g": 35.0,
-        "dims_mm": [152.0, 50.0, 52.0],
-        "cor_nome": "Amarelo Ouro",
-        "cor_hex": "#ebb814",
-        "cor_rgba": [0.92, 0.72, 0.08, 1.0],
+        "dims_mm": [157.0, 46.0, 44.0],
+        "cor_nome": "Preto (PVC impresso)",
+        "cor_hex": "#0f0f11",
+        "cor_rgba": [0.06, 0.06, 0.065, 1.0],
     },
     "amprius_si_6s2p": {
         "id": "amprius_si_6s2p",
@@ -1631,10 +1784,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "p": 2,
         "vazao_max_a": 80.0,
         "massa_extra_g": 35.0,
-        "dims_mm": [132.0, 60.0, 36.0],
-        "cor_nome": "Roxo Tecnológico",
-        "cor_hex": "#9433d1",
-        "cor_rgba": [0.58, 0.20, 0.82, 1.0],
+        "dims_mm": [120.0, 60.2, 40.0],
+        "cor_nome": "Transparente (PVC) · bolsas de alumínio",
+        "cor_hex": "#cdcfd1",
+        "cor_rgba": [0.80, 0.81, 0.82, 1.0],
     },
     "molicel_p45b_6s1p": {
         "id": "molicel_p45b_6s1p",
@@ -1644,10 +1797,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "p": 1,
         "vazao_max_a": 45.0,
         "massa_extra_g": 30.0,
-        "dims_mm": [128.0, 44.0, 24.0],
-        "cor_nome": "Verde Esmeralda",
-        "cor_hex": "#1fad59",
-        "cor_rgba": [0.12, 0.68, 0.35, 1.0],
+        "dims_mm": [132.6, 74.5, 22.1],
+        "cor_nome": "Transparente (PVC) · células cinzentas",
+        "cor_hex": "#949aa1",
+        "cor_rgba": [0.58, 0.60, 0.63, 1.0],
     },
     "lipo_4s1p_4500_baixa_tensao": {
         "id": "lipo_4s1p_4500_baixa_tensao",
@@ -1656,10 +1809,10 @@ CATALOGO_BATERIAS_PAINEL: dict[str, dict] = {
         "s": 3,
         "p": 1,
         "massa_extra_g": 18.0,
-        "dims_mm": [106.0, 36.0, 28.0],
-        "cor_nome": "Laranja Âmbar",
-        "cor_hex": "#eb6b1a",
-        "cor_rgba": [0.92, 0.42, 0.10, 1.0],
+        "dims_mm": [75.0, 35.0, 26.5],
+        "cor_nome": "Preto (PVC impresso)",
+        "cor_hex": "#121214",
+        "cor_rgba": [0.07, 0.07, 0.08, 1.0],
     },
 }
 

@@ -25,6 +25,75 @@ treino. Resumo em [Vento e orientação fixa](#vento-e-orientação-fixa-v2b) e
 - `run.py` — validação do ambiente por **fórmulas fechadas**, 146/146 checagens, exit 0/1.
 - `helices_render.py` — prova **visual** (offscreen/EGL) da animação das hélices: 2 imagens em `out/`.
 
+## DRONE ACESSÍVEL e PÁGINA DAS PEÇAS (2026-10-20) — ombro de fuso, peças impressas em ABS, massas medidas, STL e custos
+
+**Pedido do dono** (2026-10-20): o drone «100 % realista» na modelagem e nas partes móveis — baterias fiéis, o Raspberry
+Pi 5 ligado à bateria por cabo, motores com a forma e o tamanho reais, dobradiças verídicas, abraçadeiras presas,
+parafusos e porcas modelados — e uma página para ver cada peça em 3D com a montagem; depois: «a junta do começo do drone
+não parece realista: veja se estamos REALMENTE simulando um mecanismo real e fácil de fazer», «materiais baratos e
+acessíveis, a maioria impresso em 3D com o plástico das peças LEGO» (ABS), «massas realistas», e a página com os modelos
+para imprimir, os custos e o PORQUE de cada peça — sem a carga útil. O cockpit voa agora este drone por omissão
+(`sim_site.py` → `BUILD_COCKPIT_OMISSAO = "articulado_15pol_abs"`; `--build articulado_15pol_mn5006` volta ao de 19/10).
+
+### O ombro: porque o sem-fim saiu e o atuador de fuso entrou
+
+| | contas e medidas |
+|---|---|
+| momento no ombro a pairar | τ = 0,707 · L · (T − peso da ponta), L = 0,825 m (eixo do ombro ∥ y, braço a 45°): medido no simulador 6,8 N·m (o build de 19/10, mais leve, 4,4 N·m); com manobras ×1,5 e com o empuxo máximo ~×2,6 |
+| sem-fim de módulo 1 (coroa z30, Ø30 × 8 mm) | força no dente ≈ τ/r = 7/0,015 ≈ 470 N → σ (Lewis, Y ≈ 0,3) ≈ 200 MPa: o bronze PARTE (a KHK dá ~1–3 N·m admissíveis para m1). O desenho de 19/10 (m0,8, coroa Ø16) dava ~550 N e ~380 MPa: era a «mecânica estranha» |
+| **atuador linear de fuso** (o novo) | motorredutor **JGB37-520 12 V** (enrolamento rápido, 1:18,8, encoder Hall de 11 PPR, 155 g) → acoplamento flexível 6→8 → **fuso Tr8×2** em 2 × 608ZZ com 2 colares → **porca de latão** num carro impresso → **alavanca** do cubo do braço (pivô A); o corpo do atuador roda num munhão (pivô B) numa torre impressa. São as peças do eixo Z de uma impressora 3D |
+| autobloqueio | λ = atan(p/(π·d₂)) = 5,20° < φ' = atan(μ/cos 15°) = 8,83° (μ = 0,15, latão/aço com massa lubrificante; o mínimo é 0,088 — com óleo fino a margem é pequena): o empuxo não roda o fuso. η = tan λ/tan(λ+φ') = 0,364 |
+| biela (geometria do catálogo, a MESMA na física, na animação da planta e na página) | a = A − H = (−50, ±24, 0) mm, b = B − H = (∓38,1, ±24, 75,1) mm; L(q) = \|R_y(q)·a − b\| de 43 a 107 mm (curso 64 mm num fuso de 150), monótono; braço de alavanca \|L'(q)\| 38–50 mm; redução local N(q) = 2π·L'(q)/p ≈ 155 com o braço a 0 |
+| controladores | 2 × **Raspberry Pi Pico 2** (RP2350, um por lado): os 2 DRV8871, os 2 servos, os 2 encoders Hall, os 2 AS5048A (SPI) e os 2 AS5600 (I²C0/I²C1) dos braços desse lado, UART ao FC — o H743 não tem essas entradas/saídas; a malha de posição dos ombros (abaixo) corre neles |
+| física (`servos.py`) | a mesma reta do motor DC e o mesmo autobloqueio do sem-fim, com N(q) e o inverso q(θ) em FORMA FECHADA (L² = C − 2(P cos q + Q sin q)): binário de bloqueio no braço 14,4 N·m (braço a 0), vazio 20,5°/s; o FC fecha a malha com o encoder Hall + o AS5048A: banda morta de 0,05° (o driver desliga e o fuso segura), PWM mínimo 0,6 fora dela (vence o arranque com a carga), **proteção de bloqueio** (a empurrar sem andar 1,5 s, o driver desliga 2 s — o DRV8871 a 2,37 A dissiparia ~2,6 W, perto do corte térmico) e **trava de tiro** (os ombros param da ordem de tiro até a bala sair) |
+| medido (`teste_ombro_fuso.py`, 21/21 + 6 mutações) | a junta fica onde a porca a põe (± folga ± \|τ\|/k); um ombro vai a −8° a 19,4°/s ≤ ω₀/\|N(q)\|; a pairar o ombro segura 6,8 N·m com **0,01 A** (a espera); servos dos ombros DESLIGADOS 2 s em voo: o braço mexe **0,008°**; o corpo arfa ±20° com os motores de nível (≤ 1,2°) e o drone parado (< 6 cm) |
+
+**Mira nos 3 cenários de altura** (`cenarios_mira.py`, bola programada, sementes 6200–6203, 4 × 10 s, portão TF; o
+mesmo código para os dois builds — o de 19/10 reproduz a tabela de 19/10):
+
+| build | mesma altura | drone abaixo | drone acima |
+|---|---|---|---|
+| `articulado_15pol_mn5006` (DYNAMIXEL + sem-fim, 4464 g) | 73 ✓ 0 ✗ · +109,5/min | 63 ✓ 0 ✗ · +94,5/min | 59 ✓ 0 ✗ · +88,5/min |
+| **`articulado_15pol_abs`** (fuso + ABS, 6601 g) | **90 ✓ 0 ✗ · +135,0/min** · ≤ 19 cm | **82 ✓ 0 ✗ · +123,0/min** · ≤ 19 cm | **75 ✓ 0 ✗ · +112,5/min** · ≤ 19 cm |
+
+Para chegar aqui (medido, não suposto): (1) o portão TF foi RE-TREINADO para este build
+(`treinar_mira_articulada.py --build articulado_15pol_abs --episodios 100` → `out/mira_articulada/articulado_15pol_abs/`;
+o cockpit e os cenários carregam o modelo do build que voam, `mira_articulada.caminho_modelo`); (2) o FC **trava os
+motores dos ombros** desde a ordem de tiro até a bala sair (+30 ms; `ServosBracos.travar_ombros`, chamado pelo
+`env_real.disparar`): o fuso segura o braço, e os impulsos de posicionamento dos motorredutores (banda morta + PWM
+mínimo) deixam de mexer o corpo durante os 16 ms do gatilho — sem a trava o cenário «abaixo» tinha 2–3 erros em ~83
+tiros. Validação em sementes nunca vistas (90001–90004): 86 ✓ / 80 ✓ / 65 ✓, 0 ✗ (+129,0/+120,0/+97,5 por minuto).
+
+### Peças impressas em ABS, massas medidas e custos
+
+- **Impressas** (material `*_abs_*`, malhas fechadas): placas de baixo e de cima (nervuradas, 109 e 71 g), colunas, e por braço a forquilha da dobradiça, o cubo com a alavanca, a torre do pivô B, o corpo do atuador, o carro da porca, o berço e o garfo do cotovelo, o suporte do motor e o pé da perna; na eletrónica as bases dos bucks, o berço do UBEC, os suportes dos drivers, a ponte do FC, o suporte da câmara, a bandeja dos sensores e os 2 suportes dos controladores dos braços — 26 STL diferentes para 51 peças, 1103 g de ABS e ~88 h de impressão;
+  todas cabem numa mesa de 220 × 220 × 250 mm. Definições: ABS, bico 0,4, camada 0,2, 3 perímetros, 40 % giroide,
+  mesa 100 °C, caixa fechada; insertos de latão M3 cravados a quente em furos de Ø4,0. Ficam COMPRADAS as peças em que o
+  ABS não chega (e a ficha diz porquê): tubos de carbono (um tubo de ABS dobraria ~35× mais), ferragens, rolamentos,
+  fuso e porca, motores, eletrónica, bateria, fios.
+- **Massas** (`lab/drone_rpi/detalhes/massas.py`, «como num fatiador»): as impressas = 1,04 g/cm³ × (casca de 1,2 mm +
+  40 % do interior); tubos, veios, rolamentos, porca e fuso pela geometria × densidade; ferragens pelas malhas completas
+  das normas; cabos por volume (cobre + silicone); as compradas com ficha (motores, ESC, Pi, FC, bateria, servos,
+  motorredutores, reguladores) pela ficha. `--atualizar-catalogo` escreve-as no catálogo e o simulador voa com elas:
+  6601 g (frame 537 g, pernas 113, por ombro 326 g + o motorredutor de 155 g, cotovelo 130 g + o servo de 60 g, mastro 25 g, reguladores
+  202 g, cabos/suportes/ferragens soltas 582 g) → T/W 2,31, pairagem 981 W, **11,3 min** de autonomia no modelo.
+  O build de 19/10 (4464 g, 22,0 min) não contava os cabos, as ferragens nem o mecanismo real das dobradiças.
+- **Custos** (`precos.py`; preços de loja de outubro de 2026, pesquisa em `pesquisas/2026-10-20-materiais-acessiveis-precos.md`,
+  US$ 1 = R$ 5,05, sem portes nem impostos): **R$ 8.536** (US$ 1.690) — propulsão US$ 614 (motores, ESC, hélices), eletrónica 385 (com os 2 Pico 2), mecanismo dos braços 356, bateria 156, estrutura 148 (tubos de carbono, ABS, ferragens, insertos), cablagem 31.
+
+### A página `/pecas`
+
+`http://127.0.0.1:8080/pecas` (ligação na janela Ajuda) — o drone que o cockpit voa, peça a peça (`exportar.py`, do
+MESMO modelo que o simulador compila): ficha de cada peça (medidas reais, como funciona, **porque é necessária ao
+projeto**, massa medida, custo, fontes), MONTAGEM passo a passo (16 passos no acessível: imprimir, dobradiças,
+atuadores de fuso, biela, encoders, braços, reguladores, …), FERRAGENS (528, com os binários) e **IMPRIMIR E
+CUSTOS** (custo por categoria e por peça; cada peça impressa com o STL — `GET /api/pecas3d/stl?build=&arquivo=`, binário
+em mm, já deitado na face de apoio, as cópias iguais num só ficheiro com «imprimir N×» — e o ZIP com todas e o LEIA-ME,
+`GET /api/pecas3d/stl.zip?build=`). No visor, o ombro de fuso mexe-se como no MuJoCo: o atuador roda no pivô B, o fuso
+gira 2π·ΔL/p e a porca acompanha a alavanca. A página é a do DRONE: a carga útil do topo não entra (nem geoms, nem
+fichas, nem textos). Provas: `teste_pecas3d.py` (§1 exportação, §1b a página do drone, §2 API, §2b STL, §3 simulador,
+§3b biela, §4 auditoria de realismo, §5 9 mutações) e `teste_ombro_fuso.py`.
+
 ## BRAÇOS ARTICULADOS — mirar por ARFAGEM sem sair do sítio (2026-10-19)
 
 **Pedido do dono** (desenho `~/Imagens/unnamed.png`, mod para um jogo futuro): cada braço **sobe/desce na base** e tem uma
@@ -42,7 +111,7 @@ quando acha que acerta). Build novo **`articulado_15pol_mn5006`** — o build AT
 | **2 dobradiças por braço, os 8 eixos ∥ y do CORPO** (ombro na placa + cotovelo com **mastro** vertical) | as pontas só sobem/descem e inclinam à frente/trás — **|Δy| = 1e-16 m** em 50 poses (`teste_bracos.py` §3); o corpo arfa por cima dos motores |
 | **mastro = raio da hélice + 40 mm = 230,5 mm** (> 190,5 mm) | a hélice nunca chega ao braço: pior folga **5,5 cm** em 9 × 13 poses; condição fechada (braço a 45°): mastro > raio·max\|sen q\|/√(1+cos²q) = raio (§4) |
 | **servo inteligente DYNAMIXEL XH430-V210-R (24 V)** em vez de passo a passo | malha fechada com encoder absoluto (4096/volta), PID interno, corrente medida, barramento RS-485 a 200 Hz; um passo a passo em malha aberta **perde passos** com vibração/carga e gasta a corrente de retenção sempre (calor) — ficha: 2,6 N·m · 0,7 A · 52 rpm · 82 g |
-| **ombro: sem-fim 20:1 AUTOBLOQUEANTE + encoder AS5048A (14 bits) na saída** | λ = 3,81° < φ = atan 0,10 = 5,71° ⇒ o empuxo não faz recuar o braço; η = tan λ/tan(λ+φ) = **0,397** ⇒ 20,65 N·m e 15,6°/s na saída; em pairagem segura **4,39 N·m com a corrente de espera (0,04–0,06 A)** e com os servos DESLIGADOS o braço mexe **0,003°** (§5b) |
+| **ombro: sem-fim 20:1 AUTOBLOQUEANTE + encoder AS5048A (14 bits) na saída** (⚠ 2026-10-20: a coroa m0,8 Ø16 não aguenta o momento de pairagem — ~550 N no dente, σ ≈ 380 MPa; o build acessível troca-o pelo fuso, ver acima) | λ = 3,81° < φ = atan 0,10 = 5,71° ⇒ o empuxo não faz recuar o braço; η = tan λ/tan(λ+φ) = **0,397** ⇒ 20,65 N·m e 15,6°/s na saída; em pairagem segura **4,39 N·m com a corrente de espera (0,04–0,06 A)** e com os servos DESLIGADOS o braço mexe **0,003°** (§5b) |
 | **cotovelo: acionamento direto** | a linha de empuxo passa pelo eixo do cotovelo (sem carga estática); chega aos 40° a **302°/s ≤ 312°/s** (52 rpm da ficha) (§5) |
 | **macro-mini** (`bracos_controlo.py`) | o ombro segue só a parte LENTA de τ (filtro 0,6 s + zona morta de 1°: parado, o sem-fim segura sem corrente) e o cotovelo corrige JÁ (~100°/s); IK fechada q₁ = τ + δ, q₂ = −δ, δ = asin((r_s/l₁)·sen τ) — os 4 rotores ficam no plano dos motores |
 | **motor MN5006 KV450** | com os braços o drone pesa **4463,6 g** (servos, sem-fins, encoders, mastros, dobradiças, regulador de 24 V incluídos) — com o MN4004 o T/W seria ≈ 1,0; com o MN5006 **T/W 2,58**, pairagem **557 W**, **22,0 min** de autonomia no modelo (o rígido com a Glock: 40,7 min) |

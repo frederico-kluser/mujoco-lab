@@ -817,6 +817,9 @@ class DroneRealEnv(HoverEnv):
         """Dispara `n` tiro(s) da arma fixa no topo do drone (`planta.disparar`). `atraso_s` > 0 = o tempo entre a ORDEM
         e a bala sair do cano (solenoide do gatilho + percussor): o tiro sai no passo de física em que o relógio o
         alcança, com o estado do cano DESSE instante (devolve None; o registo fica em `planta.ultimo_tiro`)."""
+        sv = getattr(self.planta, "servos", None)
+        if sv is not None and getattr(self.hw.bracos, "ombro", None) is not None and self.hw.bracos.ombro.fuso is not None:
+            sv.travar_ombros(float(atraso_s) + 0.03)       # ombros de fuso: nenhum impulso do motor durante o disparo
         if atraso_s > 0.0:
             self._tiros_agendados.append([float(self.data.time) + float(atraso_s), int(n)])
             return None

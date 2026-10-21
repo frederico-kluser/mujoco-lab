@@ -110,6 +110,15 @@ API (JSON; todas as escritas são ATÓMICAS: tmp + `os.replace` no ficheiro de c
 
 São 15 rotas `/api/*` no total (5 GET + 10 POST); além das anteriores: `POST /api/bateria`
 `{"acao": "recarregar"|"nova"}` (planta REAL; recarregar fecha o ciclo com desgaste; nova = pack novo) e o
+PÁGINA DAS PEÇAS 3D (2026-10-20) — `GET /pecas` é uma rota do site (a SPA); os dados vêm de `GET /api/pecas3d`
+(`?build=<id>` opcional; omissão = o build que este servidor voa): o drone peça a peça em JSON (`lab/drone_rpi/detalhes/
+exportar.py`: árvore de corpos e juntas, malhas, materiais, ferragens por tipo e por instância, cabos, eixos, variantes,
+fichas com o «porque», passos de montagem, massas medidas, custos e as bielas dos ombros de fuso), gerado a pedido do
+MESMO modelo que o simulador compila, em cache por build e pela data dos ficheiros de `lab/drone_rpi/` e
+`models/drone_rpi/`, comprimido (gzip) e com ETag (304 sem mudanças). Os MODELOS PARA IMPRIMIR das peças em ABS saem do
+mesmo processo: `GET /api/pecas3d/stl?build=&arquivo=<x>.stl` (STL binário em mm, deitado na face de apoio) e
+`GET /api/pecas3d/stl.zip?build=` (todos + LEIA-ME).
+
 MÓDULO DE CÂMARA FPV — `GET /api/fpv.mjpg` (stream multipart/x-mixed-replace, o padrão do exemplo web
 streaming do picamera2: SÓ o último quadro, `Cache-Control: no-cache`, partes `image/jpeg` com
 `X-Fpv-Seq`/`X-Fpv-Captura-Ms`), `GET /api/fpv.jpg` (um quadro), `GET /api/fpv/estado` (estado do módulo)
@@ -140,6 +149,7 @@ FIABILIDADE sob POSTs concorrentes (o servidor é `ThreadingHTTPServer`, uma thr
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -861,6 +871,90 @@ class CanalHud:
 
 
 # ---------------------------------------------------------------------------------------------- servidor
+_PECAS3D_TRAVA = threading.Lock()
+_PECAS3D_CACHE: dict = {}
+
+
+def assinatura_pecas3d() -> float:
+    """A data mais recente dos ficheiros de que o JSON das peças depende (código do drone e catálogo)."""
+    mt = 0.0
+    for pasta, padrao in ((_RAIZ / "lab" / "drone_rpi", "**/*.py"), (_RAIZ / "models" / "drone_rpi", "*.json")):
+        for f in pasta.glob(padrao):
+            try:
+                mt = max(mt, f.stat().st_mtime)
+            except OSError:
+                pass
+    return mt
+
+
+def pecas3d_tudo(build: str) -> tuple[bytes, str, bytes]:
+    """(JSON gzip, etag, ZIP dos STL das peças impressas) do `build` — gerado uma vez por versão do código (trava: dois
+    pedidos ao mesmo tempo não geram duas vezes). Gera-se num processo Python NOVO (`python -m
+    lab.drone_rpi.detalhes.exportar`): um servidor que está a correr há horas tem os módulos antigos em memória, e a
+    página tem de mostrar o drone do código de AGORA (medido: com a importação no próprio processo a página continuava
+    com as peças de antes da edição)."""
+    import tempfile
+    chave = (build, assinatura_pecas3d())
+    with _PECAS3D_TRAVA:
+        if chave not in _PECAS3D_CACHE:
+            with tempfile.TemporaryDirectory(prefix="pecas3d_") as pasta:
+                saida = Path(pasta) / f"{build}.json.gz"
+                zip_stl = Path(pasta) / f"{build}.zip"
+                env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(_RAIZ), os.environ.get("PYTHONPATH", "")])}
+                env.pop("DRONE_DETALHES", None)
+                r = subprocess.run([sys.executable, "-m", "lab.drone_rpi.detalhes.exportar", "--build", build,
+                                    "--saida", str(saida), "--gzip", "--stl-zip", str(zip_stl)], cwd=str(_RAIZ),
+                                   env=env, capture_output=True, text=True, timeout=300, check=False)
+                if r.returncode != 0 or not saida.is_file():
+                    raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout)
+                                       else f"exportar saiu com {r.returncode}")
+                corpo = saida.read_bytes()
+                zbytes = zip_stl.read_bytes() if zip_stl.is_file() else b""
+            etag = next((x.split("=", 1)[1] for x in r.stdout.split() if x.startswith("etag=")), None) or \
+                hashlib.sha1(corpo).hexdigest()[:16]
+            for k in [k for k in _PECAS3D_CACHE if k[0] == build]:
+                _PECAS3D_CACHE.pop(k)
+            _PECAS3D_CACHE[chave] = (corpo, etag, zbytes)
+        return _PECAS3D_CACHE[chave]
+
+
+def pecas3d_bytes(build: str) -> tuple[bytes, str]:
+    """(JSON gzip, etag) das peças 3D do `build` (ver `pecas3d_tudo`)."""
+    corpo, etag, _z = pecas3d_tudo(build)
+    return corpo, etag
+
+
+def pecas3d_stl(build: str, arquivo: str | None) -> tuple[bytes, str, str]:
+    """(bytes, nome, tipo) — um STL das peças impressas do `build` (`arquivo` do JSON) ou, sem `arquivo`, o ZIP com
+    todos e o LEIA-ME. `KeyError` se o ficheiro não existe."""
+    import io
+    import zipfile
+    _c, _e, zbytes = pecas3d_tudo(build)
+    if not arquivo:
+        if not zbytes:
+            raise KeyError("este build não tem peças impressas")
+        return zbytes, f"pecas_impressas_{build}.zip", "application/zip"
+    if "/" in arquivo or "\\" in arquivo or not arquivo.endswith(".stl"):
+        raise KeyError(f"ficheiro inválido {arquivo!r}")
+    with zipfile.ZipFile(io.BytesIO(zbytes)) as z:
+        try:
+            return z.read(arquivo), arquivo, "model/stl"
+        except KeyError:
+            raise KeyError(f"{arquivo!r} não existe nas peças impressas de {build}") from None
+
+
+def build_das_pecas(pedido: str | None, servidor) -> str:
+    """O build da página das peças: o pedido (se existir no catálogo) ou o que este servidor voa (o do cockpit)."""
+    from lab import drone_rpi as dr
+    builds = dr.carregar_builds()["builds"]
+    if pedido:
+        if pedido not in builds:
+            raise ValueError(f"build desconhecido {pedido!r} (há {len(builds)}: {', '.join(sorted(builds))})")
+        return pedido
+    voa = getattr(servidor, "build", None) or (getattr(servidor, "hardware", None) or {}).get("build")
+    return voa if voa in builds else BUILD_COCKPIT_OMISSAO
+
+
 class Servidor:
     """Estado partilhado entre os pedidos: caminhos, processo do runner, modelo, porta e os COMANDOS.
 
@@ -1024,6 +1118,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream_hud()
             elif rota == "/api/hud.json":
                 self._hud_json()
+            elif rota == "/api/pecas3d":
+                self._pecas3d()
+            elif rota in ("/api/pecas3d/stl", "/api/pecas3d/stl.zip"):
+                self._pecas3d_stl(rota.endswith(".zip"))
             elif rota.startswith("/api/"):
                 self._erro(404, f"rota desconhecida: {rota}")
             else:
@@ -1496,6 +1594,68 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass                                    # o cliente desligou: o stream morre com ele
+
+    def _pecas3d(self) -> None:
+        """`GET /api/pecas3d[?build=<id>]`: o drone peça a peça para a página `/pecas` (gzip + ETag)."""
+        import gzip as _gzip
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        try:
+            build = build_das_pecas((qs.get("build") or [None])[0], self.servidor)
+        except ValueError as erro:
+            self._erro(400, str(erro))
+            return
+        try:
+            corpo, etag = pecas3d_bytes(build)
+        except Exception as erro:  # noqa: BLE001 — a página diz porquê, o servidor continua
+            self._erro(500, f"não consegui gerar as peças 3D do build {build}: {type(erro).__name__}: {erro}")
+            return
+        etag_h = f'"{etag}"'
+        if self.headers.get("If-None-Match") == etag_h:
+            self.send_response(304)
+            self.send_header("ETag", etag_h)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        aceita_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "")
+        dados = corpo if aceita_gzip else _gzip.decompress(corpo)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if aceita_gzip:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(dados)))
+        self.send_header("ETag", etag_h)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Pecas3d-Build", build)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(dados)
+
+    def _pecas3d_stl(self, zip_: bool) -> None:
+        """`GET /api/pecas3d/stl?build=<id>&arquivo=<x>.stl` (um STL, mm) · `GET /api/pecas3d/stl.zip?build=<id>` (todos
+        + LEIA-ME): os modelos para imprimir das peças em ABS, tirados do mesmo modelo que o simulador compila."""
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        try:
+            build = build_das_pecas((qs.get("build") or [None])[0], self.servidor)
+        except ValueError as erro:
+            self._erro(400, str(erro))
+            return
+        try:
+            dados, nome, tipo = pecas3d_stl(build, None if zip_ else (qs.get("arquivo") or [None])[0])
+        except KeyError as erro:
+            self._erro(404, str(erro.args[0] if erro.args else erro))
+            return
+        except Exception as erro:  # noqa: BLE001
+            self._erro(500, f"não consegui gerar os STL do build {build}: {type(erro).__name__}: {erro}")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(dados)))
+        self.send_header("Content-Disposition", f'attachment; filename="{nome}"')
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Pecas3d-Build", build)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(dados)
 
     def _hud_json(self) -> None:
         """`GET /api/hud.json`: a última amostra do HUD (`{"hud": {...}|null, "idade_s": s|null}`)."""
@@ -2805,7 +2965,10 @@ def pasta_fpv_omissao(porta: int, ambiente=None) -> Path:
     return FPV_OMISSAO
 
 
-BUILD_COCKPIT_OMISSAO = "articulado_15pol_mn5006"   # o drone do cockpit: braços articulados (pedido do dono, 2026-10-19)
+# o drone do cockpit: braços articulados (pedido do dono, 2026-10-19) na versão ACESSÍVEL — peças impressas em ABS e o
+# ombro de fuso Tr8×2 (pedido de 2026-10-20; nos 3 cenários de mira acerta tanto ou mais do que o DYNAMIXEL + sem-fim,
+# medido com `cenarios_mira.py`). `--build articulado_15pol_mn5006` volta ao de 2026-10-19.
+BUILD_COCKPIT_OMISSAO = "articulado_15pol_abs"
 BUILD_DA_POLITICA = "politica"                       # `--build politica`: o build do `hardware.json` da política (rígido)
 
 
