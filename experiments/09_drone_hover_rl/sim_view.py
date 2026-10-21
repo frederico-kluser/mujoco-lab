@@ -2721,7 +2721,9 @@ class ControladorDeVoo:
         env = self.env
         if self.mira_art is None:
             lat = LATENCIA_CAMERA_DCMI_S if "arduino" in str(env.hw.nome) else LATENCIA_CAMERA_PI_S
-            self.mira_art = MiraArticuladaIA(latencia_camera_s=lat, semente=int(getattr(env, "passos", 0)) + 101)
+            from mira_articulada import caminho_modelo
+            self.mira_art = MiraArticuladaIA(caminho_modelo(getattr(env.hw, "nome", None)), latencia_camera_s=lat,
+                                             semente=int(getattr(env, "passos", 0)) + 101)
         if not self.mira_art_ativa:                  # entrou agora no «seguir»: integradores e rastreador do zero
             self.mira_art.reiniciar()
         c = self.mira_art.passo(env, dt=getattr(env, "dt_decisao", 0.02))
@@ -3071,7 +3073,29 @@ def hud_bracos(env, piloto, derivados: dict) -> dict | None:
             "pitch_alvo": round(math.degrees(float(br.pitch_corpo_alvo)), 2) if br is not None else None,
             "modo": (br.modo if br is not None else None), "mira_ativa": ativa,
             "mira": mira if ativa else None,
-            "geometria": _geometria_bracos_hud(env)}
+            "geometria": _geometria_bracos_hud(env),
+            "atuadores": _atuadores_hud(env)}
+
+
+def _atuadores_hud(env) -> dict | None:
+    """Que atuadores o build tem (texto da janela Braços; fixo — uma vez por env): o do ombro com a transmissão (fuso
+    numa alavanca ou sem-fim N:1), o do cotovelo, quem SEGURA o braço sem corrente e a corrente de espera."""
+    a = getattr(env, "_atuadores_hud", None)
+    if a is None:
+        mec = getattr(env.hw, "bracos", None)
+        if mec is None:
+            return None
+        so, sc = mec.ombro, mec.cotovelo
+        if so.fuso is not None:
+            ombro = f"{so.servo.modelo} + fuso Tr8×2 numa alavanca (N ≈ {so.reducao:.0f} com o braço a 0)"
+            segura = "fuso"
+        else:
+            ombro = f"{so.servo.modelo} + sem-fim {so.reducao:g}:1"
+            segura = "sem-fim"
+        a = {"ombro": ombro, "cotovelo": sc.servo.modelo, "segura": segura,
+             "espera_a": round(float(so.servo.corrente_espera), 3), "tensao_v": round(float(so.servo.tensao), 1)}
+        env._atuadores_hud = a
+    return a
 
 
 def _geometria_bracos_hud(env) -> dict:
@@ -3809,7 +3833,7 @@ def analisar_argumentos(argv=None) -> argparse.Namespace:
                         "diz `trocando` + motivo")
     p.add_argument("--build", default=None, metavar="NOME",
                    help="voa ESTE build do catálogo (models/drone_rpi/builds.json) em vez do da política — ex.: "
-                        "`articulado_15pol_mn5006` (braços articulados: no «seguir a bola»/AUTO SHOOT o corpo arfa "
+                        "`articulado_15pol_abs` (braços articulados acessíveis: no «seguir a bola»/AUTO SHOOT o corpo arfa "
                         "para a altura da bola). Se a observação do build não for a da política, o modo RL fica "
                         "indisponível e voa a cascata clássica. Não muda o build ATIVO do catálogo")
     p.add_argument("--seed", type=int, default=0,

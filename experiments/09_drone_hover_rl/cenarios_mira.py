@@ -29,7 +29,9 @@ _AQUI = Path(__file__).resolve().parent
 _RAIZ = next(p for p in _AQUI.parents if (p / "pyproject.toml").exists())
 sys.path[:0] = [p for p in (str(_RAIZ), str(_AQUI)) if p not in sys.path]
 
-BUILD_ARTICULADO = "articulado_15pol_mn5006"
+# o build dos braços dos cenários: o de 19/10 (o v5 do benchmark) — ou o de `MIRA_BUILD` (o treino da mira por build,
+# `treinar_mira_articulada.py --build`; os processos filhos herdam-no)
+BUILD_ARTICULADO = __import__("os").environ.get("MIRA_BUILD") or "articulado_15pol_mn5006"
 PENALIDADE = 20.0
 CENARIOS = {
     "mesma": {"z_drone": 1.4, "z_alvo": 1.4, "rotulo": "Mesma altura do alvo"},
@@ -53,6 +55,7 @@ class OpcoesEpisodio:
     atirar: bool = True                    # auto-tiro com a decisão da mira (portão físico + rede TF se existir)
     usar_tf: bool = True
     articulado: bool = True                # False = o drone RÍGIDO de sempre com a `MiraBalisticaIA` (sobe/desce para mirar)
+    build: str | None = None               # build articulado a usar (None = `BUILD_ARTICULADO`; ex. o acessível)
     dz_alvo: float | None = None           # treino: altura do alvo face ao drone sorteada (substitui a do cenário)
     z_drone: float | None = None
     gancho_decisao: object = None          # f(env, mira, k) chamado a cada decisão (gravação para o treino)
@@ -63,7 +66,7 @@ def criar_env(opc: OpcoesEpisodio, episodio_s: float):
     from env_real import DroneRealEnv
     cen = CENARIOS[opc.cenario]
     z_d = float(opc.z_drone if opc.z_drone is not None else cen["z_drone"])
-    build = BUILD_ARTICULADO if opc.articulado else None
+    build = (opc.build or BUILD_ARTICULADO) if opc.articulado else None
     return DroneRealEnv(build=build, modo_acao="ctbr", comando=True, com_alvo=True, episodio_s=episodio_s, alvo_z=z_d)
 
 
@@ -82,7 +85,9 @@ def correr_episodio(opc: OpcoesEpisodio, env=None, nuc=None) -> dict:
     nuc.pos_reset()
     lat = LATENCIA_CAMERA_DCMI_S if "arduino" in str(env.hw.nome) else LATENCIA_CAMERA_PI_S
     if opc.articulado:
-        mira = MiraArticuladaIA(latencia_camera_s=lat, semente=int(opc.semente) + 101)
+        from mira_articulada import caminho_modelo
+        mira = MiraArticuladaIA(caminho_modelo(opc.build or BUILD_ARTICULADO), latencia_camera_s=lat,
+                                semente=int(opc.semente) + 101)
         mira.usar_tf = bool(opc.usar_tf)
     else:
         from mira_balistica import MiraBalisticaIA

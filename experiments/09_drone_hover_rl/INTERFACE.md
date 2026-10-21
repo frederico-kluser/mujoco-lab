@@ -15,6 +15,10 @@ VENTO», descrevem a página que o cockpit substituiu.
 > (ep+1). O arranque é **autoritativo** (corrige o `loop` do ficheiro de controlo) e depois só o
 > `POST /api/loop` o muda (*sticky*).
 
+> **2026-10-20 — o build do cockpit por omissão passou a `articulado_15pol_abs`** (o ACESSÍVEL: peças impressas em ABS,
+> ombro de fuso Tr8×2; README → «DRONE ACESSÍVEL e PÁGINA DAS PEÇAS»); aditivo ao HUD: `bracos.atuadores` {`ombro`,
+> `cotovelo`, `segura`, `espera_a`, `tensao_v`} — a janela Braços mostra os atuadores do build que voa.
+
 > **2026-10-19 — braços articulados** (`articulado_15pol_mn5006`, mira por arfagem; README → «BRAÇOS ARTICULADOS» →
 > «No COCKPIT»): **é o build do cockpit por omissão** — `sim_site.py` sem `--build` (e o `mujoco 09`) voa
 > `articulado_15pol_mn5006` (`BUILD_COCKPIT_OMISSAO`); `--build <nome>` escolhe outro e `--build politica` volta ao rígido
@@ -160,6 +164,41 @@ Amostra do HUD (o runner manda-a por UDP local ao servidor; nada toca no disco):
 
 `erro_tan` é o que o site usa para desenhar o retículo em qualquer resolução: no stream de altura `H` e FoV
 vertical `fovy`, a bola está a `erro_tan × (H/2)/tan(fovy/2)` píxeis do centro.
+
+### 0.7 PEÇAS 3D e MONTAGEM — a página `/pecas` (2026-10-20)
+
+`http://127.0.0.1:8080/pecas` (a ligação está na janela **Ajuda**) mostra cada peça do drone que o cockpit voa, em 3D
+(three.js), com a ficha real, as ferragens que a prendem e os passos de montagem. Não é desenhada à mão: os dados
+saem do MESMO modelo que o simulador compila.
+
+| rota | corpo / resposta |
+|---|---|
+| `GET /pecas` | a SPA (o `index.html` do site; o bundle da página carrega à parte — o three.js não entra no cockpit) |
+| `GET /api/pecas3d[?build=<id>]` | JSON (gzip se o cliente aceitar, `ETag`, `304` com `If-None-Match`, `X-Pecas3d-Build`); omissão = o build que este servidor voa; build desconhecido → 400 com a lista |
+| `GET /api/pecas3d/stl?build=<id>&arquivo=<x>.stl` | um MODELO PARA IMPRIMIR: STL binário em **mm**, já deitado na face de apoio e centrado (`impressao.py`); nome que não é um STL das peças → 404 |
+| `GET /api/pecas3d/stl.zip?build=<id>` | todos os STL das peças impressas em ABS + `LEIA-ME.txt` (definições de impressão, quantidade, massa, tempo e medidas de cada um); build sem peças impressas → 404 |
+
+O JSON (`lab/drone_rpi/detalhes/exportar.py`, `versao: 1`; metros, quaternions `[w,x,y,z]`, z para cima, vetores em
+base64 little-endian): `corpos` (árvore com as juntas: `eixo`, `pos`, `limites_graus`) · `geoms` (primitiva ou malha +
+`faces` [f0, f1) da malha fundida, `peca`, `inst`, `anim` rotor/sem-fim) · `malhas` · `materiais` · `ferragens`
+(`tipos`: uma malha COMPLETA por tipo — com a haste roscada — descrição e binário; `instancias`: corpo, pos, quat,
+peça) · `ligacoes` (cada cabo: âncora de saída e de chegada) · `eixos` (dobradiças, rolamentos, sem-fim com `razao` e
+`sentido`) · `rotores` (centro e sentido real) · `variantes` · `pecas` (fichas: nome, categoria, resumo,
+como_funciona, **porque** — porque é necessária ao projeto —, specs, fontes, `massa_medida_g`, `impressa`, `custo`) ·
+`passos` (montagem: título, texto, peças, ferragens contadas com o binário) · `impressas` («peça#inst» → STL `arquivo`,
+`massa_g`/`volume_cm3`/`tempo_h` medidos na geometria como num fatiador, `dims_mm` na mesa, `cabe_mesa` (220 × 220 ×
+250 mm), `fechada`, `copias` iguais) · `impressao` (mesa e definições) · `custos` (US$ e R$ ao câmbio da pesquisa, por
+peça e por categoria; as compras sem peça desenhada vêm como fichas `sem_modelo`) · `bielas` (os ombros de fuso:
+`h`, `a`, `b`, `passo` — a geometria do catálogo, a mesma da física). A página é a do DRONE: a carga útil do topo não
+entra (nem geoms, nem fichas, nem textos — `teste_pecas3d.py` §1b).
+
+A página: lista por categoria → ficha (só a peça / no drone / cada unidade) · Montagem passo a passo (só o que já
+está montado, com o que entra agora em destaque) · Ferragens (todas, com quantidades e binários; cada tipo inteiro em
+3D) · **Imprimir e custos** (o custo de referência de tudo, por categoria e por peça, e as peças em ABS com o STL de
+cada uma, «imprimir N×», g/h por unidade e o ZIP com todas) · no visor: vista explodida, ombros e cotovelos (rodam como
+no MuJoCo; no ombro de fuso o atuador roda no seu pivô, o fuso gira e a porca acompanha a alavanca), hélices a girar no
+sentido real, clique para escolher uma peça. Provas: `teste_pecas3d.py` (página, STL, biela) e `teste_ombro_fuso.py`
+(física do ombro de fuso).
 
 ---
 

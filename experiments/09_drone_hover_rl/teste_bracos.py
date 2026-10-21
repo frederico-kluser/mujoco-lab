@@ -511,7 +511,9 @@ def checa_cockpit(c: Checagens) -> None:
     hw_pol = sim_site.hardware_do_modelo(modelo)
     c.ok("[§9] o cockpit voa POR OMISSÃO o drone com braços (pedido do dono): sem --build → articulado; `--build politica` "
          "→ o build da política (rígido); com uma política do cf2 (sem hardware.json) não há build",
-         sim_site.resolver_build(None, hw_pol) == BUILD and sim_site.resolver_build("politica", hw_pol) is None
+         sim_site.resolver_build(None, hw_pol) == sim_site.BUILD_COCKPIT_OMISSAO
+         and dr.hardware(sim_site.BUILD_COCKPIT_OMISSAO).bracos is not None
+         and sim_site.resolver_build("politica", hw_pol) is None
          and sim_site.resolver_build("endurance_15pol_p50b", hw_pol) == "endurance_15pol_p50b"
          and sim_site.resolver_build(None, None) is None,
          f"omissão → {sim_site.resolver_build(None, hw_pol)} · politica → {sim_site.resolver_build('politica', hw_pol)}")

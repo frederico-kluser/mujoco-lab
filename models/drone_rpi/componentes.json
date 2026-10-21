@@ -305,7 +305,19 @@
           "torque_nm": 0.27,
           "empuxo_g": 1295
         }
-      ]
+      ],
+      "altura_corpo_mm": 19.0,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        3.0,
+        6.0
+      ],
+      "cabo_mm": 50,
+      "cabo_tipo": "fio esmaltado (série Antigravity)",
+      "montagem_base": "4 × M3 no Ø25 (rosca útil 2,3 mm na base)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø3 × 6 (T-mount: 2 × M3×10)",
+      "acabamento": "alumínio anodizado preto; anel de aço preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn4004-motor-3d-model.step"
     },
     "tmotor_mn4004_kv400": {
       "fabricante": "T-Motor",
@@ -376,7 +388,19 @@
           "empuxo_g": 1521,
           "torque_nm": 0.24
         }
-      ]
+      ],
+      "altura_corpo_mm": 19.0,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        3.0,
+        6.0
+      ],
+      "cabo_mm": 50,
+      "cabo_tipo": "fio esmaltado (série Antigravity)",
+      "montagem_base": "4 × M3 no Ø25 (rosca útil 2,3 mm na base)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø3 × 6 (T-mount: 2 × M3×10)",
+      "acabamento": "alumínio anodizado preto; anel de aço preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn4004-motor-3d-model.step"
     },
     "tmotor_mn4006_kv380": {
       "fabricante": "T-Motor",
@@ -621,7 +645,19 @@
           "torque_nm": 0.2641,
           "independente": true
         }
-      ]
+      ],
+      "altura_corpo_mm": 21.0,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        3.0,
+        5.8
+      ],
+      "cabo_mm": 50,
+      "cabo_tipo": "fio esmaltado («Lead: Enameled Wire 50mm», MN4006 EVO)",
+      "montagem_base": "4 × M3 no Ø25 (rosca útil 2,3 mm na base)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø3 × 5,8",
+      "acabamento": "alumínio anodizado preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn4006-motor-3d-model.step"
     },
     "tmotor_mn2806_kv400": {
       "fabricante": "T-Motor",
@@ -855,7 +891,20 @@
           "empuxo_g": 531,
           "torque_nm": 0.09
         }
-      ]
+      ],
+      "altura_corpo_mm": 18.4,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        4.0,
+        5.5
+      ],
+      "cabo_mm": 50,
+      "cabo_tipo": "«Enameled Wire 50mm», saída lateral-baixo (entalhe da base)",
+      "montagem_base": "2 × M3 no Ø25 + 2 × M3 no Ø19 (rosca útil 2,3 mm)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø4 × 5,5",
+      "acabamento": "alumínio anodizado preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn2806-motor-3d-model.step",
+      "nota_altura": "a ficha (Φ35×26) conta o veio: corpo 18,4 + 5,5 por cima + 2,1 por baixo (STEP)"
     },
     "tmotor_mn2806_kv650": {
       "fabricante": "T-Motor",
@@ -906,7 +955,20 @@
           "torque_nm": 0.06,
           "empuxo_g": 361
         }
-      ]
+      ],
+      "altura_corpo_mm": 18.4,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        4.0,
+        5.5
+      ],
+      "cabo_mm": 50,
+      "cabo_tipo": "«Enameled Wire 50mm», saída lateral-baixo (entalhe da base)",
+      "montagem_base": "2 × M3 no Ø25 + 2 × M3 no Ø19 (rosca útil 2,3 mm)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø4 × 5,5",
+      "acabamento": "alumínio anodizado preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn2806-motor-3d-model.step",
+      "nota_altura": "a ficha (Φ35×26) conta o veio: corpo 18,4 + 5,5 por cima + 2,1 por baixo (STEP)"
     },
     "tmotor_mn5006_kv450": {
       "fabricante": "T-Motor",
@@ -997,7 +1059,20 @@
           "empuxo_g": 3218,
           "torque_nm": 0.59
         }
-      ]
+      ],
+      "altura_corpo_mm": 25.0,
+      "eixo_mm": 6.0,
+      "pino_mm": [
+        4.0,
+        4.9
+      ],
+      "cabo_mm": 80,
+      "cabo_tipo": "«Lead Cable 80mm» (loja T-Motor; o rcdrone diz 60 mm)",
+      "montagem_base": "4 × M3 no Ø25 (base em cruz, rosca útil 3,5 mm)",
+      "montagem_helice": "4 × M3 no Ø12 + 4 × M3 no Ø18 + pino Ø4 × 4,9",
+      "acabamento": "alumínio anodizado preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn5006-motor-3d-model.step",
+      "nota_altura": "a ficha (Φ55,6×30) conta o pino do veio: corpo 25,0 + pino 4,9 (STEP)"
     },
     "ref_2306_2450kv": {
       "fabricante": "genérico (classe 2306 FPV)",
@@ -1016,7 +1091,20 @@
       "fontes": [
         "plano-drone-real.md §6 P0 (T-Motor F40 Pro V 2306 ≈ 1,2 kgf/motor a 4S)"
       ],
-      "nota": "Só para comparar com o quad 5″ do plano; R/I₀ típicos da classe, não verificados nesta pesquisa."
+      "nota": "Só para comparar com o quad 5″ do plano; R/I₀ típicos da classe, não verificados nesta pesquisa.",
+      "altura_corpo_mm": 16.5,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        5.0,
+        13.0
+      ],
+      "cabo_mm": 100,
+      "cabo_tipo": "silicone 18 AWG (classe F40 PRO)",
+      "montagem_base": "4 × M3 16 × 16",
+      "montagem_helice": "perno M5 + porca autoblocante",
+      "acabamento": "sino anodizado preto (genérico)",
+      "modelo_3d": null,
+      "nota_altura": "classe T-Motor F40 PRO: 27,9 × 16,5 mm (dronehitech); o catálogo (28 × 18) é estimado"
     },
     "tmotor_mn5006_kv300": {
       "fabricante": "T-Motor",
@@ -1079,7 +1167,20 @@
           "empuxo_g": 2996,
           "torque_nm": 0.63
         }
-      ]
+      ],
+      "altura_corpo_mm": 25.0,
+      "eixo_mm": 6.0,
+      "pino_mm": [
+        4.0,
+        4.9
+      ],
+      "cabo_mm": 80,
+      "cabo_tipo": "«Lead Cable 80mm» (loja T-Motor)",
+      "montagem_base": "4 × M3 no Ø25 (base em cruz, rosca útil 3,5 mm)",
+      "montagem_helice": "4 × M3 no Ø12 + 4 × M3 no Ø18 + pino Ø4 × 4,9",
+      "acabamento": "alumínio anodizado preto; bobinas de cobre à vista",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn5006-motor-3d-model.step",
+      "nota_altura": "a ficha (Φ55,6×30) conta o pino do veio: corpo 25,0 + pino 4,9 (STEP)"
     },
     "tmotor_mn3508_kv380": {
       "fabricante": "T-Motor",
@@ -1146,7 +1247,19 @@
           "rpm": 4500,
           "empuxo_g": 1100
         }
-      ]
+      ],
+      "altura_corpo_mm": 26.5,
+      "eixo_mm": 4.0,
+      "pino_mm": [
+        4.0,
+        6.1
+      ],
+      "cabo_mm": 600,
+      "cabo_tipo": "silicone 18 AWG",
+      "montagem_base": "4 × M3 no Ø25 (rosca útil 2,6 mm)",
+      "montagem_helice": "4 × M3 no Ø12 + pino Ø4 × 6,1 (adaptador M6 incluído)",
+      "acabamento": "alumínio anodizado PRATA (série Navigator: «silver housing»)",
+      "modelo_3d": "https://cn.tmotor.com/uploadfile/downloads/tmotor-mn3508-motor-3d-model.step"
     }
   },
   "helices": {
@@ -1197,7 +1310,15 @@
       "fontes": [
         "https://store.tmotor.com/product/polish-carbon-fiber-15x5-prop.html"
       ],
-      "nota": "Ótimo 5200-7000 rpm (fabricante); a NS15x5 ultraleve pesa 13 g mas não tem tabela de ensaio com estes motores."
+      "nota": "Ótimo 5200-7000 rpm (fabricante); a NS15x5 ultraleve pesa 13 g mas não tem tabela de ensaio com estes motores.",
+      "cubo_mm": [
+        22.0,
+        6.0
+      ],
+      "montagem": "T-mount: furo Ø6 + 2 × Ø3 a 12 mm; 2 × M3×10, tampa e anel de latão",
+      "acabamento": "carbono 3K polido, estampagem branca",
+      "fonte_montagem": "https://www.facebook.com/groups/1737736206469442/posts/3016248608618189",
+      "nota_cubo": "Ø e espessura do cubo ESTIMADOS (6 mm fecha com o pino de 6 mm do MN4004 e os M3×10)"
     },
     "tmotor_p16x5_4": {
       "fabricante": "T-Motor",
@@ -1341,16 +1462,23 @@
       "ciclos_80": 750,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        21.7,
-        70.2
+        21.4,
+        70.0
       ],
       "confianca": "medido (massa, DCIR a 50 % SoC: About:Energy 2024) + fabricante (ciclos)",
       "fontes": [
         "https://www.aboutenergy.io/post/molicel-p50b-vs-p45b-battery-performance",
-        "https://www.e-cigarette-forum.com/threads/bench-test-results-molicel-p50b-60a-5000mah-21700.986092"
+        "https://www.e-cigarette-forum.com/threads/bench-test-results-molicel-p50b-60a-5000mah-21700.986092",
+        "https://www.molicel.com/wp-content/uploads/Product-Data-Sheet-of-INR-21700-P50B-80122.pdf",
+        "https://www.dnkpower.com/wp-content/uploads/2024/11/Molicel-INR21700P50B.pdf"
       ],
       "nota": "Fabricante: 265 Wh/kg, DCIR máx 12,8 mΩ, 60 A com corte térmico a 80 °C (não é contínuo até 2,5 V — Mooch); usa-se o DCIR MEDIDO (15 mΩ) e 45 A. Ciclos: About:Energy mede até +50 % de ciclos face ao P45B (500+) → 750.",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_max_mm": [
+        21.55,
+        70.15
+      ],
+      "dims_nota": "dims: NOMINAL 21,40 ± 0,15 × 70,00 ± 0,15 mm (spec v0.1); envelope máx. 21,55 × 70,15 (ficha 80122) — fabricante (2026-10-20; antes 21,7 × 70,2, o envelope genérico antigo)"
     },
     "molicel_p45b": {
       "fabricante": "Molicel",
@@ -1366,15 +1494,21 @@
       "ciclos_80": 500,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        21.7,
-        70.2
+        21.55,
+        70.15
       ],
       "confianca": "medido (massa 66,0 g, DCIR 15 mΩ: About:Energy; ~35 A contínuos reais: Mooch) + fabricante (500+ ciclos)",
       "fontes": [
         "https://www.aboutenergy.io/post/molicel-p50b-vs-p45b-battery-performance",
-        "https://budgetlightforum.com/t/bench-test-results-molicel-p45b-50a-4500mah-21700/70213"
+        "https://budgetlightforum.com/t/bench-test-results-molicel-p45b-50a-4500mah-21700/70213",
+        "https://www.molicel.com/wp-content/uploads/INR21700P45B_1.2_Product-Data-Sheet-of-INR-21700-P45B-80109.pdf"
       ],
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_max_mm": [
+        21.55,
+        70.15
+      ],
+      "dims_nota": "dims: só o máximo é publicado (21,55 × 70,15 mm, ficha v1.2) — usa-se como medida da malha (2026-10-20; antes 21,7 × 70,2)"
     },
     "lg_m50lt": {
       "fabricante": "LG Energy Solution",
@@ -1391,14 +1525,20 @@
       "c_ref_ciclos": 0.5,
       "dims_mm": [
         21.1,
-        70.15
+        70.5
       ],
       "confianca": "fabricante (capacidade, massa, corrente, ciclos); DCIR ESTIMADO (não publicado)",
       "fontes": [
-        "https://f.hubspotusercontent10.net/hubfs/6584819/Cell%20Spec%20Sheets/LG/Lithium%20Ion%20LG%20INR%2021700%20M50LT%202021-LSD-MBD-b00002_21700_M50LT_PS_Promotion_V1.pdf"
+        "https://f.hubspotusercontent10.net/hubfs/6584819/Cell%20Spec%20Sheets/LG/Lithium%20Ion%20LG%20INR%2021700%20M50LT%202021-LSD-MBD-b00002_21700_M50LT_PS_Promotion_V1.pdf",
+        "https://lygte-info.dk/review/batteries2012/LG%2021700%20M50T%205000mAh%20(Gray)%20UK.html"
       ],
       "nota": "Corrente máxima depende da temperatura: 14,4 A só a 10-25 °C, 7,2 A a 25-55 °C (usa-se 7,2 A). 1000 ciclos ≥80 % da energia numa janela reduzida (4,1-2,85 V, 0,3C/0,5C). Abaixo de ~7 A por célula dura mais que o P50B (Mooch).",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_max_mm": [
+        21.44,
+        70.65
+      ],
+      "dims_nota": "dims: máx. Ø ≤ 21,44 (a 4 mm do topo) × H ≤ 70,65 mm (spec LG); nominal 21,1 × 70,5 = o M50T medido pelo HKJ — fórum (2026-10-20; antes 21,1 × 70,15, valor sem fonte)"
     },
     "samsung_50e": {
       "fabricante": "Samsung SDI",
@@ -1414,8 +1554,8 @@
       "ciclos_80": 500,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        21.25,
-        70.8
+        21.1,
+        70.6
       ],
       "confianca": "fabricante (spec V1.0 2018) + medido (HKJ); DCIR ESTIMADO",
       "fontes": [
@@ -1423,7 +1563,12 @@
         "https://lygte-info.dk/review/batteries2012/Samsung%20INR21700-50E%205000mAh%20(Cyan)%20UK.html"
       ],
       "nota": "'Não gosta de corrente alta' (HKJ): célula de energia para ~3-5 A por célula em pairagem.",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_max_mm": [
+        21.25,
+        70.8
+      ],
+      "dims_nota": "dims: medido 21,1 × 70,6 (HKJ); envelope máx. 21,25 × 70,80 com manga (spec V1.0) (2026-10-20)"
     },
     "amprius_sa102": {
       "fabricante": "Amprius",
@@ -1439,16 +1584,22 @@
       "ciclos_80": 150,
       "c_ref_ciclos": 0.2,
       "dims_mm": [
-        80,
-        50,
-        6
+        56.5,
+        49.5,
+        5.5
       ],
       "confianca": "fabricante (PRELIMINARY); DCIR estimado (publicado só ACIR ≤30 mΩ a 1 kHz); dimensões estimadas",
       "fontes": [
         "https://amprius.com/documents/Amprius_Product_Catalog.pdf"
       ],
       "nota": "450 Wh/kg mas só 1C contínuo e 150 ciclos; exige compressão externa de 30 PSI. Montar em paralelo (xP) para a corrente de pairagem.",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_max_mm": [
+        58.0,
+        51.0,
+        5.9
+      ],
+      "dims_nota": "dims: L1 56,5 ± 1,5 (com abas; corpo L2 53,0) × W1 49,5 ± 1,5 × T1 5,5 ± 0,4 mm a 30 % SoC — fabricante (TDS AMP-TDS-SA102-P5) (2026-10-20; antes 80 × 50 × 6 estimado)"
     },
     "tattu_semisolido_12ah": {
       "fabricante": "Tattu (Grepow)",
@@ -1465,9 +1616,9 @@
       "ciclos_80": 300,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        194,
-        71,
-        5.3
+        180.0,
+        70.0,
+        5.2
       ],
       "confianca": "fabricante (sem medição independente); R ≤7 mΩ sem dizer se é por célula — usa-se por célula (conservador)",
       "fontes": [
@@ -1475,7 +1626,8 @@
         "http://www.grepow.com/semi-solid-state-battery/350wh-kg-series-high-energy-density-battery-pack.html"
       ],
       "nota": "Pack 6S: 266,4 Wh, 800 g (≈333 Wh/kg ao nível do pack), 194×71×32 mm, 36 A (3C) contínuos, >300 ciclos ≥80 %. Tensão de pouso 2,88 V/célula (Grepow 'land-off'). Ânodo Si-C + NMC alto níquel: usa-se a curva OCV Li-ion.",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_nota": "dims: ESTIMADAS — 194 × 71 é o PACK (32/6 = 5,33 mm por célula com invólucro); corpo da célula ≈ 180 × 70 × 5,2 (2026-10-20)"
     },
     "tattu_gtech_10ah": {
       "fabricante": "Tattu (Grepow)",
@@ -1491,16 +1643,17 @@
       "ciclos_80": 300,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        169,
-        65,
-        9.75
+        157.0,
+        63.0,
+        9.6
       ],
       "confianca": "fabricante (capacidade, massa, C); R e ciclos ESTIMADOS (não publicados)",
       "fontes": [
         "https://www.grepow.com/uav-battery/tattu-4s-10000mah-14-8v-25c-lipo-drone-battery.html"
       ],
       "nota": "Pack 4S: 940 g ±20 g, 148 Wh (≈157 Wh/kg), 169×65×39 mm.",
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_nota": "dims: ESTIMADAS — 169 × 65 × 39 é o PACK (39/4 = 9,75 por célula com invólucro); corpo ≈ 157 × 63 × 9,6 (2026-10-20)"
     },
     "gensace_5ah_45c": {
       "fabricante": "Gens Ace",
@@ -1516,15 +1669,17 @@
       "ciclos_80": 150,
       "c_ref_ciclos": 1.0,
       "dims_mm": [
-        140,
-        45,
-        9
+        148.0,
+        45.0,
+        7.2
       ],
       "confianca": "fabricante (massa 480 g/pack, 45C, 'pelo menos 150 ciclos'); R ESTIMADO; dimensões estimadas",
       "fontes": [
-        "https://genstattu.com/gens-ace-5000mah-4s-45c-14-8v-lipo-battery-pack-with-dean-plug"
+        "https://genstattu.com/gens-ace-5000mah-4s-45c-14-8v-lipo-battery-pack-with-dean-plug",
+        "https://genstattu.com/gens-ace-5000mah-6s-45c-22-2v-g-tech-lipo-battery-pack-with-ec5-plug"
       ],
-      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir"
+      "verificacao": "fonte única: NÃO confirmada pela verificação adversarial da pesquisa de 2026-10-10 (nenhuma alegação de células/packs passou 2/3) — usar com cautela e medir",
+      "dims_nota": "dims: ESTIMADAS da caixa do pack (4S 158 × 46 × 31 → 7,75 mm/célula; 6S 157 × 46 × 44 → 7,33) menos invólucro, espuma e zona das abas: corpo ≈ 148 × 45 × 7,2 (2026-10-20; antes 140 × 45 × 9)"
     },
     "lipo_1500_4s_cell": {
       "fabricante": "genérico",
@@ -1560,6 +1715,8 @@
       "massa_pernas_g": 50,
       "altura_pernas_mm": 120,
       "perda_download": 0.05,
+      "esc_no_braco_mm": 220.0,
+      "esc_no_braco_nota": "Centro de cada ESC (1 por braço) a 220 mm do centro, deitado em cima do tubo e preso a ele por 2 abraçadeiras, como num X500 real: é o primeiro troço livre de tubo depois da placa (aresta a 130,2 mm), da abraçadeira do canto (até 161,8 mm) e da perna (abraçadeira de 167,7 a 189,8 mm) — o termorretrátil começa 2,4 mm depois da abraçadeira da perna e as saídas das fases acabam 2,7 mm antes das balas do motor (254,2 mm). A 0,45 do braço (146 mm, o valor sem este campo) o ESC caía no canto da placa, 2 mm por cima das abraçadeiras do canto e da perna. Fica debaixo do disco da hélice: o condensador vai ao lado do ESC (pás a ≥ 4,3 mm do topo). Medido na geometria 3D (detalhes/eletronica), 2026-10-20.",
       "confianca": "estimado por densidade do material (carbono 1,55 g/cm³): 4 braços 16×14 mm × 280 mm = 82 g, 2 placas 130×130×1,5 mm = 78 g, 4 abraçadeiras 32 g, 4 suportes de motor 28 g, parafusos 15 g; pernas de tubo 10 mm 50 g",
       "fontes": [
         "https://discuss.ardupilot.org/t/how-to-build-a-1-hour-250g-ardupilot-quadcopter/115400",
@@ -1596,6 +1753,8 @@
       "massa_pernas_g": 0,
       "altura_pernas_mm": 200,
       "perda_download": 0.07,
+      "esc_no_braco_mm": 220.0,
+      "esc_no_braco_nota": "Centro de cada ESC (1 por braço) a 220 mm do centro, deitado em cima do tubo e preso a ele por 2 abraçadeiras: é o primeiro troço livre de tubo depois da placa (aresta a 130,2 mm), da abraçadeira do canto (até 161,8 mm) e da perna (abraçadeira de 167,7 a 189,8 mm) — o termorretrátil começa 2,4 mm depois da abraçadeira da perna e as saídas das fases acabam 2,7 mm antes das balas do motor (254,2 mm). A 0,45 do braço (146 mm, o valor sem este campo) o ESC caía no canto da placa, 2 mm por cima das abraçadeiras do canto e da perna. Fica debaixo do disco da hélice: o condensador vai ao lado do ESC (pás a ≥ 6,5 mm do topo). Medido na geometria 3D (detalhes/eletronica), 2026-10-20.",
       "confianca": "fabricante/revendedor (massa líquida 0,75 kg; uma loja dá 600 mm de 'wheelbase diameter')",
       "fontes": [
         "https://www.readymaderc.com/products/details/86704-tarot-tl65s01-650-sport-carbon-quad-frame-w-retracting-gear"
@@ -1610,6 +1769,8 @@
       "massa_pernas_g": 0,
       "altura_pernas_mm": 215,
       "perda_download": 0.07,
+      "esc_no_braco_mm": 178.7,
+      "esc_no_braco_nota": "Centro de cada ESC (1 por braço) a 178,7 mm do centro, deitado em cima do tubo e preso a ele por 2 abraçadeiras, como no X500 real (ESC presos aos braços): é o primeiro troço livre de tubo depois da placa (aresta a 100,1 mm), da abraçadeira do canto (até 120,5 mm) e da perna (abraçadeira de 126,5 a 148,5 mm) — o termorretrátil começa 2,4 mm depois da abraçadeira da perna e as saídas das fases acabam 5,7 mm antes da abraçadeira do motor (215,9 mm). A 0,45 do braço (112,5 mm, o valor sem este campo) o ESC caía no canto da placa, em cima das maxilas e por baixo da placa de cima (os M3 das maxilas e o das colunas davam no ESC). Fica debaixo do disco da hélice: o condensador vai ao lado do ESC (pás a ≥ 3,8 mm do topo). Medido na geometria 3D (detalhes/eletronica), 2026-10-20.",
       "confianca": "fabricante (610 g, 500 mm, trem 215 mm); hélice máx. pela geometria (354 mm entre eixos vizinhos)",
       "fontes": [
         "https://holybro.com/products/x500-v2-kits"
@@ -1638,10 +1799,27 @@
       "massa_pernas_g": 55,
       "altura_pernas_mm": 130,
       "perda_download": 0.05,
+      "esc_no_braco_mm": 247.5,
+      "esc_no_braco_nota": "Centro de cada ESC (1 por braço) a 247,5 mm do centro, deitado em cima do tubo e preso a ele por 2 abraçadeiras, como num X500 real: é o primeiro troço livre de tubo depois da placa (aresta a 150,2 mm), da abraçadeira do canto (até 188,6 mm) e da perna (abraçadeira de 195,2 a 217,3 mm) — o termorretrátil começa 2,4 mm depois da abraçadeira da perna e as saídas das fases acabam 11,2 mm antes das balas do motor (290,2 mm, MN5006). A 0,45 do braço (168,75 mm, o valor sem este campo) o ESC caía no canto da placa, 2 mm por cima das abraçadeiras do canto e da perna. Fica debaixo do disco da hélice: o condensador vai ao lado do ESC (pás a ≥ 10,4 mm do topo). Medido na geometria 3D (detalhes/eletronica), 2026-10-20.",
       "confianca": "estimado por densidade do material (o de 650 mm + 2 × 50 mm de tubo por braço)",
       "fontes": [
         "https://rotorcraft.arc.nasa.gov/Publications/files/72-2016-374.pdf"
       ]
+    },
+    "diy_tubo_carbono_1950_abs": {
+      "fabricante": "DIY (impresso em ABS)",
+      "modelo": "X 1950 mm: tubos de carbono 25×23 mm + PEÇAS IMPRESSAS em ABS (placas nervuradas, abraçadeiras, suportes dos motores, trem de pouso, bandejas)",
+      "wheelbase_mm": 1950,
+      "placa_mm": 208,
+      "massa_g": 537.0,
+      "helice_max_pol": 16,
+      "massa_pernas_g": 112.6,
+      "altura_pernas_mm": 120,
+      "perda_download": 0.05,
+      "confianca": "medido na geometria (lab/drone_rpi/detalhes/massas.py, 2026-10-20)",
+      "fontes": [],
+      "nota": "Versão ACESSÍVEL do frame 1950 (2026-10-20): o que pode ser IMPRESSO em ABS (o plástico das peças LEGO) é impresso; ficam compradas só as peças em que o plástico não chega — os tubos de carbono dos braços (um tubo de ABS de 25 mm dobraria ~35× mais: E 2 GPa contra ~70 GPa), as ferragens de aço e os rolamentos. Massas finais medidas na geometria (massas.py).",
+      "material_impresso": "ABS"
     }
   },
   "esc": {
@@ -2004,6 +2182,26 @@
         "https://store-usa.arduino.cc/products/arduino-due-without-headers",
         "pesquisas/2026-10-12-para-um-quadricoptero-grande-1-95-m-entre-eixos-helices-15-p.md (Q5, Q5.1, Q6.1)"
       ]
+    },
+    "pico2_bracos": {
+      "nome": "2 × Raspberry Pi Pico 2 (RP2350) — controladores dos braços (um por lado)",
+      "massa_g": 6.0,
+      "potencia_w": {
+        "repouso": 0.16,
+        "voo": 0.2,
+        "pico": 0.3
+      },
+      "dims_mm": [
+        51,
+        21,
+        3.9
+      ],
+      "quantidade": 2,
+      "confianca": "ficha (Raspberry Pi Pico 2: 51 × 21 mm, ~3 g; RP2350 a 3,3 V ~20–30 mA cada) — potência estimada",
+      "fontes": [
+        "https://datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf"
+      ],
+      "nota": "O FC não tem entradas para 4 encoders Hall, 4 AS5048A (SPI) e 4 AS5600 (I²C, todos no endereço 0x36) nem saídas PWM para 4 DRV8871 (2 cada) + 4 servos: cada Pico serve os 2 braços do seu lado — 4 PWM dos drivers, 2 PWM dos servos, 4 entradas dos encoders Hall (PIO em quadratura), SPI com 2 CS para os AS5048A, os 2 AS5600 nos 2 barramentos I²C (I²C0 e I²C1, sem multiplexador) e UART ao FC (21 GPIO de 26). É lá que corre a malha de posição dos ombros (banda morta, PWM mínimo, proteção de bloqueio, trava dos ombros)."
     }
   },
   "sensores": {
@@ -2134,6 +2332,21 @@
         "https://www.mouser.com/datasheet/2/588/AS5048_DS000298_4-00-1100510.pdf"
       ],
       "nota": "Mede o ângulo REAL do braço no eixo do ombro (depois da folga do sem-fim) — é este o valor que entra na observação e na cinemática; o encoder interno do servo fica para o laço de posição do próprio servo."
+    },
+    "ams_as5600": {
+      "fabricante": "ams OSRAM",
+      "modelo": "AS5600 (encoder magnético absoluto de 12 bits, I²C/PWM)",
+      "tipo": "encoder",
+      "bits": 12,
+      "resolucao_graus": 0.0879,
+      "precisao_graus": 0.5,
+      "massa_g": 1.5,
+      "potencia_w": 0.03,
+      "confianca": "fabricante (12 bits = 0,088°/LSB) + estimado (precisão de sistema ±0,5° sem linearização)",
+      "fontes": [
+        "https://ams-osram.com/products/sensor-solutions/position-sensors/ams-as5600-position-sensor"
+      ],
+      "nota": "Mede o ângulo REAL do cotovelo (o DS3218 não devolve a posição): íman diametral na ponta do parafuso M8 do lado do rolamento."
     }
   },
   "cameras": {
@@ -2823,6 +3036,83 @@
         "https://www.robotshop.com/products/robotis-dynamixel-xh540-v270-r-smart-servo-actuator"
       ],
       "nota": "Comparação para o OMBRO sem sem-fim: o momento do empuxo em pairagem (~6,4 N·m no build articulado) é 70 % do bloqueio — 3,5× o contínuo de 1,84 N·m (aquecia e gastava ~10 W por braço só para segurar). Por isso o ombro usa a V210 com um sem-fim autobloqueante."
+    },
+    "servo_ds3218mg_270": {
+      "fabricante": "DSSERVO",
+      "modelo": "DS3218MG (270°, engrenagens metálicas, 20 kg·cm)",
+      "tipo": "servo_pwm",
+      "tensao_v": 6.0,
+      "binario_bloqueio_nm": 2.0,
+      "corrente_bloqueio_a": 2.2,
+      "velocidade_vazio_rpm": 67.0,
+      "reducao_interna": 275.0,
+      "resolucao_pulsos_volta": 1200,
+      "folga_graus": 0.5,
+      "massa_g": 60.0,
+      "dims_mm": [
+        20.0,
+        40.5,
+        40.0
+      ],
+      "corrente_espera_a": 0.01,
+      "fracao_binario_continuo": 0.2,
+      "inercia_rotor_kgm2": 3e-07,
+      "atrito_saida_nm": 0.05,
+      "barramento": "PWM 50–333 Hz (500–2500 µs) do FC; o ângulo REAL vem de um AS5600 no eixo do cotovelo",
+      "confianca": "estimado (preliminar 2026-10-20 — afinado pela pesquisa pesquisas/2026-10-20-materiais-acessiveis-precos.md e pela massa medida na geometria: lab/drone_rpi/detalhes/massas.py)",
+      "fontes": [],
+      "nota": "O cotovelo só segura o mastro (o empuxo passa pelo eixo): < 0,5 N·m — um servo de passatempo de 20 kg·cm (~12 USD) chega com folga; o lado oposto do garfo roda num rolamento 608ZZ com um parafuso M8.",
+      "nota_tensao": "a 6,0 V do UBEC Hobbywing 10A V2 (o DS3218MG é dado até 6,8 V): 19 kg·cm a 5 V e 21,5 a 6,8 V ⇒ ~20,4 kg·cm = 2,0 N·m; 0,16 → 0,14 s/60° ⇒ ~0,149 s/60° = 67 rpm (interpolado)"
+    },
+    "motorredutor_jgb37_520_12v_1_18_8_enc": {
+      "fabricante": "genérico (classe JGB37-520)",
+      "modelo": "motorredutor DC JGB37-520 12 V (enrolamento rápido) 1:18,8 com encoder Hall",
+      "tipo": "motorredutor_dc",
+      "tensao_v": 12.0,
+      "binario_bloqueio_nm": 0.255,
+      "corrente_bloqueio_a": 2.4,
+      "velocidade_vazio_rpm": 530.0,
+      "reducao_interna": 18.8,
+      "resolucao_pulsos_volta": 827,
+      "folga_graus": 1.0,
+      "massa_g": 155.0,
+      "dims_mm": [
+        37.0,
+        37.0,
+        53.0
+      ],
+      "veio": {
+        "diametro_mm": 6.0,
+        "comprimento_mm": 15.0,
+        "corte_d_mm": 11.5,
+        "excentrico": true,
+        "desvio_mm": null,
+        "nota": "o veio sai fora do centro do redutor; o desvio não foi encontrado nas fichas"
+      },
+      "redutor_mm": {
+        "diametro": 37.0,
+        "comprimento": 21.0
+      },
+      "motor_mm": {
+        "diametro": 33.0,
+        "comprimento": 22.7
+      },
+      "face": "6 × M3 roscados em círculo (Ø do círculo não publicado), face Ø31 com ressalto Ø12",
+      "conector": "PH2.0-6P / XH2.54-6P (M+, M−, GND, VCC, A, B)",
+      "corrente_espera_a": 0.01,
+      "fracao_binario_continuo": 0.33,
+      "inercia_rotor_kgm2": 2e-06,
+      "atrito_saida_nm": 0.01,
+      "barramento": "PWM do FC por um driver DRV8871 (limite de corrente 64/27 kΩ = 2,37 A) a partir de um buck de 12 V + encoder Hall de 11 PPR no motor (×4 em quadratura × 18,8 = 827 impulsos por volta do fuso); o ângulo do braço vem do AS5048A",
+      "confianca": "M — fichas de loja; as fontes divergem até ~40 % no bloqueio (usa-se a mais baixa: 2,6 kg·cm). Pesquisa 2026-10-20: pesquisas/2026-10-20-materiais-acessiveis-precos.md §fuso",
+      "fontes": [
+        "https://precisionminidrives.com/product/37mm-gear-motor-with-encoder-41mm-type-model-nfp-jgb37-520-en",
+        "https://www.openimpulse.com/blog/jgb37-520-gearmotor-selector",
+        "https://www.hiwonder.com/products/hall-encoder-dc-geared-motor",
+        "https://nfpmotor.com/37mm-metal-gear-motor-model-nfp-gm37-520-en",
+        "https://www.robotshop.com/products/aslong-motor-37mm-diameter-12v-200rpm-brushed-dc-gear-motor-w-encoder"
+      ],
+      "nota": "Roda o FUSO Tr8×2 do ombro (acoplamento flexível 6 → 8 mm). Porquê este: a 2 mm por volta o fuso precisa de ~350–500 rpm com 0,1 N·m para o braço subir ~11 °/s com a carga de pairagem — o 25GA-370 (~2 W) e o JGB37-520 de 24 V (~1 W) não chegam; o enrolamento rápido de 12 V a 1:18,8 dá ~3,5 W."
     }
   },
   "mecanismos_braco": {
@@ -2894,6 +3184,125 @@
         "https://ui.adsabs.harvard.edu/abs/2015ITCST..23..540R/abstract"
       ],
       "nota": "Porquê servos e não motor de passo: um passo em malha aberta perde passos sem dar por isso com o soco do recuo e a vibração, e gasta corrente plena para SEGURAR; o servo tem encoder absoluto e PID próprio. Porquê o sem-fim no ombro: o empuxo de pairagem faz ~6 N·m no ombro — o sem-fim autobloqueante segura-o sem corrente; o cotovelo, com o empuxo a passar pelo eixo, só sente o peso do mastro, o giroscópico e o arrasto (< 0,5 N·m)."
+    },
+    "ombro_fuso_impresso_cotovelo_servo": {
+      "nome": "Braços articulados ACESSÍVEIS (2 dobradiças por braço, 8 juntas): ombro com ATUADOR LINEAR DE FUSO Tr8×2 (motorredutor JGB37-520 + porca de latão, peças de eixo Z de impressora 3D) numa alavanca do cubo impresso em ABS; cotovelo com servo DS3218MG e rolamento 608ZZ",
+      "descricao": "Cada braço tem um OMBRO na placa (sobe/desce o braço) e um COTOVELO na ponta com um MASTRO vertical que leva o motor (o desenho do dono). Os 8 eixos são PARALELOS ao eixo de arfagem (y do corpo). Versão ACESSÍVEL (2026-10-20, pedido do dono: «mecanismo real e fácil de fazer», «materiais baratos, a maioria impresso em ABS»). O OMBRO é uma dobradiça simples (veio Ø8 em 2 × 608ZZ numa forquilha impressa) movida por um ATUADOR LINEAR: um motorredutor JGB37-520 roda um fuso trapezoidal Tr8×2 cuja porca de latão empurra a ALAVANCA do cubo do braço — o mesmo fuso e a mesma porca do eixo Z de uma impressora 3D. O fuso é autobloqueante: o empuxo não o faz rodar e segurar o braço não gasta corrente. Porque não o sem-fim: a pairar o ombro segura ~7,4 N·m (0,707 × 0,825 m × 12,7 N) e até ~19 N·m com o empuxo máximo — num par sem-fim de módulo 1 (coroa Ø30 × 8 mm) isso dá ~500 N no dente (σ ≈ 200 MPa): parte; no fuso a mesma carga é uma força axial de ~120–220 N na porca, que um Tr8 aguenta com folga.",
+      "eixo_juntas": "y",
+      "raio_ombro_mm": 150.0,
+      "folga_helice_mm": 40.0,
+      "ombro": {
+        "servo": "motorredutor_jgb37_520_12v_1_18_8_enc",
+        "tipo_reducao": "atuador linear: fuso trapezoidal Tr8×2 (1 entrada, passo 2 mm) + porca de latão de flange, acoplamento flexível 6→8 mm, bloco impresso com 2 × 608ZZ (aguentam o impulso axial); a biela empurra uma alavanca do cubo do braço (a redução varia com o ângulo: N(q) = 2π·L'(q)/p)",
+        "autobloqueante": true,
+        "folga_graus": 0.3,
+        "rigidez_nm_rad": 2500.0,
+        "amortecimento_nms_rad": 4.0,
+        "encoder": "ams_as5048a",
+        "massa_redutor_g": 158.0,
+        "limites_graus": [
+          -40.0,
+          40.0
+        ],
+        "fracao_velocidade_perfil": 0.9,
+        "ganhos_servo": {
+          "kp_duty_por_rad": 0.6,
+          "kd_duty_por_rad_s": 0.0,
+          "zona_morta_graus": 0.05,
+          "nota": "PID do FC sobre o ângulo do FUSO (encoder Hall): satura a ~1,7 rad de fuso (≈ 0,5° no braço); banda morta de 0,05° no braço (≈ 2× a resolução do AS5048A): lá dentro o DRV8871 fica em roda livre, a correção pelo AS5048A não acumula e o fuso autobloqueante segura. Fora da banda o PWM é pelo menos 0,6 — o que vence o arranque com o momento de pairagem (~7 N·m → 0,13 N·m no fuso ≈ 50 % do bloqueio): sem isto o motor ficava a empurrar sem andar com erros pequenos (corrente sem movimento). Proteção de BLOQUEIO: a empurrar sem andar 1,5 s (o DRV8871 limitado a 2,37 A dissipa ~2,6 W: perto do corte térmico — eletrónica, 2026-10-20), o FC desliga o driver 2 s e tenta outra vez.",
+          "corte_bloqueio_s": 1.5,
+          "pausa_bloqueio_s": 2.0,
+          "duty_minimo": 0.6
+        },
+        "fuso": {
+          "alavanca_mm": [
+            -50.0,
+            24.0,
+            0.0
+          ],
+          "base_mm": [
+            -38.1,
+            24.0,
+            75.1
+          ],
+          "passo_mm": 2.0,
+          "d_medio_mm": 7.0,
+          "meio_angulo_flanco_graus": 15.0,
+          "coef_atrito": 0.15,
+          "comprimento_fuso_mm": 150.0,
+          "cm_atuador_mm": -36.4,
+          "massa_atuador_g": 137.3,
+          "massa_carro_g": 30.2,
+          "nota": "GEOMETRIA DO DESENHO (estrutura, 2026-10-20) para o braço do quadrante (+x, +y), relativa ao eixo do ombro, junta a 0. Alavanca de 50 mm horizontal para DENTRO; atuador por cima, ~9° inclinado para o eixo (o ótimo do braço de alavanca: 38,2 mm mínimo, 50 máximo, L(q) monótono de 42,9 a 107,2 mm, curso 64,3 mm num fuso de 150); o plano do mecanismo fica 24 mm para fora da placa em y (a placa de baixo acaba em y = −2,1 do eixo, as cabeças dos parafusos de ombro do pivô A ficam a +2). B = pivô do corpo do atuador, NO EIXO do fuso, a meio do bloco dos 2 × 608ZZ; segura-o uma torre impressa na placa de cima. Massas (estimadas): fuso Tr8×2 150 mm 47 g + acoplamento 6→8 16 g + 2 colares Ø8 17 g + 2 × 608ZZ 26 g + bloco/campânula ABS 11 g (18,2 cm³ × 1,04 × 0,55) + pivô B (2 × ISO 7379 Ø5 + 2 × MR85ZZ + 2 insertos M4) 5 g = 122 g; carro = porca de latão 13 g + carro ABS 5 g + 4 × M3 e insertos 4 g + pivô A 3 g = 25 g. CM do corpo do atuador (motorredutor 155 g a +73 mm de B, para longe de A; acoplamento a +35; fuso centrado a −42; bloco a +12) ⇒ −36,4 mm ao longo de B→A."
+        }
+      },
+      "cotovelo": {
+        "servo": "servo_ds3218mg_270",
+        "reducao": 1.0,
+        "tipo_reducao": "direto (o servo é o pivô; o lado oposto roda num 608ZZ com parafuso M8)",
+        "autobloqueante": false,
+        "encoder": "ams_as5600",
+        "massa_redutor_g": 129.8,
+        "limites_graus": [
+          -60.0,
+          60.0
+        ],
+        "fracao_velocidade_perfil": 0.9
+      },
+      "mastro": {
+        "diametro_mm": 16.0,
+        "massa_g": 25.4
+      },
+      "massa_dobradica_g": 0.0,
+      "fonte_servos": {
+        "modelo": "2 × buck XL4016 12 V (um por par de ombros, por baixo da placa de baixo) + 4 × DRV8871 (ILIM 27 kΩ = 2,37 A) + UBEC Hobbywing 10A V2 a 6,0 V (servos dos cotovelos; aceita 6S)",
+        "tensao_v": 12.0,
+        "eficiencia": 0.9,
+        "massa_g": 201.9,
+        "massa_eletronica_g": 143.0,
+        "cm_mm": [
+          -16.0,
+          0.0,
+          -25.0
+        ],
+        "nota": "Massa REAL das peças compradas: 2 × 48 g (XL4016) + 34 g (UBEC) + 4 × 2,2 g (DRV8871) = 143 g; os suportes impressos somam-se pela geometria (`massas.py --atualizar-catalogo`). `cm_mm` = centro de massa no referencial do frame (centro da placa de baixo), medido no desenho da eletrónica (2026-10-20): é aí que o simulador põe a caixa física `fonte_servos`."
+      },
+      "barramento_hz": 200.0,
+      "ganhos_servo": {
+        "kp_duty_por_rad": 19.0,
+        "kd_duty_por_rad_s": 0.0
+      },
+      "confianca": "estimado (preliminar 2026-10-20 — afinado pela pesquisa pesquisas/2026-10-20-materiais-acessiveis-precos.md e pela massa medida na geometria: lab/drone_rpi/detalhes/massas.py)",
+      "estimado": {
+        "fuso": "Tr8×2: λ = atan(2/(π·7)) = 5,20°; μ = 0,15 (latão/aço lubrificado: 0,10–0,19) ⇒ φ' = atan(0,15/cos 15°) = 8,83° > λ ⇒ AUTOBLOQUEANTE (o mínimo é μ = 0,088: com óleo fino a margem é pequena — massa lubrificante); η = tan λ/tan(λ+φ') = 0,364. Alavanca de 60 mm (junta a 0): N = 2π·60/2 = 188; binário de bloqueio no braço = 0,255 × 188 × 0,364 ≈ 17,5 N·m (no fim do curso, braço efetivo ~34 mm: ~10 N·m — o momento de pairagem é ~6,2 N·m); vazio 530 rpm/188 ≈ 17 °/s; com a carga de pairagem (6,2 N·m → 103 N na porca, 0,09 N·m no fuso, 35 % do bloqueio) ~11 °/s.",
+        "rigidez": "porca de latão + peças de ABS: 2500 N·m/rad no braço (estimado; medir) — no modelo é constante (a do fuso varia com o braço de alavanca²).",
+        "massas": "medido na geometria (lab/drone_rpi/detalhes/massas.py, 2026-10-20) — ver `python -m lab.drone_rpi.detalhes.massas`"
+      },
+      "fontes": [],
+      "nota": "Porquê motorredutor com encoder e não motor de passo: um passo em malha aberta perde passos com o soco do recuo e a vibração e gasta corrente para SEGURAR; o motorredutor com encoder Hall + o AS5048A no veio do ombro fecham a malha no FC, e o fuso autobloqueante segura o braço com 0 A. O cotovelo, com o empuxo a passar pelo eixo, só sente o peso do mastro, o giroscópico e o arrasto (< 0,5 N·m): chega um servo de passatempo.",
+      "massas_cm": {
+        "forquilha_cm_mm": [
+          -9.3,
+          -23.5,
+          2.4
+        ],
+        "forquilha_meias_mm": [
+          26.8,
+          16.0,
+          17.4
+        ],
+        "servo_cotovelo_cm_mm": [
+          -10.0,
+          -4.15,
+          0.0
+        ],
+        "servo_cotovelo_meias_mm": [
+          20.0,
+          18.25,
+          10.0
+        ],
+        "nota": "Onde o simulador põe as massas (braço do quadrante +x+y; os outros espelham-se x → sx·x, y → sy·y), medido no desenho da estrutura (2026-10-20): forquilha + anéis dos 608 relativo ao eixo do ombro H; o servo do cotovelo (com o berço e o garfo) relativo ao eixo do cotovelo. O corpo do atuador vai para B + cm_atuador·(B→A)."
+      }
     }
   },
   "correcao_tabelas": {

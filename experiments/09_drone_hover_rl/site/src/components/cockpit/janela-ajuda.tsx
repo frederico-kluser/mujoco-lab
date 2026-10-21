@@ -81,6 +81,24 @@ export function JanelaAjuda() {
       </section>
 
       <section className="flex flex-col gap-1.5">
+        <Legenda>peças e montagem</Legenda>
+        <p className="text-[0.76rem] leading-snug text-hud">
+          Cada peça deste drone em 3D — medidas reais, como funciona, os parafusos que a prendem e os passos de
+          montagem — na página{" "}
+          <a
+            href="/pecas"
+            target="_blank"
+            rel="noopener"
+            data-testid="ligacao-pecas"
+            className="text-hud-ciano underline-offset-2 hover:underline"
+          >
+            Peças 3D ↗
+          </a>
+          .
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-1.5">
         <Legenda>sinais (forma + cor)</Legenda>
         <ul className="grid grid-cols-1 gap-1">
           {SINAIS.map((sinal) => (
